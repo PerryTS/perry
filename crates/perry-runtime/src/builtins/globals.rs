@@ -430,7 +430,7 @@ fn get_object_property(value: f64, name: &[u8]) -> f64 {
     let Some(addr) = pointer_addr(value) else {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
-    if gc_type_for_pointer(addr) != Some(crate::gc::GC_TYPE_OBJECT) {
+    if !matches!(gc_type_for_pointer(addr), Some(crate::gc_object_type_pat!())) {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);

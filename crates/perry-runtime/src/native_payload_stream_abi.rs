@@ -41,7 +41,7 @@ fn is_object(value: f64) -> bool {
     let addr = jsval.as_pointer::<u8>() as usize;
     // SAFETY: the reader validates the address before reading.
     unsafe { crate::value::addr_class::try_read_gc_header(addr) }
-        .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_OBJECT)
+        .is_some_and(|header| crate::gc_type_is_object!(header.obj_type))
 }
 
 /// node's `Transform` constructor body on a family-allocated object. 0 on

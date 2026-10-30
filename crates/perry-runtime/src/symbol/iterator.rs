@@ -19,7 +19,7 @@ pub unsafe extern "C" fn js_object_get_own_property_symbols(obj_f64: f64) -> i64
     if value.is_pointer() {
         let addr = value.as_pointer::<u8>() as usize;
         if crate::value::addr_class::try_read_tracked_gc_header(addr)
-            .is_some_and(|header| (*header.as_ptr()).obj_type == crate::gc::GC_TYPE_OBJECT)
+            .is_some_and(|header| crate::gc_type_is_object!((*header.as_ptr()).obj_type))
         {
             let object = addr as *const crate::object::ObjectHeader;
             if !crate::object::overflow::shadowed(object)

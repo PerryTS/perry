@@ -170,13 +170,13 @@ pub(crate) fn tui_handle_parts_raw(raw: i64) -> Option<(TuiKind, i64)> {
     }
     let addr = raw as usize;
     let header = unsafe { crate::value::addr_class::try_read_gc_header(addr)? };
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!(header.obj_type) {
         return None;
     }
     let obj = addr as *mut crate::object::ObjectHeader;
     unsafe {
         let kind = TuiKind::from_class_id((*obj).class_id)?;
-        let meta = (*obj).meta;
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
         if meta.is_null() {
             return None;
         }

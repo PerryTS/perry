@@ -205,7 +205,7 @@ impl Observation {
                 | ObservationSource::Method
                 | ObservationSource::NumericWrite
         ) || (self.source == ObservationSource::HelperReturn
-            && self.heap_type == crate::gc::GC_TYPE_OBJECT as u16)
+            && crate::gc_type_is_object!(self.heap_type as u8))
     }
     fn affected_by_representation_change(
         &self,
@@ -709,7 +709,7 @@ fn helper_return_facts(bits: u64) -> (LayoutWord, u32, u16, u64, u16) {
             let (class_id, heap_type, aux, element_kind) = classify_array(addr, None);
             (LayoutWord(0), class_id, heap_type, aux, element_kind)
         }
-        crate::gc::GC_TYPE_OBJECT => {
+        crate::gc_object_type_pat!() => {
             let (shape_id, class_id, heap_type) = object_shape(addr);
             (shape_id, class_id, heap_type, 0, value_kind)
         }
@@ -760,7 +760,7 @@ fn object_shape(addr: usize) -> (LayoutWord, u32, u16) {
     unsafe {
         let gc = (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         let gc_type = (*gc).obj_type as u16;
-        if (*gc).obj_type != crate::gc::GC_TYPE_OBJECT {
+        if crate::gc_type_is_not_object!((*gc).obj_type) {
             return (LayoutWord(0), 0, gc_type);
         }
         let class_id = (*ptr).class_id;
@@ -1045,7 +1045,7 @@ pub extern "C" fn js_typed_feedback_object_get_field_by_name_f64(
         site_id,
         TypedFeedbackSiteKind::PropertyGet,
         observation,
-        valid_string_key(key) && gc_type == crate::gc::GC_TYPE_OBJECT as u16,
+        valid_string_key(key) && crate::gc_type_is_object!(gc_type as u8),
     );
     if !pass {
         record_fallback_call(site_id);
@@ -1086,7 +1086,7 @@ pub extern "C" fn js_typed_feedback_object_set_field_by_name(
         site_id,
         TypedFeedbackSiteKind::PropertySet,
         observation,
-        valid_string_key(key) && gc_type == crate::gc::GC_TYPE_OBJECT as u16,
+        valid_string_key(key) && crate::gc_type_is_object!(gc_type as u8),
     );
     if !pass {
         record_fallback_call(site_id);
@@ -1854,7 +1854,7 @@ fn object_key_matches_field(
     }
     let object_addr = normalize_raw_object_addr(obj as u64);
     let (shape_id, _, heap_type) = object_shape(object_addr);
-    if heap_type != crate::gc::GC_TYPE_OBJECT as u16 || shape_id == LayoutWord(0) {
+    if crate::gc_type_is_not_object!(heap_type as u8) || shape_id == LayoutWord(0) {
         return false;
     }
     unsafe {
@@ -2365,7 +2365,7 @@ pub extern "C" fn js_typed_feedback_array_index_get_fallback_boxed(
                     key_ptr,
                 )
             }
-            crate::gc::GC_TYPE_OBJECT | crate::gc::GC_TYPE_CLOSURE => {
+            crate::gc_object_type_pat!() | crate::gc::GC_TYPE_CLOSURE => {
                 let key_ptr = index_value_to_property_key(index);
                 crate::object::js_object_get_field_by_name_f64(
                     raw_addr as *const ObjectHeader,
@@ -2713,7 +2713,7 @@ pub extern "C" fn js_typed_feedback_array_index_set_fallback_boxed(
                 );
                 crate::value::js_nanbox_pointer(new_arr as i64)
             }
-            crate::gc::GC_TYPE_OBJECT | crate::gc::GC_TYPE_CLOSURE => {
+            crate::gc_object_type_pat!() | crate::gc::GC_TYPE_CLOSURE => {
                 // #6935: `js_jsvalue_to_string` on an object index runs a user
                 // `toString` / `valueOf` (and allocates for every primitive
                 // one), so it can trigger a GC that **evacuates**. The receiver

@@ -586,7 +586,7 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
                 as *const crate::gc::GcHeader;
             (*hdr).obj_type
         };
-        if obj_type == crate::gc::GC_TYPE_OBJECT {
+        if crate::gc_type_is_object!(obj_type) {
             let obj = raw_addr as *mut crate::ObjectHeader;
             // #1668: `[...searchParams]` / `Array.from(searchParams)` yield the
             // `[key, value]` entry pairs. Detect a URLSearchParams by its shape

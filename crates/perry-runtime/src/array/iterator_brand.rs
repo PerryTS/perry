@@ -32,6 +32,6 @@ pub(crate) fn has_materialized_iterator_brand(addr: usize, brand: u64) -> bool {
             return false;
         }
         let bag = array_property_bag(addr as *const ArrayHeader);
-        !bag.is_null() && !(*bag).meta.is_null() && (*(*bag).meta).native_state == brand
+        !bag.is_null() && !crate::meta_read!(crate::meta_obj_runtime_born!(bag as *mut _)).is_null() && (*crate::meta_read!(crate::meta_obj_runtime_born!(bag as *mut _))).native_state == brand
     }
 }

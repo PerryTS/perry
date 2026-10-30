@@ -148,7 +148,7 @@ unsafe fn apply_to_json(value: f64) -> f64 {
         // Only plain JS objects carry a `toJSON` field worth probing; arrays /
         // buffers / errors don't, and probing them would walk an unrelated
         // layout. `object_get_to_json` itself guards on a null keys_array.
-        if gc_obj_type(ptr) == crate::gc::GC_TYPE_OBJECT
+        if crate::gc_type_is_object!(gc_obj_type(ptr))
             && !crate::buffer::is_registered_buffer(ptr as usize)
         {
             if let Some(to_json_val) = object_get_to_json(ptr) {
@@ -325,7 +325,7 @@ pub(super) unsafe fn dispatch_pointer_with_replacer(
                 stringify_array_with_replacer_pretty(ptr, replacer, buf, indent, depth)
             }
         }
-        crate::gc::GC_TYPE_OBJECT => {
+        crate::gc_object_type_pat!() => {
             if is_object_pointer(ptr) {
                 stringify_object_with_replacer_pretty(ptr, replacer, buf, indent, depth);
             } else if super::stringify::object_has_no_own_keys(ptr) {
@@ -447,8 +447,10 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
             keys_root.get_raw_const_ptr::<crate::ArrayHeader>(),
         )
         .0;
-        let fields_ptr = (obj_root.get_raw_const_ptr::<u8>())
-            .add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
+        // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+        let fields_ptr = crate::meta_slots_of!(crate::meta_obj_runtime_born!(
+            (obj_root.get_raw_const_ptr::<u8>()) as *mut _
+        )) as *const f64;
         let replacer = replacer_root.get_raw_const_ptr::<crate::ClosureHeader>();
         // #9398: tombstoned slot from an O(1) delete — not a key, not
         // serialized. See `tombstoned_key_slot`.
@@ -936,7 +938,7 @@ pub(crate) unsafe fn stringify_value_pretty(
         // misdetected as an array by the `else` fallback below. Emit "{}" after
         // a `toJSON` probe (a `class { toJSON() {…} }` instance carries no own
         // field but must still honour the prototype method).
-        if gc_obj_type(ptr) == crate::gc::GC_TYPE_OBJECT
+        if crate::gc_type_is_object!(gc_obj_type(ptr))
             && super::stringify::object_has_no_own_keys(ptr)
         {
             if (*(ptr as *const crate::ObjectHeader)).class_id != 0 {
@@ -1007,7 +1009,7 @@ pub(crate) unsafe fn stringify_object_pretty(
     // and emit `null` otherwise, rather than faulting inside JSON.stringify.
     if crate::value::addr_class::try_read_tracked_gc_header_of_type(
         ptr as usize,
-        crate::gc::GC_TYPE_OBJECT,
+        crate::gc_object_type_pat!(),
     )
     .is_none()
     {
@@ -1053,7 +1055,8 @@ pub(crate) unsafe fn stringify_object_pretty(
     let keys_len = keys_view.count();
     let keys_elements = crate::object::keys_array_dense_slots(keys_view.arr()).0;
     let fields_ptr =
-        (ptr as *const u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
+        // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+        crate::meta_slots_of!(crate::meta_obj_runtime_born!(ptr as *mut _)) as *const f64;
     // Iterate keys_len, not min(...): ≥9-field objects keep overflow values in
     // OVERFLOW_FIELDS (see the function-replacer walk above / plain #307 fix).
     let alloc_limit = std::cmp::max(num_fields, crate::object::INLINE_SLOT_FLOOR as u32);
@@ -1604,7 +1607,7 @@ pub unsafe extern "C" fn js_json_stringify_full(
                 if let Some(ptr) = extract_pointer(after_bits) {
                     if !crate::value::addr_class::is_handle_band(ptr as usize)
                         && ptr_derefable(ptr as usize)
-                        && gc_obj_type(ptr) == crate::gc::GC_TYPE_OBJECT
+                        && crate::gc_type_is_object!(gc_obj_type(ptr))
                         && !crate::buffer::is_registered_buffer(ptr as usize)
                     {
                         TO_JSON_RESOLVED_FOR.with(|c| c.set(ptr as usize));

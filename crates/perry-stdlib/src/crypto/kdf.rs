@@ -1066,7 +1066,7 @@ unsafe fn scrypt_options_object(options_bits: f64) -> Option<*const ObjectHeader
     }
     let header =
         &*(ptr.sub(perry_runtime::gc::GC_HEADER_SIZE) as *const perry_runtime::gc::GcHeader);
-    if header.obj_type != perry_runtime::gc::GC_TYPE_OBJECT {
+    if perry_runtime::gc_type_is_not_object!(header.obj_type) {
         return None;
     }
     Some(ptr as *const ObjectHeader)

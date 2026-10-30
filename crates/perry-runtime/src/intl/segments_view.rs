@@ -138,7 +138,7 @@ struct CursorFields(*mut JSValue);
 impl CursorFields {
     #[inline(always)]
     unsafe fn from_cursor(cursor: *mut ObjectHeader) -> Self {
-        Self((cursor as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut JSValue)
+        Self(crate::meta_slots_of!(crate::meta_obj_runtime_born!(cursor as *mut _)) as *mut JSValue)
     }
 
     #[inline(always)]

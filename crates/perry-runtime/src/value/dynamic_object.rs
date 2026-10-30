@@ -140,7 +140,7 @@ pub extern "C" fn js_value_length_f64(value: f64) -> f64 {
             // reassigned to an array-like object (`var x = []; … x = {0:0};
             // x.splice(1,1); x.length` — test262 splice/S15.4.4.12_A4_T1
             // #10). Read it like any field; absent stays the 0 fallback.
-            crate::gc::GC_TYPE_OBJECT => {
+            crate::gc_object_type_pat!() => {
                 let key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
                 let v = crate::object::js_object_get_field_by_name_f64(
                     handle as *const crate::object::ObjectHeader,

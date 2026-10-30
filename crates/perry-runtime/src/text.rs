@@ -164,7 +164,7 @@ fn text_native_state(value: f64, class_id: u32) -> Option<u64> {
     }
     let addr = (bits & crate::value::POINTER_MASK) as usize;
     let header = unsafe { crate::value::addr_class::try_read_gc_header(addr)? };
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!(header.obj_type) {
         return None;
     }
     let obj = addr as *mut ObjectHeader;
@@ -172,7 +172,7 @@ fn text_native_state(value: f64, class_id: u32) -> Option<u64> {
         if (*obj).class_id != class_id {
             return None;
         }
-        let meta = (*obj).meta;
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
         if meta.is_null() {
             return Some(0);
         }

@@ -54,7 +54,7 @@ fn is_object_like_for_overload(value: f64) -> bool {
     jv.is_null()
         || matches!(
             gc_type_of(value),
-            Some(crate::gc::GC_TYPE_OBJECT)
+            Some(crate::gc_object_type_pat!())
                 | Some(crate::gc::GC_TYPE_ARRAY)
                 | Some(crate::gc::GC_TYPE_MAP)
                 | Some(crate::gc::GC_TYPE_SET)
@@ -92,7 +92,7 @@ fn validate_options(options: f64) {
     if matches!(kind, crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_CLOSURE) {
         throw_invalid_arg_type("options", "of type object", options);
     }
-    if kind != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!(kind) {
         return;
     }
 

@@ -84,9 +84,9 @@ pub(crate) fn seal_selected(module: &str, name: &str, value: f64) {
         let bag = crate::value::js_nanbox_get_pointer(image) as *mut crate::object::ObjectHeader;
         // The recorded constructor parent (and other private state) remains
         // an owned edge. It is never a JS property of this null-prototype bag.
-        if !(*old).meta.is_null() {
-            let state = (*(*old).meta).expando;
-            let meta = (*bag).meta;
+        if !crate::meta_read!(crate::meta_obj_runtime_born!(old as *mut _)).is_null() {
+            let state = (*crate::meta_read!(crate::meta_obj_runtime_born!(old as *mut _))).expando;
+            let meta = crate::meta_read!(crate::meta_obj_runtime_born!(bag as *mut _));
             // GC_STORE_AUDIT(BARRIERED): metadata-record child edge.
             (*meta).expando = state;
             crate::gc::runtime_write_barrier_slot(
@@ -125,7 +125,7 @@ pub(crate) unsafe fn inherits_function(closure: *const super::ClosureHeader, nam
     if bag.is_null() {
         return false;
     }
-    let meta = (*bag).meta;
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(bag as *mut _));
     if meta.is_null() {
         return false;
     }

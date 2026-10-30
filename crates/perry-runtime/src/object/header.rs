@@ -136,7 +136,7 @@ impl MetaObj {
 /// slots. Runtime births are meta-form (P10), so the size is the meta-form
 /// header plus the slots.
 #[inline(always)]
-pub(crate) const fn meta_form_alloc_bytes(slots: usize) -> usize {
+pub const fn meta_form_alloc_bytes(slots: usize) -> usize {
     std::mem::size_of::<ObjectHeader>() + slots * std::mem::size_of::<u64>()
 }
 

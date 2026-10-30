@@ -183,3 +183,23 @@ pub(crate) unsafe fn map_cell_meta_slot(cell: *mut crate::map::MapHeader) -> *mu
 pub(crate) unsafe fn set_cell_meta_slot(cell: *mut crate::set::SetHeader) -> *mut *mut ObjectMeta {
     std::ptr::addr_of_mut!((*cell).meta)
 }
+
+/// The meta word of a Promise cell.
+#[inline(always)]
+pub(crate) unsafe fn promise_cell_meta(cell: *const crate::promise::Promise) -> *mut ObjectMeta {
+    (*cell).meta
+}
+
+/// The address of a Date cell's meta word.
+#[inline(always)]
+pub(crate) unsafe fn date_cell_meta_slot(cell: *mut crate::date::DateCell) -> *mut *mut ObjectMeta {
+    std::ptr::addr_of_mut!((*cell).meta)
+}
+
+/// The address of a RegExp cell's meta word.
+#[inline(always)]
+pub(crate) unsafe fn regexp_cell_meta_slot(
+    cell: *mut crate::regex::RegExpHeader,
+) -> *mut *mut ObjectMeta {
+    std::ptr::addr_of_mut!((*cell).meta)
+}

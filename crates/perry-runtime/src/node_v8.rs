@@ -144,7 +144,7 @@ fn is_valid_heap_snapshot_options(value: f64) -> bool {
     let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(ptr) }) else {
         return false;
     };
-    header.obj_type == crate::gc::GC_TYPE_OBJECT
+    crate::gc_type_is_object!(header.obj_type)
 }
 
 fn validate_heap_snapshot_options(value: f64) {

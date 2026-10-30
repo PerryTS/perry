@@ -646,7 +646,7 @@ pub(crate) unsafe fn born_instance(
     proto: *mut ObjectHeader,
     slots: u32,
 ) -> *mut ObjectHeader {
-    let meta = (*proto).meta;
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(proto as *mut _));
     if !meta.is_null() {
         let word = (*meta).instance_birth;
         let shape_id = (word >> 32) as u32;
@@ -690,7 +690,7 @@ unsafe fn mint_birth_record(
     let shape_id =
         obj.with_mut_ptr::<ObjectHeader, _>(|obj| crate::object::shapes::object_shape_stamp(obj));
     let meta =
-        // A1_UNPROVEN: proto parameter of mint_birth_record, no type test (kind-A/B question for S0b-S0e).
+        // A1_UNPROVEN: proto parameter of mint_birth_record, no type test (record-first: the receiver layout word; kind-A/B question for S0f).
         proto.with_mut_ptr::<ObjectHeader, _>(|proto| crate::object::object_meta_ensure(crate::meta_obj_runtime_born!(proto), crate::object::MetaReason::NativePayload));
     if !meta.is_null() {
         // GC_STORE_AUDIT(POINTER_FREE): a class id and a ShapeId, never a heap
@@ -713,7 +713,8 @@ fn instance_of(value: f64, class_id: u32) -> Option<*mut ObjectHeader> {
 #[inline]
 fn payload_cell(value: f64, class_id: u32) -> Result<*mut NativeHandleHeader, PayloadMiss> {
     let obj = instance_of(value, class_id).ok_or(PayloadMiss::Foreign)?;
-    let meta = unsafe { (*obj).meta };
+    // A1_UNPROVEN: record-first: payload family class layout word (kind-A/B question for S0f).
+    let meta = unsafe { crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)) };
     if meta.is_null() {
         return Err(PayloadMiss::Foreign);
     }
@@ -731,7 +732,8 @@ pub(crate) fn stream_hooks_of(
 ) -> Option<(&'static StreamHooks, *mut NativeHandleHeader)> {
     let obj = any_object(value)?;
     // SAFETY: a live ordinary object (checked by `any_object`).
-    let meta = unsafe { (*obj).meta };
+    // A1_UNPROVEN: record-first: payload family class layout word (kind-A/B question for S0f).
+    let meta = unsafe { crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)) };
     if meta.is_null() {
         return None;
     }
@@ -780,7 +782,8 @@ pub unsafe fn payload_mut_attached<'a, T: 'static>(
     family: &NativePayloadFamily,
 ) -> Result<&'a mut T, PayloadMiss> {
     let obj = any_object(value).ok_or(PayloadMiss::Foreign)?;
-    let meta = (*obj).meta;
+    // A1_UNPROVEN: record-first: payload family class layout word (kind-A/B question for S0f).
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     if meta.is_null() {
         return Err(PayloadMiss::Foreign);
     }
@@ -1402,7 +1405,7 @@ pub unsafe fn call_from_native(
     else {
         return Err(());
     };
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!(header.obj_type) {
         return Err(());
     }
     let class_id = (*((bits & crate::value::POINTER_MASK) as *const ObjectHeader)).class_id;
@@ -1552,7 +1555,7 @@ pub fn set_pending_exception(owner: f64, exception: f64) -> Result<(), ()> {
     let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(addr) }) else {
         return Err(());
     };
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!(header.obj_type) {
         return Err(());
     }
     let class_id = unsafe { (*(addr as *const ObjectHeader)).class_id };
@@ -1601,7 +1604,8 @@ pub fn close_attached<T: 'static>(value: f64, family: &NativePayloadFamily) -> b
     let Some(obj) = any_object(value) else {
         return false;
     };
-    let meta = unsafe { (*obj).meta };
+    // A1_UNPROVEN: record-first: payload family class layout word (kind-A/B question for S0f).
+    let meta = unsafe { crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)) };
     if meta.is_null() {
         return false;
     }
@@ -1670,7 +1674,7 @@ pub(crate) unsafe fn try_payload_method_fast_dispatch(
     }
     let addr = (bits & crate::value::POINTER_MASK) as usize;
     let header = crate::value::addr_class::try_read_gc_header(addr)?;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!(header.obj_type) {
         return None;
     }
     let obj = addr as *const ObjectHeader;
@@ -1727,7 +1731,8 @@ pub fn js_state(value: f64, family: &NativePayloadFamily, create: bool) -> f64 {
 /// also for a source subclass instance), on the cell's creator thread.
 pub(crate) fn attached_family_class_id(value: f64) -> Option<u32> {
     let obj = any_object(value)?;
-    let meta = unsafe { (*obj).meta };
+    // A1_UNPROVEN: record-first: payload family class layout word (kind-A/B question for S0f).
+    let meta = unsafe { crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)) };
     if meta.is_null() {
         return None;
     }

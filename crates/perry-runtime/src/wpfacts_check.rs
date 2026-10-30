@@ -161,7 +161,7 @@ pub extern "C" fn perry_wpfacts_check_field(
         if crate::value::addr_class::is_handle_band(addr)
             || crate::value::addr_class::try_read_tracked_gc_header_of_type(
                 addr,
-                crate::gc::GC_TYPE_OBJECT,
+                crate::gc_object_type_pat!(),
             )
             .is_none()
         {

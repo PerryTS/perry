@@ -57,7 +57,7 @@ pub extern "C" fn js_array_subclass_init(this: f64, n: f64) -> f64 {
     if raw == 0 {
         return this;
     }
-    if unsafe { gc_type_for_ptr(raw) } != Some(crate::gc::GC_TYPE_OBJECT) {
+    if !matches!(unsafe { gc_type_for_ptr(raw) }, Some(crate::gc_object_type_pat!())) {
         return this;
     }
     let scope = crate::gc::RuntimeHandleScope::new();

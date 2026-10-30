@@ -535,7 +535,7 @@ impl Writer<'_> {
                 }
                 self.array(addr, built as usize)
             }
-            gc::GC_TYPE_OBJECT => {
+            crate::gc_object_type_pat!() => {
                 if crate::regex::regexp_data_of(f64::from_bits(bits)).is_some() {
                     self.regexp(addr)
                 } else {
@@ -806,7 +806,8 @@ impl Writer<'_> {
         if crate::native_class_ids::is_native_backed_class_id(class_id) {
             return self.unsupported("native handle");
         }
-        let meta = (*obj).meta;
+        // A1_UNPROVEN: record-first: serialized object layout word (kind-A/B question for S0f).
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
         if !meta.is_null() && crate::native_payload::is_payload_state_word((*meta).native_state) {
             return self.unsupported("native handle");
         }
@@ -1153,7 +1154,8 @@ impl Writer<'_> {
         };
         // #9029: a deleted key leaves a hole; skip the key and its slot
         // together so the reader's positional pairs stay aligned.
-        let fields_ptr = (obj as *const u8).add(std::mem::size_of::<crate::object::ObjectHeader>())
+        // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+        let fields_ptr = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _))
             as *const u64;
         // An optional key whose slot holds the hole is absent: skip it the
         // same way, key and slot together.

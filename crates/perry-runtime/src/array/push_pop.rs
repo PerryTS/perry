@@ -801,7 +801,7 @@ pub unsafe extern "C" fn js_array_fill_values(
 /// caller has already demoted a uniquely-owned heap string in `value`.
 #[inline]
 fn object_backed_push_fast(arr: *mut ArrayHeader, value: f64) -> bool {
-    if crate::array::array_receiver_gc_tag(arr).0 != gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!(crate::array::array_receiver_gc_tag(arr).0) {
         return false;
     }
     crate::array::subclass::array_subclass_fast_push_one_raw(arr, value).is_some()
@@ -1006,7 +1006,7 @@ pub(crate) fn push_spec_declined(arr: *mut ArrayHeader, value: f64) -> *mut Arra
     // resolver nor the exotic probe (both are classification misses for an
     // OBJECT header); the string demote precedes the store as in
     // `js_array_push_f64`.
-    if crate::array::array_receiver_gc_tag(arr).0 == gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_object!(crate::array::array_receiver_gc_tag(arr).0) {
         string::js_string_addref_if_heap_string(value);
         if crate::array::subclass::array_subclass_fast_push_one_raw(arr, value).is_some() {
             return arr;

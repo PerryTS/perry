@@ -116,7 +116,7 @@ pub(crate) fn describe_received_js(value: f64) -> *mut StringHeader {
                 == Some(crate::value::TAG_NULL)
         {
             let empty = header.is_some_and(|h| unsafe {
-                (*h.as_ptr()).obj_type == crate::gc::GC_TYPE_OBJECT
+                crate::gc_type_is_object!((*h.as_ptr()).obj_type)
                     && crate::object::object_keys(addr as *const crate::object::ObjectHeader)
                         .count()
                         == 0
@@ -312,7 +312,7 @@ fn received_native_prototype_shape(prototype: f64, intrinsic: f64) -> ReceivedNa
                 // Inspect the published class prototypes without any user Get.
                 let class_id = unsafe {
                     crate::value::addr_class::try_read_tracked_gc_header(addr)
-                        .filter(|header| (*header.as_ptr()).obj_type == crate::gc::GC_TYPE_OBJECT)
+                        .filter(|header| crate::gc_type_is_object!((*header.as_ptr()).obj_type))
                         .map_or(0, |_| (*(addr as *const crate::ObjectHeader)).class_id)
                 };
                 if class_id == 0 {

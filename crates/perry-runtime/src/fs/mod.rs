@@ -150,16 +150,16 @@ pub(crate) fn filehandle_object_fd(value: f64) -> Option<i32> {
     }
     let header = unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }?;
     unsafe {
-        if (*header.as_ptr()).obj_type != crate::gc::GC_TYPE_OBJECT
+        if crate::gc_type_is_not_object!((*header.as_ptr()).obj_type)
             || (*header.as_ptr()).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return None;
         }
         let obj = addr as *const crate::object::ObjectHeader;
-        if (*obj).class_id != CLASS_ID_FS_FILEHANDLE || (*obj).meta.is_null() {
+        if (*obj).class_id != CLASS_ID_FS_FILEHANDLE || crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)).is_null() {
             return None;
         }
-        let word = (*(*obj).meta).native_state;
+        let word = (*crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _))).native_state;
         (word != 0).then_some(word.wrapping_sub(1) as u32 as i32)
     }
 }
@@ -196,7 +196,7 @@ fn object_class_id(value: f64) -> Option<u32> {
     unsafe {
         let gc_header =
             (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
+        if crate::gc_type_is_not_object!((*gc_header).obj_type) {
             return None;
         }
         Some((*obj).class_id)

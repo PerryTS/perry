@@ -38,7 +38,7 @@ fn heap_object_addr(value: f64) -> Option<usize> {
     unsafe {
         let gc_header =
             (addr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
+        if crate::gc_type_is_not_object!((*gc_header).obj_type) {
             return None;
         }
     }

@@ -37,7 +37,7 @@ pub(crate) fn note_named_mutation(owner: usize, name: &[u8]) {
         let Some(header) = crate::value::addr_class::try_read_gc_header(owner) else {
             return;
         };
-        let prototype = header.obj_type == crate::gc::GC_TYPE_OBJECT
+        let prototype = crate::object_has_meta_word!(header.obj_type)
             && (crate::object::is_typed_array_prototype(owner) || is_buffer_prototype(owner));
         if prototype {
             PERRY_TYPED_NAMED_PROPS_INVALIDATED.store(1, Ordering::Release);

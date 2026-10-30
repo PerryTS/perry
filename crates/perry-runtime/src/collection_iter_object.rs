@@ -61,7 +61,7 @@ fn iterator_class_id(addr: usize) -> Option<u32> {
     // `addr < GC_HEADER_SIZE + 0x1000` floor let a proxy/fetch id through).
     unsafe {
         let header = crate::value::addr_class::try_read_gc_header(addr)?;
-        if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+        if crate::gc_type_is_not_object!(header.obj_type) {
             return None;
         }
         Some((*(addr as *const ObjectHeader)).class_id)

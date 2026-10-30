@@ -699,7 +699,7 @@ pub(crate) fn module_object_ptr(value: f64) -> Option<*const crate::object::Obje
         return None;
     }
     let gc_header = unsafe { &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader) };
-    if gc_header.obj_type == crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_object!(gc_header.obj_type) {
         Some(ptr as *const crate::object::ObjectHeader)
     } else {
         None

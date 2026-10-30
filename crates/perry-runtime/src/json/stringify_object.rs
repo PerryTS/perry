@@ -62,7 +62,7 @@ unsafe fn member_to_json(value: f64) -> Option<f64> {
     }
     match gc_obj_type(ptr) {
         crate::gc::GC_TYPE_ARRAY => array_get_to_json(ptr as *const crate::ArrayHeader),
-        crate::gc::GC_TYPE_OBJECT => {
+        crate::gc_object_type_pat!() => {
             let resolved = object_get_to_json(ptr);
             if resolved.is_none() {
                 // Hand the verdict to the member's own walk (#10696); the
@@ -378,7 +378,8 @@ unsafe fn stringify_object_walk(
             if slotted {
                 crate::object::field_get_set::js_object_get_key_field(obj, f).bits()
             } else if f < alloc_limit {
-                let fields_ptr = (obj as *const u8).add(std::mem::size_of::<crate::ObjectHeader>())
+                // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+                let fields_ptr = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _))
                     as *const f64;
                 (*fields_ptr.add(f as usize)).to_bits()
             } else {

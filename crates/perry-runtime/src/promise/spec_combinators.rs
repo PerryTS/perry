@@ -648,7 +648,7 @@ fn plain_native_promise(value: f64) -> Option<*mut Promise> {
         return None;
     }
     let p: *mut Promise = unboxed_ptr(value);
-    if p.is_null() || unsafe { !(*p).meta.is_null() } {
+    if p.is_null() || unsafe { !crate::object::cell_meta::promise_cell_meta(p).is_null() } {
         return None;
     }
     Some(p)

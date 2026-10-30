@@ -144,7 +144,7 @@ pub extern "C" fn js_event_emitter_subclass_init(this: f64, options: f64) -> f64
     if raw == 0 {
         return this;
     }
-    if unsafe { gc_type_for_ptr(raw) } != Some(crate::gc::GC_TYPE_OBJECT) {
+    if !matches!(unsafe { gc_type_for_ptr(raw) }, Some(crate::gc_object_type_pat!())) {
         return this;
     }
     // node's `EventEmitter.init`: own `_events`/`_eventsCount`/`_maxListeners`
@@ -183,7 +183,7 @@ pub extern "C" fn js_node_stream_legacy_subclass_init(this: f64) -> f64 {
     if raw == 0 {
         return this;
     }
-    if unsafe { gc_type_for_ptr(raw) } != Some(crate::gc::GC_TYPE_OBJECT) {
+    if !matches!(unsafe { gc_type_for_ptr(raw) }, Some(crate::gc_object_type_pat!())) {
         return this;
     }
     let obj = raw as *mut ObjectHeader;
@@ -217,7 +217,7 @@ pub extern "C" fn js_event_emitter_async_resource_subclass_init(this: f64, optio
 
     let this = this_handle.get_nanbox_f64();
     let raw = raw_ptr_from_value(this);
-    if raw == 0 || unsafe { gc_type_for_ptr(raw) } != Some(crate::gc::GC_TYPE_OBJECT) {
+    if raw == 0 || !matches!(unsafe { gc_type_for_ptr(raw) }, Some(crate::gc_object_type_pat!())) {
         return this;
     }
     let options = options_handle.get_nanbox_f64();
