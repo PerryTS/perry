@@ -345,8 +345,22 @@ const _: () = assert!(
             crate::codegen_abi::LAYOUT_DESC_GC_HEADER_WORD_OFFSET_ILP32
         }
 );
-const _: () =
-    assert!(std::mem::offset_of!(PerryLayoutKey, off) == crate::codegen_abi::LAYOUT_KEY_OFF_OFFSET);
+const _: () = assert!(
+    std::mem::offset_of!(PerryLayoutKey, off)
+        == if cfg!(target_pointer_width = "64") {
+            crate::codegen_abi::LAYOUT_KEY_OFF_OFFSET_LP64
+        } else {
+            crate::codegen_abi::LAYOUT_KEY_OFF_OFFSET_ILP32
+        }
+);
+const _: () = assert!(
+    std::mem::size_of::<PerryLayoutKey>()
+        == if cfg!(target_pointer_width = "64") {
+            crate::codegen_abi::LAYOUT_KEY_SIZE_LP64
+        } else {
+            crate::codegen_abi::LAYOUT_KEY_SIZE_ILP32
+        }
+);
 
 const _: () = assert!(
     std::mem::offset_of!(PerryLayoutDesc, image_keys)
