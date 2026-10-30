@@ -22,7 +22,7 @@ mod select;
 mod tower;
 use collapse::method_dispatch_collapse_enabled;
 use dispatch_receiver_class::*;
-use tower::{emit_tower_pshape_call, tower_pshape_route};
+use tower::{emit_tower_pshape_call, tower_layout_proven, tower_pshape_route};
 
 // Reach the override-emit helpers (`pub(super)` of `lower_call`) by their
 // canonical crate-relative path.
@@ -565,7 +565,19 @@ pub(crate) fn try_lower_instance_method_call(
                 ) {
                     Some(route) => {
                         let recv_handle = unbox_to_i64(ctx.block(), &recv_box);
-                        emit_tower_pshape_call(ctx, i, &route, &recv_handle, &case_arg_slices)
+                        // The facts prove the receiver is this arm's class
+                        // (`proven`) and that class's layout never changes
+                        // (`fixed_layout`): the arm needs no recheck.
+                        let layout_proven = proven.is_some()
+                            && tower_layout_proven(ctx, implementors[i].0);
+                        emit_tower_pshape_call(
+                            ctx,
+                            i,
+                            &route,
+                            &recv_handle,
+                            &case_arg_slices,
+                            layout_proven,
+                        )
                     }
                     None => {
                         if closed_bodies.contains(&fname.as_str()) {
