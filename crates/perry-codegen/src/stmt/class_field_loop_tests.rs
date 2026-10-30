@@ -154,6 +154,8 @@ fn assigning_ctor(fields: &[ClassField]) -> perry_hir::Function {
                 object: Box::new(Expr::This),
                 property: p.name.clone(),
                 value: Box::new(Expr::LocalGet(p.id)),
+                byte_offset: 0,
+                byte_end: 0,
             })
         })
         .collect();
@@ -194,6 +196,8 @@ fn bump_stmt(recv_id: u32, strict: bool) -> Stmt {
         }),
         receiver: Box::new(Expr::LocalGet(recv_id)),
         strict,
+        byte_offset: 0,
+        byte_end: 0,
     })
 }
 

@@ -143,11 +143,21 @@ macro_rules! drive_parts {
     ($unroll:expr, $n:expr, $obj:ident . $method:ident ( $parts:ident , ? )) => {{
         if $unroll {
             debug_assert!($n <= MAX_UNROLLED_PARTS);
-            if $n > 0 { $obj.$method($parts, 0)?; }
-            if $n > 1 { $obj.$method($parts, 1)?; }
-            if $n > 2 { $obj.$method($parts, 2)?; }
-            if $n > 3 { $obj.$method($parts, 3)?; }
-            if $n > 4 { $obj.$method($parts, 4)?; }
+            if $n > 0 {
+                $obj.$method($parts, 0)?;
+            }
+            if $n > 1 {
+                $obj.$method($parts, 1)?;
+            }
+            if $n > 2 {
+                $obj.$method($parts, 2)?;
+            }
+            if $n > 3 {
+                $obj.$method($parts, 3)?;
+            }
+            if $n > 4 {
+                $obj.$method($parts, 4)?;
+            }
         } else {
             for i in 0..$n {
                 $obj.$method($parts, i)?;
@@ -162,11 +172,21 @@ macro_rules! emit_parts {
     ($unroll:expr, $n:expr, $obj:ident . $method:ident ( ? , $cursor:ident )) => {{
         let mut cursor = $cursor;
         if $unroll {
-            if $n > 0 { cursor = $obj.$method(0, cursor); }
-            if $n > 1 { cursor = $obj.$method(1, cursor); }
-            if $n > 2 { cursor = $obj.$method(2, cursor); }
-            if $n > 3 { cursor = $obj.$method(3, cursor); }
-            if $n > 4 { cursor = $obj.$method(4, cursor); }
+            if $n > 0 {
+                cursor = $obj.$method(0, cursor);
+            }
+            if $n > 1 {
+                cursor = $obj.$method(1, cursor);
+            }
+            if $n > 2 {
+                cursor = $obj.$method(2, cursor);
+            }
+            if $n > 3 {
+                cursor = $obj.$method(3, cursor);
+            }
+            if $n > 4 {
+                cursor = $obj.$method(4, cursor);
+            }
         } else {
             for i in 0..$n {
                 cursor = $obj.$method(i, cursor);

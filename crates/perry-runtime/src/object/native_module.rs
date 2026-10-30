@@ -710,7 +710,10 @@ pub extern "C" fn js_create_native_module_namespace(
     // are UTF-8 by construction and are not validated again on each call.
     let module_name = unsafe {
         let bytes = std::slice::from_raw_parts(module_name_ptr, module_name_len);
-        debug_assert!(std::str::from_utf8(bytes).is_ok(), "native module name is not UTF-8");
+        debug_assert!(
+            std::str::from_utf8(bytes).is_ok(),
+            "native module name is not UTF-8"
+        );
         std::str::from_utf8_unchecked(bytes)
     };
     let module_name = normalize_native_module_alias(module_name);

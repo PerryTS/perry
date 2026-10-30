@@ -1448,6 +1448,7 @@ impl<'a> UseWalk<'a> {
                 object,
                 property,
                 value,
+                ..
             } => {
                 if let Expr::LocalGet(id) = object.as_ref() {
                     if let Some(root) = self.tracked_root(*id) {

@@ -229,8 +229,8 @@ pub(crate) use old_free::{
 mod tenuring;
 use tenuring::*;
 mod oldgen;
-use oldgen::*;
 pub(crate) use oldgen::finalize_dead_arena_payload;
+use oldgen::*;
 pub(crate) mod heap_generation;
 /// #10698: `gc_check_trigger`'s "nothing is due" watermark and the
 /// `TriggerInput` cell type whose writes retire it.

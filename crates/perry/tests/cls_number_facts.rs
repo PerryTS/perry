@@ -8,7 +8,6 @@
 //! * `s.x = v` on a facts-proven nullable receiver is one receiver test and
 //!   a slot store, not the by-name store site.
 
-
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -156,7 +155,8 @@ fn a_subclass_returning_a_string_keeps_the_dynamic_add() {
 
 #[test]
 fn a_field_that_becomes_a_string_keeps_the_dynamic_add() {
-    let source = format!("{SHAPES}\n(shapes[0] as any).y = \"y\";\nconsole.log(shapes[0].describe());\n");
+    let source =
+        format!("{SHAPES}\n(shapes[0] as any).y = \"y\";\nconsole.log(shapes[0].describe());\n");
     let dir = tempfile::tempdir().unwrap();
     let (ir, out) = compile_and_run(dir.path(), &source, false);
     let describe = body(&ir, "perry_method_main_ts__Shape__describe");
@@ -165,5 +165,8 @@ fn a_field_that_becomes_a_string_keeps_the_dynamic_add() {
             || describe.contains("guarded_add.dynamic"),
         "describe lost its dynamic add although a field holds a string"
     );
-    assert!(out.lines().last().unwrap().contains('y'), "wrong output: {out}");
+    assert!(
+        out.lines().last().unwrap().contains('y'),
+        "wrong output: {out}"
+    );
 }

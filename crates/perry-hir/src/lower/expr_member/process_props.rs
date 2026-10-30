@@ -16,7 +16,6 @@ use super::LoweringContext;
 /// `None` so the caller keeps lowering them to a callable native-module ref.
 pub(crate) fn lower_process_named_property(prop: &str) -> Option<Expr> {
     Some(match prop {
-        "argv" => Expr::ProcessArgv,
         "platform" => Expr::OsPlatform,
         "arch" => Expr::OsArch,
         "pid" => Expr::ProcessPid,
@@ -107,4 +106,18 @@ pub(crate) fn is_ws_ready_state_receiver(
         ctx.lookup_native_module(obj_ident.sym.as_ref()),
         Some(("ws", None | Some("default") | Some("WebSocket")))
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn named_argv_uses_existing_export_cell_instead_of_live_intrinsic() {
+        assert!(lower_process_named_property("argv").is_none());
+        assert!(matches!(
+            lower_process_named_property("env"),
+            Some(Expr::ProcessEnv)
+        ));
+    }
 }

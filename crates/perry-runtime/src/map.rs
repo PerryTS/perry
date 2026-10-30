@@ -3158,7 +3158,10 @@ mod tests {
             let base = entries.as_ptr();
             for hit_at in 0..used {
                 let bits = entries[hit_at as usize * 2].to_bits();
-                assert_eq!(unsafe { find_identical_key(base, used, bits) }, Some(hit_at as i32));
+                assert_eq!(
+                    unsafe { find_identical_key(base, used, bits) },
+                    Some(hit_at as i32)
+                );
             }
             assert_eq!(unsafe { find_identical_key(base, used, 0x1234) }, None);
             // A key stored beyond `used` is not part of the extent.
@@ -3192,7 +3195,11 @@ mod tests {
                 js_map_set(map, 100.0 + k as f64, k as f64);
             }
             for k in 0..n {
-                assert_eq!(js_map_get(map, 100.0 + k as f64), k as f64, "n={n} slot {k}");
+                assert_eq!(
+                    js_map_get(map, 100.0 + k as f64),
+                    k as f64,
+                    "n={n} slot {k}"
+                );
                 assert_eq!(js_map_has(map, 100.0 + k as f64), 1);
             }
             assert_eq!(js_map_has(map, 99.0), 0);
@@ -3211,14 +3218,26 @@ mod tests {
         js_map_set(map, 0.0, 1.0);
         js_map_set(map, f64::NAN, 2.0);
         js_map_set(map, 5.0, 3.0);
-        assert_eq!(js_map_get(map, -0.0), 1.0, "-0 is SameValueZero-equal to +0");
-        assert_eq!(js_map_get(map, f64::from_bits(0x7ff8_0000_0000_0001)), 2.0, "any NaN");
+        assert_eq!(
+            js_map_get(map, -0.0),
+            1.0,
+            "-0 is SameValueZero-equal to +0"
+        );
+        assert_eq!(
+            js_map_get(map, f64::from_bits(0x7ff8_0000_0000_0001)),
+            2.0,
+            "any NaN"
+        );
         assert_eq!(js_map_get(map, 5.0), 3.0);
         let a = js_string_from_bytes(b"ab".as_ptr(), 2);
         let b = js_string_from_bytes(b"ab".as_ptr(), 2);
         let c = js_string_from_bytes(b"ac".as_ptr(), 2);
         js_map_set_string_number(map, a, 9.0);
-        assert_eq!(js_map_get_string_key(map, b), 9.0, "content-equal, not identical");
+        assert_eq!(
+            js_map_get_string_key(map, b),
+            9.0,
+            "content-equal, not identical"
+        );
         assert_eq!(js_map_has_string_key(map, c), 0);
     }
 

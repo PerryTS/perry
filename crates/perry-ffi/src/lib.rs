@@ -423,9 +423,9 @@ pub use perry_abi as __fn_info_abi;
 /// The symbol derives from its fully qualified body path and ABI builders.
 #[macro_export]
 macro_rules! fn_info {
-    (#[realm($path:literal, spec = { length = $length:literal }, emit = metadata)] reference export $body:path, $n:tt; $($m:ident($($a:tt)*)),*; bind $binding:ident, $metadata:ident) => {
+    (#[realm($path:literal, spec = { length = $length:literal }, emit = metadata)] reference export $($body:ident)::+, $n:tt; $($m:ident($($a:tt)*)),*; bind $binding:ident, $metadata:ident) => {
         macro_rules! $metadata { (length) => { $length }; }
-        let $binding = $crate::fn_info!(reference export $body, $n; $($m($($a)*)),*);
+        let $binding = $crate::fn_info!(reference export $($body)::+, $n; $($m($($a)*)),*);
     };
     ($(#[realm($($facts:tt)*)])? reference $($rest:tt)*) => {
         $crate::__fn_info_abi::fn_info! { for $crate::RawClosureHeader; reference $($rest)* }

@@ -53,11 +53,19 @@ pub unsafe extern "C" fn js_symbol_for(key_f64: f64) -> f64 {
     // TypeError, matching `ToString(symbol)` (and `Symbol()`'s coercion).
     let key_ptr = if tag == STRING_TAG {
         (bits & POINTER_MASK) as *const StringHeader
-    } else if crate::value::addr_class::is_plausible_heap_addr(bits as usize) {
-        // Raw StringHeader pointer from a legacy callsite. Use the canonical
-        // heap-address predicate rather than a duplicated literal range so a
-        // small-magnitude (e.g. denormal) double key isn't misclassified as a
-        // pointer — it falls through to ToString below and coerces correctly.
+    } else if crate::value::addr_class::is_plausible_heap_addr(bits as usize)
+        && crate::value::addr_class::try_read_tracked_gc_header_of_type(
+            bits as usize,
+            crate::gc::GC_TYPE_STRING,
+        )
+        .is_some()
+    {
+        // A raw StringHeader pointer from a legacy callsite needs allocation
+        // AND type evidence before it is dereferenced. Magnitude alone is not
+        // evidence: a subnormal double's bits can land in the heap range (the
+        // guard below documents the fixture), and reading it as a StringHeader
+        // is a read of unowned memory. Without the evidence the key falls
+        // through to ToString, which is what Node does for any number.
         bits as *const StringHeader
     } else {
         if js_is_symbol(key_f64) != 0 {
@@ -307,5 +315,66 @@ pub unsafe extern "C" fn js_symbol_equals(a: f64, b: f64) -> i32 {
         1
     } else {
         0
+    }
+}
+
+#[cfg(test)]
+mod registry_key_tests {
+    use super::*;
+
+    /// `Symbol.for(<number>)` registers under `ToString(number)`. A subnormal
+    /// double's bits can land inside the heap range, and magnitude alone used to
+    /// be enough to read them as a raw `StringHeader` — a read of unowned
+    /// memory, whose result depends on whatever the allocator left there. The
+    /// fixture asserts both halves of the hazard: the bits are heap-plausible,
+    /// and no tracked allocation owns that address.
+    #[test]
+    fn heap_plausible_number_keys_are_coerced_without_dereferencing_their_bits() {
+        unsafe {
+            for number in [1e-310, f64::from_bits(0x4000_0000)] {
+                assert!(
+                    crate::value::addr_class::is_plausible_heap_addr(number.to_bits() as usize),
+                    "fixture {number} is not heap-plausible: the test would prove nothing"
+                );
+                assert!(
+                    crate::value::addr_class::try_read_tracked_gc_header(
+                        number.to_bits() as usize
+                    )
+                    .is_none(),
+                    "fixture {number} must name an unowned address"
+                );
+                let text = crate::builtins::js_string_coerce(number);
+                let expected = js_symbol_for(crate::value::js_nanbox_string(text as i64));
+                let actual = js_symbol_for(number);
+                assert_eq!(
+                    actual.to_bits(),
+                    expected.to_bits(),
+                    "Symbol.for({number}) must register under its ToString text"
+                );
+                assert_ne!(js_is_symbol(actual), 0);
+            }
+        }
+    }
+
+    /// The other half of the branch must keep working: a raw `StringHeader`
+    /// from a legacy callsite (an owned, tracked string allocation) is still
+    /// used directly, and shares its registry entry with the boxed string.
+    #[test]
+    fn tracked_raw_string_pointers_still_share_the_registry_entry() {
+        unsafe {
+            let bytes = b"legacy raw symbol registry key";
+            let header = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+            assert!(
+                crate::value::addr_class::try_read_tracked_gc_header_of_type(
+                    header as usize,
+                    crate::gc::GC_TYPE_STRING,
+                )
+                .is_some(),
+                "a freshly allocated string must carry string type evidence"
+            );
+            let boxed = js_symbol_for(crate::value::js_nanbox_string(header as i64));
+            let raw = js_symbol_for(f64::from_bits(header as u64));
+            assert_eq!(raw.to_bits(), boxed.to_bits());
+        }
     }
 }

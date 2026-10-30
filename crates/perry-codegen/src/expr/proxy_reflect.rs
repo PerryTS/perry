@@ -936,6 +936,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             value,
             receiver,
             strict,
+            ..
         } => {
             if matches!(receiver.as_ref(), Expr::This) {
                 if let Some(result) = crate::layout_desc::function_families::lower_symbol_store(
@@ -983,6 +984,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             object: target.clone(),
                             property: property.clone(),
                             value: value.clone(),
+                            byte_offset: 0,
+                            byte_end: 0,
                         },
                         // #9459: the reference's own `Throw` flag, not the
                         // enclosing function's -- module init is a synthetic
@@ -1002,6 +1005,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         object: target.clone(),
                         property,
                         value: value.clone(),
+                        byte_offset: 0,
+                        byte_end: 0,
                     },
                     // #9459: see the `caller`/`arguments` route above.
                     *strict,
@@ -1014,6 +1019,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         object: target.clone(),
                         index: key.clone(),
                         value: value.clone(),
+                        byte_offset: 0,
+                        byte_end: 0,
                     },
                     // #7590: a `PutValue` routed through the index-set fast
                     // path returns the assigned value to ITS caller, which may
@@ -1053,6 +1060,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 object: target.clone(),
                                 property,
                                 value: value.clone(),
+                                byte_offset: 0,
+                                byte_end: 0,
                             },
                             *strict,
                         );

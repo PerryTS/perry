@@ -161,6 +161,7 @@ fn capability_from_init(
                 object,
                 index,
                 value,
+                ..
             }) if local_get_is(object, param.id) => {
                 let Expr::String(key) = index.as_ref() else {
                     return None;

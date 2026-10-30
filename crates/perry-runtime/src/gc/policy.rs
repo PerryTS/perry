@@ -3951,7 +3951,9 @@ pub(crate) fn gc_safepoint_moving_minor() -> bool {
     // The trigger ladder coalesces the two young resources into the existing
     // precise handoff. Only small occupancy/capacity selects small copying,
     // unless a young large container is alive: its edges need the trace.
-    if due == Some(BudgetedGcTrigger::YoungScavengeCap) && !scheduled && gen_gc_enabled()
+    if due == Some(BudgetedGcTrigger::YoungScavengeCap)
+        && !scheduled
+        && gen_gc_enabled()
         && crate::arena::copying_from_space_in_use_bytes() < scavenge_nursery_cap_dueness_bytes()
         && !crate::arena::young_large_containers_exist()
     {
@@ -5472,7 +5474,9 @@ fn leaf_memory_due_at_cap(cap: usize, small_bytes: usize) -> (bool, usize) {
         return (false, usize::MAX);
     }
     let window = super::tenuring::eden_allocation_window_bytes(
-        cap, crate::arena::copying_active_survivor_in_use_bytes());
+        cap,
+        crate::arena::copying_active_survivor_in_use_bytes(),
+    );
     (
         small_bytes.saturating_add(leaf_bytes) >= window,
         window.saturating_sub(leaf_bytes),

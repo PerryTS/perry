@@ -21,6 +21,10 @@ pub(crate) unsafe fn construct(value: f64, args: *const f64, len: usize) -> Opti
         return None;
     }
     let info = (*ptr).info;
+    debug_assert!(
+        !info.is_null(),
+        "a reachable closure carries an info record"
+    );
     if (*info).flags & crate::codegen_abi::FN_NATIVE_EXPORT == 0 {
         return None;
     }
@@ -260,9 +264,14 @@ pub(crate) unsafe fn call_minted(
         .map(f64::from_bits)?;
     let closure =
         crate::value::js_nanbox_get_pointer(value) as *const crate::closure::ClosureHeader;
-    if !crate::closure::is_closure_ptr(closure as usize)
-        || (*(*closure).info).code == crate::closure::BOUND_METHOD_FUNC_PTR
-    {
+    if !crate::closure::is_closure_ptr(closure as usize) {
+        return None;
+    }
+    debug_assert!(
+        !(*closure).info.is_null(),
+        "a reachable closure carries an info record"
+    );
+    if (*(*closure).info).code == crate::closure::BOUND_METHOD_FUNC_PTR {
         return None;
     }
     Some(crate::closure::js_native_call_value(

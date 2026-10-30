@@ -898,6 +898,8 @@ fn collect_module_one(
                 }),
                 property: "Bun".to_string(),
                 value: Box::new(perry_hir::Expr::NativeModuleRef("bun".to_string())),
+                byte_offset: 0,
+                byte_end: 0,
             }),
         );
         // #10360: tell the runtime too, for Web APIs whose Bun behavior
@@ -1147,15 +1149,14 @@ fn collect_module_one(
             // object at lowering (authoritative; handles single-line sources and
             // doesn't misclassify multi-line filenames).
             let eval_mode = *is_eval;
-            let mut visiting: std::collections::HashSet<u32> = std::collections::HashSet::new();
             let (resolution, partial) = if eval_mode {
                 (
-                    perry_hir::resolve_import_path_with_context(
+                    perry_hir::resolve_worker_eval_source(
                         filename.as_ref(),
+                        &hir_module,
                         &module_const_locals,
                         &dynamic_param_literals,
                         &dynamic_local_literals,
-                        &mut visiting,
                     ),
                     false,
                 )

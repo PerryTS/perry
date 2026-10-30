@@ -12,7 +12,7 @@ extern "C" fn broadcast_post_message(
     closure: *const ClosureHeader,
     _this: perry_runtime::closure::JsThis,
     value: f64,
-    transfer: f64,
+    _transfer: f64,
 ) -> f64 {
     let channel_id = port_id_from_closure(closure);
     let channel_name = BROADCAST_CHANNELS.with(|channels| {
@@ -24,7 +24,7 @@ extern "C" fn broadcast_post_message(
     let Some(channel_name) = channel_name else {
         throw_invalid_state_error("BroadcastChannel is closed");
     };
-    let serialized = clone_message(value, transfer);
+    let serialized = clone_message(value, js_undefined());
     BROADCAST_CHANNELS.with(|channels| {
         for (id, state) in channels.borrow_mut().iter_mut() {
             if *id != channel_id && !state.closed && state.name == channel_name {

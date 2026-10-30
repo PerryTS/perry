@@ -531,6 +531,7 @@ pub(crate) fn lower(
             object,
             index,
             value,
+            ..
         } => {
             if let Some(result) = crate::layout_desc::function_families::lower_symbol_store(
                 ctx,

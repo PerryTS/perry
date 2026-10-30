@@ -383,10 +383,15 @@ mod tests {
         let here = seeded_hash(b"member");
         let _stack_pad = [0u8; 4096];
         let deeper = std::hint::black_box(seeded_hash(b"member"));
-        let other_thread = std::thread::spawn(|| seeded_hash(b"member")).join().unwrap();
+        let other_thread = std::thread::spawn(|| seeded_hash(b"member"))
+            .join()
+            .unwrap();
         assert_eq!(here, deeper);
         assert_eq!(here, other_thread);
-        assert_eq!(here, ahash::RandomState::with_seed(0).hash_one(&b"member"[..]));
+        assert_eq!(
+            here,
+            ahash::RandomState::with_seed(0).hash_one(&b"member"[..])
+        );
         std::hint::black_box(&PAD);
         // `RandomState::new()` mixes addresses in; it must differ from the seed.
         assert_ne!(

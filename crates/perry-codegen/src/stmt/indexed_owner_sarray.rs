@@ -53,10 +53,8 @@ pub(super) fn admit(ctx: &mut FnCtx<'_>, id: u32, slow: &str) -> Storage {
     );
     branch_guard(ctx, &heap, slow);
     let handle = ctx.block().and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
-    let ordinary = crate::expr::array_proto_guard::emit_ordinary_array_admission(
-        ctx.block(),
-        &handle,
-    );
+    let ordinary =
+        crate::expr::array_proto_guard::emit_ordinary_array_admission(ctx.block(), &handle);
     branch_guard(ctx, &ordinary, slow);
     let ptr = ctx.block().inttoptr(I64, &handle);
     let len = ctx.block().load(I32, &ptr);

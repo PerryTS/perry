@@ -721,7 +721,10 @@ mod tests {
                 .generation
                 .fetch_add(1, Ordering::AcqRel);
             discard_disabled_entries(&mut snapshot);
-            assert!(snapshot.entries.is_empty(), "a disabled entry must be dropped");
+            assert!(
+                snapshot.entries.is_empty(),
+                "a disabled entry must be dropped"
+            );
             discard_disabled_entries(&mut snapshot);
             assert!(snapshot.entries.is_empty());
         })

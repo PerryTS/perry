@@ -1,0 +1,75 @@
+//! The model-node constructors the exhaustive `expr_rest` match calls: the
+//! primitive-protocol touches (`prim_kids`, `primbox_kids`), the container-node
+//! builders (`bobj`, `new_arr_from`, `new_iter_from`), and the element/callback
+//! flows (`elem_store`, `elem_load`, `callback`, `array_cb`). The match itself
+//! stays in `gen_rest`: routing is one exhaustive table, not a per-group guess.
+use super::*;
+
+impl<'a> Gen<'a> {
+    pub(super) fn prim_kids(&mut self, fx: &Fx, e: &Expr, result: u16, why: &str, proto: Protocol) -> NodeId {
+        let ks = kids(e);
+        self.prim_op(fx, &ks, result, why, proto)
+    }
+
+    pub(super) fn primbox_kids(&mut self, fx: &Fx, e: &Expr, why: &str, proto: Protocol) -> NodeId {
+        let ks = kids(e);
+        self.prim_box_op(fx, &ks, why, proto)
+    }
+
+    pub(crate) fn bobj(&mut self, mi: u32, what: &'static str) -> (Tok, NodeId) {
+        let tm = self.new_bobj_template(mi, what);
+        let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
+        let n = self.tok_node(t);
+        (t, n)
+    }
+
+    pub(crate) fn new_arr_from(&mut self, mi: u32, what: &str, elems: &[NodeId]) -> NodeId {
+        let tm = self.new_arr_template(mi, what);
+        let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
+        let fa = self.m.field_any(t);
+        for &e in elems {
+            self.m.edge(e, fa);
+        }
+        self.tok_node(t)
+    }
+
+    /// A builtin iterator object (`arr.values()`, `entries()`, `keys()`)
+    /// yielding `vals` through `next().value` (`builtins::iterator_method`).
+    pub(crate) fn new_iter_from(&mut self, mi: u32, vals: &[NodeId]) -> NodeId {
+        let (t, n) = self.bobj(mi, "Iterator");
+        let a = self.m.atom("#elems");
+        let e = self.m.field(t, a);
+        for &v in vals {
+            self.m.edge(v, e);
+        }
+        n
+    }
+
+    /// Store `v` into every element/entry of what `recv` holds.
+    pub(super) fn elem_store(&mut self, fx: &Fx, recv: NodeId, v: NodeId, what: &str) {
+        let ek = self.m.elem_key();
+        self.store(fx, recv, ek, v, what.to_string(), None, false);
+    }
+
+    /// Call `cb` with `args` (this = undefined); returns the result node.
+    pub(super) fn callback(&mut self, cb: NodeId, args: Vec<NodeId>) -> NodeId {
+        self.call_value(cb, ThisArg::Undef, args, vec![])
+    }
+
+    /// These operations read numeric elements. The solved receiver decides
+    /// whether this is an array-like; other receivers retain full lookup.
+    pub(super) fn elem_load(&mut self, recv: NodeId) -> NodeId {
+        let key = self.m.elem_key();
+        self.load(recv, key)
+    }
+
+    pub(super) fn array_cb(&mut self, fx: &Fx, array: &Expr, callback: &Expr) -> (NodeId, NodeId, NodeId) {
+        let a = self.expr(fx, array);
+        let cb = self.expr(fx, callback);
+        let ek = self.m.elem_key();
+        let elems = self.load(a, ek);
+        let num = self.prim_node(prim::NUM);
+        let ret = self.callback(cb, vec![elems, num, a]);
+        (a, elems, ret)
+    }
+}

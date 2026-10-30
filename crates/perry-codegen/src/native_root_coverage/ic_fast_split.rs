@@ -117,11 +117,15 @@ fn split_module() -> Module {
                 object: Box::new(Expr::LocalGet(100)),
                 property: "bar".to_string(),
                 value: Box::new(Expr::LocalGet(22)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Expr(Expr::PropertySet {
                 object: Box::new(Expr::LocalGet(103)),
                 property: "x".to_string(),
                 value: Box::new(Expr::Number(7.0)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             let_stmt(
                 23,

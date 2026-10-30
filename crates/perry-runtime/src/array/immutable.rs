@@ -102,8 +102,11 @@ pub extern "C" fn js_array_to_sorted_default(arr: *const ArrayHeader) -> *mut Ar
     }
     unsafe {
         let len = (*arr).length as usize;
-        // Clone the array
-        let new_arr = js_array_alloc(len as u32);
+        // The clone allocation can move the source before its slots are
+        // read, so root it across the allocation.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let source = scope.root_raw_const_ptr(arr);
+        let (new_arr, arr) = source.across_const::<ArrayHeader, _>(|| js_array_alloc(len as u32));
         (*new_arr).length = len as u32;
         let src = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
         let dst = crate::array::array_elements_ptr(new_arr as *const ArrayHeader) as *mut f64;
@@ -119,9 +122,9 @@ pub extern "C" fn js_array_to_sorted_default(arr: *const ArrayHeader) -> *mut Ar
             };
         }
         rebuild_array_layout(new_arr);
-        // Sort the copy in-place using default sort
-        js_array_sort_default(new_arr);
-        new_arr
+        // The sort itself can collect, so hand back the helper's live pointer
+        // rather than the one captured before it.
+        js_array_sort_default(new_arr)
     }
 }
 
@@ -164,8 +167,11 @@ pub extern "C" fn js_array_to_sorted_with_comparator(
     }
     unsafe {
         let len = (*arr).length as usize;
-        // Clone the array
-        let new_arr = js_array_alloc(len as u32);
+        // Root both inputs before the clone allocation can move them.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let source = scope.root_raw_const_ptr(arr);
+        let comparator = scope.root_raw_const_ptr(comparator);
+        let (new_arr, arr) = source.across_const::<ArrayHeader, _>(|| js_array_alloc(len as u32));
         (*new_arr).length = len as u32;
         let src = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
         let dst = crate::array::array_elements_ptr(new_arr as *const ArrayHeader) as *mut f64;
@@ -181,9 +187,11 @@ pub extern "C" fn js_array_to_sorted_with_comparator(
             };
         }
         rebuild_array_layout(new_arr);
-        // Sort the copy in-place
-        js_array_sort_with_comparator(new_arr, comparator);
-        new_arr
+        // The sort calls back into JS, which can move both the copy and the
+        // comparator: re-read the comparator and return the live result.
+        comparator.with_const_ptr(|comparator| {
+            js_array_sort_with_comparator(new_arr, comparator)
+        })
     }
 }
 

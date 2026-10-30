@@ -610,6 +610,7 @@ pub fn fix_class_field_expr(
             object,
             index,
             value,
+            ..
         } => {
             fix_class_field_expr(object, class_field_natives, user_classes, current_class);
             fix_class_field_expr(index, class_field_natives, user_classes, current_class);
@@ -677,6 +678,7 @@ pub fn scan_stmt_for_field_native_instances(
             object,
             property,
             value,
+            ..
         }) => {
             if matches!(object.as_ref(), Expr::This) {
                 if let Some((module_name, class_name)) =
@@ -1275,6 +1277,7 @@ pub fn fix_native_instance_expr_with_locals(
             object,
             index,
             value,
+            ..
         } => {
             fix_native_instance_expr_with_locals(object, native_instances, local_id_instances);
             fix_native_instance_expr_with_locals(index, native_instances, local_id_instances);

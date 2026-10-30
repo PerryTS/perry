@@ -262,6 +262,7 @@ pub(super) fn nested_layouts(
                     birth_keys: atoms_of(g, &g.m.tmpls[itm as usize].birth_keys),
                     definite: atoms_of(g, &g.m.tmpls[itm as usize].definite),
                     ctor_leaks: true,
+                    ctor_returns: g.chain_returns(itm),
                     binding_prim: 0,
                     fn_inst: false,
                 });
@@ -1087,6 +1088,7 @@ pub(super) fn describe_nodes(
                             birth_keys: atoms_of(g, &g.m.tmpls[tm as usize].birth_keys),
                             definite: atoms_of(g, &g.m.tmpls[tm as usize].definite),
                             ctor_leaks: true,
+                    ctor_returns: g.chain_returns(tm),
                             binding_prim: 0,
                             fn_inst: false,
                         });
@@ -1432,6 +1434,7 @@ pub(super) fn describe_toks(
                     birth_keys: atoms_of(g, &g.m.tmpls[tm as usize].birth_keys),
                     definite: atoms_of(g, &g.m.tmpls[tm as usize].definite),
                     ctor_leaks: true,
+                    ctor_returns: g.chain_returns(tm),
                     binding_prim: 0,
                     fn_inst: false,
                 })
@@ -1601,6 +1604,7 @@ pub(super) fn fn_inst_contract(
         birth_keys: atoms_of(g, &tpl.birth_keys),
         definite: atoms_of(g, &tpl.definite),
         ctor_leaks: true,
+        ctor_returns: m.ctor_returns_object(f),
         binding_prim: 0,
         fn_inst: true,
     })
@@ -1853,6 +1857,7 @@ pub(super) fn arg_contract_of(
                             birth_keys: atoms_of(g, &g.m.tmpls[tm as usize].birth_keys),
                             definite: atoms_of(g, &g.m.tmpls[tm as usize].definite),
                             ctor_leaks: true,
+                    ctor_returns: g.chain_returns(tm),
                             binding_prim: 0,
                             fn_inst: false,
                         }),

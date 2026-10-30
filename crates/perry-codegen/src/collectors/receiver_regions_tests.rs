@@ -830,6 +830,8 @@ fn battery() -> Vec<(&'static str, Vec<Stmt>)> {
                 object: Box::new(num(OBJ)),
                 index: Box::new(num(NUM)),
                 value: Box::new(Expr::Number(1.0)),
+                byte_offset: 0,
+                byte_end: 0,
             })],
         ),
         (

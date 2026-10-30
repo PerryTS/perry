@@ -443,7 +443,10 @@ pub(crate) unsafe fn drop_packed_subclass_numeric_proof_record(
     }
     // The caller moves away from the proof sibling before publishing another
     // shape or returning to a mutator; clear the bound and twin-id payload.
-    let meta = crate::meta_read!(crate::meta_obj_from_kind!(obj as *mut _, crate::object::shapes::ShapeObjectKind::OrdinaryNumericProof));
+    let meta = crate::meta_read!(crate::meta_obj_from_kind!(
+        obj as *mut _,
+        crate::object::shapes::ShapeObjectKind::OrdinaryNumericProof
+    ));
     let mut unproven = 0;
     if !meta.is_null() {
         if (*meta).flags & PACKED_NUMERIC_META_VALID != 0 {
@@ -793,8 +796,8 @@ unsafe fn store_dense_nonpointer_number_slot(
     let value_bits = number.to_bits();
     if slot < live_inline_slots {
         // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
-        let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _))
-            .cast::<u64>();
+        let fields =
+            crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)).cast::<u64>();
         // GC_STORE_AUDIT(POINTER_FREE): the caller proved `number` is a raw nonnegative i32 Number; no edge changes.
         ptr::write(fields.add(slot as usize), value_bits);
         return true;
@@ -822,8 +825,8 @@ unsafe fn clear_retired_dense_slot(
 ) {
     if slot < former_live_inline_slots {
         // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
-        let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _))
-            .cast::<u64>();
+        let fields =
+            crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)).cast::<u64>();
         // The predecessor ShapeId is already installed, so this physical tail
         // is outside the object's traced slot range. Clearing it is storage
         // hygiene, not publication of a new edge.
@@ -858,8 +861,8 @@ unsafe fn clear_retired_dense_numeric_tail_slot(
 ) {
     if slot < former_live_inline_slots {
         // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
-        let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _))
-            .cast::<u64>();
+        let fields =
+            crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)).cast::<u64>();
         // GC_STORE_AUDIT(POINTER_FREE): retiring a physical tail slot to `undefined` publishes no edge.
         ptr::write(fields.add(slot as usize), crate::value::TAG_UNDEFINED);
         return;

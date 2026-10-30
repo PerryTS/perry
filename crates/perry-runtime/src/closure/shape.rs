@@ -543,8 +543,8 @@ pub(crate) unsafe fn closure_own_prototype_by_shape(
         index => {
             let bag = (*closure).props;
             debug_assert!(!bag.is_null(), "a keyed Function shape has a bag");
-            let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(bag as *mut _))
-                as *const u64;
+            let fields =
+                crate::meta_slots_of!(crate::meta_obj_runtime_born!(bag as *mut _)) as *const u64;
             Some(Some(f64::from_bits(*fields.add(index as usize))))
         }
     }

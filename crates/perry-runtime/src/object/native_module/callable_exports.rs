@@ -1280,6 +1280,15 @@ unsafe fn bound_native_callable_closure(
     // heap floor lets a `0xf0000`-band id through on Linux — the #5592 sweep
     // host) before probing `CLOSURE_MAGIC`. Refs test262
     // class/subclass/superclass-{arrow,async,generator,async-generator}-function.
+    // Every closure user code can reach carries an info record; only a heap
+    // walker can see a header whose info is not written yet.
+    #[cfg(debug_assertions)]
+    if crate::closure::is_closure_ptr(closure as usize) {
+        assert!(
+            !(*closure).info.is_null(),
+            "a reachable closure carries an info record"
+        );
+    }
     if !crate::closure::is_closure_ptr(closure as usize)
         || ((*closure).code() != crate::closure::BOUND_METHOD_FUNC_PTR
             && (*(*closure).info).flags & crate::codegen_abi::FN_NATIVE_EXPORT == 0)

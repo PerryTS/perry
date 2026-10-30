@@ -292,11 +292,13 @@ pub(crate) fn collect_literal_finals(
                         object,
                         property,
                         value,
+                        ..
                     } => Some((object.as_ref(), property.as_str(), value.as_ref())),
                     Expr::IndexSet {
                         object,
                         index,
                         value,
+                        ..
                     } => match index.as_ref() {
                         Expr::String(key) => Some((object.as_ref(), key.as_str(), value.as_ref())),
                         _ => None,

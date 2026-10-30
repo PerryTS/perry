@@ -758,7 +758,11 @@ fn perform(
         let element_fast = cap_reject_is_closure && !promise_lifecycle_observed();
         // A plain native promise needs neither the catch frame (no getter can
         // run) nor the constructor/`then` probes; see `plain_native_promise`.
-        let plain = if element_fast { plain_native_promise(next) } else { None };
+        let plain = if element_fast {
+            plain_native_promise(next)
+        } else {
+            None
+        };
         let next_promise = if plain.is_some() {
             next
         } else if element_fast {

@@ -1,6 +1,10 @@
 use super::*;
 
 fn resolution_info(source: &str) -> (Resolution, bool) {
+    worker_resolution(source, false)
+}
+
+fn worker_resolution(source: &str, eval: bool) -> (Resolution, bool) {
     let ast = perry_parser::parse_typescript(source, "worker-helpers.ts").unwrap();
     let module = crate::lower_module(&ast, "worker-helpers", "worker-helpers.ts").unwrap();
     let consts = collect_module_const_locals(&module);
@@ -9,9 +13,14 @@ fn resolution_info(source: &str) -> (Resolution, bool) {
     let mut results = Vec::new();
     for_each_worker_new(&module, &mut |expr| {
         if let Expr::WorkerNew { filename, .. } = expr {
-            results.push(resolve_worker_path(
-                filename, &module, &consts, &params, &locals,
-            ));
+            results.push(if eval {
+                (
+                    resolve_worker_eval_source(filename, &module, &consts, &params, &locals),
+                    false,
+                )
+            } else {
+                resolve_worker_path(filename, &module, &consts, &params, &locals)
+            });
         }
     });
     assert_eq!(results.len(), 1, "fixture must contain one Worker");
@@ -305,4 +314,37 @@ fn partial_marker_survives_nested_calls_and_string_operations() {
     assert!(
         !resolution_info("function target() { return './worker.ts'; } new Worker(target());").1
     );
+}
+
+#[test]
+fn eval_source_retains_url_provenance() {
+    for filename in [
+        "new URL('./worker.cjs', import.meta.url)",
+        "filename",
+        "identity(filename)",
+    ] {
+        let source = format!("const filename = new URL('./worker.cjs', import.meta.url); function identity(x) {{ return x; }} new Worker({filename}, {{eval:true}});");
+        assert!(matches!(
+            worker_resolution(&source, true).0,
+            Resolution::Unresolved(_)
+        ));
+    }
+    assert!(matches!(
+        worker_resolution(
+            "new Worker('file:///source-is-a-string', {eval:true});",
+            true
+        )
+        .0,
+        Resolution::Set(_)
+    ));
+}
+
+#[test]
+fn eval_source_does_not_inherit_filename_byte_limit() {
+    let script = format!("/*{}*/", "x".repeat(70_000));
+    let source = format!("const source = {script:?}; new Worker(source, {{eval:true}});");
+    match worker_resolution(&source, true).0 {
+        Resolution::Set(values) => assert_eq!(values, vec![script]),
+        other => panic!("{other:?}"),
+    }
 }

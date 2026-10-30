@@ -359,7 +359,8 @@ fn young_large_weak_storage_keeps_moved_keys_through_promotion() {
     let owner = (rooted(0).to_bits() & POINTER_MASK) as *const crate::ObjectHeader;
     let table = unsafe { crate::weakref::storage::owned_storage(owner) };
     assert!(
-        crate::arena::pointer_in_nursery(table as usize) && crate::arena::is_large_storage(table as usize),
+        crate::arena::pointer_in_nursery(table as usize)
+            && crate::arena::is_large_storage(table as usize),
         "a large weak table is young large storage"
     );
     root_object(1);
@@ -369,11 +370,22 @@ fn young_large_weak_storage_keeps_moved_keys_through_promotion() {
         (old_key & POINTER_MASK) as usize
     ));
     js_weakmap_set(rooted(0), rooted(1), rooted(2));
-    assert_eq!(remembered_dirty_page_count(), 0, "a young table owes no coverage");
+    assert_eq!(
+        remembered_dirty_page_count(),
+        0,
+        "a young table owes no coverage"
+    );
     let trace = collect_minor_trace(GcTriggerKind::Direct);
     assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
-    assert_ne!(old_key, rooted(1).to_bits(), "the live weak key must actually move");
-    assert!(crate::arena::pointer_in_old_gen(table as usize), "the table is promoted at its address");
+    assert_ne!(
+        old_key,
+        rooted(1).to_bits(),
+        "the live weak key must actually move"
+    );
+    assert!(
+        crate::arena::pointer_in_old_gen(table as usize),
+        "the table is promoted at its address"
+    );
     assert_eq!(
         js_weakmap_get(rooted(0), rooted(1)).to_bits(),
         rooted(2).to_bits()

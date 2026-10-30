@@ -1553,6 +1553,9 @@ pub struct Model {
     pub marker_links: Vec<(Tok, Tok)>,
     /// Published classes whose constructor is a contract (DECISIONS 57).
     pub ctor_published: crate::pts::FxHashSet<TmplId>,
+    /// Foreign classes whose constructor chain may return an object other
+    /// than `this` (`ClassContract::ctor_returns`): their `new` is unknown.
+    pub foreign_ctor_returns: crate::pts::FxHashSet<TmplId>,
     /// Another unit's templates this unit sees through a contract, with the
     /// facts their defining unit published (design §11.2).
     pub foreign: FxHashMap<TmplId, crate::TemplateFacts>,
