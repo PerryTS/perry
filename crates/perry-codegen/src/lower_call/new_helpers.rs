@@ -741,7 +741,12 @@ pub(crate) fn ctor_chain_can_replace_this(
     leaf: &str,
 ) -> bool {
     let mut name = leaf.to_string();
+    let mut seen = std::collections::HashSet::new();
     for _ in 0..32 {
+        // A cyclic heritage has been walked whole: every class on it passed.
+        if !seen.insert(name.clone()) {
+            return false;
+        }
         let Some(class) = classes.get(&name).copied() else {
             return true;
         };
