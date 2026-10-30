@@ -234,6 +234,10 @@ errors retain their identity, and rejection leaves ArrayBuffers attached.
 BroadcastChannel ignores its extra argument. Worker constructor transfer admission
 remains separate; MessagePort endpoint movement and direct-message routing/timeout
 parity are not provided by this normalization.
+Main-thread `postMessageToThread` rejects missing or stopped destinations before
+cloning the payload or detaching transfer buffers. Worker-origin messages retain
+Node's forwarding order: cloning precedes destination rejection. Admission does
+not guarantee rollback if a destination exits concurrently after it was admitted.
 Other worker API parity gaps remain.
 
 ## Next Steps
