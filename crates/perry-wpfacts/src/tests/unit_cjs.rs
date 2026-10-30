@@ -207,7 +207,10 @@ fn a_commonjs_unit_proves_what_the_whole_program_proves() {
     // DECISIONS 225: the wrapper's `module.require` (`moduleRequire`) never
     // runs in any of the three modules: its call sites are dead (25 -> 22).
     assert_eq!(proven_sites(&w).len(), 22);
-    assert_cjs_per_unit(&w, &u, 7);
+    // SEH: per unit proves all 22: the module records' fields joined over
+    // rounds keep each round's description (`ClassContract::join`) where the
+    // join made them ⊤ (`exports.Base` read ⊤, 7 proven).
+    assert_cjs_per_unit(&w, &u, 22);
 }
 
 /// DECISIONS 115: a class whose binding may hold `undefined` beside the
@@ -378,7 +381,8 @@ fn capture_parameters_bound_directly_or_composed_hold_the_class_environment() {
     let (w, u) = both(&T5);
     // DECISIONS 225: `moduleRequire` never runs (31 -> 28, see T1).
     assert_eq!(proven_sites(&w).len(), 28);
-    assert_cjs_per_unit(&w, &u, 13);
+    // SEH: all 28, as T1 (13 while the joined records read ⊤).
+    assert_cjs_per_unit(&w, &u, 28);
 }
 
 #[test]

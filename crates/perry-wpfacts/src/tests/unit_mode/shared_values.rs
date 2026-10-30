@@ -849,6 +849,39 @@ pub(super) fn a_parameter_stored_through_a_result_into_another_units_literal_esc
     assert!(!field(tmpl(&pf, "Box"), "v").readonly, "{}", pf.dump_text());
 }
 
+/// A store into another declaration unit's literal reached through a result
+/// (`get().p = o`): the stored object leaves through `b()`, and the reader
+/// writes it. Per unit must not be stronger than whole.
+fn stored_through_a_result_is_written(b: &str, m: &str) {
+    let mods = [("b", b), ("m", m)];
+    assert!(!field(tmpl(&whole_of(&mods), "Box"), "v").readonly);
+    let pf = units_of(&mods);
+    assert!(!field(tmpl(&pf, "Box"), "v").readonly, "{}", pf.dump_text());
+}
+
+#[test]
+pub(super) fn an_object_stored_through_a_result_into_another_units_literal_escapes() {
+    let b = "const saved: any = { p: null };\nfunction get() { return saved; }\nclass Box { v: any = 1; }\nexport function run() { const o = new Box(); get().p = o; return o; }\nexport function b() { return saved.p; }";
+    let m = "import { run, b } from './b'; const o = run(); const r = b(); r.v = 'x'; console.log(o.v);";
+    stored_through_a_result_is_written(b, m);
+}
+
+#[test]
+pub(super) fn a_method_parameter_stored_through_a_result_into_another_units_literal_escapes() {
+    // DECISIONS 148: `a`'s parameter is described, not a bare marker.
+    let b = "const saved: any = { p: null };\nfunction get() { return saved; }\nexport class K { a(p: any) { get().p = p; } }\nexport function b() { return saved.p; }";
+    let m = "import { K, b } from './b'; class Box { v: any = 1; } const o = new Box(); new K().a(o); const r = b(); r.v = 'x'; console.log(o.v);";
+    stored_through_a_result_is_written(b, m);
+}
+
+#[test]
+pub(super) fn a_closed_parameter_stored_through_a_result_into_another_units_literal_escapes() {
+    // DECISIONS 13: `a` is run only by `run`, its parameter is closed.
+    let b = "const saved: any = { p: null };\nfunction get() { return saved; }\nclass Box { v: any = 1; }\nfunction a(p: any) { get().p = p; }\nexport function run() { const o = new Box(); a(o); return o; }\nexport function b() { return saved.p; }";
+    let m = "import { run, b } from './b'; const o = run(); const r = b(); r.v = 'x'; console.log(o.v);";
+    stored_through_a_result_is_written(b, m);
+}
+
 #[test]
 pub(super) fn a_closure_stores_into_another_units_literal() {
     // `f` and `g` are a literal's methods; the cell they share is a
