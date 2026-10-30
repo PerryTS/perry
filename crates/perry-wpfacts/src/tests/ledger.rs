@@ -136,6 +136,7 @@ fn every_seed_text_has_a_cause() {
             ("top_val(", 60, false),
             ("let why = ", 120, false),
             ("reason(\"", 10, true),
+            ("to_sink(", 120, true),
             ("reason(&format!(\"", 24, true),
         ] {
             for (at, _) in s.match_indices(needle) {
