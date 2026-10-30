@@ -610,6 +610,9 @@ impl<'a> Gen<'a> {
             top(self, any);
         }
         self.m.foreign.insert(tm, joined.facts.clone());
+        if joined.ctor_returns {
+            self.m.foreign_ctor_returns.insert(tm);
+        }
         self.stand_in_cc.insert(tm, joined);
     }
 
@@ -728,6 +731,9 @@ impl<'a> Gen<'a> {
         });
         self.m.funcs[ctor as usize].ctor_of = Some(tm);
         self.m.foreign.insert(tm, c.facts.clone());
+        if c.ctor_returns {
+            self.m.foreign_ctor_returns.insert(tm);
+        }
         self.stand_in_cc.insert(tm, c.clone());
         // Its parent from another unit (DECISIONS 104): that class's own
         // stand-in, so an inherited method resolves up the chain as in the

@@ -864,6 +864,7 @@ fn compute_act<'a>(
                         birth_keys: atoms_of(&g, &g.m.tmpls[tm as usize].birth_keys),
                         definite: atoms_of(&g, &g.m.tmpls[tm as usize].definite),
                         ctor_leaks: g.chain_leaks(tm),
+                        ctor_returns: g.chain_returns(tm),
                         binding_prim: match e {
                             Some(_) => g.m.nodes[en as usize].prim,
                             None => 0,

@@ -614,12 +614,12 @@ mod tests {
         let mut child = class("A", Some("B"));
         child.constructor = Some(function(
             "constructor",
-            vec![Stmt::Return(Some(Expr::PropertyGet {
+            vec![Stmt::Expr(Expr::PropertyGet {
                 byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::This),
                 property: "value".to_string(),
-            }))],
+            })],
         ));
 
         let mut parent = class("B", Some("A"));
