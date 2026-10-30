@@ -5419,12 +5419,33 @@ fn leaf_memory_due_at_cap(cap: usize, small_bytes: usize) -> (bool, usize) {
     if leaf_bytes == 0 {
         return (false, usize::MAX);
     }
-    let window = super::tenuring::eden_allocation_window_bytes(
+    leaf_window_due(
         cap,
+        small_bytes,
         crate::arena::copying_active_survivor_in_use_bytes(),
-    );
+        leaf_bytes,
+    )
+}
+
+/// The leaf arm of the young trigger: Eden plus the young leaves against
+/// Eden's allocation window, and the from-space bound under which that stays
+/// false. `small_bytes` is the from-space occupancy (Eden plus the active
+/// survivor space); the window already credits the survivor space against the
+/// cap (`eden_allocation_window_bytes`, the budget the copying minor reads),
+/// so the survivor bytes come out of the reading before the comparison.
+/// Counting them on both sides made the arm due up to one survivor credit
+/// before the copying cap with no leaf to retire, and every young leaf born
+/// in that band ran a leaf service that could not make the arm false.
+pub(super) fn leaf_window_due(
+    cap: usize,
+    small_bytes: usize,
+    survivor_bytes: usize,
+    leaf_bytes: usize,
+) -> (bool, usize) {
+    let window = super::tenuring::eden_allocation_window_bytes(cap, survivor_bytes);
+    let eden = small_bytes.saturating_sub(survivor_bytes);
     (
-        small_bytes.saturating_add(leaf_bytes) >= window,
-        window.saturating_sub(leaf_bytes),
+        eden.saturating_add(leaf_bytes) >= window,
+        window.saturating_add(survivor_bytes).saturating_sub(leaf_bytes),
     )
 }
