@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Default)]
 pub(crate) struct Trace {
     pub pred: BTreeMap<NodeId, (NodeId, String)>,
-    pub contract_inputs: BTreeMap<NodeId, String>,
+    pub contract_inputs: BTreeMap<NodeId, (String, String)>,
     pub seeds: BTreeMap<NodeId, String>,
     pub bound_origins: BTreeMap<u32, CallId>,
     pub source_calls: BTreeSet<CallId>,
@@ -856,10 +856,10 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
         nodes.extend(m.closed_params.get(&f).into_iter().flatten());
     }
     if let Some(trace) = &m.diagnostic {
-        for (&n, input) in &trace.contract_inputs {
+        for (&n, (input, why)) in &trace.contract_inputs {
             nodes.insert(n);
             out.push(format!(
-                "{{\"record\":\"contract-input\",\"node\":{n},\"description\":{}}}",
+                "{{\"record\":\"contract-input\",\"node\":{n},\"description\":{},\"why\":{why}}}",
                 quote(input)
             ));
         }
@@ -922,10 +922,24 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
 /// Existing contract summary, observed only after fact derivation.
 pub(crate) fn value_brief(c: &crate::units::ValueContract) -> String {
     format!(
-        "{{\"unknown\":{},\"prim\":{},\"functions\":{},\"arrays\":{}}}",
+        "{{\"unknown\":{},\"why\":{},\"prim\":{},\"functions\":{},\"arrays\":{}}}",
         c.unknown,
+        why_json(c),
         c.prim,
         strings(c.fns.iter().map(|f| f.name.clone())),
         strings(c.arrays.iter().cloned())
     )
+}
+
+/// The reason an unknown value contract is unknown and the unit that
+/// published it, as JSON (`null` when it is known or has no recorded reason).
+pub(crate) fn why_json(c: &crate::units::ValueContract) -> String {
+    match &c.why.0 {
+        Some((r, u)) if c.unknown => format!(
+            "{{\"reason\":{},\"unit\":{}}}",
+            quote(r),
+            u.as_deref().map_or("null".into(), quote)
+        ),
+        _ => "null".into(),
+    }
 }
