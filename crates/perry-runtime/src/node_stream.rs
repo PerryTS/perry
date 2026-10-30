@@ -693,6 +693,9 @@ fn push_chunk(stream: f64, chunk: f64) -> f64 {
         flush_readable_decoder(stream);
         mark_stream_ended(stream);
         refresh_readable_aborted_flag(stream);
+        // node's `onEofChunk`: a reader waiting in `readable` learns of EOF
+        // while data it has not drained is still buffered.
+        schedule_readable_event(stream);
         schedule_readable_end(stream);
         return f64::from_bits(TAG_FALSE);
     }
