@@ -361,6 +361,7 @@ mod tests {
         );
 
         let path = CString::new(library.as_os_str().as_bytes()).expect("NUL-free dylib path");
+        let _loader = crate::test_support::loaded_objects_test_lock();
         let handle = unsafe { libc::dlopen(path.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
         assert!(!handle.is_null(), "dlopen failed");
 
@@ -441,6 +442,7 @@ mod tests {
         );
 
         let path = CString::new(library.as_os_str().as_bytes()).expect("NUL-free dylib path");
+        let _loader = crate::test_support::loaded_objects_test_lock();
         let handle = unsafe { libc::dlopen(path.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
         assert!(!handle.is_null(), "dlopen failed");
         std::fs::remove_file(&library).expect("unlink loaded dylib");

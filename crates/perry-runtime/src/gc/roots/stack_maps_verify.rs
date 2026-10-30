@@ -33,7 +33,9 @@
 //! prologue words `fp_to_sp_offset` decoded to derive an SP base. That is
 //! enough to say which walker is wrong without a second run.
 
-use super::{fp_chain, unwind, MutableRootSlot, NativeStackWalkStats, ResolvedRoot, StackMapIndex};
+use super::{
+    fast_walk, unwind, MutableRootSlot, NativeStackWalkStats, ResolvedRoot, StackMapIndex,
+};
 use std::fmt::Write as _;
 
 /// Run the fast walk non-mutating, then the unwinder for the real visitation,
@@ -43,13 +45,14 @@ pub(super) fn visit(
     visit: &mut impl FnMut(MutableRootSlot),
 ) -> NativeStackWalkStats {
     let mut fast: Vec<ResolvedRoot> = Vec::new();
-    let fast_stats = fp_chain::visit(index, &mut |root: ResolvedRoot| fast.push(root));
+    let fast_stats = fast_walk::visit(index, &mut |root: ResolvedRoot| fast.push(root));
     let Some(fast_stats) = fast_stats else {
         panic!(
             "PERRY_STACKMAP_WALKER=verify: fast walk unavailable — it abandoned the \
              walk on a frame it could not resolve (a base outside FP/SP/x19, an \
-             undecodable prologue, or an unvalidated frame record), or this target \
-             has no fp-chain walker."
+             undecodable prologue, an unvalidated frame record, or on x86-64 an \
+             unwind row the direct decoder cannot follow), or this target has no \
+             fast walker."
         );
     };
     let mut slow: Vec<ResolvedRoot> = Vec::new();
