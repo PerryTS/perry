@@ -114,7 +114,7 @@ fn addon_files(root: &Path, dir: &Path, output: &mut Vec<PathBuf>) -> Result<()>
     Ok(())
 }
 
-fn matches_target(path: &Path, triple: &str) -> Result<bool> {
+pub(super) fn matches_target(path: &Path, triple: &str) -> Result<bool> {
     let bytes = fs::read(path)?;
     let file = object::File::parse(&*bytes)
         .map_err(|e| anyhow::anyhow!("cannot inspect native addon {}: {e}", path.display()))?;
