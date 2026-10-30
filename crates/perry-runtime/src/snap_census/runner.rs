@@ -323,6 +323,13 @@ struct State {
     regions: Vec<(usize, usize)>,
     heap: PageMap,
     bin: PageMap,
+    /// The main thread's static TLS block: module globals live there in a
+    /// program with a Worker (per-thread init flags and bindings, #10399).
+    tls: PageMap,
+    /// Pages opened for the current instruction (the handler's own state is
+    /// never in TLS: a TLS page may be protected).
+    pending: [usize; 8],
+    rset_word: usize,
     realm: (usize, usize),
     d_mode: bool,
     perf_fd: i32,
@@ -391,6 +398,14 @@ unsafe fn start(out: String) {
     let (res_lo, res_hi) = crate::arena::snap_reservation_bounds();
     let realm = crate::value::addr_class::realm::bounds();
     let (bin_lo, bin_hi) = writable_image_range(realm.0);
+    let mut fs: usize = 0;
+    libc::syscall(libc::SYS_arch_prctl, 0x1003 /* ARCH_GET_FS */, &mut fs as *mut usize);
+    let (tls_lo, tls_hi) = if fs != 0 && !(fs >= bin_lo && fs < bin_hi) {
+        let (lo, hi) = writable_image_range(fs);
+        (lo.max(fs.saturating_sub(16 << 20)), hi.min(fs + (1 << 20)))
+    } else {
+        (fs, fs + PAGE)
+    };
     let mut st = Box::new(State {
         out,
         inits: Vec::with_capacity(4096),
@@ -420,6 +435,9 @@ unsafe fn start(out: String) {
         regions: Vec::new(),
         heap: PageMap::new(res_lo, res_hi),
         bin: PageMap::new(bin_lo, bin_hi),
+        tls: PageMap::new(tls_lo, tls_hi),
+        pending: [0; 8],
+        rset_word: 0,
         realm,
         d_mode: false,
         perf_fd: open_instruction_counter(),
@@ -815,8 +833,8 @@ pub(super) fn global_root(slot: usize) {
         st.w.insert(slot as u64);
         flag_page(st, slot & !(PAGE - 1), PF_W);
     }
-    if st.d_mode {
-        let page = slot & !(PAGE - 1);
+    let page = slot & !(PAGE - 1);
+    if st.d_mode && page_flags(st, page).is_some() {
         unsafe { libc::mprotect(page as *mut _, PAGE, libc::PROT_NONE) };
     }
 }
@@ -834,7 +852,7 @@ fn mark_tracked(lo: usize, hi: usize) {
 
 #[inline]
 fn page_flags(st: &State, addr: usize) -> Option<*mut u8> {
-    st.heap.slot(addr).or_else(|| st.bin.slot(addr))
+    st.heap.slot(addr).or_else(|| st.bin.slot(addr)).or_else(|| st.tls.slot(addr))
 }
 
 // ---------------------------------------------------------------------------
@@ -874,16 +892,18 @@ unsafe fn for_each_tracked_range(st: &State, mut f: impl FnMut(usize, usize)) {
     for &(b, e) in &st.regions {
         f(b, e);
     }
-    let mut i = 0;
-    while i < st.bin.pages {
-        if *st.bin.flags.add(i) & PF_TRACKED != 0 {
-            let s = i;
-            while i < st.bin.pages && *st.bin.flags.add(i) & PF_TRACKED != 0 {
+    for m in [&st.bin, &st.tls] {
+        let mut i = 0;
+        while i < m.pages {
+            if *m.flags.add(i) & PF_TRACKED != 0 {
+                let s = i;
+                while i < m.pages && *m.flags.add(i) & PF_TRACKED != 0 {
+                    i += 1;
+                }
+                f(m.lo + s * PAGE, m.lo + i * PAGE);
+            } else {
                 i += 1;
             }
-            f(st.bin.lo + s * PAGE, st.bin.lo + i * PAGE);
-        } else {
-            i += 1;
         }
     }
 }
@@ -1031,25 +1051,25 @@ fn pre_existing(st: &State, word: usize) -> bool {
 // Signals
 // ---------------------------------------------------------------------------
 
-static mut PREV_SEGV: std::mem::MaybeUninit<libc::sigaction> = std::mem::MaybeUninit::uninit();
-static mut PREV_TRAP: std::mem::MaybeUninit<libc::sigaction> = std::mem::MaybeUninit::uninit();
+/// The dispositions the runner replaced, alone on their page (a page of
+/// `.bss` may also hold module globals, which the runner protects).
+#[repr(C, align(4096))]
+struct Prev(std::mem::MaybeUninit<libc::sigaction>);
+static mut PREV_SEGV: Prev = Prev(std::mem::MaybeUninit::uninit());
+static mut PREV_TRAP: Prev = Prev(std::mem::MaybeUninit::uninit());
 
-std::thread_local! {
-    static PENDING: std::cell::Cell<[usize; 8]> = const { std::cell::Cell::new([0; 8]) };
-    static RSET_WORD: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
 
 unsafe fn install_handlers() {
     let mut a: libc::sigaction = std::mem::zeroed();
     a.sa_sigaction = on_segv as *const () as usize;
     a.sa_flags = libc::SA_SIGINFO;
     libc::sigemptyset(&mut a.sa_mask);
-    libc::sigaction(libc::SIGSEGV, &a, std::ptr::addr_of_mut!(PREV_SEGV).cast());
+    libc::sigaction(libc::SIGSEGV, &a, std::ptr::addr_of_mut!(PREV_SEGV.0).cast());
     let mut t: libc::sigaction = std::mem::zeroed();
     t.sa_sigaction = on_trap as *const () as usize;
     t.sa_flags = libc::SA_SIGINFO;
     libc::sigemptyset(&mut t.sa_mask);
-    libc::sigaction(libc::SIGTRAP, &t, std::ptr::addr_of_mut!(PREV_TRAP).cast());
+    libc::sigaction(libc::SIGTRAP, &t, std::ptr::addr_of_mut!(PREV_TRAP.0).cast());
 }
 
 unsafe fn chain(prev: *const libc::sigaction, sig: i32) {
@@ -1065,7 +1085,7 @@ extern "C" fn on_segv(sig: libc::c_int, info: *mut libc::siginfo_t, ctx: *mut li
         let addr = (*info).si_addr() as usize;
         let st_ptr = ANCHOR.state.load(Relaxed);
         if st_ptr.is_null() {
-            return chain(std::ptr::addr_of!(PREV_SEGV).cast(), sig);
+            return chain(std::ptr::addr_of!(PREV_SEGV.0).cast(), sig);
         }
         let st = &mut *st_ptr;
         let page = addr & !(PAGE - 1);
@@ -1073,28 +1093,24 @@ extern "C" fn on_segv(sig: libc::c_int, info: *mut libc::siginfo_t, ctx: *mut li
             let uc = ctx as *mut libc::ucontext_t;
             let gregs = &mut (*uc).uc_mcontext.gregs;
             if gregs[libc::REG_ERR as usize] & 2 == 0 || st.heap.slot(addr).is_none() {
-                return chain(std::ptr::addr_of!(PREV_SEGV).cast(), sig);
+                return chain(std::ptr::addr_of!(PREV_SEGV.0).cast(), sig);
             }
             st.rset_faults += 1;
             let word = addr & !7;
             if let Some(i) = cand_index(st, word) {
                 st.cand_writes[i] = st.cand_writes[i].saturating_add(1);
-                RSET_WORD.with(|w| w.set(word | 1));
+                st.rset_word = word | 1;
             }
-            PENDING.with(|p| {
-                let mut v = p.get();
-                if let Some(slot) = v.iter_mut().find(|s| **s == 0) {
-                    *slot = page;
-                }
-                p.set(v)
-            });
+            if let Some(slot) = st.pending.iter_mut().find(|s| **s == 0) {
+                *slot = page;
+            }
             libc::mprotect(page as *mut _, PAGE, libc::PROT_READ | libc::PROT_WRITE);
             gregs[libc::REG_EFL as usize] |= EFLAGS_TF;
             return;
         }
         let tracked = page_flags(st, page).is_some_and(|f| *f & PF_TRACKED != 0);
         if !tracked || policy(st, page) == libc::PROT_READ | libc::PROT_WRITE {
-            return chain(std::ptr::addr_of!(PREV_SEGV).cast(), sig);
+            return chain(std::ptr::addr_of!(PREV_SEGV.0).cast(), sig);
         }
         let uc = ctx as *mut libc::ucontext_t;
         let gregs = &mut (*uc).uc_mcontext.gregs;
@@ -1103,12 +1119,9 @@ extern "C" fn on_segv(sig: libc::c_int, info: *mut libc::siginfo_t, ctx: *mut li
         st.faults_total += 1;
         // Open the page for one instruction (before recording: the record
         // may read an object header on it).
-        let pending = PENDING.with(|p| p.get());
-        let mut pend = pending;
-        if let Some(slot) = pend.iter_mut().find(|s| **s == 0) {
+        if let Some(slot) = st.pending.iter_mut().find(|s| **s == 0) {
             *slot = page;
         }
-        PENDING.with(|p| p.set(pend));
         libc::mprotect(page as *mut _, PAGE, libc::PROT_READ | libc::PROT_WRITE);
         note_access(st, addr & !7, write, pc);
         gregs[libc::REG_EFL as usize] |= EFLAGS_TF;
@@ -1117,13 +1130,14 @@ extern "C" fn on_segv(sig: libc::c_int, info: *mut libc::siginfo_t, ctx: *mut li
 
 extern "C" fn on_trap(sig: libc::c_int, _info: *mut libc::siginfo_t, ctx: *mut libc::c_void) {
     unsafe {
-        let pending = PENDING.with(|p| p.get());
-        if pending[0] == 0 {
-            return chain(std::ptr::addr_of!(PREV_TRAP).cast(), sig);
+        let st_ptr = ANCHOR.state.load(Relaxed);
+        if st_ptr.is_null() || (*st_ptr).pending[0] == 0 {
+            return chain(std::ptr::addr_of!(PREV_TRAP.0).cast(), sig);
         }
-        let st = &mut *ANCHOR.state.load(Relaxed);
+        let st = &mut *st_ptr;
+        let pending = st.pending;
         if st.rset_active {
-            let w = RSET_WORD.with(|w| w.replace(0));
+            let w = std::mem::replace(&mut st.rset_word, 0);
             if w != 0 {
                 let word = w & !1;
                 if heap_pointer(st, *(word as *const u64)) {
@@ -1140,7 +1154,7 @@ extern "C" fn on_trap(sig: libc::c_int, _info: *mut libc::siginfo_t, ctx: *mut l
                 libc::mprotect(page as *mut _, PAGE, policy(st, page));
             }
         }
-        PENDING.with(|p| p.set([0; 8]));
+        st.pending = [0; 8];
         let uc = ctx as *mut libc::ucontext_t;
         (*uc).uc_mcontext.gregs[libc::REG_EFL as usize] &= !EFLAGS_TF;
     }
@@ -1153,7 +1167,7 @@ fn note_access(st: &mut State, word: usize, write: bool, pc: usize) {
         return;
     }
     // Words of the binary range count only as global slots or realm cells.
-    if st.bin.slot(word).is_some()
+    if (st.bin.slot(word).is_some() || st.tls.slot(word).is_some())
         && !(word >= st.realm.0 && word < st.realm.1)
         && !st.globals.contains(word as u64)
     {
