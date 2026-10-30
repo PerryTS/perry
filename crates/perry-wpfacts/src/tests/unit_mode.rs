@@ -595,5 +595,7 @@ mod return_transfers;
 
 #[path = "unit_mode/commonjs_helper.rs"]
 mod commonjs_helper;
+#[path = "unit_mode/forwarded_literal_copies.rs"]
+mod forwarded_literal_copies;
 #[path = "unit_mode/pub_callable.rs"]
 mod pub_callable;
