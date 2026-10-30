@@ -31,6 +31,13 @@ fn is_qualified_type_name(name: &str) -> bool {
     name.contains('.')
 }
 
+/// A generic base that names an array type. Any other generic base (`Pick`,
+/// `Omit`, `Readonly`, a user generic) describes some other value whose own
+/// methods may share names with `Array.prototype`.
+fn is_array_generic_base(base: &str) -> bool {
+    matches!(base, "Array" | "ReadonlyArray")
+}
+
 fn is_typed_array_type(ty: &Type) -> bool {
     matches!(
         ty,
