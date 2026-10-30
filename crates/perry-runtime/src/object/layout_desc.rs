@@ -1914,6 +1914,7 @@ mod windows_layout_bounds_tests {
 
 #[cfg(all(test, target_os = "windows"))]
 mod windows_atom_bounds_tests {
+    use super::atoms::atom_bounds;
     use super::*;
 
     #[test]
