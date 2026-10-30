@@ -21,6 +21,16 @@ Find the crate that already owns the behavior before writing: the pipeline order
 - Commits keep the loose `feat:` / `fix:` / `docs:` / `chore:` prefix the log already uses.
 - Read `MERGE_GUIDE.md` before landing a queue of PRs.
 
+## Comments
+
+A comment earns its lines only by saying what the code cannot: the invariant, the ordering constraint, the reason the plainer form is wrong. Perry is public and long-lived, so every line a reader pays for must be one a fresh reader needs, not one the author happened to learn.
+
+- Write the present tense: the invariant as it holds now. A date, a `used to`, a `previously`, a `for now` describes the commit that wrote it, and the next change makes it false without touching it.
+- A PR or issue number may accompany the reason, never replace it. `#6117` alone points into a closed conversation, and it keeps reading as current long after the code moved.
+- Delete rather than paraphrase once a comment stops holding. The removed reasoning survives in `git log` and the pull request; the file holds the present.
+- Rationale that must outlive a refactor belongs in `docs/src/`, which is reviewed prose. Code keeps the invariant and the pointer to it.
+- The comments inside a hunk you edit are yours for that edit: fix or delete the ones that no longer hold instead of leaving them beside a change that contradicts them.
+
 ## Building and testing
 
 ```bash
@@ -74,7 +84,7 @@ A clean `git status` says nothing about what you link.
 Most structural gates here compare the tree against a committed baseline instead of an absolute bound, so they fail on *growth*: `scripts/raw_handle_debt.py`, `scripts/runtime_size_budget.py`, `scripts/test262_ratchet.py`, and the committed baseline files they compare against.
 
 - A baseline moves **down**. `--update` refuses to raise it, and CI also runs the differential arm (`--no-raise-vs <merge-base>`), so widening a baseline or a per-module ceiling to cover new debt fails the pull request from the other side. Remove the debt site instead.
-- `scripts/check_file_size.sh` is the same idea plus an ALLOWLIST: a tracked `*.rs` over 2,000 lines fails unless the script names it with a one-line rationale. An allowlisted file has no size protection left, so hold it to the cap anyway, and treat adding an entry as the last resort that names the follow-up. Its error text carries the split recipe: extract a function group into a sibling module and re-export it from `mod.rs` with explicit named `use` statements, since globs do not propagate through transitive re-exports.
+- `scripts/check_file_size.sh` is the same idea plus an ALLOWLIST: a tracked `*.rs` over 2,000 lines — comment, test and blank lines priced the same as code — fails unless the script names it with a one-line rationale. An allowlisted file has no size protection left, so hold it to the cap anyway, and treat adding an entry as the last resort that names the follow-up. Its error text carries the split recipe: extract a function group into a sibling module and re-export it from `mod.rs` with explicit named `use` statements, since globs do not propagate through transitive re-exports.
 - Splitting a module that carries ledgered debt requires the ledger line to travel with it: the moving line takes a trailing `# moved-from: <old path>` so the merge-base arm credits what the source gave up (`scripts/raw_handle_debt.py`, "RELOCATIONS"). Without it, a module whose debt is spread across it cannot be split at all.
 - A new test file in a suite with an explicit registry is no test at all until it is registered. `scripts/check_test_registration.py` runs in `lint`; `docs/src/testing/test-registration.md` says which suites glob and which keep a list.
 
