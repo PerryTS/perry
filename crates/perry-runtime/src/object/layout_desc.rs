@@ -677,8 +677,14 @@ pub(crate) fn coloured_atoms() -> Vec<(&'static [u8], u64, u32, u32)> {
             }
         }
     }
-    out.sort();
-    out.dedup();
+    // Ordered by the program's own numbers (colour bit, slot, hash); the
+    // bytes only break a tie of all three, which is a repeated atom.
+    out.sort_by(|a, b| {
+        (a.2, a.3, a.1)
+            .cmp(&(b.2, b.3, b.1))
+            .then_with(|| a.0.cmp(b.0))
+    });
+    out.dedup_by(|a, b| a.2 == b.2 && a.3 == b.3 && a.1 == b.1 && a.0 == b.0);
     out
 }
 

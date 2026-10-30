@@ -1100,9 +1100,10 @@ pub(crate) unsafe fn record_prototype_template(
         let is = |name: &[u8]| crate::string::js_string_key_matches_bytes(key, name);
         let fill = if slot == 0 && is(b"constructor") && bits == owner {
             ProtoFill::Constructor
-        } else if let Some((name, false)) = members.iter().find(|(name, _)| is(name)) {
-            let Some(code) = super::super::class_registry::class_method_entry_bytes(class_id, name)
-            else {
+        } else if let Some(member) = members.iter().find(|m| !m.accessor && is(&m.name)) {
+            let Some(code) = member.at.method_index().and_then(|index| {
+                super::super::class_registry::class_method_entry_at(class_id, index)
+            }) else {
                 return;
             };
             if !static_method_value_runs(bits, code, class) {
