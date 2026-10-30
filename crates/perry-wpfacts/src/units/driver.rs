@@ -446,9 +446,26 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
                     published_layouts.insert(c.display.clone());
                     if u.layouts_fwd.contains(&c.display) {
                         if !owned_layouts.contains(&c.display) {
-                            input
-                                .layouts
-                                .insert(c.display.clone(), Digested::new(c.clone()));
+                            // Several units forward copies of one literal
+                            // shape no unit here births: its entry is their
+                            // join, ascending from the last round's copy, as
+                            // for several owners (DECISIONS 112). Replaced,
+                            // the last forwarder of a round would win and a
+                            // reader solved before it would never read what
+                            // the round leaves.
+                            let e = match input.layouts.get(&c.display).map(|e| &e.c) {
+                                Some(p)
+                                    if c.literal_shape
+                                        && p.literal_shape
+                                        && copy_of.contains_key(&c.display) =>
+                                {
+                                    let mut j = p.clone();
+                                    j.join(c);
+                                    j
+                                }
+                                _ => c.clone(),
+                            };
+                            input.layouts.insert(c.display.clone(), Digested::new(e));
                             copy_of.insert(c.display.clone(), si);
                         }
                         continue;
