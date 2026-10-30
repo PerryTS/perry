@@ -75,9 +75,32 @@ pub(super) fn tower_pshape_route(
     })
 }
 
+/// Do the facts prove that every instance of class `cid` keeps the layout it
+/// was born with?
+///
+/// `fixed_layout` (F3) is derived for a class that is prefix-stable (no
+/// escape, no hard mark: no `delete`, `defineProperty`, `setPrototypeOf`,
+/// freeze or seal reaches an instance, in any module the facts cover) and
+/// that no store ever gives a key beyond its birth keys. Then the dynamic
+/// recheck of [`emit_tower_pshape_call`] has nothing left to catch. It is
+/// kept in a contract build (which checks the facts at run time), with
+/// interpreted code present (`interp_guard`), and for every class the facts
+/// do not list as fixed.
+pub(super) fn tower_layout_proven(ctx: &FnCtx<'_>, cid: u32) -> bool {
+    !ctx.wpfacts_off
+        && !ctx.wpfacts.interp_guard
+        && !crate::codegen::helpers::check_contracts()
+        && ctx
+            .wpfacts
+            .classes
+            .get(&cid)
+            .is_some_and(|class| class.fixed_layout)
+}
+
 /// Emit the keys-guarded diamond for one dispatch-tower case: inline shape
 /// re-check → `{public}$pshape` on a match, the unchanged public body
-/// otherwise.
+/// otherwise. With `layout_proven` (the facts prove the arm's class keeps its
+/// birth layout, [`tower_layout_proven`]) the case is the `$pshape` call alone.
 ///
 /// The tower's case block proves `class_id`, which is NOT enough for the
 /// clone's bare fixed-slot accesses — `delete inst.f` compacts the packed slots
@@ -106,7 +129,11 @@ pub(super) fn emit_tower_pshape_call(
     route: &TowerPshapeRoute,
     recv_handle: &str,
     case_arg_slices: &[(crate::types::LlvmType, &str)],
+    layout_proven: bool,
 ) -> String {
+    if layout_proven {
+        return ctx.block().call(DOUBLE, &route.clone_fn, case_arg_slices);
+    }
     // The global is read ONCE per function (entry-hoisted); the case block only
     // reloads it from the stack slot, which mem2reg folds away.
     let expected_shape_id = match crate::typed_shape::static_class_shape_id(&route.keys_global) {

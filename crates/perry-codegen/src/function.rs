@@ -45,6 +45,10 @@ pub struct LlFunction {
     /// general small-function policy gives the early pass an explicit code-size
     /// budget instead of activating every historical hint at once.
     pub pre_statepoint_inline: bool,
+    /// This lowered method body fits the guarded-specialization inline budget.
+    /// It joins the early inliner only when the facts prove a call site closed
+    /// over it (`codegen/closed_targets.rs`).
+    pub closed_target_preinline: bool,
     /// When true, keep a small routing wrapper as an optimization boundary.
     /// Used when inlining would duplicate guarded fast/fallback call graphs.
     pub no_inline: bool,
@@ -306,6 +310,7 @@ impl LlFunction {
             linkage: String::new(),
             force_inline: false,
             pre_statepoint_inline: false,
+            closed_target_preinline: false,
             no_inline: false,
             disable_tail_calls: false,
             nanbox_operands: false,
