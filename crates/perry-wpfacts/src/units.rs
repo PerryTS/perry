@@ -318,12 +318,50 @@ pub(crate) struct FnContract {
 /// may hold, and whether it may hold an unknown value (⊤ to the reader).
 /// The layouts' fields hold unknown values for the reader; a store or an
 /// opening operation through them is the reader's census report.
+/// Dump-only: why a value contract is `unknown`, the first reason and the
+/// unit that published it (stamped when the dump is on). It takes no part in
+/// equality or hashing, so rounds and fingerprints are those of a run without
+/// it.
+#[derive(Clone, Default)]
+pub(crate) struct Why(pub Option<(&'static str, Option<std::sync::Arc<str>>)>);
+
+impl PartialEq for Why {
+    fn eq(&self, _: &Why) -> bool {
+        true
+    }
+}
+
+impl std::hash::Hash for Why {
+    fn hash<H: std::hash::Hasher>(&self, _: &mut H) {}
+}
+
+impl std::fmt::Debug for Why {
+    fn fmt(&self, _: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        Ok(())
+    }
+}
+
+impl Why {
+    /// The smaller of the two (reason, unit), so a join does not depend on
+    /// the order the units are folded in.
+    fn join(&mut self, o: &Why) {
+        let key = |w: &Why| w.0.as_ref().map(|(r, u)| (*r, u.clone()));
+        match (key(self), key(o)) {
+            (None, Some(_)) => self.0 = o.0.clone(),
+            (Some(a), Some(b)) if b < a => self.0 = o.0.clone(),
+            _ => {}
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Hash)]
 pub(crate) struct ValueContract {
     pub layouts: Vec<ClassContract>,
     pub classes: Vec<ClassContract>,
     pub fns: Vec<FnContract>,
     pub unknown: bool,
+    /// Why it is unknown (dump only, see `Why`).
+    pub why: Why,
     /// The runtime-owned objects it may hold (`Model::named_shared`), one
     /// object for the whole program: the reader holds them as well.
     pub shared: Vec<crate::model::Shared>,
@@ -697,6 +735,31 @@ impl ClassContract {
 }
 
 impl ValueContract {
+    /// Unknown, for this reason unless it already has one.
+    pub(crate) fn unknown_because(&mut self, why: &'static str) {
+        self.unknown = true;
+        if self.why.0.is_none() {
+            self.why.0 = Some((why, None));
+        }
+    }
+
+    /// A contract that is unknown for this reason.
+    pub(crate) fn unknown_for(why: &'static str) -> ValueContract {
+        let mut vc = ValueContract {
+            prim: crate::model::prim::ALL,
+            ..Default::default()
+        };
+        vc.unknown_because(why);
+        vc
+    }
+
+    /// Names the publishing unit on a reason that has none yet.
+    pub(crate) fn stamp(&mut self, unit: &std::sync::Arc<str>) {
+        if let Some((_, u @ None)) = &mut self.why.0 {
+            *u = Some(unit.clone());
+        }
+    }
+
     /// The join of two value contracts: the layouts, classes and
     /// functions (each by identity, its description joined), an unknown
     /// value and the primitive kinds only grow.
@@ -715,6 +778,7 @@ impl ValueContract {
         );
         join_keyed(&mut self.fns, &o.fns, |f| f.name.clone(), FnContract::join);
         self.unknown |= o.unknown;
+        self.why.join(&o.why);
         union_into(&mut self.shared, &o.shared);
         self.shared.sort();
         self.prim |= o.prim;

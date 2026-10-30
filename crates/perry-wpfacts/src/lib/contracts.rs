@@ -1321,7 +1321,7 @@ pub(super) fn describe_toks(
         }
         let (tm, class) = match g.m.toks[t as usize] {
             model::TokKind::Top | model::TokKind::BuiltinFn => {
-                vc.unknown = true;
+                vc.unknown_because("top-value");
                 continue;
             }
             model::TokKind::Builtin(ns) => {
@@ -1355,7 +1355,7 @@ pub(super) fn describe_toks(
             model::TokKind::Func(f, _)
                 if g.m.funcs[f as usize].func_id != u32::MAX && !g.m.contract_fns.contains(&f) =>
             {
-                vc.unknown = true;
+                vc.unknown_because("escaped-function-without-contract");
                 continue;
             }
             model::TokKind::Func(f, _) if g.m.funcs[f as usize].func_id != u32::MAX => {
@@ -1437,7 +1437,7 @@ pub(super) fn describe_toks(
                 })
             });
         let Some(mut cc) = cc else {
-            vc.unknown = true;
+            vc.unknown_because("class-without-contract");
             continue;
         };
         if g.stand_in_cc.contains_key(&tm) {
@@ -1688,7 +1688,7 @@ pub(super) fn arg_contract_of(
             // value no contract describes here (as a parameter marker's
             // reach is), not as nothing.
             if toks.iter().any(|&t| arg_reach_unknown(g, t)) {
-                vc.unknown = true;
+                vc.unknown_because("argument-marker-reach");
                 vc.prim |= model::prim::ALL;
             }
             for t in toks.into_iter().flat_map(|t| g.m.marker_members(t)) {
@@ -1733,12 +1733,12 @@ pub(super) fn arg_contract_of(
                                 vc.fns.push(fc);
                             }
                         }
-                        None => vc.unknown = true,
+                        None => vc.unknown_because("function-without-publication"),
                     }
                     continue;
                 }
                 let model::TokKind::Obj(tm, _) = g.m.toks[t as usize] else {
-                    vc.unknown = true;
+                    vc.unknown_because("non-object-value");
                     continue;
                 };
                 if let Some((tm, kind)) = crate::bindings::sealed_owner(&g.m, t) {
@@ -1799,7 +1799,11 @@ pub(super) fn arg_contract_of(
                 }
                 if g.m.param_marker.contains_key(&t) || g.unit_in.is_some_and(|u| u.broken(display))
                 {
-                    vc.unknown = true;
+                    vc.unknown_because(if g.m.param_marker.contains_key(&t) {
+                        "parameter-marker"
+                    } else {
+                        "broken-layout"
+                    });
                     // A marker is the whole argument (DECISIONS 119).
                     if g.m.param_marker.contains_key(&t) {
                         vc.prim |= model::prim::ALL;
@@ -1875,7 +1879,7 @@ pub(super) fn arg_contract_of(
                         vc.layouts.push(cc)
                     }
                     Some(_) => {}
-                    None => vc.unknown = true,
+                    None => vc.unknown_because("layout-without-contract"),
                 }
             }
         }

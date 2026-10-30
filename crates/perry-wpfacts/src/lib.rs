@@ -983,7 +983,8 @@ fn compute_act<'a>(
     };
     // Its value contracts (design §12): per published value binding, the
     // contracts of what it may hold (`Gen::contract_check` accepted them).
-    let values_out: Vec<((String, String), units::ValueContract)> = if cfg.unit && !g.m.aborted {
+    let mut values_out: Vec<((String, String), units::ValueContract)> = if cfg.unit && !g.m.aborted
+    {
         let mut out = Vec::new();
         for &((mi, a), n) in &g.value_contracts {
             let vc = value_contract_of(
@@ -1007,13 +1008,17 @@ fn compute_act<'a>(
     // Its store effects with their value contracts (design §17.16 (c)): an
     // undescribed value (`Gen::effect_bad`) or a solve over the bound is
     // unknown, of any kind.
-    let stores_out: Vec<(String, String, units::ValueContract)> = store_nodes
+    let mut stores_out: Vec<(String, String, units::ValueContract)> = store_nodes
         .into_iter()
         .map(|(d, k, nodes)| {
             let mut vc = units::ValueContract::default();
             for n in nodes {
                 if g.m.aborted || g.effect_bad.contains(&n) {
-                    vc.unknown = true;
+                    vc.unknown_because(if g.m.aborted {
+                        "unit-aborted"
+                    } else {
+                        "undescribed-store-value"
+                    });
                     vc.prim = model::prim::ALL;
                 } else {
                     vc.join(&value_contract_of(
@@ -1043,12 +1048,12 @@ fn compute_act<'a>(
         .filter_map(|(k, n)| {
             let node = &g.m.nodes[*n as usize];
             if g.m.aborted || g.cell_bad.contains(n) {
-                let vc = units::ValueContract {
-                    unknown: true,
-                    prim: model::prim::ALL,
-                    ..Default::default()
+                let because = if g.m.aborted {
+                    "unit-aborted"
+                } else {
+                    "undescribed-cell-write"
                 };
-                return Some((k.clone(), vc));
+                return Some((k.clone(), units::ValueContract::unknown_for(because)));
             }
             // DECISIONS 162: an own parameter's marker in it is the callers'
             // argument, which their units store there themselves.
@@ -1083,22 +1088,26 @@ fn compute_act<'a>(
     // cell write is (`Model::global_written_own`): a replayed write of
     // another unit's is that unit's `global:*` write.
     if g.m.global_cells && (g.m.aborted || g.m.global_written_own) {
-        let vc = units::ValueContract {
-            unknown: true,
-            prim: model::prim::ALL,
-            ..Default::default()
+        let because = if g.m.aborted {
+            "unit-aborted"
+        } else {
+            "global-written-by-unmodeled-code"
         };
-        cells_out.push(("global:*".to_string(), vc));
+        cells_out.push((
+            "global:*".to_string(),
+            units::ValueContract::unknown_for(because),
+        ));
     }
     // DECISIONS 94: an array unmodeled code may write (it escaped): every
     // unit's elements of it read ⊤.
     // A named key stored into one: every unit's named fields of it read ⊤.
     for (key, t) in &g.arr_cells {
-        let vc = units::ValueContract {
-            unknown: true,
-            prim: model::prim::ALL,
-            ..Default::default()
+        let because = if g.m.aborted {
+            "unit-aborted"
+        } else {
+            "array-escaped"
         };
+        let vc = units::ValueContract::unknown_for(because);
         if g.m.aborted || g.m.is_escaped(*t) {
             cells_out.retain(|(k, _)| k != key);
             cells_out.push((key.clone(), vc.clone()));
@@ -1111,17 +1120,17 @@ fn compute_act<'a>(
     // per binding (its unit's path, its name) a value contract, as of a
     // published binding; ⊤ for one no contract describes, and for every
     // binding it writes when the solve stopped at the bound.
-    let writes_out: Vec<((String, String), units::ValueContract)> = if cfg.unit {
-        let unknown = units::ValueContract {
-            unknown: true,
-            prim: model::prim::ALL,
-            ..Default::default()
-        };
+    let mut writes_out: Vec<((String, String), units::ValueContract)> = if cfg.unit {
         g.written_keys()
             .into_iter()
             .filter_map(|(id, key)| {
                 if g.m.aborted || g.write_top.contains(&id) {
-                    return Some((key, unknown.clone()));
+                    let because = if g.m.aborted {
+                        "unit-aborted"
+                    } else {
+                        "binding-write-over-the-bound"
+                    };
+                    return Some((key, units::ValueContract::unknown_for(because)));
                 }
                 let &n = g.binding_writes.get(&id)?;
                 let vc = value_contract_of(
@@ -1139,7 +1148,7 @@ fn compute_act<'a>(
         Vec::new()
     };
     // What its calls pass to the other units' closed functions (decision 13).
-    let args_out: Vec<(String, units::ArgContract)> = match g.view {
+    let mut args_out: Vec<(String, units::ArgContract)> = match g.view {
         Some(v) if cfg.unit && !g.m.aborted => {
             let mut out: Vec<(String, units::ArgContract)> = Vec::new();
             for nm in &v.closed_refs {
@@ -1226,7 +1235,7 @@ fn compute_act<'a>(
     // runs it on (`Model::this_admitted`), published to the method's unit.
     // A receiver marker or a published receiver token stands for instances
     // of classes further units may extend: unknown.
-    let this_args_out: Vec<(String, units::ValueContract)> = match g.view {
+    let mut this_args_out: Vec<(String, units::ValueContract)> = match g.view {
         Some(_) if cfg.unit && !g.m.aborted => {
             let mut by: Vec<(String, Vec<model::Tok>)> = Vec::new();
             for &(this, t) in &g.m.this_admitted {
@@ -1260,7 +1269,9 @@ fn compute_act<'a>(
                         &mut layouts_out,
                         &open_tm,
                     );
-                    vc.unknown |= opaque;
+                    if opaque {
+                        vc.unknown_because("opaque-receiver");
+                    }
                     (nm, vc)
                 })
                 .collect()
@@ -1304,7 +1315,7 @@ fn compute_act<'a>(
     // under no name (through ⊤) passes what no contract describes: `top`.
     // DECISIONS 224: the same for a function its owner published to a known
     // closed callee (`FnContract::callable`).
-    let method_args_out: Vec<(String, units::ArgContract)> = match g.view {
+    let mut method_args_out: Vec<(String, units::ArgContract)> = match g.view {
         Some(_) if cfg.unit && !g.m.aborted => {
             let mut by: Vec<(String, Vec<model::Tok>)> = Vec::new();
             for (&t, fc) in &g.stand_in_fc {
@@ -1516,6 +1527,28 @@ fn compute_act<'a>(
     } else {
         std::mem::take(&mut g.m.shared_out).into_iter().collect()
     };
+    // Dump only: the unit that published each unknown value's reason.
+    if cfg.diagnostics {
+        let unit: std::sync::Arc<str> = view.map_or("<whole>", |v| v.key.as_str()).into();
+        for (_, vc) in &mut values_out {
+            vc.stamp(&unit);
+        }
+        for (_, _, vc) in &mut stores_out {
+            vc.stamp(&unit);
+        }
+        for (_, vc) in &mut cells_out {
+            vc.stamp(&unit);
+        }
+        for (_, vc) in &mut writes_out {
+            vc.stamp(&unit);
+        }
+        for (_, vc) in &mut this_args_out {
+            vc.stamp(&unit);
+        }
+        for (_, ac) in args_out.iter_mut().chain(method_args_out.iter_mut()) {
+            ac.params.iter_mut().for_each(|vc| vc.stamp(&unit));
+        }
+    }
     let diagnostics = if cfg.diagnostics {
         vec![(view.map_or("<whole>", |v| v.key.as_str()).to_owned(), {
             let mut rows = diagnostics::collect(&g);

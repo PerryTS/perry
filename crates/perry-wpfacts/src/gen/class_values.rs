@@ -285,7 +285,7 @@ impl<'a> Gen<'a> {
     ) -> NodeId {
         let n = self.m.node_named("value", || format!("value({local})"));
         if let Some(trace) = &mut self.m.diagnostic {
-            trace.contract_inputs.insert(n, format!("local={local};module={mi};unknown={};prim={};fns={:?};layouts={:?};arrays={:?}", c.unknown,c.prim,c.fns.iter().map(|f| &f.name).collect::<Vec<_>>(),c.layouts.iter().map(|l| &l.display).collect::<Vec<_>>(),c.arrays));
+            trace.contract_inputs.insert(n, (format!("local={local};module={mi};unknown={};prim={};fns={:?};layouts={:?};arrays={:?}", c.unknown,c.prim,c.fns.iter().map(|f| &f.name).collect::<Vec<_>>(),c.layouts.iter().map(|l| &l.display).collect::<Vec<_>>(),c.arrays), crate::diagnostics::why_json(c)));
         }
 
         let broken = |g: &Self, d: &str| g.unit_in.is_some_and(|u| u.broken(d));
