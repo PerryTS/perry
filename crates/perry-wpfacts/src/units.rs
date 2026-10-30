@@ -1382,7 +1382,7 @@ pub(crate) fn module_exports(sorted: &[(&str, &Module)], es: &crate::ExportSourc
 }
 
 #[path = "units/driver.rs"]
-mod driver;
+pub(crate) mod driver;
 pub(crate) use driver::digest;
 pub(crate) use driver::run;
 #[cfg(test)]

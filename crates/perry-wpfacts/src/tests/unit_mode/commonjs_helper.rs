@@ -56,3 +56,20 @@ fn a_helper_reading_its_own_contract_back_reaches_the_sound_fixpoint() {
     let wx = w.fields.iter().find(|f| f.key == "exports").unwrap();
     assert!(!wx.readonly && !ux.readonly, "the callbacks store exports");
 }
+
+/// The no-fixpoint report names the top-level fields that differ, nested
+/// values included, from the derived `Debug` form.
+#[test]
+fn the_no_fixpoint_report_names_the_changed_fields() {
+    #[derive(Debug)]
+    struct C {
+        params: Vec<u8>,
+        reach: Vec<u8>,
+        ret: Option<Vec<String>>,
+        name: String,
+    }
+    let a = C { params: vec![1, 5], reach: vec![0, 4], ret: Some(vec!["x".into()]), name: "ct".into() };
+    let b = C { params: vec![1, 5], reach: vec![0, 0], ret: Some(vec!["y".into()]), name: "ct".into() };
+    assert_eq!(crate::units::driver::changed_fields(&a, &b), ["reach", "ret"]);
+    assert!(crate::units::driver::changed_fields(&a, &a).is_empty());
+}

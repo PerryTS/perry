@@ -354,6 +354,10 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         let mut work = 0u64;
         // The units this round solves: only their shared writes can be new.
         let mut solved: Vec<usize> = Vec::new();
+        // A round past `LONG_ROUNDS` (64, 128, ...) names what each unit it
+        // solves changed (`no_fixpoint_report`).
+        let long = rounds >= LONG_ROUNDS && rounds.is_power_of_two();
+        let mut long_changes: Vec<(usize, Vec<String>)> = Vec::new();
         for level in &levels {
             // A unit over the bound keeps its result (`dependents`).
             for &si in level {
@@ -381,6 +385,11 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
                 // value one writer took from another's earlier write cannot
                 // pass back and forth between them after its source stopped
                 // writing it (tsc typescript.js#u4336/#u4339, period 2).
+                if long {
+                    if let Some(old) = per_unit[si].as_ref() {
+                        long_changes.push((si, output_changes(&u, old)));
+                    }
+                }
                 if let Some(old) = per_unit[si].take() {
                     let at: FxHashMap<String, usize> = u
                         .cells_out
@@ -911,6 +920,9 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             shared_rounds.push(shared.clone());
         }
         input.shared = shared;
+        if long {
+            no_fixpoint_report(rounds, &solves, &long_changes, seeds.len());
+        }
         if cfg.report {
             eprintln!(
                 "perry: wpfacts census r{rounds} end seeds {} {}",
@@ -1652,6 +1664,113 @@ pub(super) fn unique_bindings<T>(values: &mut [(u32, T)], module: &str, kind: &s
             pair[0].0, pair[1].0,
             "per-unit facts: duplicate {kind} {} in {module}; cloned bodies must have distinct binding identities",
             pair[0].0,
+        );
+    }
+}
+
+/// The rounds after which the driver names what keeps it going (the corpus
+/// reaches its fixpoint in at most ~15). A round count that keeps growing is
+/// a unit whose outputs never settle: each report at round 64, 128, 256, ...
+/// names the units that round solved and what each changed.
+const LONG_ROUNDS: u32 = 64;
+
+/// What a unit's solve changed in its outputs against its last solve: each
+/// contract added (`+`), dropped (`-`) or changed, with the fields that
+/// differ.
+fn output_changes(u: &ProgramFacts, old: &ProgramFacts) -> Vec<String> {
+    fn keyed<K: std::fmt::Display + PartialEq, C: std::fmt::Debug + PartialEq>(
+        out: &mut Vec<String>,
+        what: &str,
+        new: &[(K, &C)],
+        old: &[(K, &C)],
+    ) {
+        for (k, c) in new {
+            match old.iter().find(|(ok, _)| ok == k) {
+                None => out.push(format!("+{what} {k}")),
+                Some((_, p)) if p != c => {
+                    out.push(format!("{what} {k} [{}]", changed_fields(*p, *c).join(" ")))
+                }
+                Some(_) => {}
+            }
+        }
+        for (k, _) in old {
+            if !new.iter().any(|(nk, _)| nk == k) {
+                out.push(format!("-{what} {k}"));
+            }
+        }
+    }
+    fn own(v: &ProgramFacts) -> Vec<(String, &FnContract)> {
+        v.own_fns_out.iter().map(|c| (c.name.clone(), c)).collect()
+    }
+    fn named<C>(v: &[((String, String), C)]) -> Vec<(String, &C)> {
+        v.iter().map(|(k, c)| (format!("{}:{}", k.0, k.1), c)).collect()
+    }
+    fn cells(v: &ProgramFacts) -> Vec<(String, &ValueContract)> {
+        v.cells_out.iter().map(|(k, c)| (k.clone(), c)).collect()
+    }
+    let mut out = Vec::new();
+    keyed(&mut out, "own_fn", &own(u), &own(old));
+    keyed(&mut out, "fn", &named(&u.fn_contracts_out), &named(&old.fn_contracts_out));
+    keyed(&mut out, "class", &named(&u.contracts_out), &named(&old.contracts_out));
+    keyed(&mut out, "value", &named(&u.values_out), &named(&old.values_out));
+    keyed(&mut out, "cell", &cells(u), &cells(old));
+    let added = u.shared_out.iter().filter(|w| !old.shared_out.contains(w)).count();
+    let gone = old.shared_out.iter().filter(|w| !u.shared_out.contains(w)).count();
+    if added + gone != 0 {
+        out.push(format!("shared writes +{added} -{gone}"));
+    }
+    out
+}
+
+/// The top-level fields of `a` and `b` (one type) whose values differ, read
+/// from their derived `Debug` form: no list of fields to keep in step.
+pub(crate) fn changed_fields<T: std::fmt::Debug>(a: &T, b: &T) -> Vec<String> {
+    fn fields(s: &str) -> Vec<(String, String)> {
+        let mut v: Vec<(String, String)> = Vec::new();
+        for line in s.lines() {
+            let top = line.starts_with("    ") && !line.starts_with("     ");
+            match line[line.len().min(4)..].split_once(": ") {
+                Some((name, rest)) if top => v.push((name.to_string(), rest.to_string())),
+                _ => {
+                    if let Some(last) = v.last_mut() {
+                        last.1.push('\n');
+                        last.1.push_str(line);
+                    }
+                }
+            }
+        }
+        v
+    }
+    let (fa, fb) = (fields(&format!("{a:#?}")), fields(&format!("{b:#?}")));
+    let mut out: Vec<String> = fa
+        .iter()
+        .filter(|(n, x)| fb.iter().find(|(m, _)| m == n).is_none_or(|(_, y)| x != y))
+        .map(|(n, _)| n.clone())
+        .collect();
+    out.extend(fb.iter().filter(|(n, _)| !fa.iter().any(|(m, _)| m == n)).map(|(n, _)| n.clone()));
+    out
+}
+
+/// The no-fixpoint report of round `round`: the units it solved and what
+/// each changed (at most 16 units, 8 changes each).
+fn no_fixpoint_report(
+    round: u32,
+    solves: &[Solve<'_>],
+    changed: &[(usize, Vec<String>)],
+    seeds: usize,
+) {
+    eprintln!(
+        "perry: wpfacts: no fixpoint after {round} rounds: round {round} solved {} units, {seeds} seeded for the next",
+        changed.len()
+    );
+    for (si, cs) in changed.iter().take(16) {
+        let shown: Vec<&str> = cs.iter().take(8).map(|c| c.as_str()).collect();
+        eprintln!(
+            "perry: wpfacts:   {} changed {}: {}{}",
+            solves[*si].key,
+            cs.len(),
+            if shown.is_empty() { "nothing".to_string() } else { shown.join("; ") },
+            if cs.len() > 8 { "; ..." } else { "" }
         );
     }
 }
