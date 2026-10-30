@@ -140,6 +140,14 @@ pub const fn meta_form_alloc_bytes(slots: usize) -> usize {
     std::mem::size_of::<ObjectHeader>() + slots * std::mem::size_of::<u64>()
 }
 
+/// The byte offset of inline slot `slot` of a meta-form object: what a
+/// per-site memo stores at fill, once, so every reader adds it to the object
+/// ([`object_slot_at`]) and none composes a slot base.
+#[inline(always)]
+pub const fn meta_form_slot_off(slot: u32) -> u32 {
+    meta_form_alloc_bytes(slot as usize) as u32
+}
+
 // The constructors as macros: the struct literal is built in the caller, with
 // the form check under `cfg(debug_assertions)`, so a migrated read is the
 // tokens it replaced and no release code depends on an inlining decision.

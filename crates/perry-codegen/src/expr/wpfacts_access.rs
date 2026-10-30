@@ -522,8 +522,12 @@ pub(crate) fn emit_witness(
     let key_idx = ctx.strings.intern(property);
     let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
     let (c01, c23) = pack_cids(&p.class_ids);
-    let slot = if p.agrees() {
-        p.slot.to_string()
+    // The slot names the key (F3); its byte offset is the address the
+    // access used, which the witness reads.
+    let (triple, form) = (ctx.target_triple, p.form());
+    let off_of = |s: u32| crate::target_layout::layout_key_off(triple, form, s).to_string();
+    let (slot, off) = if p.agrees() {
+        (p.slot.to_string(), off_of(p.slot))
     } else {
         let bits = ctx.block().bitcast_double_to_i64(recv_box);
         let biased = ctx.block().sub(
@@ -531,7 +535,8 @@ pub(crate) fn emit_witness(
             &bits,
             &(super::receiver_range::RECEIVER_BIAS as i64).to_string(),
         );
-        select_by_class(ctx, &biased, p, |s| s.to_string())
+        let slot = select_by_class(ctx, &biased, p, |s| s.to_string());
+        (slot, select_by_class(ctx, &biased, p, &off_of))
     };
     let blk = ctx.block();
     let key_box = blk.load(DOUBLE, &key_handle_global);
@@ -556,6 +561,7 @@ pub(crate) fn emit_witness(
             (I64, &c01),
             (I64, &c23),
             (I32, &slot),
+            (I32, &off),
             (I32, &(p.kind_mask as i32).to_string()),
             (I32, &flags.to_string()),
             (I64, &(site as i64).to_string()),

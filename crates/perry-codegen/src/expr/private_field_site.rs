@@ -8,7 +8,7 @@
 //! (`js_private_field_site_get` / `_set` -> `private_field_site_word`):
 //!
 //! ```text
-//!   ShapeId (bits 0..32) | slot (bits 32..48) | F64 lane (bit 48)
+//!   ShapeId (bits 0..32) | slot byte offset (bits 32..56) | F64 lane (bit 56)
 //! ```
 //!
 //! and only when the field is a plain inline slot whose lane is `Any` or
@@ -44,10 +44,10 @@ use super::{
     FnCtx,
 };
 
-/// The word's `F64` lane bit (runtime `PRIVATE_FIELD_SITE_F64`, `1 << 48`).
-const PRIVATE_FIELD_SITE_F64: &str = "281474976710656";
-/// The word's slot bits after `>> 32` (runtime `PRIVATE_FIELD_SITE_SLOT_MASK`).
-const PRIVATE_FIELD_SITE_SLOT_MASK: &str = "65535";
+/// The word's `F64` lane bit (runtime `PRIVATE_FIELD_SITE_F64`, `1 << 56`).
+const PRIVATE_FIELD_SITE_F64: &str = "72057594037927936";
+/// The word's slot offset bits after `>> 32` (runtime `PRIVATE_FIELD_SITE_SLOT_MASK`).
+const PRIVATE_FIELD_SITE_SLOT_MASK: &str = "16777215";
 /// `POINTER_TAG + 0x10_0000`: with the unsigned compare below, "a POINTER
 /// NaN-box above the native-handle band" in one test (as
 /// `emit_private_site_guard`).
@@ -219,22 +219,22 @@ fn emit_site_probe(
     }
 }
 
-/// The slot address a hit block reads or writes: the payload's inline
-/// fields plus `slot * 8`.
+/// The slot address a hit block reads or writes: the payload plus the slot's
+/// byte offset, the static shape's key offset or the one the site word holds.
 fn emit_slot_ptr(ctx: &mut FnCtx<'_>, hit: &SiteHit, payload: &str) -> String {
-    let header_skip =
-        crate::target_layout::object_slot_base_bytes(ctx.target_triple, hit.form()).to_string();
-    let blk = ctx.block();
-    let slot = match hit {
-        SiteHit::Static(sf) => sf.slot.to_string(),
+    let off = match hit {
+        SiteHit::Static(sf) => {
+            crate::target_layout::layout_key_off(ctx.target_triple, hit.form(), sf.slot).to_string()
+        }
         SiteHit::Word(word) => {
-            let slot = blk.lshr(I64, word, "32");
-            blk.and(I64, &slot, PRIVATE_FIELD_SITE_SLOT_MASK)
+            let blk = ctx.block();
+            let off = blk.lshr(I64, word, "32");
+            blk.and(I64, &off, PRIVATE_FIELD_SITE_SLOT_MASK)
         }
     };
+    let blk = ctx.block();
     let obj_ptr = blk.inttoptr(I64, payload);
-    let fields = blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
-    blk.gep(DOUBLE, &fields, &[(I64, &slot)])
+    blk.gep(I8, &obj_ptr, &[(I64, &off)])
 }
 
 /// The brand owner operand of the runtime miss, as the guard arm passes it.
