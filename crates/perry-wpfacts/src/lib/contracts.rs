@@ -262,6 +262,7 @@ pub(super) fn nested_layouts(
                     birth_keys: atoms_of(g, &g.m.tmpls[itm as usize].birth_keys),
                     definite: atoms_of(g, &g.m.tmpls[itm as usize].definite),
                     ctor_leaks: true,
+                    ctor_returns: g.chain_returns(itm),
                     binding_prim: 0,
                     fn_inst: false,
                 });
@@ -1087,6 +1088,7 @@ pub(super) fn describe_nodes(
                             birth_keys: atoms_of(g, &g.m.tmpls[tm as usize].birth_keys),
                             definite: atoms_of(g, &g.m.tmpls[tm as usize].definite),
                             ctor_leaks: true,
+                            ctor_returns: g.chain_returns(tm),
                             binding_prim: 0,
                             fn_inst: false,
                         });
@@ -1432,6 +1434,7 @@ pub(super) fn describe_toks(
                     birth_keys: atoms_of(g, &g.m.tmpls[tm as usize].birth_keys),
                     definite: atoms_of(g, &g.m.tmpls[tm as usize].definite),
                     ctor_leaks: true,
+                    ctor_returns: g.chain_returns(tm),
                     binding_prim: 0,
                     fn_inst: false,
                 })
@@ -1480,14 +1483,31 @@ pub(super) fn describe_toks(
                 }
                 None => {
                     layouts_out.push(cc.clone());
-                    if let Some(d) = g.describing.borrow_mut().as_mut() {
-                        d.push(cc.display.clone());
-                    }
                     cc.field_fns =
                         literal_field_fns(&g, templates, &toks, tm, layouts_out, open_tm);
                     cc.field_layouts = nested_layouts(g, templates, tm, layouts_out, open_tm);
                     cc.field_values = field_value_contracts(g, templates, tm, layouts_out, open_tm);
                     cc.field_tas = field_ta_contracts(g, tm);
+                    // A literal layout of this unit goes out under its
+                    // display, described: the owner's entry, which a reader
+                    // takes over any copy (`Gen::other_layout`, DECISIONS 106;
+                    // a class goes out as DECISIONS 132 says). Without it the
+                    // only entry is a forwarder's copy of an earlier round,
+                    // which the forwarder itself reads back and forwards again.
+                    match cc.literal_shape {
+                        true => {
+                            if let Some(e) =
+                                layouts_out.iter_mut().find(|c| c.display == cc.display)
+                            {
+                                *e = cc.clone();
+                            }
+                        }
+                        false => {
+                            if let Some(d) = g.describing.borrow_mut().as_mut() {
+                                d.push(cc.display.clone());
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1601,6 +1621,7 @@ pub(super) fn fn_inst_contract(
         birth_keys: atoms_of(g, &tpl.birth_keys),
         definite: atoms_of(g, &tpl.definite),
         ctor_leaks: true,
+        ctor_returns: m.ctor_returns_object(f),
         binding_prim: 0,
         fn_inst: true,
     })
@@ -1867,6 +1888,7 @@ pub(super) fn arg_contract_of(
                             birth_keys: atoms_of(g, &g.m.tmpls[tm as usize].birth_keys),
                             definite: atoms_of(g, &g.m.tmpls[tm as usize].definite),
                             ctor_leaks: true,
+                            ctor_returns: g.chain_returns(tm),
                             binding_prim: 0,
                             fn_inst: false,
                         }),

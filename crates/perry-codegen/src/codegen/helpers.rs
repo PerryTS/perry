@@ -521,6 +521,34 @@ pub(crate) fn write_barriers_enabled() -> bool {
 }
 
 thread_local! {
+    static JS_TEXT_SECTION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The output section every compiled JS function is placed in on x86_64
+/// Linux. There the runtime unwinds by DWARF and meets every runtime frame;
+/// an `Error` capture keeps the JS frames only, and a frame is JS when its
+/// pc lies between the linker's `__start_`/`__stop_` symbols of this section:
+/// a range test on the code's own placement, no table (the runtime side is
+/// `error_stack_frames.rs`). Elsewhere the frame-pointer chain skips the
+/// runtime's frames by itself, so no section is named.
+pub(crate) const JS_TEXT_SECTION_NAME: &str = "perry_js_text";
+
+/// Whether the CURRENT module places its functions in
+/// [`JS_TEXT_SECTION_NAME`] (`set_js_text_section_for_target`).
+pub(crate) fn js_text_section() -> Option<&'static str> {
+    JS_TEXT_SECTION
+        .with(|c| c.get())
+        .then_some(JS_TEXT_SECTION_NAME)
+}
+
+pub(crate) fn set_js_text_section_for_target(triple: &str) {
+    let on = triple.starts_with("x86_64")
+        && target_os_of(triple) == Some("linux")
+        && !triple.contains("android");
+    JS_TEXT_SECTION.with(|c| c.set(on));
+}
+
+thread_local! {
     static FULL_OUTLINE_IC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static JSCVT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }

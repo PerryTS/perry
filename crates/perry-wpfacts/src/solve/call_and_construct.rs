@@ -464,6 +464,17 @@ impl Model {
         }
     }
 
+    fn chain_has_foreign_returning_ctor(&self, tm: TmplId) -> bool {
+        let mut cur = Some(tm);
+        while let Some(c) = cur {
+            if self.foreign_ctor_returns.contains(&c) {
+                return true;
+            }
+            cur = self.tmpls[c as usize].parent;
+        }
+        false
+    }
+
     pub fn construct(&mut self, call: CallId, t: Tok) {
         self.diagnostic_callee(call, t);
         if !self.sum.ready {
@@ -487,6 +498,14 @@ impl Model {
                 let inst = self.site_tok(tm, ctx);
                 self.add_tok(c.ret, inst);
                 self.run_ctor_chain(call, tm, inst);
+                // Another unit's constructor up the chain returns an object:
+                // `new` yields that value, which this unit cannot name.
+                if self.chain_has_foreign_returning_ctor(tm) {
+                    self.add_top(c.ret, |_| {
+                        "`new` of a class whose constructor (another unit's) returns an object"
+                            .into()
+                    });
+                }
             }
             // DECISIONS 210: another unit's contract function: its instances
             // are its owner's `new <f>` layout, which the owner constructs
@@ -499,7 +518,17 @@ impl Model {
                 self.constructed.insert(f);
                 self.ctor_calls.insert(call);
                 match self.foreign_ctor[&f] {
-                    Some((n, _)) => self.edge(n, c.ret),
+                    Some((n, tm)) => {
+                        self.edge(n, c.ret);
+                        // Its owner's function may return an object: `new`
+                        // yields that value, which this unit cannot name.
+                        if self.foreign_ctor_returns.contains(&tm) {
+                            self.add_top(c.ret, |_| {
+                                "`new` of another unit's constructor function that returns an object"
+                                    .into()
+                            });
+                        }
+                    }
                     None => self.add_top(c.ret, |_| {
                         "instance of another unit's constructor function (layout not published)"
                             .into()
@@ -609,6 +638,22 @@ impl Model {
             }
             (None, None, None) => {}
         }
+    }
+
+    /// Whether constructor `f` may return a value `new` keeps instead of its
+    /// `this`: an object (or ⊤) other than the receiver itself. A primitive
+    /// return is ignored by `new`.
+    pub(crate) fn ctor_returns_object(&self, f: FnIdx) -> bool {
+        let fi = &self.funcs[f as usize];
+        if fi.ret == NO_NODE {
+            return false;
+        }
+        let this = (fi.this != NO_NODE).then(|| self.nodes[fi.this as usize].pts.to_sorted());
+        self.nodes[fi.ret as usize]
+            .pts
+            .to_sorted()
+            .iter()
+            .any(|t| !this.as_ref().is_some_and(|ts| ts.contains(t)))
     }
 
     /// The objects constructor `f` returns for `call` (its instance's
