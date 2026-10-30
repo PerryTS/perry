@@ -556,15 +556,12 @@ pub fn arena_alloc_gc(size: usize, align: usize, obj_type: u8) -> *mut u8 {
 /// fills by; the image is read through the pointer on the fast arm only, so the
 /// large and slow arms pay nothing for it.
 ///
+/// `origin` is the JS caller's frame when the entry passed one: only the slow
+/// arm, the one that can collect, offers it (`gc::roots::walk_origin`), so the
+/// bump path stays as it was.
+///
 /// # Safety
 /// `word` points at the descriptor's header image.
-pub(crate) unsafe fn arena_alloc_gc_object_word(word: *const u64, slots: u32) -> *mut u8 {
-    arena_alloc_gc_object_word_offering(word, slots, None)
-}
-
-/// [`arena_alloc_gc_object_word`] for an entry that passed its JS caller's
-/// frame: only the slow arm, the one that can collect, offers it
-/// (`gc::roots::walk_origin`), so the bump path stays as it was.
 #[inline(always)]
 pub(crate) unsafe fn arena_alloc_gc_object_word_offering(
     word: *const u64,
