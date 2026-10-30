@@ -17,12 +17,14 @@ struct NativeExportInfo {
 
 pub(crate) unsafe fn construct(value: f64, args: *const f64, len: usize) -> Option<f64> {
     let ptr = crate::value::js_nanbox_get_pointer(value) as *const crate::closure::ClosureHeader;
-    // A closure's info word may be null (a header born without a body record).
-    let info = crate::closure::closure_info(ptr)?;
-    if info.flags & crate::codegen_abi::FN_NATIVE_EXPORT == 0 {
+    if !crate::closure::is_closure_ptr(ptr as usize) {
         return None;
     }
-    let info: *const JsFunctionInfo = info;
+    // A closure's info word may be null (a header born without a body record).
+    let info = (*ptr).info;
+    if info.is_null() || (*info).flags & crate::codegen_abi::FN_NATIVE_EXPORT == 0 {
+        return None;
+    }
     ((*info.cast::<NativeExportInfo>()).construct)(args, len)
 }
 
