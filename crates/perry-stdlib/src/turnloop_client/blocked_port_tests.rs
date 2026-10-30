@@ -17,6 +17,7 @@ fn blocked_port_preflight_rejects_before_proxy_or_tls_preparation() {
             body: None,
             redirect: RedirectMode::Follow,
             abort_key: None,
+            tls: None,
         };
         assert_eq!(
             prepare(&spec).err(),
@@ -74,6 +75,7 @@ fn redirected_destination_is_rejected_before_connection_allocation() {
             body: None,
             redirect: RedirectMode::Follow,
             abort_key: None,
+            tls: None,
         };
         let mut request = tlc::Request::new(&spec.url, &spec.method).unwrap();
         assert!(request
