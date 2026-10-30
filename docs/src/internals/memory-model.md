@@ -320,7 +320,7 @@ row of this table once pointed into a `gc.rs` that no longer exists.
 | Adaptive tenuring threshold | `crates/perry-runtime/src/gc/tenuring.rs` | `tenuring_survivals` |
 | Write barriers | `crates/perry-runtime/src/gc/barrier_store.rs` | `runtime_write_barrier_slot` |
 | Explicit pinning | `crates/perry-runtime/src/gc/pin.rs` | `pin_object` |
-| Conservative-pin predicate | `crates/perry-runtime/src/gc/verify.rs` | `is_conservatively_pinned` |
+| Conservative-pin predicate | `crates/perry-runtime/src/gc/rewrite.rs` | `is_conservatively_pinned` |
 | Collection triggers and pacing | `crates/perry-runtime/src/gc/policy.rs` | `gc_check_trigger` |
 | Current operations page | `docs/src/internals/garbage-collector.md` | — |
 | Design plan (historical) | `docs/generational-gc-plan.md` | — |
@@ -334,7 +334,7 @@ row of this table once pointed into a `gc.rs` that no longer exists.
 <!-- gc-symbol: tenuring_survivals in crates/perry-runtime/src/gc/tenuring.rs -->
 <!-- gc-symbol: runtime_write_barrier_slot in crates/perry-runtime/src/gc/barrier_store.rs -->
 <!-- gc-symbol: pin_object in crates/perry-runtime/src/gc/pin.rs -->
-<!-- gc-symbol: is_conservatively_pinned in crates/perry-runtime/src/gc/verify.rs -->
+<!-- gc-symbol: is_conservatively_pinned in crates/perry-runtime/src/gc/rewrite.rs -->
 <!-- gc-symbol: gc_check_trigger in crates/perry-runtime/src/gc/policy.rs -->
 
 Those rows are not decorative: each is bound to a `gc-symbol` marker above and
