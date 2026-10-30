@@ -430,8 +430,10 @@ pub(crate) fn verdict_cause(v: &crate::Verdict) -> Option<Result<Unknown, String
         HardLayout
     } else if starts("slots differ") || starts("receivers mix") {
         PolymorphicBeyondSet
-    } else if starts("key not a definite") {
+    } else if starts("key not a definite") || starts("method not found on the chain") {
         KeyNotDefinite
+    } else if starts("a computed key may hold it") {
+        ComputedKey
     } else if starts("accessor key") {
         AccessorKey
     } else if starts("primitive receiver") {
