@@ -291,8 +291,9 @@ impl<'a> Gen<'a> {
         let broken = |g: &Self, d: &str| g.unit_in.is_some_and(|u| u.broken(d));
         for cc in &c.layouts {
             if broken(self, &cc.display) {
-                self.m
-                    .add_top(n, |_| "broken layout of another unit".into());
+                self.m.add_top(n, |_| {
+                    format!("broken layout of another unit: {}", cc.display)
+                });
                 continue;
             }
             // An instance of this unit's class described back to it (a

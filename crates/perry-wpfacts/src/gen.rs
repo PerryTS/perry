@@ -683,35 +683,6 @@ impl<'a> Gen<'a> {
             })
             .map(|(d, _)| d.clone())
             .collect();
-        // Explain: why this unit reports each contract it consumed.
-        if self.m.explain && !self.m.aborted {
-            let mut why: Vec<String> = Vec::new();
-            for (d, (_, tm, toks)) in &self.stand_ins {
-                if !out.contains(d) {
-                    continue;
-                }
-                let mut rs: Vec<String> = Vec::new();
-                if self.m.foreign_written.contains(tm) {
-                    rs.push("written".into());
-                }
-                if self.m.adds_keys.get(tm).is_some_and(|&k| k > 0) {
-                    rs.push("adds keys".into());
-                }
-                for &t in toks {
-                    if let Some(&r) = self.m.escaped.get(&t) {
-                        rs.push(format!("escaped: {}", self.m.reasons[r as usize]));
-                    }
-                    if let Some(&(_, r)) = self.m.hard.get(&t) {
-                        rs.push(format!("hard: {}", self.m.reasons[r as usize]));
-                    }
-                }
-                why.push(format!("{d}: {}", rs.join("; ")));
-            }
-            why.sort();
-            for w in why {
-                eprintln!("perry: wpfacts explain: unit reports {w}");
-            }
-        }
         for ((name, _), &(_, t)) in &self.stand_in_fns {
             // An aborted unit is unknown code holding everything it names
             // (ALI cause 4). It reports what no contract grants unknown code:
@@ -738,28 +709,80 @@ impl<'a> Gen<'a> {
                 .tmpl_of(*t)
                 .is_none_or(|tm| crate::bindings::owner_metadata_written(&self.m, tm));
             if self.m.aborted || written || self.m.is_escaped(*t) || self.m.hard.contains_key(t) {
-                if self.m.explain {
-                    let esc = self
-                        .m
-                        .escaped
-                        .get(t)
-                        .map(|&r| self.m.reasons[r as usize].clone());
-                    let hard = self
-                        .m
-                        .hard
-                        .get(t)
-                        .map(|&(_, r)| self.m.reasons[r as usize].clone());
-                    eprintln!(
-                        "perry: wpfacts explain: unit reports {rep}: written {written} escaped {esc:?} hard {hard:?}"
-                    );
-                }
                 out.push(rep.clone());
             }
         }
         out.extend(self.override_reports());
         out.sort();
         out.dedup();
+        // Explain: why this unit reports each contract it consumed.
+        if self.m.explain {
+            for (d, rs) in self.report_reasons(&out) {
+                eprintln!("perry: wpfacts explain: unit reports {d}: {}", rs.join("; "));
+            }
+        }
         out
+    }
+
+    /// Why this unit files each of its census reports `out` (`reports`),
+    /// for the dump and explain: `aborted`; `written: <key (object)> | …`
+    /// (a store no store effect covers, decision 17); `adds keys: <key> | …`;
+    /// `escaped: <reason>` / `hard: <reason>` of a token of the display;
+    /// `touched` (a function used as an object, DECISIONS 210); `override`.
+    /// The keys are named only with the dump's capture (`Model::diagnostic`).
+    pub(crate) fn report_reasons(&self, out: &[String]) -> Vec<(String, Vec<String>)> {
+        let m = &self.m;
+        let trace = m.diagnostic.as_ref();
+        let keys = |set: Option<&std::collections::BTreeSet<String>>| -> String {
+            set.map(|s| format!(": {}", s.iter().cloned().collect::<Vec<_>>().join(" | ")))
+                .unwrap_or_default()
+        };
+        let tok_reasons = |rs: &mut Vec<String>, t: Tok| {
+            if let Some(&r) = m.escaped.get(&t) {
+                rs.push(format!("escaped: {}", m.reasons[r as usize]));
+            }
+            if let Some(&(_, r)) = m.hard.get(&t) {
+                rs.push(format!("hard: {}", m.reasons[r as usize]));
+            }
+        };
+        let fns: FxHashMap<String, Tok> = self
+            .stand_in_fns
+            .iter()
+            .map(|((name, _), &(_, t))| (format!("fn:{name}"), t))
+            .collect();
+        out.iter()
+            .map(|d| {
+                let mut rs: Vec<String> = Vec::new();
+                if m.aborted {
+                    rs.push("aborted".into());
+                } else if let Some((_, tm, toks)) = self.stand_ins.get(d) {
+                    if m.foreign_written.contains(tm) {
+                        rs.push(format!("written{}", keys(trace.and_then(|t| t.written.get(tm)))));
+                    }
+                    if m.adds_keys.get(tm).is_some_and(|&k| k > 0) {
+                        rs.push(format!("adds keys{}", keys(trace.and_then(|t| t.added.get(tm)))));
+                    }
+                    for &t in toks {
+                        tok_reasons(&mut rs, t);
+                    }
+                } else if let Some(&t) = fns.get(d) {
+                    tok_reasons(&mut rs, t);
+                    if m.fn_touched.contains(&t) {
+                        rs.push("touched".into());
+                    }
+                } else if let Some((_, t)) = self.stand_in_tas.iter().find(|(r, _)| r == d) {
+                    if m.tmpl_of(*t).is_none_or(|tm| crate::bindings::owner_metadata_written(m, tm)) {
+                        rs.push("written".into());
+                    }
+                    tok_reasons(&mut rs, *t);
+                } else {
+                    rs.push("override".into());
+                }
+                rs.sort();
+                rs.dedup();
+                (d.clone(), rs)
+            })
+            .collect()
     }
 
     /// A class of this unit with another unit's class `A` as an ancestor

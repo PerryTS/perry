@@ -1607,7 +1607,7 @@ impl Model {
         });
         self.add_prim(any, prim::ALL);
         if let Some(tm) = self.tmpl_of(t) {
-            *self.adds_keys.entry(tm).or_default() += 1;
+            self.add_key(tm, |m| format!("* (escaped: {})", m.reasons[reason as usize]));
         }
         // Its prototypes are reachable (`Object.getPrototypeOf`).
         let pn = self.proto_node(t);
@@ -1760,7 +1760,7 @@ impl Model {
         let any = self.any_key_node(t);
         self.add_prim(any, prim::ALL);
         if let Some(tm) = self.tmpl_of(t) {
-            *self.adds_keys.entry(tm).or_default() += 1;
+            self.add_key(tm, |m| format!("* (hard {}: {})", kind.code(), m.reasons[reason as usize]));
         }
         for s in self.wide_sites(t) {
             self.mark_hard(s, kind, reason);
