@@ -595,7 +595,13 @@ const UNKNOWN_WHY: &[&str] = &[
     "class-without-contract",
     "argument-marker-reach",
     "function-without-publication",
-    "non-object-value",
+    "top-argument",
+    "bound-function-argument",
+    "class-constructor-argument",
+    "prototype-argument",
+    "builtin-argument",
+    "module-namespace-argument",
+    "argument-value",
     "parameter-marker",
     "broken-layout",
     "layout-without-contract",
@@ -629,7 +635,7 @@ fn every_unknown_reason_is_named() {
         for needle in ["unknown_because(", "unknown_for(", "let because = "] {
             for (at, _) in s.match_indices(needle) {
                 // The literals up to the end of the statement or call.
-                let end = (at + 300).min(s.len());
+                let end = (at + 1500).min(s.len());
                 let end = s[at..end].find(';').map_or(end, |e| at + e);
                 let line = &s[at + needle.len()..end];
                 for (i, part) in line.split('"').enumerate() {

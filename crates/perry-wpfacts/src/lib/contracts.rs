@@ -1759,7 +1759,17 @@ pub(super) fn arg_contract_of(
                     continue;
                 }
                 let model::TokKind::Obj(tm, _) = g.m.toks[t as usize] else {
-                    vc.unknown_because("non-object-value");
+                    vc.unknown_because(match g.m.toks[t as usize] {
+                        model::TokKind::Top | model::TokKind::BuiltinFn => "top-argument",
+                        model::TokKind::Bound(_) => "bound-function-argument",
+                        model::TokKind::ClassObj(_) => "class-constructor-argument",
+                        model::TokKind::Proto(_)
+                        | model::TokKind::ObjectProto
+                        | model::TokKind::NativeProto(_) => "prototype-argument",
+                        model::TokKind::Builtin(_) => "builtin-argument",
+                        model::TokKind::ModNs(_) => "module-namespace-argument",
+                        model::TokKind::Func(..) | model::TokKind::Obj(..) => "argument-value",
+                    });
                     continue;
                 };
                 if let Some((tm, kind)) = crate::bindings::sealed_owner(&g.m, t) {
