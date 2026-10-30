@@ -86,6 +86,7 @@ pub(super) fn link_args(
         format!("--sysroot={}", sdk.join("share/wasi-sysroot").display()),
     ];
     args.extend(objects.iter().map(|o| o.display().to_string()));
+    args.extend(super::link_pad_args());
     args.push(runtime.display().to_string());
     if !keep_symbols {
         // Compression changes instruction offsets and cannot preserve DWARF.
