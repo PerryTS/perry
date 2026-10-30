@@ -56,7 +56,6 @@
 2 0 crates/perry-runtime/src/node_submodules/blob.rs
 5 0 crates/perry-runtime/src/node_submodules/diagnostics.rs
 2 0 crates/perry-runtime/src/node_submodules/diagnostics_tail.rs
-3 0 crates/perry-runtime/src/node_submodules/mod.rs
 1 0 crates/perry-runtime/src/node_submodules/trace_events.rs
 1 0 crates/perry-runtime/src/object/class_registry/state.rs
 1 0 crates/perry-runtime/src/object/native_module/class_method_values.rs
@@ -101,4 +100,4 @@
 2 1 crates/perry-stdlib/src/tls/turnloop_server.rs
 2 0 crates/perry-stdlib/src/turnloop_smtp/ffi.rs
 1 0 crates/perry-stdlib/src/webcrypto/util.rs
-5 0 crates/perry-stdlib/src/worker_threads.rs
+3 0 crates/perry-stdlib/src/worker_threads.rs

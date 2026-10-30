@@ -751,7 +751,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function(
         "perry_wpfacts_check_field",
         I32,
-        &[DOUBLE, DOUBLE, I64, I64, I64, I32, I32, I32, I64],
+        &[DOUBLE, DOUBLE, I64, I64, I64, I32, I32, I32, I32, I64],
     );
     // FVA: the contract witness of an elided call (`lower_call/proven_call.rs`).
     module.declare_function("perry_wpfacts_check_call", PTR, &[DOUBLE, I64, I64]);
@@ -962,6 +962,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // `js_process_stdin/out/err`) are declared as DOUBLE.
     module.declare_function("js_process_cwd", I64, &[]);
     module.declare_function("js_process_argv", I64, &[]);
+    module.declare_function("js_process_argv_value", DOUBLE, &[]);
     module.declare_function("js_process_pid", DOUBLE, &[]);
     module.declare_function("js_process_ppid", DOUBLE, &[]);
     module.declare_function("js_process_uptime", DOUBLE, &[]);

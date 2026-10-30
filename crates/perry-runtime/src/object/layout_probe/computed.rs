@@ -106,12 +106,13 @@ pub unsafe extern "C" fn perry_probe_get_value(
             // any code since the birth could run (`order_known`, the
             // constructors' inert prologue) knows it.
             if order_known == 0 {
-                let fields =
-                    (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
                 let keys = std::slice::from_raw_parts(d.keys, d.key_count as usize);
                 let mut hole = false;
                 if keys[pos as usize..].iter().any(|k| {
-                    let present = *fields.add(k.slot as usize) != TAG_HOLE;
+                    let present = *crate::object::header::object_slot_at(
+                        obj as *mut ObjectHeader,
+                        u32::from(k.off),
+                    ) != TAG_HOLE;
                     let after_hole = present && hole;
                     hole |= !present;
                     after_hole

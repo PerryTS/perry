@@ -10,6 +10,7 @@ crate::perry_thread_local! {
 // IPC members are fixed at Worker bootstrap, not by later process.env edits.
 pub struct WorkerProcessState {
     ipc_enabled: bool,
+    argv: Option<(Option<String>, Option<crate::thread::SerializedValue>)>,
 }
 
 impl WorkerProcessState {
@@ -21,11 +22,86 @@ impl WorkerProcessState {
                 .is_some_and(|(_, value)| !value.is_empty()),
             None => std::env::var_os(IPC_CHANNEL_ENV).is_some_and(|value| !value.is_empty()),
         };
-        Self { ipc_enabled }
+        Self {
+            ipc_enabled,
+            argv: None,
+        }
+    }
+
+    pub fn with_worker_argv(
+        mut self,
+        entry: Option<String>,
+        argv: Option<crate::thread::SerializedValue>,
+    ) -> Self {
+        if entry.is_some() || argv.is_some() {
+            self.argv = Some((entry, argv));
+        }
+        self
+    }
+
+    pub fn serialize_argv(value: f64) -> Result<crate::thread::SerializedValue, String> {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let value = scope.root_nanbox_f64(value);
+        let len = crate::array::arraylike_length(value.get_nanbox_f64());
+        let array = scope.root_raw_mut_ptr(crate::array::js_array_alloc(len as u32));
+        for index in 0..len {
+            let item = crate::array::arraylike_get(value.get_nanbox_f64(), index);
+            crate::array::js_array_push_f64(array.get_raw_mut_ptr(), item);
+        }
+        unsafe {
+            crate::thread::serialize_message(
+                crate::value::JSValue::pointer(array.get_raw_const_ptr::<u8>()).bits(),
+                &[],
+                None,
+            )
+        }
     }
 
     pub fn install(self) {
         WORKER_IPC_ENABLED.with(|slot| slot.set(self.ipc_enabled));
+        let Some((entry, argv)) = self.argv else {
+            return;
+        };
+        crate::gc::gc_init();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let defaults = scope.root_raw_mut_ptr(crate::os::js_process_argv());
+        let argv = scope.root_nanbox_f64(match argv {
+            Some(value) => f64::from_bits(unsafe {
+                crate::thread::deserialize_nanbox_on_current_thread(&value)
+            }),
+            None => f64::from_bits(crate::value::TAG_UNDEFINED),
+        });
+        let len = if argv.get_nanbox_f64().to_bits() == crate::value::TAG_UNDEFINED {
+            0
+        } else {
+            crate::array::arraylike_length(argv.get_nanbox_f64())
+        };
+        let array = scope.root_raw_mut_ptr(crate::os::allocate_process_argv(
+            (len as u32).saturating_add(2),
+        ));
+        crate::array::js_array_push_f64(
+            array.get_raw_mut_ptr(),
+            crate::array::js_array_get_f64(defaults.get_raw_mut_ptr(), 0),
+        );
+        let entry = match entry {
+            Some(entry) => crate::value::js_nanbox_string(crate::string::js_string_from_bytes(
+                entry.as_ptr(),
+                entry.len() as u32,
+            ) as i64),
+            None => crate::array::js_array_get_f64(defaults.get_raw_mut_ptr(), 1),
+        };
+        crate::array::js_array_push_f64(array.get_raw_mut_ptr(), entry);
+        for index in 0..len {
+            let item = crate::array::arraylike_get(argv.get_nanbox_f64(), index);
+            crate::array::js_array_push_f64(array.get_raw_mut_ptr(), item);
+        }
+        crate::object::native_namespace_prop_override_store(
+            "process",
+            "argv",
+            crate::value::js_nanbox_pointer(
+                array.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64
+            ),
+        );
     }
 }
 

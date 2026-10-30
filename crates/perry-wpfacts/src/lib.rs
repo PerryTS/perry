@@ -465,7 +465,9 @@ fn compute_act<'a>(
         checks += 1;
         // DECISIONS 171: a cell its solve came to consume is seeded first.
         let woke = g.wake_cells();
-        g.contract_check() | woke
+        // What the check added is solved before its results are read
+        // again, whether or not the check counted it as a change.
+        g.contract_check() | woke | g.m.unsolved()
     } {
         g.m.solve();
     }

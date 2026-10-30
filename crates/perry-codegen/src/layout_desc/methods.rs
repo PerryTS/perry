@@ -112,8 +112,14 @@ pub(super) fn emit(
         while !entries[at].ends_with("zeroinitializer") {
             at = (at + 1) & (cap - 1);
         }
+        // The holder is a class prototype, which carries the meta word.
+        let off = key_off(
+            &llmod.target_triple,
+            crate::target_layout::HeaderForm::Meta,
+            *slot as u32,
+        );
         entries[at] = format!(
-            "{{ ptr, ptr, i32, i32 }} {{ ptr @{a}, ptr @{g}, i32 {}, i32 {slot} }}",
+            "{{ ptr, ptr, i32, i32 }} {{ ptr @{a}, ptr @{g}, i32 {}, i32 {off} }}",
             chain.len()
         );
     }
@@ -282,9 +288,14 @@ mod tests {
             "i32 700, i32 {}",
             crate::layout_ordinals::static_word(100000)
         )));
+        let off = key_off(
+            "x86_64-unknown-linux-gnu",
+            crate::target_layout::HeaderForm::Meta,
+            1,
+        );
         assert!(
-            ir.contains("i32 2, i32 1"),
-            "inherited m needs both holder words"
+            ir.contains(&format!("i32 2, i32 {off}")),
+            "inherited m needs both holder words and its slot offset"
         );
         assert!(
             !ir.contains("c\"blocked"),

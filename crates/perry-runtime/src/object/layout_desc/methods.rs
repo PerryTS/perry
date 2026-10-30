@@ -15,7 +15,8 @@ pub struct PerryFamilyMethod {
     pub atom: *const StaticAtom,
     pub guards: *const PerryMethodHolder,
     pub depth: u32,
-    pub slot: u32,
+    /// The method's byte offset in the last guard's holder (its key's `off`).
+    pub off: u32,
 }
 #[repr(C)]
 pub struct PerryMethodHolder {
@@ -123,9 +124,7 @@ pub unsafe extern "C" fn perry_probe_family_method(
     if holder.is_null() {
         return 0;
     }
-    let value = *((holder as *const u8)
-        .add(std::mem::size_of::<ObjectHeader>() + entry.slot as usize * 8)
-        as *const u64);
+    let value = *super::super::header::object_slot_at(holder as *mut ObjectHeader, entry.off);
     // ConstFn is a shape fact. Its immutable function info specifies the ABI;
     // the closure value remains the callee environment, including lexical home.
     let closure = (value & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;

@@ -220,6 +220,12 @@ environment. Disabled process callables expose `disabled === true`; reading
 `umask` remains allowed. Worker title writes remain local to the existing title
 value, and mutable CommonJS/default reads observe the updated title. Named ESM
 title imports remain a known parity limitation.
+Worker eval source must be a primitive string. A URL with truthy `eval` throws
+before reading workerData or detaching buffers; ordinary file URLs use the same
+registered entry table as dynamically selected files. Literal string eval remains
+compiled ahead of time; dynamically generated source is still unsupported.
+Worker `argv` values are converted in constructor order and installed in the
+child's existing process-argv authority, after execPath and the Worker entry name.
 Other worker API parity gaps remain.
 
 ## Next Steps
