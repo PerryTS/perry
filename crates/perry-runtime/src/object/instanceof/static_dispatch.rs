@@ -178,6 +178,33 @@ fn instanceof_dispatch(
                 false_val
             };
         }
+        // A function object given a class's prototype (a callable class
+        // instance: `Object.setPrototypeOf(fn.bind(this),
+        // new.target.prototype)`, ArkType's `Callable`) has no class shape:
+        // OrdinaryHasInstance walks its prototype chain for the class's
+        // prototype object.
+        if crate::closure::is_closure_bits(value.to_bits()) {
+            if let Some(first) = crate::closure::closure_static_prototype(addr) {
+                let scope = crate::gc::RuntimeHandleScope::new();
+                let target = scope.root_nanbox_f64(
+                    super::super::class_registry::class_decl_prototype_value(class_id),
+                );
+                let mut proto = scope.root_nanbox_u64(first);
+                for _ in 0..1024 {
+                    let bits = proto.get_nanbox_u64();
+                    let current = crate::value::JSValue::from_bits(bits);
+                    if current.is_null() || current.is_undefined() {
+                        break;
+                    }
+                    if bits == target.get_nanbox_u64() {
+                        return true_val;
+                    }
+                    let next = crate::object::js_object_get_prototype_of(f64::from_bits(bits));
+                    proto = scope.root_nanbox_u64(next.to_bits());
+                }
+                return false_val;
+            }
+        }
     }
     native_with_constructor(value, class_id, constructor)
 }

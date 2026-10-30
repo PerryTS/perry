@@ -523,7 +523,17 @@ pub fn substitute_lexical_this_in_expr(expr: &mut Expr, replacement: &Expr) {
                 // #11157: a local replacement (a per-evaluation class's
                 // self-binding) is read from the closure body now, so the
                 // closure must capture it like any other outer local.
-                if let Expr::LocalGet(id) = replacement {
+                let local = match replacement {
+                    Expr::LocalGet(id) => Some(id),
+                    // A property of a local (a derived constructor's
+                    // `this` cell, `lower_decl::super_arrow_this`).
+                    Expr::PropertyGet { object, .. } => match object.as_ref() {
+                        Expr::LocalGet(id) => Some(id),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let Some(id) = local {
                     if !captures.contains(id) {
                         captures.push(*id);
                     }

@@ -34,6 +34,24 @@ pub fn extract_single_module_exports_assignment(source: &str) -> Option<String> 
     found
 }
 
+/// True when the module's export names cannot be read from its source: some
+/// `module.exports = …` assignment's value is not an object literal (a call
+/// such as a UMD `factory(…)`, an identifier, a `require`, …). Only `exports.X
+/// = …` writes and `module.exports = { … }` literals list them completely.
+/// The names an importer asks of such a module are then exported from its
+/// `module.exports` object (see `CompilationContext::cjs_demanded_exports`).
+pub fn module_exports_is_opaque(source: &str) -> bool {
+    // The first character of each assigned value; `==`/`===` comparisons
+    // fail the `[^=\s]` after the single `=`.
+    let Ok(re) = perry_perex::tooling::Regex::new(
+        r#"\bmodule(?:\.exports|\[\s*'exports'\s*\]|\[\s*"exports"\s*\])\s*=\s*([^=\s])"#,
+    ) else {
+        return false;
+    };
+    re.captures_iter(source)
+        .any(|cap| cap.get(1).is_some_and(|first| first.as_str() != "{"))
+}
+
 /// Return the set of specs `SPEC` for which this module is a *trivial
 /// re-export wrapper* — i.e. it contains a `module.exports = require('SPEC')`
 /// (or bare `exports = require('SPEC')`) assignment, optionally inside a
