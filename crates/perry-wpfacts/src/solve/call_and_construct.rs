@@ -750,6 +750,26 @@ impl Model {
                 return;
             }
         }
+        // A marker with its callers' values beside it (decision 13,
+        // DECISIONS 107, 148): the call is made on those values (below),
+        // whose contracts carry what it does to them to their units
+        // (DECISIONS 143). Its own use is a read of the method under the key,
+        // as for a parameter's own marker (DECISIONS 144), not an escape:
+        // nothing of the receiver reaches code the solve does not see. A
+        // reach marker is its own reach under every key (`marker_load`).
+        if bits == crate::model::MARK_ESCAPE
+            && t != TOP
+            && self.is_marker(t)
+            && self.beside_values(t)
+        {
+            self.mark_use(t, crate::model::MARK_READ);
+            let r = match key {
+                Key::Named(a) => self.marker_load(t, Some(a)),
+                Key::Any => self.reach_of(t),
+            };
+            self.mark_use(r, crate::model::MARK_READ);
+            return;
+        }
         self.mark_use(t, bits);
         if t == TOP {
             self.call_tok(call, TOP, Some(TOP));
