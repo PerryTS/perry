@@ -292,7 +292,7 @@ impl<'a> Gen<'a> {
         for cc in &c.layouts {
             if broken(self, &cc.display) {
                 self.m.add_top(n, |_| {
-                    format!("broken layout of another unit: {}", cc.display)
+                    format!("broken layout of another unit ({})", cc.display)
                 });
                 continue;
             }

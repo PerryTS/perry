@@ -727,7 +727,8 @@ impl<'a> Gen<'a> {
     /// Why this unit files each of its census reports `out` (`reports`),
     /// for the dump and explain: `aborted`; `written: <key (object)> | …`
     /// (a store no store effect covers, decision 17); `adds keys: <key> | …`;
-    /// `escaped: <reason>` / `hard: <reason>` of a token of the display;
+    /// `escaped: <reason> @<file>|<hir id>|<function>` (where it first
+    /// escaped) / `hard: <reason>` of a token of the display;
     /// `touched` (a function used as an object, DECISIONS 210); `override`.
     /// The keys are named only with the dump's capture (`Model::diagnostic`).
     pub(crate) fn report_reasons(&self, out: &[String]) -> Vec<(String, Vec<String>)> {
@@ -737,9 +738,27 @@ impl<'a> Gen<'a> {
             set.map(|s| format!(": {}", s.iter().cloned().collect::<Vec<_>>().join(" | ")))
                 .unwrap_or_default()
         };
+        // The function whose walk first escaped `t` (through the escapes
+        // that carried it): ` @<file>|<hir id>|<name>`, for the ledger to
+        // join with the bodies the program runs.
+        let at = |mut t: Tok| -> String {
+            let Some(d) = trace else { return String::new() };
+            for _ in 0..64 {
+                match d.esc_first.get(&t).map(|e| e.cause) {
+                    Some(crate::diagnostics::Cause::Fn(f)) => {
+                        let fi = &m.funcs[f as usize];
+                        let file = self.modules.get(fi.module as usize).map_or("", |(p, _)| *p);
+                        return format!(" @{file}|{}|{}", fi.func_id, fi.name);
+                    }
+                    Some(crate::diagnostics::Cause::Tok(u)) if u != t => t = u,
+                    _ => break,
+                }
+            }
+            String::new()
+        };
         let tok_reasons = |rs: &mut Vec<String>, t: Tok| {
             if let Some(&r) = m.escaped.get(&t) {
-                rs.push(format!("escaped: {}", m.reasons[r as usize]));
+                rs.push(format!("escaped: {}{}", m.reasons[r as usize], at(t)));
             }
             if let Some(&(_, r)) = m.hard.get(&t) {
                 rs.push(format!("hard: {}", m.reasons[r as usize]));

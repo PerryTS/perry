@@ -46,24 +46,15 @@ export class Node {
     kind: number;
     constructor(kind: number) { this.kind = kind; }
 }
-export function make(kind: number): Node { return new Node(kind); }
 export function kindOf(n: Node): number { return n.kind; }
 ";
 
 #[test]
 fn a_store_of_an_undeclared_key_reports_written_and_the_key() {
-    // `b` stores `parent`, a key `Node` never declares, into the instances
-    // it gets from `make`: no store effect covers it (decision 17), so `b`
-    // reports `a.ts:Node`, and the record says why.
-    let reader = "
-import { make, kindOf } from \"./a\";
-export function link(k: number): number {
-    const n = make(k);
-    const p = make(k + 1);
-    (n as any).parent = p;
-    return kindOf(n);
-}
-";
+    // `b` stores `parent`, a key `Node` never declares, into a `Node`: no
+    // store effect covers it (decision 17), so `b` reports `a.ts:Node`, and
+    // the record says why.
+    let reader = "import { Node, kindOf } from './a'; const n = new Node(1); (n as any).parent = new Node(2); console.log(kindOf(n));";
     let mods = [("a", OWNER), ("b", reader)];
     let on = units(&mods, true);
     assert!(on.broken.iter().any(|d| d == "a.ts:Node"), "{:?}", on.broken);
@@ -90,15 +81,9 @@ export function link(k: number): number {
 fn a_store_of_a_definite_key_is_a_store_effect_and_no_report() {
     // The control: `kind` is definite in every `Node`; the store is the
     // store effect decision 17 publishes, nothing is broken or reported.
-    let reader = "
-import { make, kindOf } from \"./a\";
-export function bump(k: number): number {
-    const n = make(k);
-    n.kind = k + 1;
-    return kindOf(n);
-}
-";
+    let reader = "import { Node, kindOf } from './a'; const n = new Node(1); n.kind = 2; console.log(kindOf(n));";
     let on = units(&[("a", OWNER), ("b", reader)], true);
     assert!(!on.broken.iter().any(|d| d == "a.ts:Node"), "{:?}", on.broken);
     assert!(reports(&on).iter().all(|l| !l.contains("a.ts:Node")), "{:?}", reports(&on));
 }
+
