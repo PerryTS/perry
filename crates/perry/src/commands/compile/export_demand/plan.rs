@@ -47,6 +47,9 @@ struct Module<'a> {
     whole_targets: Vec<PathBuf>,
     /// Plain named HIR imports of a module without a summary.
     named_targets: Vec<(PathBuf, String)>,
+    /// Re-export items whose source the collection-time pruner postponed:
+    /// left exactly as they are.
+    postponed: HashSet<usize>,
 }
 
 pub(crate) struct Planned {
@@ -64,6 +67,7 @@ pub(crate) fn plan(
     let paths: Vec<PathBuf> = ctx.native_modules.keys().cloned().collect();
     let key_set: HashSet<PathBuf> = paths.iter().cloned().collect();
     let mut modules: HashMap<PathBuf, Module> = HashMap::new();
+    let mut unresolved: Vec<String> = Vec::new();
     for p in &paths {
         let hir_imports = ctx.native_modules[p].imports.clone();
         let hir_exports = ctx.native_modules[p].exports.clone();
@@ -73,6 +77,7 @@ pub(crate) fn plan(
             targets: HashMap::new(),
             whole_targets: Vec::new(),
             named_targets: Vec::new(),
+            postponed: HashSet::new(),
         };
         let resolved = |source: &str| {
             hir_imports
@@ -97,7 +102,22 @@ pub(crate) fn plan(
                     Some(t) => {
                         m.targets.insert(index, t);
                     }
-                    None if compiled_specifier(ctx, p, source, &key_set) => return None,
+                    None => match compiled_specifier(ctx, p, source) {
+                        // A re-export the collection-time pruner postponed:
+                        // nothing demands it and its edge is gone from HIR.
+                        Some(t)
+                            if matches!(item.kind, Kind::ReExport | Kind::ExportAll)
+                                && ctx.reexport_pruner.postponed(&t) =>
+                        {
+                            m.postponed.insert(index);
+                        }
+                        Some(t) => unresolved.push(format!(
+                            "{} -> {source} -> {}",
+                            p.display(),
+                            t.display()
+                        )),
+                        None => {}
+                    },
                     None => {}
                 }
             }
@@ -171,6 +191,16 @@ pub(crate) fn plan(
         modules.insert(p.clone(), m);
     }
 
+    if !unresolved.is_empty() {
+        eprintln!(
+            "perry: export demand: {} edges into compiled files outside the graph:",
+            unresolved.len()
+        );
+        for u in unresolved.iter().take(12) {
+            eprintln!("perry: export demand:   {u}");
+        }
+        return None;
+    }
     // Import cycles: an imported binding is initialized when its module is
     // not in the reader's cycle (it finished evaluating first).
     let scc = components(&paths, &modules);
@@ -370,6 +400,7 @@ pub(crate) fn plan(
                         }
                     }
                 }
+                Kind::ReExport if m.postponed.contains(&i) => {}
                 Kind::ExportLocal | Kind::ReExport if !d.whole => {
                     for e in item
                         .exports
@@ -532,19 +563,14 @@ fn compiled_specifier(
     ctx: &mut CompilationContext,
     importer: &Path,
     source: &str,
-    key_set: &HashSet<PathBuf>,
-) -> bool {
-    let _ = key_set;
-    match super::super::resolve::cached_resolve_import(source, importer, ctx) {
-        Some((p, _)) => {
-            let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
-            matches!(
-                ext,
-                "ts" | "tsx" | "mts" | "cts" | "js" | "jsx" | "mjs" | "cjs"
-            )
-        }
-        None => false,
-    }
+) -> Option<PathBuf> {
+    let (p, _) = super::super::resolve::cached_resolve_import(source, importer, ctx)?;
+    let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
+    matches!(
+        ext,
+        "ts" | "tsx" | "mts" | "cts" | "js" | "jsx" | "mjs" | "cjs"
+    )
+    .then(|| p.canonicalize().unwrap_or(p))
 }
 
 /// Strongly connected components of the module graph (iterative Tarjan).
