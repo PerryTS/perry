@@ -835,20 +835,8 @@ pub(crate) unsafe fn selected_native_module_constant(
         // ~8 process tests in the node-core radar (#2135) were "skipping"
         // when they should have been running. (#2135)
         "worker_threads" => match property {
-            "MessageChannel" | "MessagePort" | "BroadcastChannel" => {
-                let global = crate::object::js_get_global_this();
-                let global_obj = crate::value::js_nanbox_get_pointer(global) as *const ObjectHeader;
-                if global_obj.is_null() {
-                    Some(f64::from_bits(JSValue::undefined().bits()))
-                } else {
-                    let key = crate::string::js_string_from_bytes(
-                        property.as_ptr(),
-                        property.len() as u32,
-                    );
-                    Some(f64::from_bits(
-                        js_object_get_field_by_name(global_obj, key).bits(),
-                    ))
-                }
+            _ if is_worker_messaging_constructor(property) => {
+                worker_messaging_constructor_value(module_name, property)
             }
             "isMainThread" => Some(call_worker_threads_getter(
                 &WORKER_THREADS_IS_MAIN_THREAD_GETTER,
