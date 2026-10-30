@@ -747,7 +747,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function(
         "perry_wpfacts_check_field",
         I32,
-        &[DOUBLE, DOUBLE, I64, I64, I64, I32, I32, I32, I64],
+        &[DOUBLE, DOUBLE, I64, I64, I64, I32, I32, I32, I32, I64],
     );
     // FVA: the contract witness of an elided call (`lower_call/proven_call.rs`).
     module.declare_function("perry_wpfacts_check_call", PTR, &[DOUBLE, I64, I64]);

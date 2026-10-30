@@ -112,8 +112,14 @@ pub(super) fn emit(
         while !entries[at].ends_with("zeroinitializer") {
             at = (at + 1) & (cap - 1);
         }
+        // The holder is a class prototype, which carries the meta word.
+        let off = key_off(
+            &llmod.target_triple,
+            crate::target_layout::HeaderForm::Meta,
+            *slot as u32,
+        );
         entries[at] = format!(
-            "{{ ptr, ptr, i32, i32 }} {{ ptr @{a}, ptr @{g}, i32 {}, i32 {slot} }}",
+            "{{ ptr, ptr, i32, i32 }} {{ ptr @{a}, ptr @{g}, i32 {}, i32 {off} }}",
             chain.len()
         );
     }
