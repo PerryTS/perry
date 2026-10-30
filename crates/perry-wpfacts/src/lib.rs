@@ -92,6 +92,10 @@ pub struct FactsConfig {
     /// The per-unit driver prints a census line per dependency level and
     /// per round (`PERRY_FACTS_REPORT=1`): what each holds, and the RSS.
     pub report: bool,
+    /// Dump only (per-unit driver): the file the units' diagnostic records are
+    /// written to as each unit is captured at the fixpoint, instead of being
+    /// held for the dump (`ProgramFacts::diag_stream`).
+    pub diag_sidecar: Option<std::path::PathBuf>,
 }
 
 /// Module path → `export … from` source → the module path it resolves to.
@@ -136,6 +140,10 @@ pub struct Stats {
 pub struct ProgramFacts {
     /// Dump-only JSON records, scoped by emitting analysis-unit identity.
     pub diagnostics: Vec<(String, Vec<String>)>,
+    /// Dump-only: where the per-unit diagnostic records went when they were
+    /// streamed (`FactsConfig::diag_sidecar`): the file and, in unit order,
+    /// each unit's (offset, length).
+    pub diag_stream: Option<(std::path::PathBuf, Vec<(u64, u64)>)>,
     /// Dump-only: the addresses of the HIR sites the analyses recorded
     /// (`ledger::census` compares them with the HIR).
     pub(crate) diagnostic_sites: Vec<(usize, &'static str, u32)>,
@@ -1528,8 +1536,9 @@ fn compute_act<'a>(
     } else {
         std::mem::take(&mut g.m.shared_out).into_iter().collect()
     };
-    // Dump only: the unit that published each unknown value's reason.
-    if cfg.diagnostics {
+    // The unit that published each unknown value's reason (only the dump reads
+    // it; it takes no part in equality or hashing).
+    if cfg.unit {
         let unit: std::sync::Arc<str> = view.map_or("<whole>", |v| v.key.as_str()).into();
         for (_, vc) in &mut values_out {
             vc.stamp(&unit);
@@ -1594,6 +1603,7 @@ fn compute_act<'a>(
             .collect()
     });
     let mut pf = ProgramFacts {
+        diag_stream: None,
         diagnostics,
         diagnostic_sites,
         activation,
@@ -1739,6 +1749,12 @@ impl ProgramFacts {
     /// The human/oracle-readable facts dump.
     pub fn dump_text(&self) -> String {
         dump::dump_text(self)
+    }
+
+    /// Dump only: writes the diagnostic records streamed to the sidecar,
+    /// after `dump_text`.
+    pub fn append_streamed(&self, out: &mut impl std::io::Write) -> std::io::Result<()> {
+        dump::append_streamed(self, out)
     }
 
     /// The constraint relations for `scripts/wpfacts_recompute.py`.

@@ -237,8 +237,12 @@ pub(super) fn dependency_order(solves: &[Solve]) -> Vec<usize> {
 /// and stored.
 
 pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts {
+    // The rounds capture no diagnostics: they are captured once, at the
+    // fixpoint (`capture_diagnostics`), so the records of earlier solves are
+    // never held.
     let ucfg = FactsConfig {
         unit: true,
+        diagnostics: false,
         ..cfg.clone()
     };
     let flats: Vec<Option<Module>> = sorted
@@ -421,25 +425,7 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
                 // of that name, another unit's (`var _C = class _C {..};
                 // export { _C }`: the module exports the binding, the class
                 // `_C` goes to the binding's unit only).
-                let module_export = |n: &String| !s.view.unit_exports.contains(n);
-                for ((p, n), c) in &u.contracts_out {
-                    input.classes.insert((s.key.clone(), n.clone()), c.clone());
-                    if module_export(n) {
-                        input.classes.insert((p.clone(), n.clone()), c.clone());
-                    }
-                }
-                for ((p, n), c) in &u.fn_contracts_out {
-                    input.fns.insert((s.key.clone(), n.clone()), c.clone());
-                    if module_export(n) {
-                        input.fns.insert((p.clone(), n.clone()), c.clone());
-                    }
-                }
-                for ((p, n), c) in &u.values_out {
-                    input.values.insert((s.key.clone(), n.clone()), c.clone());
-                    if module_export(n) {
-                        input.values.insert((p.clone(), n.clone()), c.clone());
-                    }
-                }
+                publish_contracts(&mut input, s, u);
                 // DECISIONS 134: a layout this unit owned at its last solve
                 // and no longer publishes is gone now, unless another unit
                 // births it too (DECISIONS 112).
@@ -929,7 +915,21 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             input.broken.extend(fresh);
             continue;
         }
+        let diag_stream = if cfg.diagnostics {
+            capture_diagnostics(
+                &mut per_unit,
+                &solves,
+                sorted,
+                &ucfg,
+                &mut input,
+                &levels,
+                cfg.diag_sidecar.as_deref(),
+            )
+        } else {
+            None
+        };
         let mut pf = ProgramFacts {
+            diag_stream,
             module_paths: sorted.iter().map(|(p, _)| p.to_string()).collect(),
             dynamic_code_reach: cfg.dynamic_code_reach.clone(),
             sabotage: cfg.sabotage.clone(),
@@ -1654,5 +1654,107 @@ pub(super) fn unique_bindings<T>(values: &mut [(u32, T)], module: &str, kind: &s
             "per-unit facts: duplicate {kind} {} in {module}; cloned bodies must have distinct binding identities",
             pair[0].0,
         );
+    }
+}
+
+/// A unit's class, function and value contracts as the next levels read them:
+/// under the unit's path and, when the module exports the name, under the
+/// module's.
+fn publish_contracts(input: &mut Published, s: &Solve, u: &ProgramFacts) {
+    let module_export = |n: &String| !s.view.unit_exports.contains(n);
+    for ((p, n), c) in &u.contracts_out {
+        input.classes.insert((s.key.clone(), n.clone()), c.clone());
+        if module_export(n) {
+            input.classes.insert((p.clone(), n.clone()), c.clone());
+        }
+    }
+    for ((p, n), c) in &u.fn_contracts_out {
+        input.fns.insert((s.key.clone(), n.clone()), c.clone());
+        if module_export(n) {
+            input.fns.insert((p.clone(), n.clone()), c.clone());
+        }
+    }
+    for ((p, n), c) in &u.values_out {
+        input.values.insert((s.key.clone(), n.clone()), c.clone());
+        if module_export(n) {
+            input.values.insert((p.clone(), n.clone()), c.clone());
+        }
+    }
+}
+
+/// Dump only. Solves every unit once more at the fixpoint with the
+/// diagnostics on, the way a round would (each level reads the contracts of
+/// the earlier ones), and keeps from it what the dump needs: the sites and
+/// the diagnostic records, written to the sidecar file when there is one
+/// (their offsets are returned) instead of held. The facts are the rounds'.
+fn capture_diagnostics(
+    per_unit: &mut [Option<ProgramFacts>],
+    solves: &[Solve],
+    sorted: &[(&str, &Module)],
+    ucfg: &FactsConfig,
+    input: &mut Published,
+    levels: &[Vec<usize>],
+    sidecar: Option<&std::path::Path>,
+) -> Option<(std::path::PathBuf, Vec<(u64, u64)>)> {
+    use std::io::Write;
+    let dcfg = FactsConfig {
+        diagnostics: true,
+        ..ucfg.clone()
+    };
+    let mut out = sidecar.map(|p| {
+        std::io::BufWriter::new(
+            std::fs::File::create(p)
+                .unwrap_or_else(|e| panic!("cannot write {}: {e}", p.display())),
+        )
+    });
+    let mut spans = vec![(0u64, 0u64); solves.len()];
+    let mut at = 0u64;
+    input.classes.clear();
+    input.fns.clear();
+    input.values.clear();
+    for level in levels {
+        // Chunks bound what is held: a level can be thousands of units.
+        for chunk in level.chunks(256) {
+            for (si, mut u2) in solve_level(chunk, solves, sorted, &dcfg, input) {
+                let u = per_unit[si].as_mut().expect("every unit solved");
+                u.sites = std::mem::take(&mut u2.sites);
+                u.diagnostic_sites = std::mem::take(&mut u2.diagnostic_sites);
+                match out.as_mut() {
+                    Some(w) => {
+                        let mut n = 0u64;
+                        for (_, lines) in &u2.diagnostics {
+                            for line in lines {
+                                let text = format!(
+                                    "D {{\"unit\":{},{}\n",
+                                    crate::diagnostics::quote(&solves[si].key),
+                                    &line[1..]
+                                );
+                                w.write_all(text.as_bytes()).expect("write the sidecar");
+                                n += text.len() as u64;
+                            }
+                        }
+                        spans[si] = (at, n);
+                        at += n;
+                        u.diagnostics = u2
+                            .diagnostics
+                            .into_iter()
+                            .map(|(k, _)| (k, Vec::new()))
+                            .collect();
+                    }
+                    None => u.diagnostics = u2.diagnostics,
+                }
+            }
+        }
+        for &si in level {
+            let u = per_unit[si].as_ref().expect("every unit solved");
+            publish_contracts(input, &solves[si], u);
+        }
+    }
+    match (out, sidecar) {
+        (Some(mut w), Some(p)) => {
+            w.flush().expect("write the sidecar");
+            Some((p.to_path_buf(), spans))
+        }
+        _ => None,
     }
 }
