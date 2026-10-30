@@ -136,6 +136,9 @@ struct StackMapIndex {
     /// can share a relocated address and each brings its own records.
     functions: Vec<lazy::FunctionEntry>,
     eager: Option<EagerIndex>,
+    /// Where the x86-64 frame walk ends; resolved with the index.
+    #[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+    root_frames: frame_walk::RootFrames,
 }
 
 /// The v4 whole-section index.
@@ -741,6 +744,10 @@ pub(in crate::gc) struct NativeStackWalkStats {
     pub(in crate::gc) locations_visited: usize,
     pub(in crate::gc) fp_walks: usize,
     pub(in crate::gc) fallback_walks: usize,
+    /// x86-64 frame walk: frames stepped by their unwind row, and JS frames
+    /// stepped by their frame record.
+    pub(in crate::gc) cfi_steps: usize,
+    pub(in crate::gc) record_steps: usize,
 }
 
 #[inline]
@@ -923,6 +930,8 @@ fn build_index_from_sections(
         records,
         functions,
         eager,
+        #[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+        root_frames: frame_walk::RootFrames::resolve(),
     }
 }
 
@@ -1320,7 +1329,8 @@ fn sve_vector_length_bytes() -> Option<usize> {
     None
 }
 
-type VerifyWalk = for<'a> fn(&StackMapIndex, &'a mut dyn FnMut(MutableRootSlot)) -> NativeStackWalkStats;
+type VerifyWalk =
+    for<'a> fn(&StackMapIndex, &'a mut dyn FnMut(MutableRootSlot)) -> NativeStackWalkStats;
 static VERIFY_WALK: crate::feature_hooks::Hook<VerifyWalk> = crate::feature_hooks::Hook::empty();
 
 fn verify_walk(
@@ -1350,7 +1360,7 @@ fn visit_fast(
     // exotic register, and it reuses the mid-walk bail this walker
     // already performs for `x19_is_body_sp` and an unvalidated
     // `caller_fp`.
-    if let Some(stats) = fp_chain::visit(index, &mut |root: ResolvedRoot| {
+    if let Some(stats) = fast_walk::visit(index, &mut |root: ResolvedRoot| {
         root.visit_with_context(visit)
     }) {
         return stats;
@@ -1429,6 +1439,7 @@ mod unwind {
         index: &'a StackMapIndex,
         visit: &'a mut F,
         stats: NativeStackWalkStats,
+        last_ip: usize,
     }
 
     pub(super) fn visit<F: FnMut(ResolvedRoot)>(
@@ -1442,14 +1453,44 @@ mod unwind {
                 walks: 1,
                 ..NativeStackWalkStats::default()
             },
+            last_ip: 0,
         };
-        unsafe {
+        let code = unsafe {
             _Unwind_Backtrace(
                 walk_frame::<F>,
                 (&mut state as *mut WalkState<'_, _>).cast::<c_void>(),
-            );
+            )
+        };
+        #[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+        if code != URC_END_OF_STACK {
+            stopped_short(code, state.last_ip);
         }
+        #[cfg(not(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu")))]
+        let _ = code;
         state.stats
+    }
+
+    /// `_Unwind_Backtrace` reached the end of the thread's frames.
+    #[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+    const URC_END_OF_STACK: i32 = 5;
+
+    /// The unwinder stopped before the stack's end: a frame without usable
+    /// unwind tables. Every frame outward of it went unscanned, so its roots
+    /// were never visited, and under a moving collection the mutator would
+    /// resume on from-space pointers. That is corruption, not a short walk;
+    /// it ends here, naming the frame and the object it belongs to.
+    #[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+    #[cold]
+    fn stopped_short(code: i32, last_ip: usize) -> ! {
+        let module = crate::eh_walker::module_name(last_ip as u64)
+            .unwrap_or_else(|| String::from("<no loaded object>"));
+        eprintln!(
+            "perry: the GC root scan cannot walk this thread's stack past the frame \
+             returning to {last_ip:#x} in {module} (_Unwind_Backtrace code {code}): that \
+             object has no unwind tables the walk can follow there, so every frame \
+             outward of it would go unscanned and its roots be lost."
+        );
+        std::process::abort();
     }
 
     fn walk_trace_enabled() -> bool {
@@ -1470,6 +1511,7 @@ mod unwind {
         let state = &mut *argument.cast::<WalkState<'_, F>>();
         state.stats.frames_visited = state.stats.frames_visited.saturating_add(1);
         let ip = _Unwind_GetIP(context);
+        state.last_ip = ip;
         if walk_trace_enabled() {
             let mut info: libc::Dl_info = std::mem::zeroed();
             let name =
@@ -1740,9 +1782,12 @@ mod fp_chain {
     }
 }
 
-#[cfg(not(all(
-    any(target_vendor = "apple", target_os = "linux"),
-    target_arch = "aarch64"
+#[cfg(not(any(
+    all(
+        any(target_vendor = "apple", target_os = "linux"),
+        target_arch = "aarch64"
+    ),
+    all(target_arch = "x86_64", target_os = "linux", target_env = "gnu")
 )))]
 mod fp_chain {
     use super::*;
@@ -1754,6 +1799,18 @@ mod fp_chain {
         None
     }
 }
+
+// x86-64 Linux has no frame-pointer chain through the runtime: its walk steps
+// JS frames by their frame records and everything else by its unwind row.
+#[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+#[path = "stack_maps_frame_walk.rs"]
+mod frame_walk;
+
+#[cfg(not(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu")))]
+use fp_chain as fast_walk;
+/// The walk `Fast` mode runs before (if it fails closed) the system unwinder.
+#[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+use frame_walk as fast_walk;
 
 // The compact-map decoder. Its own file because this one is close to the
 // 2000-line cap; the re-export is named rather than a glob because a glob does
@@ -1807,6 +1864,12 @@ mod decode_tests;
 ))]
 #[path = "stack_maps_walker_agreement.rs"]
 mod walker_agreement;
+
+// The x86-64 frame walk against the unwinder over probe frames of a chosen
+// layout, with its sabotage arms.
+#[cfg(all(test, target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+#[path = "stack_maps_frame_walk_tests.rs"]
+mod frame_walk_tests;
 
 pub(crate) mod census_rows;
 

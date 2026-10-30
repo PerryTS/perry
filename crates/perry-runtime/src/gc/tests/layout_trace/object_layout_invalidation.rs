@@ -25,6 +25,7 @@ fn test_layout_scan_trace_counts_raw_numeric_object_fields() {
         GcTriggerSnapshot {
             kind: GcTriggerKind::Direct,
             steps_before: Some(GcStepSnapshot::current()),
+            origin: None,
         },
     )
     .expect("test requested GC trace capture");
@@ -71,6 +72,7 @@ fn test_layout_scan_trace_counts_mixed_raw_numeric_object_fields() {
         GcTriggerSnapshot {
             kind: GcTriggerKind::Direct,
             steps_before: Some(GcStepSnapshot::current()),
+            origin: None,
         },
     )
     .expect("test requested GC trace capture");

@@ -229,8 +229,8 @@ pub(crate) use old_free::{
 mod tenuring;
 use tenuring::*;
 mod oldgen;
-use oldgen::*;
 pub(crate) use oldgen::finalize_dead_arena_payload;
+use oldgen::*;
 pub(crate) mod heap_generation;
 /// #10698: `gc_check_trigger`'s "nothing is due" watermark and the
 /// `TriggerInput` cell type whose writes retire it.
@@ -351,6 +351,7 @@ pub(super) fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCol
     // cannot be deferred any further than this.
     roots::ensure_stack_maps_built();
     diagnostic_hooks::before_collection();
+    let _origin = ActiveWalkOrigin::enter(trigger.origin);
 
     gc_collect_minor_with_trigger_inner(trigger, FullEscalation::Allowed, CopyingFastPath::Allowed)
 }
@@ -375,6 +376,7 @@ pub(super) enum CopyingFastPath {
 pub(super) fn gc_collect_compacting_minor(trigger: GcTriggerSnapshot) -> GcCollectOutcome {
     roots::ensure_stack_maps_built();
     diagnostic_hooks::before_collection();
+    let _origin = ActiveWalkOrigin::enter(trigger.origin);
     let _armed = oldgen_defrag::IdleCompactDefragArm::new();
     gc_collect_minor_with_trigger_inner(trigger, FullEscalation::Refused, CopyingFastPath::Skipped)
 }
@@ -408,6 +410,7 @@ pub(super) fn gc_collect_forced_evacuating_minor(trigger: GcTriggerSnapshot) -> 
     // cannot be deferred any further than this.
     roots::ensure_stack_maps_built();
     diagnostic_hooks::before_collection();
+    let _origin = ActiveWalkOrigin::enter(trigger.origin);
 
     gc_collect_minor_with_trigger_inner(trigger, FullEscalation::Refused, CopyingFastPath::Allowed)
 }
@@ -904,6 +907,7 @@ fn gc_collect_full_mark_sweep_with_trigger(trigger: GcTriggerSnapshot) -> GcColl
     // cannot be deferred any further than this.
     roots::ensure_stack_maps_built();
     diagnostic_hooks::before_collection();
+    let _origin = ActiveWalkOrigin::enter(trigger.origin);
 
     // PERRY_GC_SAFEPOINT_ONLY: see gc_collect_minor_with_trigger. Manual
     // gc() engages its own force_full_scan first, which this detects as
@@ -982,6 +986,7 @@ pub(super) fn test_gc_collect_emergency_full_trace_json() -> serde_json::Value {
     let outcome = gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot {
         kind: GcTriggerKind::Emergency,
         steps_before: Some(GcStepSnapshot::current()),
+        origin: None,
     });
     outcome
         .trace

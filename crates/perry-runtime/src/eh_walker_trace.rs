@@ -273,7 +273,7 @@ pub(crate) fn capture_return_addresses(out: &mut [usize], top: usize) -> usize {
 /// without `main` (a test harness loaded some other way, a shared object)
 /// links and simply walks to the bottom of the stack.
 #[cfg(not(test))]
-pub(super) fn executable_main() -> u64 {
+pub(crate) fn executable_main() -> u64 {
     extern "C" {
         #[linkage = "extern_weak"]
         static main: *const u8;
@@ -286,7 +286,7 @@ pub(super) fn executable_main() -> u64 {
 // Rust synthesizes the test harness's main in this crate; redeclaring that
 // entry as weak data conflicts with its generated function during LTO.
 #[cfg(test)]
-pub(super) fn executable_main() -> u64 {
+pub(crate) fn executable_main() -> u64 {
     0
 }
 
@@ -337,7 +337,7 @@ pub(crate) fn capture_js_return_addresses(
         // `Some(Some(..))`: the function's start and FDE; `Some(None)`: no
         // table covers the site; `None`: only gimli can read this image.
         let covering = match image {
-            Some(image) => hdr_function(&image.image, site),
+            Some(image) => hdr_function(&image.image.cfi_tables(), site),
             None => Some(None),
         };
         let start = match covering {
@@ -361,7 +361,13 @@ pub(crate) fn capture_js_return_addresses(
         let row = match (image, covering) {
             _ if js => Row::NoFde,
             (Some(image), Some(Some((start, fde)))) => {
-                match fde_row(&image.image, site, start, fde, &mut scratch.cies) {
+                match fde_row(
+                    &image.image.cfi_tables(),
+                    site,
+                    start,
+                    fde,
+                    &mut scratch.cies,
+                ) {
                     Some(row) => row,
                     None => gimli_row(
                         image,
@@ -850,40 +856,61 @@ fn hdr_search(hdr: &[u8], rel: i64) -> Option<Option<(i64, i64)>> {
 /// The row for `site` read directly from `image`'s tables, or `None` to let
 /// gimli decide (any table shape other than the one LLVM emits).
 fn direct_row(image: &EhFrameImage, site: u64, cies: &mut CieMemo) -> Option<Row> {
-    let Some((func_start, fde_addr)) = hdr_function(image, site)? else {
+    let tables = image.cfi_tables();
+    let Some((func_start, fde_addr)) = hdr_function(&tables, site)? else {
         return Some(Row::NoFde);
     };
-    fde_row(image, site, func_start, fde_addr, cies)
+    fde_row(&tables, site, func_start, fde_addr, cies)
+}
+
+/// The two tables the direct decoder reads, as plain slices: an image the
+/// `Error` walker enumerated, or the object `_dl_find_object` names for the
+/// collector's frame walk (`gc_cfi_step`).
+#[derive(Clone, Copy)]
+struct CfiTables {
+    /// `.eh_frame`, from its first byte to (at most) the end of its object.
+    eh: &'static [u8],
+    eh_frame_addr: u64,
+    /// `.eh_frame_hdr`, likewise bounded by its object.
+    hdr: &'static [u8],
+    hdr_addr: u64,
+}
+
+impl EhFrameImage {
+    fn cfi_tables(&self) -> CfiTables {
+        CfiTables {
+            eh: self.bytes,
+            eh_frame_addr: self.eh_frame_addr,
+            hdr: self.hdr_bytes,
+            hdr_addr: self.hdr_addr,
+        }
+    }
 }
 
 /// The function `.eh_frame_hdr` says covers `site`: `(start, FDE address)`;
 /// `Some(None)` when no table entry starts at or below it; `None` for a
 /// header layout this decoder does not read.
 #[inline(always)]
-fn hdr_function(image: &EhFrameImage, site: u64) -> Option<Option<(u64, u64)>> {
-    let rel = site as i64 - image.hdr_addr as i64;
-    let Some((start_rel, fde_rel)) = hdr_search(image.hdr_bytes, rel)? else {
+fn hdr_function(tables: &CfiTables, site: u64) -> Option<Option<(u64, u64)>> {
+    let rel = site as i64 - tables.hdr_addr as i64;
+    let Some((start_rel, fde_rel)) = hdr_search(tables.hdr, rel)? else {
         return Some(None);
     };
     Some(Some((
-        (image.hdr_addr as i64).checked_add(start_rel)? as u64,
-        (image.hdr_addr as i64).checked_add(fde_rel)? as u64,
+        (tables.hdr_addr as i64).checked_add(start_rel)? as u64,
+        (tables.hdr_addr as i64).checked_add(fde_rel)? as u64,
     )))
 }
 
-/// The row at `site` from the FDE at `fde_addr` (covering the function at
-/// `func_start`), or `None` to let gimli decide.
-fn fde_row(
-    image: &EhFrameImage,
-    site: u64,
-    func_start: u64,
+/// The FDE at `fde_addr`, read up to its program: a cursor at the first
+/// instruction, the FDE's end, its `pc_range` and its CIE.
+fn fde_header(
+    tables: &CfiTables,
     fde_addr: u64,
     cies: &mut CieMemo,
-) -> Option<Row> {
-    let eh = image.bytes;
-    let fde_off = usize::try_from(fde_addr.checked_sub(image.eh_frame_addr)?).ok()?;
-
-    // FDE header.
+) -> Option<(Cursor<'static>, usize, u64, Cie)> {
+    let eh = tables.eh;
+    let fde_off = usize::try_from(fde_addr.checked_sub(tables.eh_frame_addr)?).ok()?;
     let mut c = Cursor::new(eh, fde_off);
     let len = c.u32()?;
     if len == 0 || len == u32::MAX {
@@ -896,15 +923,26 @@ fn fde_row(
     let cie_ptr_at = c.at;
     let cie_off = cie_ptr_at.checked_sub(c.u32()? as usize)?;
     let cie = cies.get(eh, cie_off)?;
-
-    // FDE body: pc_begin (already known from the table), pc_range, the
-    // augmentation data, then the program.
+    // pc_begin (already known from the table), then pc_range.
     c.skip(cie.ptr_size)?;
     let range = match cie.ptr_size {
         8 => u64::from_le_bytes(c.take()?),
         4 => c.u32()? as u64,
         _ => c.u16()? as u64,
     };
+    Some((c, fde_end, range, cie))
+}
+
+/// The row at `site` from the FDE at `fde_addr` (covering the function at
+/// `func_start`), or `None` to let gimli decide.
+fn fde_row(
+    tables: &CfiTables,
+    site: u64,
+    func_start: u64,
+    fde_addr: u64,
+    cies: &mut CieMemo,
+) -> Option<Row> {
+    let (mut c, fde_end, range, cie) = fde_header(tables, fde_addr, cies)?;
     if site >= func_start.checked_add(range)? {
         return Some(Row::NoFde);
     }
@@ -946,6 +984,174 @@ fn fde_row(
         },
         func_start,
     })
+}
+
+// ---------------------------------------------------------------------------
+// The collector's CFI step (`gc/roots/stack_maps_frame_walk.rs`).
+//
+// The root scan steps a Rust, shim or foreign frame by its row here, and
+// nothing else: JS frames step by their frame record and never reach this.
+// The object is found by `_dl_find_object` (the loader's lock-free lookup over
+// the loaded objects, the one libgcc's unwinder uses), so the walk takes no
+// lock, keeps no image list and needs no rebuild when objects come and go.
+// Every row is read directly; a shape the direct decoder declines is
+// `Unreadable`, and the collector then fails closed to the system unwinder.
+// ---------------------------------------------------------------------------
+
+/// glibc's `struct dl_find_object` on x86-64 (no `dlfo_eh_dbase` there).
+#[cfg(target_env = "gnu")]
+#[repr(C)]
+struct DlFindObject {
+    flags: u64,
+    map_start: *mut core::ffi::c_void,
+    map_end: *mut core::ffi::c_void,
+    link_map: *mut core::ffi::c_void,
+    eh_frame: *mut core::ffi::c_void,
+    reserved: [u64; 7],
+}
+
+#[cfg(target_env = "gnu")]
+type DlFindObjectFn =
+    unsafe extern "C" fn(*mut core::ffi::c_void, *mut DlFindObject) -> core::ffi::c_int;
+
+/// `_dl_find_object` (glibc 2.35), weak: an older loader leaves it null and
+/// every collector walk takes the system unwinder, as before.
+#[cfg(target_env = "gnu")]
+fn dl_find_object() -> Option<DlFindObjectFn> {
+    extern "C" {
+        #[linkage = "extern_weak"]
+        static _dl_find_object: *const u8;
+    }
+    // SAFETY: an extern_weak static reads as the symbol's address, or null;
+    // a non-null address is glibc's function of exactly this signature.
+    let address = unsafe { _dl_find_object };
+    (!address.is_null())
+        .then(|| unsafe { core::mem::transmute::<*const u8, DlFindObjectFn>(address) })
+}
+
+/// The tables of the object containing `pc`. `None`: no loaded object holds
+/// `pc`, the object has no `.eh_frame_hdr`, or the loader cannot say.
+#[cfg(target_env = "gnu")]
+fn tables_for(pc: u64) -> Option<CfiTables> {
+    let find = dl_find_object()?;
+    // SAFETY: plain-old-data out parameter.
+    let mut info: DlFindObject = unsafe { core::mem::zeroed() };
+    if unsafe { find(pc as *mut core::ffi::c_void, &mut info) } != 0 {
+        return None;
+    }
+    let (start, end) = (info.map_start as u64, info.map_end as u64);
+    let hdr_addr = info.eh_frame as u64;
+    if hdr_addr < start || hdr_addr >= end {
+        return None;
+    }
+    // SAFETY: inside the object's mapping; every read below is bounded by
+    // the header's own count and the FDE lengths, all checked against this.
+    let hdr: &'static [u8] =
+        unsafe { core::slice::from_raw_parts(hdr_addr as *const u8, (end - hdr_addr) as usize) };
+    // eh_frame_ptr is pcrel|sdata4 (`hdr_search` checks the remaining bytes).
+    if hdr.len() < 12 || hdr[0] != 1 || hdr[1] != 0x1b {
+        return None;
+    }
+    let rel = i32::from_le_bytes([hdr[4], hdr[5], hdr[6], hdr[7]]) as i64;
+    let eh_frame_addr = (hdr_addr as i64).checked_add(4)?.checked_add(rel)? as u64;
+    if eh_frame_addr < start || eh_frame_addr >= end {
+        return None;
+    }
+    // SAFETY: as above.
+    let eh: &'static [u8] = unsafe {
+        core::slice::from_raw_parts(eh_frame_addr as *const u8, (end - eh_frame_addr) as usize)
+    };
+    Some(CfiTables {
+        eh,
+        eh_frame_addr,
+        hdr,
+        hdr_addr,
+    })
+}
+
+/// One CFI step of the collector's walk.
+#[cfg(target_env = "gnu")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GcCfiStep {
+    /// The caller's frame: its pc (a return address), its sp at the call
+    /// (this frame's CFA) and its rbp.
+    Caller { pc: u64, rsp: u64, rbp: u64 },
+    /// The tables mark this frame the outermost one (undefined return
+    /// address: `_start`, a thread's `clone3`).
+    Outermost,
+    /// No table covers the pc, or not with a row this step can follow.
+    Unreadable,
+}
+
+/// The CIEs one collector walk has decoded; on the walk's stack, gone after.
+#[cfg(target_env = "gnu")]
+#[derive(Default)]
+pub(crate) struct GcCfiScratch {
+    cies: CieMemo,
+}
+
+/// Step the frame whose pc is the return address `pc` (with `rsp` its sp at
+/// that call and `rbp` its rbp) to its caller. Reads stay in `[low, top)`.
+#[cfg(target_env = "gnu")]
+pub(crate) fn gc_cfi_step(
+    pc: u64,
+    rsp: u64,
+    rbp: u64,
+    low: u64,
+    top: u64,
+    scratch: &mut GcCfiScratch,
+) -> GcCfiStep {
+    // The pc is a return address; the row that describes the frame is the
+    // one covering the call instruction.
+    let site = pc.wrapping_sub(1);
+    let Some(tables) = tables_for(site) else {
+        return GcCfiStep::Unreadable;
+    };
+    let Some(Some((start, fde))) = hdr_function(&tables, site) else {
+        return GcCfiStep::Unreadable;
+    };
+    let Some(row) = fde_row(&tables, site, start, fde, &mut scratch.cies) else {
+        return GcCfiStep::Unreadable;
+    };
+    match row {
+        Row::Step { ra_off: None, .. } => GcCfiStep::Outermost,
+        Row::Step { .. } => match apply(row, Frame { pc, rsp, rbp }, top, low) {
+            Some(caller) => GcCfiStep::Caller {
+                pc: caller.pc,
+                rsp: caller.rsp,
+                rbp: caller.rbp,
+            },
+            None => GcCfiStep::Unreadable,
+        },
+        Row::NoFde | Row::Stop => GcCfiStep::Unreadable,
+    }
+}
+
+/// `(start, end)` of the function the unwind tables say contains `addr`.
+#[cfg(target_env = "gnu")]
+pub(crate) fn cfi_function_extent(addr: u64) -> Option<(u64, u64)> {
+    let tables = tables_for(addr)?;
+    let (start, fde) = hdr_function(&tables, addr)??;
+    let (_, _, range, _) = fde_header(&tables, fde, &mut CieMemo::default())?;
+    let end = start.checked_add(range)?;
+    (addr < end).then_some((start, end))
+}
+
+/// The module that holds `pc`, for a diagnostic: its path, or `None`.
+#[cfg(target_env = "gnu")]
+pub(crate) fn module_name(pc: u64) -> Option<String> {
+    // SAFETY: plain-old-data out parameter; dladdr only reads loader state.
+    let mut info: libc::Dl_info = unsafe { core::mem::zeroed() };
+    if unsafe { libc::dladdr(pc as *const core::ffi::c_void, &mut info) } == 0
+        || info.dli_fname.is_null()
+    {
+        return None;
+    }
+    Some(
+        unsafe { std::ffi::CStr::from_ptr(info.dli_fname) }
+            .to_string_lossy()
+            .into_owned(),
+    )
 }
 
 #[cfg(test)]

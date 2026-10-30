@@ -1164,6 +1164,15 @@ pub(crate) fn function_start_for(pc: u64) -> Option<u64> {
 mod trace;
 #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
 pub(crate) use trace::{capture_js_return_addresses, capture_return_addresses};
+#[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+pub(crate) use trace::{
+    cfi_function_extent, executable_main, gc_cfi_step, module_name, GcCfiScratch, GcCfiStep,
+};
+/// Indices of the stack and frame pointer in [`WalkRegs::regs`].
+#[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+pub(crate) const SP_INDEX: usize = SP;
+#[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+pub(crate) const FP_INDEX: usize = FP;
 
 #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
 pub(crate) fn walk_pcs_from_here(_max: usize) -> Option<Vec<u64>> {

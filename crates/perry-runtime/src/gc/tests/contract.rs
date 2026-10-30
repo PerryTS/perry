@@ -84,6 +84,7 @@ fn test_gc_progress_contract_trace_json_labels_automatic_as_legacy() {
         GcTriggerSnapshot {
             kind: GcTriggerKind::ArenaBytes,
             steps_before: Some(GcStepSnapshot::current()),
+            origin: None,
         },
     )
     .expect("test requested GC trace capture");
@@ -107,6 +108,7 @@ fn test_gc_progress_contract_trace_json_labels_manual_minor_as_explicit_sync() {
         GcTriggerSnapshot {
             kind: GcTriggerKind::Manual,
             steps_before: Some(GcStepSnapshot::current()),
+            origin: None,
         },
     )
     .expect("test requested GC trace capture");

@@ -5,6 +5,7 @@ fn full_collect() {
     let trigger = GcTriggerSnapshot {
         kind: GcTriggerKind::Manual,
         steps_before: Some(GcStepSnapshot::current()),
+        origin: None,
     };
     let _ = GcCycleState::new_full(trigger).run_to_completion();
 }

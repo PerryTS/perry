@@ -227,10 +227,39 @@ unsafe fn first_birth(desc: *const PerryLayoutDesc, index: u32) -> Option<u32> {
 ///
 /// # Safety
 /// desc points to this program's immutable literal descriptor image.
+#[cfg(not(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu")))]
 #[no_mangle]
 pub unsafe extern "C" fn perry_alloc_literal_layout(
     desc: *const PerryLayoutDesc,
 ) -> *mut ObjectHeader {
+    unsafe { perry_alloc_literal_layout_body(desc) }
+}
+
+/// x86-64 Linux: an allocation slow path JS calls directly, entered through a
+/// shim that hands its caller's frame to the collections it can run
+/// (`gc::roots::walk_origin`). Allocation runs no JS, which is what lets it
+/// offer.
+#[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+#[unsafe(naked)]
+#[no_mangle]
+pub unsafe extern "C" fn perry_alloc_literal_layout(
+    desc: *const PerryLayoutDesc,
+) -> *mut ObjectHeader {
+    crate::gc::offering_entry_asm!(1, perry_alloc_literal_layout_from)
+}
+
+#[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+extern "C" fn perry_alloc_literal_layout_from(
+    desc: *const PerryLayoutDesc,
+    pc: usize,
+    sp: usize,
+    fp: usize,
+) -> *mut ObjectHeader {
+    let _origin = crate::gc::EntryWalkOrigin::enter(crate::gc::WalkOrigin { pc, sp, fp });
+    unsafe { perry_alloc_literal_layout_body(desc) }
+}
+
+unsafe fn perry_alloc_literal_layout_body(desc: *const PerryLayoutDesc) -> *mut ObjectHeader {
     #[cfg(test)]
     crate::test_support::bootstrap_test_thread();
     let Some(id) = registered_for_birth(desc) else {

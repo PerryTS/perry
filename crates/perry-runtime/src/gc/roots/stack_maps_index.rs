@@ -43,6 +43,16 @@ impl StackMapIndex {
         matched
     }
 
+    /// The map's frame size of the matched function: `None` when it is
+    /// dynamic (a variable-sized or realigned frame) or the entries sharing
+    /// the address disagree.
+    #[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+    pub(super) fn frame_size(&self, matched: &lazy::RecordMatch) -> Option<u32> {
+        let mut entries = self.functions.get(matched.functions.clone())?.iter();
+        let size = entries.next()?.stack_size;
+        (size != u32::MAX && entries.all(|entry| entry.stack_size == size)).then_some(size)
+    }
+
     pub(super) fn matched(&self, matched: &lazy::RecordMatch) -> lazy::MatchedRecords<'_> {
         lazy::MatchedRecords::new(&self.functions, &self.records, matched)
     }

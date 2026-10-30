@@ -688,6 +688,7 @@ fn test_old_young_edge_verifier_trace_json_shape() {
         GcTriggerSnapshot {
             kind: GcTriggerKind::Direct,
             steps_before: Some(GcStepSnapshot::current()),
+            origin: None,
         },
     )
     .expect("test requested GC trace capture");

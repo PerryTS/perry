@@ -29,7 +29,7 @@ use super::{StackMapDerived, StackMapLocation, DWARF_REG_FP_AARCH64, DWARF_REG_S
 
 /// One function's position in the map, in the form the root scan needs.
 ///
-/// 24 bytes, one per function with records: 1.7 MB for claude-code's 72,669,
+/// 32 bytes, one per function with records: 2.3 MB for claude-code's 72,669,
 /// against the ~117 MB of materialised records it replaces. Byte offsets are
 /// relative to the function's records blob rather than pointers, so the entry
 /// stays small and a stale entry cannot be dereferenced without going through
@@ -47,6 +47,15 @@ pub(super) struct FunctionEntry {
     pub(super) record_count: u32,
     /// Index into the index's records-blob list.
     pub(super) blob: u32,
+    /// The largest instruction offset of this function's records. An `ip`
+    /// more than the match window beyond it matches nothing here, which
+    /// [`match_records`] then says in one search instead of scanning every
+    /// record offset. Derived from the records at build; with `stack_size`
+    /// it fills what was padding.
+    pub(super) max_offset: u32,
+    /// The map's frame size for this function (`u32::MAX`: dynamic), for the
+    /// x86-64 frame walk's coherence check.
+    pub(super) stack_size: u32,
 }
 
 /// Where one record's live set lives in the stream.
@@ -425,16 +434,34 @@ pub(super) fn parse_function_table<'a>(
             if function.record_count == 0 {
                 continue;
             }
+            let offsets_at = function.first_record.checked_mul(4)?;
+            let offsets = directory.records.get(
+                offsets_at
+                    ..offsets_at.checked_add((function.record_count as usize).checked_mul(4)?)?,
+            )?;
             out.push(FunctionEntry {
                 address: function.address,
-                offsets_at: u32::try_from(function.first_record.checked_mul(4)?).ok()?,
+                offsets_at: u32::try_from(offsets_at).ok()?,
                 stream_at: u32::try_from(stream_base.checked_add(function.stream_offset)?).ok()?,
                 record_count: function.record_count,
                 blob,
+                max_offset: max_record_offset(offsets),
+                stack_size: function.stack_size,
             });
         }
         Some(())
     })
+}
+
+/// [`FunctionEntry::max_offset`] of a function whose record offsets are the
+/// little-endian `u32`s of `offsets`: the maximum, not the last, because
+/// nothing in the format orders a function's records by offset. One
+/// sequential pass the compiler vectorises.
+fn max_record_offset(offsets: &[u8]) -> u32 {
+    offsets
+        .chunks_exact(4)
+        .map(|word| u32::from_le_bytes([word[0], word[1], word[2], word[3]]))
+        .fold(0u32, u32::max)
 }
 
 /// One record's live set, as positions in the section rather than as a
@@ -537,13 +564,25 @@ pub(super) fn match_records(
     ip: usize,
     max_delta: usize,
 ) -> Option<RecordMatch> {
-    let at = functions
-        .partition_point(|entry| entry.address <= ip)
-        .checked_sub(1)?;
-    let address = functions[at].address;
-    let start = functions.partition_point(|entry| entry.address < address);
-    let end = functions.partition_point(|entry| entry.address <= address);
+    // One search. Entries sharing an address are adjacent, so the run that
+    // owns `ip` ends here and its start is a short step back (almost always
+    // zero steps).
+    let end = functions.partition_point(|entry| entry.address <= ip);
+    let address = functions[end.checked_sub(1)?].address;
+    let mut start = end - 1;
+    while start > 0 && functions[start - 1].address == address {
+        start -= 1;
+    }
     let target = u32::try_from(ip.checked_sub(address)?).ok()?;
+    // A pc past every record of the run matches nothing in it: a Rust or
+    // libc frame above the nearest lower JS function, which used to scan
+    // every one of that function's record offsets to learn the same thing.
+    if functions[start..end]
+        .iter()
+        .all(|entry| target as usize > entry.max_offset as usize + max_delta)
+    {
+        return None;
+    }
 
     let mut best: Option<(u32, u32)> = None; // (distance, offset)
     for entry in &functions[start..end] {

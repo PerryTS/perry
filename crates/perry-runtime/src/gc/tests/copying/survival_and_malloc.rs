@@ -256,6 +256,7 @@ fn test_copying_minor_sweeps_malloc_when_due_on_arena_trigger() {
     let outcome = gc_collect_minor_with_trigger(GcTriggerSnapshot {
         kind: GcTriggerKind::ArenaBytes,
         steps_before: Some(GcStepSnapshot::current()),
+        origin: None,
     });
     let trace = outcome.trace.expect("test requested GC trace capture");
 
@@ -561,6 +562,7 @@ fn test_copied_minor_malloc_scaling_no_roots_skips_registry_walk() {
     let outcome = gc_collect_minor_with_trigger(GcTriggerSnapshot {
         kind: GcTriggerKind::Direct,
         steps_before: Some(GcStepSnapshot::current()),
+        origin: None,
     });
     let trace = outcome.trace.expect("test requested GC trace capture");
 
@@ -604,6 +606,7 @@ fn test_copied_minor_malloc_scaling_live_root_with_active_registry() {
     let outcome = gc_collect_minor_with_trigger(GcTriggerSnapshot {
         kind: GcTriggerKind::ArenaBytes,
         steps_before: Some(GcStepSnapshot::current()),
+        origin: None,
     });
     let trace = outcome.trace.expect("test requested GC trace capture");
 
@@ -646,6 +649,7 @@ fn test_copied_minor_malloc_scaling_falls_back_when_registry_unavailable() {
     let outcome = gc_collect_minor_with_trigger(GcTriggerSnapshot {
         kind: GcTriggerKind::Direct,
         steps_before: Some(GcStepSnapshot::current()),
+        origin: None,
     });
     let trace = outcome.trace.expect("test requested GC trace capture");
 
@@ -809,6 +813,7 @@ fn test_copying_minor_old_to_malloc_child_survives_sweep() {
     let _ = gc_collect_minor_with_trigger(GcTriggerSnapshot {
         kind: GcTriggerKind::ArenaBytes,
         steps_before: Some(GcStepSnapshot::current()),
+        origin: None,
     });
 
     assert!(
@@ -849,6 +854,7 @@ fn test_copying_minor_old_to_malloc_nursery_grandchild_survives() {
     let _ = gc_collect_minor_with_trigger(GcTriggerSnapshot {
         kind: GcTriggerKind::ArenaBytes,
         steps_before: Some(GcStepSnapshot::current()),
+        origin: None,
     });
 
     assert!(

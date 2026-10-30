@@ -1286,6 +1286,10 @@ impl GcStepSnapshot {
 pub(crate) struct GcTriggerSnapshot {
     pub(super) kind: GcTriggerKind,
     pub(super) steps_before: Option<GcStepSnapshot>,
+    /// The JS frame this request's entry was called from, when the entry
+    /// handed one over (`roots::walk_origin`): the collection's scans start
+    /// there. Copied from the running entry's offer.
+    pub(super) origin: Option<super::WalkOrigin>,
 }
 
 impl GcTriggerSnapshot {
@@ -1294,6 +1298,7 @@ impl GcTriggerSnapshot {
         Self {
             kind,
             steps_before: gc_trace_enabled().then(GcStepSnapshot::current),
+            origin: super::offered_walk_origin(),
         }
     }
 }
@@ -3951,7 +3956,9 @@ pub(crate) fn gc_safepoint_moving_minor() -> bool {
     // The trigger ladder coalesces the two young resources into the existing
     // precise handoff. Only small occupancy/capacity selects small copying,
     // unless a young large container is alive: its edges need the trace.
-    if due == Some(BudgetedGcTrigger::YoungScavengeCap) && !scheduled && gen_gc_enabled()
+    if due == Some(BudgetedGcTrigger::YoungScavengeCap)
+        && !scheduled
+        && gen_gc_enabled()
         && crate::arena::copying_from_space_in_use_bytes() < scavenge_nursery_cap_dueness_bytes()
         && !crate::arena::young_large_containers_exist()
     {
@@ -4163,11 +4170,46 @@ pub(crate) fn set_safepoint_pending(pending: bool) {
 /// either the word was armed or the module came from a path that emits the
 /// bare call. Both must still work, which is why the check is repeated here
 /// rather than delegated to the compiler.
+#[cfg(not(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu")))]
 #[no_mangle]
 pub extern "C" fn js_gc_loop_safepoint() {
     if !super::poll_armed() {
         return;
     }
+    js_gc_loop_safepoint_armed();
+}
+
+/// x86-64 Linux: the same unarmed path (load the word through the GOT, compare,
+/// return; one instruction fewer than rustc's load-test-branch), written out
+/// so the armed path can hand the body its caller's frame (`roots::walk_origin`)
+/// — the return address, the stack pointer at the call and the frame pointer —
+/// in the argument registers, and tail-jump to it. A collection the poll runs
+/// then walks from the JS frame that polled instead of stepping the
+/// collector's own frames. The shim never owns a frame: both paths leave
+/// through `ret` or `jmp` with the stack as the caller made it.
+#[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+#[unsafe(naked)]
+#[no_mangle]
+pub extern "C" fn js_gc_loop_safepoint() {
+    core::arch::naked_asm!(
+        "mov rax, qword ptr [rip + {armed}@GOTPCREL]",
+        "cmp dword ptr [rax], 0",
+        "jne 2f",
+        "ret",
+        "2:",
+        "mov rdi, qword ptr [rsp]",
+        "lea rsi, [rsp + 8]",
+        "mov rdx, rbp",
+        "jmp {body}",
+        armed = sym super::PERRY_GC_POLL_ARMED,
+        body = sym js_gc_loop_safepoint_from,
+    );
+}
+
+/// The armed poll, entered from the shim with its caller's frame.
+#[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+extern "C" fn js_gc_loop_safepoint_from(pc: usize, sp: usize, fp: usize) {
+    let _origin = super::EntryWalkOrigin::enter(super::WalkOrigin { pc, sp, fp });
     js_gc_loop_safepoint_armed();
 }
 
@@ -4235,7 +4277,7 @@ fn js_gc_loop_safepoint_armed() {
     gc_safepoint_moving_minor();
 }
 
-struct BudgetedGcStepGuard;
+struct BudgetedGcStepGuard(#[allow(dead_code)] super::ActiveWalkOrigin);
 
 impl BudgetedGcStepGuard {
     fn enter() -> Option<Self> {
@@ -4245,7 +4287,9 @@ impl BudgetedGcStepGuard {
                 None
             } else {
                 active.set(true);
-                Some(Self)
+                // A step scans the stack it runs on, which is no entry's
+                // caller frame: its walk starts at the scan.
+                Some(Self(super::ActiveWalkOrigin::enter(None)))
             }
         })
     }
@@ -4366,6 +4410,7 @@ pub(super) fn test_start_budgeted_minor_fallback_state_with_trace(
     let trigger = GcTriggerSnapshot {
         kind: trigger_kind,
         steps_before: Some(GcStepSnapshot::current()),
+        origin: None,
     };
     let cycle = gc_start_budgeted_minor_fallback_cycle_with_snapshot(
         trigger,
@@ -5100,8 +5145,28 @@ pub(super) static GC_UNSAFE_WARNED: std::sync::atomic::AtomicBool =
 
 /// Manual GC trigger (callable from TypeScript as `gc()`). Skipped when
 /// worker threads are active (see GC_UNSAFE_ZONES).
+#[cfg(not(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu")))]
 #[no_mangle]
 pub extern "C" fn js_gc_collect() {
+    js_gc_collect_body();
+}
+
+/// x86-64 Linux: `gc()` hands its caller's frame to the collections it runs,
+/// exactly as the back-edge poll does (see `js_gc_loop_safepoint`).
+#[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+#[unsafe(naked)]
+#[no_mangle]
+pub extern "C" fn js_gc_collect() {
+    super::offering_entry_asm!(0, js_gc_collect_from)
+}
+
+#[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+extern "C" fn js_gc_collect_from(pc: usize, sp: usize, fp: usize) {
+    let _origin = super::EntryWalkOrigin::enter(super::WalkOrigin { pc, sp, fp });
+    js_gc_collect_body();
+}
+
+fn js_gc_collect_body() {
     if manual_gc_blocked_by_unsafe_zone() {
         return;
     }
@@ -5418,7 +5483,9 @@ fn leaf_memory_due_at_cap(cap: usize, small_bytes: usize) -> (bool, usize) {
         return (false, usize::MAX);
     }
     let window = super::tenuring::eden_allocation_window_bytes(
-        cap, crate::arena::copying_active_survivor_in_use_bytes());
+        cap,
+        crate::arena::copying_active_survivor_in_use_bytes(),
+    );
     (
         small_bytes.saturating_add(leaf_bytes) >= window,
         window.saturating_sub(leaf_bytes),

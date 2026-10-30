@@ -167,6 +167,8 @@ mod oracle {
 pub(super) fn collect() {
     // Must precede the root scan, and runs while allocation is still legal.
     super::roots::ensure_stack_maps_built();
+    // A collection request of its own: it carries its entry's offered frame.
+    let _origin = super::ActiveWalkOrigin::enter(super::offered_walk_origin());
     let _in_alloc = InAlloc(GC_FLAGS.with(|flags| {
         let previous = flags.get();
         flags.set(previous | GC_FLAG_IN_ALLOC);

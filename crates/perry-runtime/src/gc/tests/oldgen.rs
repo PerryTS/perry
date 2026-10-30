@@ -394,6 +394,7 @@ fn test_old_page_sweep_accounting_trace_json_includes_summary() {
     let outcome = gc_collect_minor_with_trigger(GcTriggerSnapshot {
         kind: GcTriggerKind::Direct,
         steps_before: Some(GcStepSnapshot::current()),
+        origin: None,
     });
     let trace = outcome.trace.expect("test requested GC trace capture");
     let event = trace.into_json(GcStepSnapshot::current());
@@ -1119,6 +1120,7 @@ fn test_old_page_defrag_trace_json_distinguishes_moved_from_reclaimable() {
         GcTriggerSnapshot {
             kind: GcTriggerKind::Direct,
             steps_before: Some(GcStepSnapshot::current()),
+            origin: None,
         },
     )
     .expect("test requested GC trace capture");
@@ -1320,6 +1322,7 @@ fn test_minor_skips_whole_heap_old_to_young_rebuild() {
     let full_outcome = gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot {
         kind: GcTriggerKind::Direct,
         steps_before: Some(GcStepSnapshot::current()),
+        origin: None,
     });
     let full_trace = full_outcome.trace.expect("full GC trace requested");
     assert_eq!(full_trace.old_to_young_rebuild_objects_scanned, 0);

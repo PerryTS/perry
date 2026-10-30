@@ -1077,6 +1077,7 @@ fn test_malloc_kind_telemetry_copied_minor_validation_by_kind() {
     let outcome = gc_collect_minor_with_trigger(GcTriggerSnapshot {
         kind: GcTriggerKind::ArenaBytes,
         steps_before: Some(GcStepSnapshot::current()),
+        origin: None,
     });
     let trace = outcome.trace.expect("test requested GC trace capture");
 
@@ -1116,6 +1117,7 @@ fn test_malloc_kind_telemetry_trace_json() {
         GcTriggerSnapshot {
             kind: GcTriggerKind::Direct,
             steps_before: Some(GcStepSnapshot::current()),
+            origin: None,
         },
     )
     .expect("test requested GC trace capture");

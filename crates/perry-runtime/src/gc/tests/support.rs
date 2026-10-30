@@ -662,6 +662,7 @@ pub(super) fn collect_minor_trace(trigger_kind: GcTriggerKind) -> GcCycleTrace {
     gc_collect_minor_with_trigger(GcTriggerSnapshot {
         kind: trigger_kind,
         steps_before: Some(GcStepSnapshot::current()),
+        origin: None,
     })
     .trace
     .expect("test requested GC trace capture")

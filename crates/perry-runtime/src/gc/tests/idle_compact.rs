@@ -121,6 +121,7 @@ fn the_compacting_collection_declines_the_copying_fast_path() {
     let trace = super::super::gc_collect_compacting_minor(GcTriggerSnapshot {
         kind: GcTriggerKind::IdleCompact,
         steps_before: Some(GcStepSnapshot::current()),
+        origin: None,
     })
     .trace
     .expect("test requested GC trace capture");

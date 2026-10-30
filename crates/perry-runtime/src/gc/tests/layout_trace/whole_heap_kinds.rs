@@ -80,6 +80,7 @@ fn whole_heap_kind_invariant_after_forced_collections() {
     gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot {
         kind: GcTriggerKind::Manual,
         steps_before: Some(GcStepSnapshot::current()),
+        origin: None,
     });
     assert!(gc_collection_count() > before);
     assert!(assert_whole_heap_kinds() >= 3);
