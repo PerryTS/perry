@@ -2019,7 +2019,7 @@ mod leaf_arm_tests {
             let second = js_promise_new();
             unsafe {
                 assert!(matches!((*first).state, PromiseState::Pending));
-                assert!((*first).meta.is_null());
+                assert!(crate::object::cell_meta::promise_cell_meta(first).is_null());
                 assert_eq!((*first).native_pinned, 0);
                 assert!((*second).async_id > (*first).async_id);
                 assert_eq!(
