@@ -37,7 +37,7 @@ pub(crate) struct Trace {
     pub inst_orig: BTreeMap<NodeId, NodeId>,
     /// UEB census: the operation each parameter marker first escaped by
     /// (`Model::mark_escape_why`), and the stack of those running.
-    pub esc_why: BTreeMap<Tok, String>,
+    pub esc_why: BTreeMap<Tok, (String, Option<NodeId>)>,
     pub esc_ctx: Vec<String>,
     /// UEB census: a stand-in function's parameter node its contract sinks
     /// (node, callee, index, reach key: `Some("")` the whole reach).
@@ -896,10 +896,10 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
             out.push(format!("{{\"record\":\"escape-first\",\"token\":{t},\"reason\":{},\"cause\":{},\"call\":{},\"node\":{}}}",
                 quote(m.reasons.get(e.reason as usize).map_or("", |s| s)), cause(&e.cause), opt(src_call(e.call)), opt(e.node)));
         }
-        for (t, w) in &d.esc_why {
+        for (t, (w, n)) in &d.esc_why {
             if let Some(&(f, i)) = m.param_marker.get(t) {
-                out.push(format!("{{\"record\":\"param-escape\",\"token\":{t},\"function\":{f},\"index\":{i},\"marker\":{},\"why\":{}}}",
-                    quote(&m.tok_name(*t)), quote(w)));
+                out.push(format!("{{\"record\":\"param-escape\",\"token\":{t},\"function\":{f},\"index\":{i},\"marker\":{},\"why\":{},\"node\":{}}}",
+                    quote(&m.tok_name(*t)), quote(w), opt(*n)));
             }
         }
         for (n, name, i, k) in &d.stand_in_params {

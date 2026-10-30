@@ -1647,8 +1647,13 @@ impl Model {
         // beyond any contract too (DECISIONS 203), its contract functions
         // included (`escape`).
         let reason = self.beyond_contract(reason);
-        self.mark_escape_why(t, &|m: &Self| {
-            format!("escape: {}", m.reasons[reason as usize])
+        self.mark_escape_why(t, &|m: &Self| match m
+            .diagnostic
+            .as_ref()
+            .and_then(|d| d.esc_ctx.last())
+        {
+            Some(o) => format!("{o} / escape: {}", m.reasons[reason as usize]),
+            None => format!("escape: {}", m.reasons[reason as usize]),
         });
         self.virt_revoke(t, None);
         if let Some(is) = self.contract_recv.get(&t).cloned() {
@@ -1665,8 +1670,13 @@ impl Model {
         // it and escape there (DECISIONS 111).
         if self.is_marker(t) {
             let r = self.reach_of(t);
-            self.mark_escape_why(r, &|m: &Self| {
-                format!("escape: {}", m.reasons[reason as usize])
+            self.mark_escape_why(r, &|m: &Self| match m
+                .diagnostic
+                .as_ref()
+                .and_then(|d| d.esc_ctx.last())
+            {
+                Some(o) => format!("{o} / escape: {}", m.reasons[reason as usize]),
+                None => format!("escape: {}", m.reasons[reason as usize]),
             });
             self.mark_escaped(t, reason);
             return;
