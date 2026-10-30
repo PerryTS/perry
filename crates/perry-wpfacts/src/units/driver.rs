@@ -1705,15 +1705,34 @@ fn output_changes(u: &ProgramFacts, old: &ProgramFacts) -> Vec<String> {
     fn named<C>(v: &[((String, String), C)]) -> Vec<(String, &C)> {
         v.iter().map(|(k, c)| (format!("{}:{}", k.0, k.1), c)).collect()
     }
-    fn cells(v: &ProgramFacts) -> Vec<(String, &ValueContract)> {
-        v.cells_out.iter().map(|(k, c)| (k.clone(), c)).collect()
+    // A cell keeps the unit's last write joined with its latest
+    // (DECISIONS 197): what it holds after this solve is that join.
+    let joined: Vec<(String, ValueContract)> = old
+        .cells_out
+        .iter()
+        .map(|(k, c)| {
+            let mut j = c.clone();
+            if let Some((_, n)) = u.cells_out.iter().find(|(q, _)| q == k) {
+                j.join(n);
+            }
+            (k.clone(), j)
+        })
+        .chain(
+            u.cells_out
+                .iter()
+                .filter(|(k, _)| !old.cells_out.iter().any(|(q, _)| q == k))
+                .cloned(),
+        )
+        .collect();
+    fn cells(v: &[(String, ValueContract)]) -> Vec<(String, &ValueContract)> {
+        v.iter().map(|(k, c)| (k.clone(), c)).collect()
     }
     let mut out = Vec::new();
     keyed(&mut out, "own_fn", &own(u), &own(old));
     keyed(&mut out, "fn", &named(&u.fn_contracts_out), &named(&old.fn_contracts_out));
     keyed(&mut out, "class", &named(&u.contracts_out), &named(&old.contracts_out));
     keyed(&mut out, "value", &named(&u.values_out), &named(&old.values_out));
-    keyed(&mut out, "cell", &cells(u), &cells(old));
+    keyed(&mut out, "cell", &cells(&joined), &cells(&old.cells_out));
     let added = u.shared_out.iter().filter(|w| !old.shared_out.contains(w)).count();
     let gone = old.shared_out.iter().filter(|w| !u.shared_out.contains(w)).count();
     if added + gone != 0 {
