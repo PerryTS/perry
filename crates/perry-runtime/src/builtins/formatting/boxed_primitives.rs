@@ -183,7 +183,7 @@ fn install_string_wrapper_length(
 pub(crate) fn boxed_string_wrapper_utf16_len(addr: usize) -> Option<u32> {
     unsafe {
         let header = crate::value::addr_class::try_read_gc_header(addr)?;
-        if crate::gc_type_is_not_object!(header.obj_type) {
+        if !crate::object_has_meta_word!(header.obj_type) {
             return None;
         }
         let obj_ptr = addr as *const crate::object::ObjectHeader;

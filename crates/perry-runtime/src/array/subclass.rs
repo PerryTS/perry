@@ -1317,7 +1317,7 @@ pub fn is_array_subclass_instance(object: f64) -> bool {
         Some(hdr) => hdr.obj_type,
         None => return false,
     };
-    if crate::gc_type_is_not_object!(obj_type) {
+    if !crate::object_has_meta_word!(obj_type) {
         return false;
     }
     unsafe { has_array_exotic_brand(raw as *const ObjectHeader) }

@@ -16,7 +16,7 @@ fn bytes(s: *const StringHeader) -> Vec<u8> {
 fn value(v: f64) -> ConcatPartSlot {
     ConcatPartSlot {
         word: v.to_bits(),
-        meta: CONCAT_PART_VALUE,
+        part_meta: CONCAT_PART_VALUE,
     }
 }
 
@@ -24,7 +24,7 @@ fn value(v: f64) -> ConcatPartSlot {
 fn literal(text: &'static str) -> ConcatPartSlot {
     ConcatPartSlot {
         word: text.as_ptr() as u64,
-        meta: text.len() as u64 | ((text.encode_utf16().count() as u64) << 32),
+        part_meta: text.len() as u64 | ((text.encode_utf16().count() as u64) << 32),
     }
 }
 
