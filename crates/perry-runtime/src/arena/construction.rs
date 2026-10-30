@@ -89,7 +89,7 @@ impl ConstructionBatch {
         use crate::gc::{GcHeader, GC_FLAG_ARENA, GC_HEADER_SIZE};
         debug_assert!(matches!(
             obj_type,
-            crate::gc::GC_TYPE_OBJECT | crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_STRING
+            crate::gc_object_type_pat!() | crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_STRING
         ));
         let Some(total) = size.checked_add(GC_HEADER_SIZE + 7).map(|n| n & !7) else {
             return std::ptr::null_mut();

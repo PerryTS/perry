@@ -251,7 +251,11 @@ pub(crate) fn emit(
             };
             entries.push(format!(
                 "{KEY_TY} {{ ptr @{a}, i32 {slot}, i8 -128, i8 0, i16 {} }}",
-                super::key_off(&llmod.target_triple, slot as u32)
+                super::key_off(
+                    &llmod.target_triple,
+                    crate::target_layout::HeaderForm::Meta,
+                    slot as u32
+                )
             ));
         }
         // All keys are optional, so birth exposes no property. The actual
@@ -288,7 +292,7 @@ pub(crate) fn emit(
             false,
             0,
         );
-        llmod.add_raw_global(format!("@{desc} = global {DESC_TY} {{ i32 {}, i16 {}, i8 {}, i8 0, i32 {count}, i32 {}, i64 0, ptr inttoptr (i64 2 to ptr), ptr @{desc}$keys, i32 {count}, i32 {}, ptr @{desc}$index, i32 0, i32 0, ptr null, i32 0, i32 0, ptr null, {} }}, align 8", super::fnv1a(desc.as_bytes()) as u32 & 0x7fff_ffff, crate::runtime_abi::LAYOUT_VARIANT_FUNCTION_CONSTRUCTOR, 0u8, word as i32, cap - 1, super::desc_tail(&llmod.target_triple, count as u32)));
+        llmod.add_raw_global(format!("@{desc} = global {DESC_TY} {{ i32 {}, i16 {}, i8 {}, i8 0, i32 {count}, i32 {}, i64 0, ptr inttoptr (i64 2 to ptr), ptr @{desc}$keys, i32 {count}, i32 {}, ptr @{desc}$index, i32 0, i32 0, ptr null, i32 0, i32 0, ptr null, {} }}, align 8", super::fnv1a(desc.as_bytes()) as u32 & 0x7fff_ffff, crate::runtime_abi::LAYOUT_VARIANT_FUNCTION_CONSTRUCTOR, 0u8, word as i32, cap - 1, super::desc_tail(&llmod.target_triple, crate::target_layout::HeaderForm::Meta, count as u32)));
         let n = operands.len();
         llmod.add_raw_global(format!(
             "@{desc}$operands = private constant [{n} x {{ ptr, i32, i16, i16 }}] [{}]",

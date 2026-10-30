@@ -13,7 +13,7 @@ pub(crate) unsafe fn mark_materialized_iterator(
     let _no_move = crate::gc::GcSuppressScope::new();
     let bag = array_property_bag_ensure(array);
     let meta = crate::object::object_meta_ensure(
-        crate::object::MetaObj::runtime_born(bag),
+        crate::meta_obj_runtime_born!(bag),
         crate::object::MetaReason::ArrayIteratorBrand,
     );
     // GC_STORE_AUDIT(NONPOINTER): scalar Map/Set brand in an internal bag.

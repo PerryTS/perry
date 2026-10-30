@@ -5,10 +5,10 @@
 macro_rules! native_submodule_exports {
     ($consumer:ident) => {
         $consumer! {
-        (SUBMOD_VM, "vm", "vm", [
+        (SUBMOD_VM, "vm", "vm", Vm, [
             (js_node_export_vm_createContext, "createContext", unsafe { &*crate::fn_info!(thunk_vm_create_context, 2;with_declared(2)) }),
         ]),
-        (SUBMOD_TIMERS, "timers", "timers", [
+        (SUBMOD_TIMERS, "timers", "timers", Timers, [
             (js_node_export_timers_setTimeout, "setTimeout", crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::timers::timers_ns_set_timeout, 3;with_rest(2)); realm { "node:timers.default.setTimeout", provider = closure_alloc; } }),
             (js_node_export_timers_setInterval, "setInterval", crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::timers::timers_ns_set_interval, 3;with_rest(2)); realm { "node:timers.default.setInterval", provider = closure_alloc; } }),
             (js_node_export_timers_setImmediate, "setImmediate", crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::timers::timers_ns_set_immediate, 2;with_rest(1)); realm { "node:timers.default.setImmediate", provider = closure_alloc; } }),
@@ -16,13 +16,13 @@ macro_rules! native_submodule_exports {
             (js_node_export_timers_clearInterval, "clearInterval", crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::timers::timers_ns_clear_interval, 1;with_declared(1)); realm { "node:timers.default.clearInterval", provider = closure_alloc; } }),
             (js_node_export_timers_clearImmediate, "clearImmediate", crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::timers::timers_ns_clear_immediate, 1;with_declared(1)); realm { "node:timers.default.clearImmediate", provider = closure_alloc; } }),
         ]),
-        (SUBMOD_TIMERS_PROMISES, "timers/promises", "timers_promises", [
+        (SUBMOD_TIMERS_PROMISES, "timers/promises", "timers_promises", TimersPromises, [
             (js_node_export_timers_promises_setTimeout, "setTimeout", crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::timers::timers_promises_set_timeout, 3;with_declared(3)); realm { "node:timers/promises.setTimeout", provider = closure_alloc; } }),
             (js_node_export_timers_promises_setImmediate, "setImmediate", crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::timers::timers_promises_set_immediate, 2;with_declared(2)); realm { "node:timers/promises.setImmediate", provider = closure_alloc; } }),
             (js_node_export_timers_promises_setInterval, "setInterval", crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::timers::timers_promises_set_interval, 3;with_declared(3)); realm { "node:timers/promises.setInterval", provider = closure_alloc; } }),
             (js_node_export_timers_promises_scheduler, "scheduler", unsafe { &*crate::fn_info!(timers_promises_scheduler, 1;with_declared(1)) }),
         ]),
-        (SUBMOD_FS_PROMISES, "fs/promises", "fs_promises", [
+        (SUBMOD_FS_PROMISES, "fs/promises", "fs_promises", FsPromises, [
             (js_node_export_fs_promises_readFile, "readFile", crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_fs_promises_readFile, 2;with_declared(2)); realm { "node:fs/promises.readFile", provider = closure_alloc; } }),
             (js_node_export_fs_promises_open, "open", crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_fs_promises_open, 3;with_declared(3)); realm { "node:fs/promises.open", provider = closure_alloc; } }),
             (js_node_export_fs_promises_writeFile, "writeFile", crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_fs_promises_writeFile, 3;with_declared(3)); realm { "node:fs/promises.writeFile", provider = closure_alloc; } }),
@@ -57,16 +57,16 @@ macro_rules! native_submodule_exports {
             (js_node_export_fs_promises_access, "access", crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_fs_promises_access, 2;with_declared(2)); realm { "node:fs/promises.access", provider = closure_alloc; } }),
             (js_node_export_fs_promises_constants, "constants", unsafe { &*crate::fn_info!(thunk_fs_promises_constants, 1;with_declared(1)) }),
         ]),
-        (SUBMOD_READLINE_PROMISES, "readline/promises", "readline_promises", [
+        (SUBMOD_READLINE_PROMISES, "readline/promises", "readline_promises", ReadlinePromises, [
             (js_node_export_readline_promises_createInterface, "createInterface", crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_readline_createInterface, 1;with_declared(1)); realm { "node:readline/promises.createInterface", provider = closure_alloc; } }),
             (js_node_export_readline_promises_Interface, "Interface", crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_readline_Interface, 1;with_declared(1)); realm { "node:readline/promises.Interface", kind = constructor, provider = closure, extends = "node:readline/promises.Interface.<prototype>", attrs = {prototype = writable}; } }),
             (js_node_export_readline_promises_Readline, "Readline", crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::fs_promises::thunk_readline_Readline, 2;with_declared(2)); realm { "node:readline/promises.Readline", provider = closure_alloc; } }),
         ]),
-        (SUBMOD_STREAM_PROMISES, "stream/promises", "stream_promises", [
+        (SUBMOD_STREAM_PROMISES, "stream/promises", "stream_promises", StreamPromises, [
             (js_node_export_stream_promises_pipeline, "pipeline", crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::stream_promises::thunk_streamP_pipeline, 3;with_rest(2)); realm { "node:stream/promises.pipeline", provider = closure_alloc; } }),
             (js_node_export_stream_promises_finished, "finished", crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::stream_promises::thunk_streamP_finished, 2;with_declared(2)); realm { "node:stream/promises.finished", provider = closure_alloc; } }),
         ]),
-        (SUBMOD_STREAM_CONSUMERS, "stream/consumers", "stream_consumers", [
+        (SUBMOD_STREAM_CONSUMERS, "stream/consumers", "stream_consumers", StreamConsumers, [
             (js_node_export_stream_consumers_text, "text", crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::consumers::thunk_consumers_text, 1;with_declared(1)); realm { "node:stream/consumers.text", provider = closure_alloc; } }),
             (js_node_export_stream_consumers_json, "json", crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::consumers::thunk_consumers_json, 1;with_declared(1)); realm { "node:stream/consumers.json", provider = closure_alloc; } }),
             (js_node_export_stream_consumers_buffer, "buffer", crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::consumers::thunk_consumers_buffer, 1;with_declared(1)); realm { "node:stream/consumers.buffer", provider = closure_alloc; } }),
@@ -74,7 +74,7 @@ macro_rules! native_submodule_exports {
             (js_node_export_stream_consumers_bytes, "bytes", crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::consumers::thunk_consumers_bytes, 1;with_declared(1)); realm { "node:stream/consumers.bytes", provider = closure_alloc; } }),
             (js_node_export_stream_consumers_blob, "blob", crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::consumers::thunk_consumers_blob, 1;with_declared(1)); realm { "node:stream/consumers.blob", provider = closure_alloc; } }),
         ]),
-        (SUBMOD_STREAM_WEB, "stream/web", "stream_web", [
+        (SUBMOD_STREAM_WEB, "stream/web", "stream_web", StreamWeb, [
             (js_node_export_stream_web_ReadableStream, "ReadableStream", crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::thunk_stream_web_ctor, 1;with_declared(1)); realm { "node:stream/web.ByteLengthQueuingStrategy", provider = closure_alloc; "node:stream/web.CountQueuingStrategy", provider = closure_alloc; "node:stream/web.ReadableByteStreamController", provider = closure_alloc; "node:stream/web.ReadableStreamBYOBReader", provider = closure_alloc; "node:stream/web.ReadableStreamBYOBRequest", provider = closure_alloc; "node:stream/web.ReadableStreamDefaultController", provider = closure_alloc; "node:stream/web.ReadableStreamDefaultReader", provider = closure_alloc; "node:stream/web.TransformStreamDefaultController", provider = closure_alloc; "node:stream/web.WritableStreamDefaultController", provider = closure_alloc; "node:stream/web.WritableStreamDefaultWriter", provider = closure_alloc; } }),
             (js_node_export_stream_web_ReadableStreamDefaultReader, "ReadableStreamDefaultReader", crate::fn_info!(reference import crate::node_submodules::thunk_stream_web_ctor, 1; with_declared(1))),
             (js_node_export_stream_web_ReadableStreamBYOBReader, "ReadableStreamBYOBReader", crate::fn_info!(reference import crate::node_submodules::thunk_stream_web_ctor, 1; with_declared(1))),
@@ -93,19 +93,19 @@ macro_rules! native_submodule_exports {
             (js_node_export_stream_web_CompressionStream, "CompressionStream", crate::fn_info!(reference import crate::node_submodules::thunk_stream_web_ctor, 1; with_declared(1))),
             (js_node_export_stream_web_DecompressionStream, "DecompressionStream", crate::fn_info!(reference import crate::node_submodules::thunk_stream_web_ctor, 1; with_declared(1))),
         ]),
-        (SUBMOD_HONO_JSX_SERVER, "hono/jsx", "hono_jsx_server", [
+        (SUBMOD_HONO_JSX_SERVER, "hono/jsx", "hono_jsx_server", HonoJsxServer, [
             (js_node_export_hono_jsx_server_jsx, "jsx", unsafe { &*crate::fn_info!(thunk_hono_jsx, 2;with_declared(2)) }),
             (js_node_export_hono_jsx_server_jsxs, "jsxs", unsafe { &*crate::fn_info!(thunk_hono_jsxs, 2;with_declared(2)) }),
             (js_node_export_hono_jsx_server_Fragment, "Fragment", unsafe { &*crate::fn_info!(thunk_hono_fragment, 1;with_declared(1)) }),
             (js_node_export_hono_jsx_server_JSXNode, "JSXNode", unsafe { &*crate::fn_info!(thunk_hono_jsxnode, 1;with_declared(1)) }),
         ]),
-        (SUBMOD_HONO_JSX_STREAMING, "hono/jsx/streaming", "hono_jsx_streaming", [
+        (SUBMOD_HONO_JSX_STREAMING, "hono/jsx/streaming", "hono_jsx_streaming", HonoJsxStreaming, [
             (js_node_export_hono_jsx_streaming_renderToReadableStream, "renderToReadableStream", unsafe {
                 &*crate::fn_info!(thunk_hono_render_to_readable_stream, 2;with_declared(2))
             }),
             (js_node_export_hono_jsx_streaming_Suspense, "Suspense", unsafe { &*crate::fn_info!(thunk_hono_suspense, 1;with_declared(1)) }),
         ]),
-        (SUBMOD_SYS, "sys", "sys", [
+        (SUBMOD_SYS, "sys", "sys", Sys, [
             (js_node_export_sys_format, "format", unsafe { &*crate::fn_info!(thunk_sys_format, 1;with_declared(1)) }),
             (js_node_export_sys_inspect, "inspect", unsafe { &*crate::fn_info!(thunk_sys_inspect, 1;with_declared(1)) }),
             (js_node_export_sys_debuglog, "debuglog", unsafe { &*crate::fn_info!(thunk_sys_debuglog, 1;with_declared(1)) }),
@@ -114,7 +114,7 @@ macro_rules! native_submodule_exports {
             (js_node_export_sys_callbackify, "callbackify", unsafe { &*crate::fn_info!(thunk_sys_callbackify, 1;with_declared(1)) }),
             (js_node_export_sys_isArray, "isArray", unsafe { &*crate::fn_info!(thunk_sys_isArray, 1;with_declared(1)) }),
         ]),
-        (SUBMOD_DIAGNOSTICS_CHANNEL, "diagnostics_channel", "diagnostics_channel", [
+        (SUBMOD_DIAGNOSTICS_CHANNEL, "diagnostics_channel", "diagnostics_channel", DiagnosticsChannel, [
             (js_node_export_diagnostics_channel_tracingChannel, "tracingChannel", crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::diagnostics::thunk_diag_tracing_channel, 1;with_declared(1)); realm { "node:diagnostics_channel.tracingChannel", provider = closure_alloc; } }),
             (js_node_export_diagnostics_channel_boundedChannel, "boundedChannel", crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::diagnostics_tail::thunk_diag_bounded_channel, 1;with_declared(1)); realm { "node:diagnostics_channel.BoundedChannel", provider = closure_alloc; "node:diagnostics_channel.boundedChannel", provider = closure_alloc; } }),
             (js_node_export_diagnostics_channel_channel, "channel", crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::diagnostics::thunk_diag_channel, 1;with_declared(1)); realm { "node:diagnostics_channel.channel", provider = closure_alloc; } }),
@@ -124,11 +124,11 @@ macro_rules! native_submodule_exports {
             (js_node_export_diagnostics_channel_Channel, "Channel", crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::diagnostics::thunk_diag_noop, 1;with_declared(1)); realm { "node:diagnostics_channel.Channel", provider = closure_alloc; } }),
             (js_node_export_diagnostics_channel_BoundedChannel, "BoundedChannel", crate::fn_info!(reference import crate::node_submodules::diagnostics_tail::thunk_diag_bounded_channel, 1; with_declared(1))),
         ]),
-        (SUBMOD_TRACE_EVENTS, "trace_events", "trace_events", [
+        (SUBMOD_TRACE_EVENTS, "trace_events", "trace_events", TraceEvents, [
             (js_node_export_trace_events_createTracing, "createTracing", crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::trace_events::thunk_trace_events_createTracing, 1;with_declared(1)); realm { "node:trace_events.default.createTracing"; } }),
             (js_node_export_trace_events_getEnabledCategories, "getEnabledCategories", crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::trace_events::thunk_trace_events_getEnabledCategories, 1;with_rest(0)); realm { "node:trace_events.default.getEnabledCategories"; } }),
         ]),
-        (SUBMOD_TEST, "test", "test", [
+        (SUBMOD_TEST, "test", "test", Test, [
             (js_node_export_test_default, "default", crate::node_submodules::IMPORT_THUNK_TEST),
             (js_node_export_test_test, "test", crate::node_submodules::IMPORT_THUNK_TEST),
             (js_node_export_test_skip, "skip", crate::node_submodules::IMPORT_THUNK_TEST_SKIP),
@@ -146,7 +146,7 @@ macro_rules! native_submodule_exports {
             (js_node_export_test_mock, "mock", crate::fn_info!(reference import crate::node_submodules::test::runner::thunk_test_run, 1; with_declared(1))),
             (js_node_export_test_snapshot, "snapshot", crate::fn_info!(reference import crate::node_submodules::test::runner::thunk_test_run, 1; with_declared(1))),
         ]),
-        (SUBMOD_TEST_REPORTERS, "test/reporters", "test_reporters", [
+        (SUBMOD_TEST_REPORTERS, "test/reporters", "test_reporters", TestReporters, [
             (js_node_export_test_reporters_spec, "spec", crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::test::reporters::thunk_reporter_spec, 1;with_declared(1)); realm { "node:test/reporters.default.spec", provider = closure_alloc; } }),
             (js_node_export_test_reporters_tap, "tap", crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::test::reporters::thunk_reporter_tap, 1;with_declared(1)); realm { "node:test/reporters.default.tap", provider = closure_alloc; } }),
             (js_node_export_test_reporters_dot, "dot", crate::realm_decl! { info_expr crate::fn_info!(reference export crate::node_submodules::test::reporters::thunk_reporter_dot, 1;with_declared(1)); realm { "node:test/reporters.default.dot", provider = closure_alloc; } }),
@@ -157,7 +157,7 @@ macro_rules! native_submodule_exports {
     };
 }
 macro_rules! declaration_names {
-    ($(($spec:ident, $module:literal, $key:literal,
+    ($(($spec:ident, $module:literal, $key:literal, $bucket:ident,
         [$(($getter:ident, $name:literal, $($info:tt)*)),* $(,)?])),* $(,)?) => {
         /// Public and internal export declarations with their linker symbols.
         pub const SUBMODULE_EXPORTS: &[(&str, &str, &[(&str, &str)])] = &[

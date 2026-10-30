@@ -206,6 +206,7 @@ pub(crate) use side_table_roots::{
 mod class_birth_rep_tests;
 #[cfg(test)]
 mod field_rep_store_tests;
+pub(crate) mod iterator_ctor;
 pub(crate) mod iterator_prototypes;
 pub(crate) mod map_set_subclass;
 pub mod method_call;
@@ -253,7 +254,8 @@ mod own_override_builtin_install_tests;
 #[cfg(test)]
 mod own_override_push_tests;
 pub(crate) use object_ops::{
-    ensure_key_in_keys_array, install_builtin_getter, install_own_builtin_accessor,
+    ensure_key_in_keys_array, install_builtin_accessor, install_builtin_getter,
+    install_own_builtin_accessor,
 };
 mod object_ops_frozen;
 mod polymorphic_index;
@@ -355,9 +357,9 @@ pub(crate) use global_this_tables::*;
 pub use groupby::*;
 pub use instanceof::*;
 pub(crate) use iterator_prototypes::{
-    attach_iterator_prototype, call_overridden_iterator_next, iterator_next_property_owner,
-    iterator_prototype_for_class_id, iterator_prototypes_materialized,
-    iterator_step_method_is_builtin,
+    attach_iterator_prototype, attach_wrap_for_valid_iterator_prototype,
+    call_overridden_iterator_next, iterator_next_property_owner, iterator_prototype_for_class_id,
+    iterator_prototypes_materialized, iterator_step_method_is_builtin,
 };
 pub use namespace_create::*;
 pub use native_call_method::*;
@@ -752,7 +754,7 @@ pub(crate) use call_method_depth::call_method_depth;
 pub(crate) use call_method_depth::test_enter_catch_method;
 #[cfg(test)]
 mod a1_death_tests;
-mod header;
+pub(crate) mod header;
 pub(crate) use header::*;
 mod meta_accessors;
 use call_method_depth::CallMethodDepthGuard;
@@ -1567,6 +1569,7 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
         &iterator_prototypes::STRING_ITERATOR_PROTOTYPE_PTR,
         &iterator_prototypes::REGEXP_STRING_ITERATOR_PROTOTYPE_PTR,
         &iterator_prototypes::ITERATOR_HELPER_PROTOTYPE_PTR,
+        &iterator_prototypes::WRAP_FOR_VALID_ITERATOR_PROTOTYPE_PTR,
     ] {
         slot.with_slot(|slot| {
             visitor.visit_atomic_i64_slot(slot, Ordering::Acquire, Ordering::Release);
@@ -1672,7 +1675,7 @@ pub struct ObjectHeader {
     /// objects (the common case). MUST stay the LAST field: codegen reads
     /// the earlier header fields at fixed offsets (0/4), and the
     /// field-slot region begins at `size_of::<ObjectHeader>()`, mirrored
-    /// by `perry-codegen/src/target_layout.rs::object_header_size_bytes`.
+    /// by `perry-codegen/src/target_layout.rs::object_slot_base_bytes`.
     /// See [`ObjectMeta`].
     pub meta: *mut ObjectMeta,
 }
@@ -1751,7 +1754,7 @@ pub(crate) unsafe fn object_is_regular(obj: *const ObjectHeader) -> bool {
     let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
         return false;
     };
-    header.obj_type == crate::gc::GC_TYPE_OBJECT
+    crate::gc_type_is_object!(header.obj_type)
         && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
         && shapes::shape_object_kind_of_receiver((*obj).shape_word())
             .is_some_and(|kind| kind.is_ordinary_layout())
@@ -1765,7 +1768,7 @@ pub(crate) unsafe fn object_is_shaped(obj: *const ObjectHeader) -> bool {
     let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
         return false;
     };
-    header.obj_type == crate::gc::GC_TYPE_OBJECT
+    crate::gc_type_is_object!(header.obj_type)
         && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
 }
 

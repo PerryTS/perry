@@ -1069,14 +1069,15 @@ impl<'a> Gen<'a> {
                 value,
                 step_closure,
             } => {
-                // On admission the awaited value (promise unwrapped) is
-                // rewritten into the iter-result cell, which the step then
-                // reads back as its next resume value.
+                // On admission the awaited value (promise unwrapped) is the
+                // expression's result, which the step uses as its next resume
+                // value; a decline yields the TDZ sentinel, never observed.
                 let v = self.expr(fx, value);
                 let _ = self.expr(fx, step_closure);
-                let aw = self.awaited(v);
-                let r = self.iter_res_node(fx);
-                self.m.edge(aw, r);
+                self.awaited(v)
+            }
+            Expr::AsyncStepDeclined(e) => {
+                let _ = self.expr(fx, e);
                 self.prim_node(prim::BOOL)
             }
             Expr::AsyncStepDone {

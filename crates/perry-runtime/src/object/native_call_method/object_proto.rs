@@ -34,7 +34,7 @@ pub(super) unsafe fn is_ordinary_object_receiver(object: f64) -> bool {
         return false;
     }
     let gc_header = (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    (*gc_header).obj_type == crate::gc::GC_TYPE_OBJECT
+    crate::gc_type_is_object!((*gc_header).obj_type)
 }
 
 /// The builtin `Object.prototype.hasOwnProperty` /

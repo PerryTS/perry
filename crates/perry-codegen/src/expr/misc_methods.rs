@@ -1079,13 +1079,26 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let step_box = rooted_values[1].clone();
             let blk = ctx.block();
             let step_handle = unbox_to_i64(blk, &step_box);
-            let admitted = blk.call(
+            let resumed = blk.call(
                 DOUBLE,
                 "js_async_step_resume_now",
                 &[(DOUBLE, &value_box), (I64, &step_handle)],
             );
             rooted_group.release(ctx);
-            Ok(admitted)
+            Ok(resumed)
+        }
+
+        // True when an `AsyncStepResumeNow` result is the decline sentinel
+        // (TAG_TDZ, never a legitimate await result). Pure bit compare.
+        Expr::AsyncStepDeclined(operand) => {
+            let resumed = lower_expr(ctx, operand)?;
+            let blk = ctx.block();
+            let bits = blk.bitcast_double_to_i64(&resumed);
+            let declined = blk.icmp_eq(I64, &bits, &crate::nanbox::TAG_TDZ.to_string());
+            let tag_true = (crate::nanbox::TAG_TRUE as i64).to_string();
+            let tag_false = (crate::nanbox::TAG_FALSE as i64).to_string();
+            let boxed = blk.select(I1, &declined, I64, &tag_true, &tag_false);
+            Ok(blk.bitcast_i64_to_double(&boxed))
         }
 
         // -------- Optimized async-step done (perf hot path) --------

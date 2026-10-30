@@ -1641,6 +1641,9 @@ pub(crate) fn zlib_readonly_property_enumerability(module_name: &str, key: &str)
 }
 
 pub(crate) fn native_module_has_enumerable_key(module_name: &str, key: &str) -> bool {
+    if crate::process::worker_restrictions::worker_process_member_hidden(module_name, key) {
+        return false;
+    }
     if matches!(
         module_name,
         "process" | "process.namespace" | "process.default"

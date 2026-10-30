@@ -7,6 +7,7 @@
 //! with the struct it indexes. No dependencies.
 
 pub mod function_metadata;
+mod object_type;
 pub use function_metadata::*;
 extern crate alloc;
 
@@ -368,7 +369,8 @@ pub const fn gc_header_word_is_callable(word: u32) -> bool {
     let kind = bytes[0];
     let facts = u16::from_ne_bytes([bytes[2], bytes[3]]);
     kind == GC_TYPE_CLOSURE
-        || ((kind == GC_TYPE_OBJECT || kind == GC_TYPE_PROXY) && facts & GC_OBJECT_CALLABLE != 0)
+        || ((crate::gc_type_is_object!(kind) || kind == GC_TYPE_PROXY)
+            && facts & GC_OBJECT_CALLABLE != 0)
 }
 
 /// The JS BODY calling convention. Every native body a function object runs —

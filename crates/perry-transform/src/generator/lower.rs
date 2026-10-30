@@ -528,7 +528,7 @@ pub fn transform_generator_function_with_extra_captures(
         .into_iter()
         .filter(|(id, _, _)| !no_hoist_ids.contains(id))
         .collect();
-    if fixed_state {
+    if fixed_state || func.was_plain_async {
         let locals = fixed_state::state_local_ids(
             &states,
             &shared_with_user,

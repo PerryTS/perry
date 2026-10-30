@@ -100,7 +100,7 @@ pub(crate) fn owner_kind(addr: usize) -> &'static str {
             // Only the header byte: asking `object_prototype_addr_matches`
             // here can lazily build Object.prototype, whose builtin installs
             // re-enter this census and recurse until the stack overflows.
-            crate::gc::GC_TYPE_OBJECT => "object",
+            crate::gc_object_type_pat!() => "object",
             crate::gc::GC_TYPE_ARRAY => "array",
             crate::gc::GC_TYPE_CLOSURE => "closure",
             crate::gc::GC_TYPE_ERROR => "error",

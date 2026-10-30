@@ -907,6 +907,14 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
         if identity == BuiltinConstructorIdentity::Object {
             return construct_object_with_new_target(nt);
         }
+        // Abstract (§27.1.3.1): a subclass's `super()` creates an ordinary
+        // object from new.target; `new.target === Iterator` throws.
+        if identity == BuiltinConstructorIdentity::Iterator {
+            if nt.to_bits() == func_value.to_bits() {
+                return crate::object::iterator_ctor::throw_abstract_iterator();
+            }
+            return construct_object_with_new_target(nt);
+        }
         // These factories throw or return a proxy of the caller's target;
         // they do not allocate an ordinary instance with new.target.prototype.
         if matches!(

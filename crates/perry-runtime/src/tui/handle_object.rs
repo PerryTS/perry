@@ -458,7 +458,7 @@ pub(crate) fn tui_object(kind: TuiKind, id: i64) -> i64 {
     }
     handle.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| unsafe {
         let meta = crate::object::object_meta_ensure(
-            crate::object::MetaObj::runtime_born(obj),
+            crate::meta_obj_runtime_born!(obj),
             crate::object::MetaReason::RuntimeHandle,
         );
         // A handle whose state word never landed would resolve to `None` and

@@ -590,6 +590,14 @@ const _: () = {
     );
 };
 
+/// `ClassMemberDecl::flags` (codegen's `{ ptr, ptr, ptr, i32, i32, i32, i8, i8,
+/// i16 }`, the second `i8`): the member's name bytes are valid UTF-8. The
+/// emitter sets it when it has proven the bytes (codegen: the emitted name has
+/// no lone surrogate; a native class: a Rust `&'static str`), and registration
+/// reads the name without validating it. Clear, the name is validated, and one
+/// that is not UTF-8 (a WTF-8 name) names no member.
+pub const CLASS_MEMBER_NAME_UTF8: u8 = 4;
+
 /// Explicit dynamic mints: all returns and finalizer carriers are LayoutWords.
 pub mod dynamic_layout_ffi {
     unsafe extern "C" {

@@ -238,7 +238,7 @@ unsafe fn own_property_slot(
         return None;
     }
     let obj_gc = (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    if (*obj_gc).obj_type != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!((*obj_gc).obj_type) {
         return None;
     }
     let keys_view = crate::object::object_keys(obj);
@@ -490,7 +490,7 @@ pub(crate) unsafe fn ordinary_object_prototype_property_value(
         return None;
     }
     let gc = gc_header_for(obj);
-    if (*gc).obj_type != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!((*gc).obj_type) {
         return None;
     }
     // #10827: this asked only whether the RECEIVER was born without a
@@ -817,7 +817,7 @@ pub(crate) unsafe fn is_typed_array_prototype(addr: usize) -> bool {
     // shared `_reserved` word; gate the flag read on the object type so a
     // regular array whose `_reserved` happens to collide isn't misclassified.
     let gc = (addr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    (*gc).obj_type == crate::gc::GC_TYPE_OBJECT
+    crate::gc_type_is_object!((*gc).obj_type)
         && ((*gc)._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO) != 0
 }
 

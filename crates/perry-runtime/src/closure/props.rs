@@ -242,8 +242,11 @@ unsafe fn object_own_get(obj: *const ObjectHeader, key: &[u8]) -> Option<f64> {
             && !crate::object::overflow::shadowed(obj)
         {
             let keys = d.keys as usize as *const crate::array::ArrayHeader;
-            let slot =
-                crate::object::keys_find_property_slot_by_bytes(d.keys_view(), d.logical_key_count, key)?;
+            let slot = crate::object::keys_find_property_slot_by_bytes(
+                d.keys_view(),
+                d.logical_key_count,
+                key,
+            )?;
             // An accessor key's slot holds its getter/setter pair, never a
             // data value.
             if d.summary & crate::object::key_attrs::SUMMARY_ACCESSOR != 0
@@ -480,7 +483,8 @@ pub(crate) unsafe fn bag_has_own(ptr: usize, key: &[u8]) -> bool {
     if arr.is_null() {
         return false;
     }
-    let Some(slot) = crate::object::keys_find_property_slot_by_bytes(keys, keys.count(), key) else {
+    let Some(slot) = crate::object::keys_find_property_slot_by_bytes(keys, keys.count(), key)
+    else {
         return false;
     };
     crate::object::key_attrs::key_is_accessor_at(arr, slot as u32)
@@ -643,7 +647,7 @@ unsafe fn state_ensure(ptr: usize) -> Option<*mut ObjectHeader> {
     // inherited setter may run on it), hung off the bag's `meta.expando` —
     // an ordinary traced edge of the bag.
     let meta = crate::object::object_meta_ensure(
-        crate::object::MetaObj::runtime_born(bag),
+        crate::meta_obj_runtime_born!(bag),
         crate::object::MetaReason::ClosureProps,
     );
     if meta.is_null() {

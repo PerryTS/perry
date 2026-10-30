@@ -346,7 +346,7 @@ fn class_instance_display_name(receiver: f64) -> Option<String> {
     // SAFETY: the header is read through the checked reader, and only an
     // ordinary object is asked for its shape.
     let is_object = unsafe { crate::value::addr_class::try_read_gc_header(object as usize) }
-        .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_OBJECT);
+        .is_some_and(|header| crate::gc_type_is_object!(header.obj_type));
     if !is_object || !unsafe { crate::object::object_is_shaped(object) } {
         return None;
     }
@@ -688,7 +688,7 @@ fn object_array_numeric_write_slots(
         }
         let addr = (bits & POINTER_MASK) as usize;
         let gc = crate::value::addr_class::try_read_gc_header(addr)?;
-        if gc.obj_type != crate::gc::GC_TYPE_OBJECT
+        if crate::gc_type_is_not_object!(gc.obj_type)
             || gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
             || gc._reserved & BLOCKING_FLAGS != 0
         {
@@ -730,8 +730,12 @@ fn object_array_numeric_write_slots(
         if key_count > 4096 {
             return None;
         }
-        crate::object::keys_find_slot_by_key_ptr(crate::object::ObjectKeys::new(keys, key_count), key_count, key)
-            .map(|position| crate::object::key_attrs::key_storage_slot(keys, position))
+        crate::object::keys_find_slot_by_key_ptr(
+            crate::object::ObjectKeys::new(keys, key_count),
+            key_count,
+            key,
+        )
+        .map(|position| crate::object::key_attrs::key_storage_slot(keys, position))
     }
 
     let elements = unsafe {
@@ -781,7 +785,7 @@ fn object_array_numeric_write_slots(
     // sets bit 15 of its result lane; the caller's `+1` packing cannot carry
     // into it (slot ≤ 4096).
     unsafe fn spill_lane_covers(obj: *const crate::ObjectHeader, slot: u32) -> bool {
-        let meta = (*obj).meta;
+        let meta = crate::meta_read!(crate::meta_obj_from_storage!(obj as *mut _, slot));
         if meta.is_null() {
             return false;
         }

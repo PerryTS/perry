@@ -240,7 +240,7 @@ pub extern "C" fn js_object_get_class_id(obj: *const ObjectHeader) -> u32 {
         }
         let gc_header =
             (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
+        if crate::gc_type_is_not_object!((*gc_header).obj_type) {
             return 0;
         }
         (*obj).class_id

@@ -9,6 +9,22 @@ pub(super) fn initialize_channel(fd: Option<String>, mode: &str) {
 }
 static PROCESS_IPC_PROPERTY: Hook<fn(&str) -> Option<f64>> = Hook::empty();
 pub(crate) fn process_ipc_property(property: &str) -> Option<f64> {
+    if super::worker_restrictions::worker_process_member_hidden("process", property) {
+        return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
+    }
+    if super::worker_restrictions::in_node_worker() {
+        match property {
+            "channel" | "connected" => {
+                super::worker_restrictions::ensure_worker_operation_allowed(property)
+            }
+            "send" | "disconnect" => {
+                return Some(crate::object::bound_native_callable_export_value(
+                    "process", property,
+                ))
+            }
+            _ => {}
+        }
+    }
     PROCESS_IPC_PROPERTY
         .get()
         .map_or_else(|| None, |run| run(property))
@@ -45,6 +61,7 @@ pub extern "C" fn js_process_ipc_has_active() -> i32 {
 }
 static PROCESS_IPC_SEND_CALL: Hook<fn(f64, f64, f64, f64) -> f64> = Hook::empty();
 pub(crate) fn process_ipc_send_call(message: f64, a2: f64, a3: f64, a4: f64) -> f64 {
+    crate::process::worker_restrictions::ensure_worker_operation_allowed("send");
     PROCESS_IPC_SEND_CALL.get().map_or_else(
         || f64::from_bits(crate::value::TAG_UNDEFINED),
         |run| run(message, a2, a3, a4),
@@ -52,6 +69,7 @@ pub(crate) fn process_ipc_send_call(message: f64, a2: f64, a3: f64, a4: f64) -> 
 }
 static PROCESS_IPC_DISCONNECT_CALL: Hook<fn() -> f64> = Hook::empty();
 pub(crate) fn process_ipc_disconnect_call() -> f64 {
+    crate::process::worker_restrictions::ensure_worker_operation_allowed("disconnect");
     PROCESS_IPC_DISCONNECT_CALL
         .get()
         .map_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED), |run| run())

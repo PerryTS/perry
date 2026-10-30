@@ -773,8 +773,11 @@ fn lower_new_impl_inner<'a>(
             // `size_of::<ObjectHeader>()` past the user pointer (16 on both
             // LP64 and ILP32 since #8047) — same derivation as every other
             // packed slot access.
-            let header_skip =
-                crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
+            let header_skip = crate::target_layout::object_slot_base_bytes(
+                ctx.target_triple,
+                crate::target_layout::class_instance_form(class_name),
+            )
+            .to_string();
             let fields_base = {
                 let blk = ctx.block();
                 let obj_ptr = blk.inttoptr(I64, &obj_handle);

@@ -560,7 +560,7 @@ pub fn arena_alloc_gc(size: usize, align: usize, obj_type: u8) -> *mut u8 {
 /// `word` points at the descriptor's header image.
 pub(crate) unsafe fn arena_alloc_gc_object_word(word: *const u64, slots: u32) -> *mut u8 {
     use crate::gc::GC_TYPE_OBJECT;
-    let size = std::mem::size_of::<crate::object::ObjectHeader>() + slots as usize * 8;
+    let size = crate::object::header::meta_form_alloc_bytes(slots as usize);
     let total = gc_padded_total_size(size, 8);
     debug_assert_eq!(total, (*word >> 32) as usize);
     super::alloc_sample::note(total, GC_TYPE_OBJECT);

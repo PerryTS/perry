@@ -98,15 +98,16 @@ impl Settings {
         payload
     }
     /// Refuse what this endpoint cannot honour once the peer acts on it.
-    fn validate(&self) -> Result<()> {
+    fn validate(&self, role: Role) -> Result<()> {
         for (id, value) in self.iter() {
             let valid = match id {
-                // The HPACK decoder's dynamic table is fixed at 4096 octets;
-                // advertising more would let the peer's encoder outgrow it.
-                Self::HEADER_TABLE_SIZE => value <= 4096,
-                // Server push is not implemented: PUSH_PROMISE is always a
-                // connection error, so neither side may invite one.
-                Self::ENABLE_PUSH => value == 0,
+                Self::HEADER_TABLE_SIZE => true,
+                // Only a client may invite pushes (RFC 9113 section 6.5.2); a
+                // server never sends a non-zero ENABLE_PUSH.
+                Self::ENABLE_PUSH => match role {
+                    Role::Client => value <= 1,
+                    Role::Server => value == 0,
+                },
                 Self::INITIAL_WINDOW_SIZE => value <= 0x7fffffff,
                 Self::MAX_FRAME_SIZE => (16384..=0xffffff).contains(&value),
                 Self::ENABLE_CONNECT_PROTOCOL => value <= 1,
@@ -237,6 +238,17 @@ pub enum Event<'a> {
         stream: u32,
         bytes: &'a [u8],
         end_stream: bool,
+    },
+    /// The server promised a response to the request `headers` (RFC 9113
+    /// section 8.4), on `stream`, a stream this endpoint opened. `promised` is
+    /// the server-initiated stream that will carry the response: its HEADERS
+    /// and DATA arrive as ordinary events, and [`Connection::reset`] declines
+    /// it. Only a client receives this, and only while it has not disabled push
+    /// with ENABLE_PUSH = 0.
+    PushPromise {
+        stream: u32,
+        promised: u32,
+        headers: Vec<Header>,
     },
     /// The stream is over. It may name a stream the host never saw opened: a
     /// stream past the concurrent-stream limit is refused with
@@ -398,6 +410,11 @@ pub struct Connection {
     acked_limits: Limits,
     /// Our SETTINGS_INITIAL_WINDOW_SIZE as acknowledged, and as enforced.
     acked_recv_initial: i64,
+    acked_table: usize,
+    /// Whether this endpoint accepts PUSH_PROMISE: ENABLE_PUSH as acknowledged,
+    /// loosened by every outstanding frame, defaulting to enabled.
+    acked_push: bool,
+    push_allowed: bool,
     recv_initial: i64,
     decoder: hpack::Decoder,
     encoder: hpack::Encoder,
@@ -408,6 +425,13 @@ pub struct Connection {
     /// belong to a live stream. HPACK is connection state, so such a block
     /// still has to advance the decoder before it is thrown away.
     disposal: Option<Disposal>,
+    /// PINGs sent and not yet acknowledged. An acknowledgement with none
+    /// outstanding answers nothing this endpoint sent.
+    pings: usize,
+    /// The PUSH_PROMISE whose header block is being assembled: the promised
+    /// stream and whether the block is only to be decoded and dropped (the
+    /// associated stream is gone).
+    promise: Option<(u32, bool)>,
     output: Vec<u8>,
     output_pos: usize,
     draining: bool,
@@ -417,7 +441,7 @@ pub struct Connection {
 impl Connection {
     /// A connection whose initial SETTINGS advertises `limits`: the
     /// concurrent-stream, frame-size and header-list limits, in that
-    /// (ascending) identifier order, plus ENABLE_PUSH = 0 for a client.
+    /// (ascending) identifier order.
     pub fn new(role: Role, limits: Limits) -> Result<Self> {
         Self::with_settings(role, limits, &Settings::from_limits(&limits))
     }
@@ -428,10 +452,9 @@ impl Connection {
     /// `limits` is what this endpoint enforces on its own. A parameter in
     /// `settings` that corresponds to a limit replaces it once the peer
     /// acknowledges the frame (and at once, if that relaxes it: the peer may
-    /// act on the new value before its ack reaches us). One parameter is
-    /// added: a client that does not name ENABLE_PUSH sends ENABLE_PUSH = 0,
-    /// because push defaults to enabled and this crate treats PUSH_PROMISE
-    /// as a connection error.
+    /// act on the new value before its ack reaches us). A client that
+    /// does not name ENABLE_PUSH leaves push enabled, as the protocol defaults
+    /// it, and surfaces each promise as [`Event::PushPromise`].
     pub fn with_settings(role: Role, limits: Limits, settings: &Settings) -> Result<Self> {
         if !(16384..=0xffffff).contains(&limits.frame_size)
             || limits.streams == 0
@@ -439,11 +462,8 @@ impl Connection {
         {
             return Err(protocol("invalid limits"));
         }
-        let mut settings = settings.clone();
-        if role == Role::Client && settings.get(Settings::ENABLE_PUSH).is_none() {
-            settings.set(Settings::ENABLE_PUSH, 0);
-        }
-        settings.validate()?;
+        settings.validate(role)?;
+        let settings = settings.clone();
         let mut result = Self {
             role,
             limits,
@@ -463,6 +483,9 @@ impl Connection {
             remote_settings: Settings::new(),
             acked_limits: limits,
             acked_recv_initial: 65535,
+            acked_table: 4096,
+            acked_push: true,
+            push_allowed: true,
             recv_initial: 65535,
             decoder: hpack::Decoder::new(4096, limits.header_list),
             encoder: hpack::Encoder::new(4096),
@@ -470,6 +493,8 @@ impl Connection {
             scratch: Vec::new(),
             continuation: None,
             disposal: None,
+            pings: 0,
+            promise: None,
             output: Vec::new(),
             output_pos: 0,
             draining: false,
@@ -495,13 +520,13 @@ impl Connection {
     /// peer sent under the old value are never treated as errors.
     ///
     /// Values this endpoint could not honour are refused before anything is
-    /// sent: ENABLE_PUSH other than 0, HEADER_TABLE_SIZE above 4096, and the
+    /// sent: ENABLE_PUSH above 1 from a client, anything but 0 from a server, and the
     /// out-of-range values RFC 9113 section 6.5.2 forbids.
     pub fn settings(&mut self, settings: &Settings) -> Result<()> {
         if self.failed {
             return Err(protocol("failed connection"));
         }
-        settings.validate()?;
+        settings.validate(self.role)?;
         self.send_settings(settings.clone())
     }
     fn send_settings(&mut self, settings: Settings) -> Result<()> {
@@ -519,6 +544,8 @@ impl Connection {
     fn enforce_settings(&mut self) {
         let mut limits = self.acked_limits;
         let mut recv_initial = self.acked_recv_initial;
+        let mut table = self.acked_table;
+        let mut push = self.acked_push;
         for settings in &self.settings_pending {
             for (id, value) in settings.iter() {
                 let value = value as usize;
@@ -529,6 +556,8 @@ impl Connection {
                     Settings::MAX_HEADER_LIST_SIZE => {
                         limits.header_list = limits.header_list.max(value)
                     }
+                    Settings::HEADER_TABLE_SIZE => table = table.max(value),
+                    Settings::ENABLE_PUSH => push |= value != 0,
                     _ => {}
                 }
             }
@@ -543,6 +572,8 @@ impl Connection {
             self.recv_initial = recv_initial;
         }
         self.decoder.max_list_size = limits.header_list;
+        self.decoder.set_allowed(table);
+        self.push_allowed = push;
         self.limits = limits;
     }
     /// What this endpoint enforces now, including the effect of SETTINGS it
@@ -741,6 +772,66 @@ impl Connection {
         self.send_headers(id, headers, end_stream)?;
         Ok(id)
     }
+    /// Promise a response to the request `headers` on `stream`, a request
+    /// stream the client opened (RFC 9113 section 8.4). Returns the promised
+    /// stream, which then carries the response through
+    /// [`send_headers`](Self::send_headers) and [`send_data`](Self::send_data).
+    /// Refused when the peer disabled push with ENABLE_PUSH = 0.
+    pub fn push(&mut self, stream: u32, headers: &[Header]) -> Result<u32> {
+        if self.role != Role::Server || self.draining || self.failed {
+            return Err(protocol("cannot push"));
+        }
+        if self.remote_settings.get(Settings::ENABLE_PUSH) == Some(0) {
+            return Err(protocol("push disabled by peer"));
+        }
+        let i = self.index(stream).map_err(|_| self.gone(stream))?;
+        if self.streams[i].local_end {
+            return Err(error("STREAM_CLOSED", "local stream closed"));
+        }
+        if self.active() >= self.peer_streams {
+            return Err(error("REFUSED_STREAM", "peer stream limit"));
+        }
+        validate_headers(headers, true, false)?;
+        let id = self.next_id;
+        let next = id
+            .checked_add(2)
+            .filter(|n| *n <= 0x7fffffff)
+            .ok_or(protocol("stream IDs exhausted"))?;
+        self.scratch.clear();
+        self.encoder.encode(headers, &mut self.scratch);
+        let first = self.scratch.len().min(self.peer_frame - 4);
+        let mut payload = id.to_be_bytes().to_vec();
+        payload.extend_from_slice(&self.scratch[..first]);
+        let j = self.add_stream(id)?;
+        self.next_id = next;
+        encode_frame(
+            5,
+            if first == self.scratch.len() { 4 } else { 0 },
+            stream,
+            &payload,
+            &mut self.output,
+        )?;
+        let mut start = first;
+        while start < self.scratch.len() {
+            let end = (start + self.peer_frame).min(self.scratch.len());
+            encode_frame(
+                9,
+                if end == self.scratch.len() { 4 } else { 0 },
+                stream,
+                &self.scratch[start..end],
+                &mut self.output,
+            )?;
+            start = end;
+        }
+        let s = &mut self.streams[j];
+        // The promised request has no body and the client sends nothing on it.
+        s.remote_end = true;
+        s.received_head = true;
+        s.head_request = headers
+            .iter()
+            .any(|h| h.name == ":method" && h.value == b"HEAD");
+        Ok(id)
+    }
     pub fn send_headers(&mut self, id: u32, headers: &[Header], end_stream: bool) -> Result<()> {
         if self.failed {
             return Err(protocol("failed connection"));
@@ -902,7 +993,9 @@ impl Connection {
         self.frame(3, 0, id, &code.to_be_bytes())
     }
     pub fn ping(&mut self, data: [u8; 8]) -> Result<()> {
-        self.frame(6, 0, 0, &data)
+        self.frame(6, 0, 0, &data)?;
+        self.pings += 1;
+        Ok(())
     }
     /// Graceful close: GOAWAY(NO_ERROR) naming the last stream this connection
     /// has processed, then drain. A stream the peer opens before it sees the
@@ -942,6 +1035,7 @@ impl Connection {
             self.failed = true;
             let code = match e.code {
                 "FLOW_CONTROL_ERROR" => 3,
+                "INTERNAL_ERROR" => 2,
                 "FRAME_SIZE_ERROR" => 6,
                 "COMPRESSION_ERROR" => 9,
                 "ENHANCE_YOUR_CALM" => 11,
@@ -1178,6 +1272,8 @@ impl Connection {
                             Settings::MAX_HEADER_LIST_SIZE => {
                                 self.acked_limits.header_list = value as usize
                             }
+                            Settings::HEADER_TABLE_SIZE => self.acked_table = value as usize,
+                            Settings::ENABLE_PUSH => self.acked_push = value != 0,
                             _ => {}
                         }
                     }
@@ -1196,7 +1292,10 @@ impl Connection {
                         match id {
                             1 => self.encoder.set_table_size((value as usize).min(4096)),
                             2 => {
-                                if value > 1 || self.role == Role::Client {
+                                if match self.role {
+                                    Role::Server => value > 1,
+                                    Role::Client => value != 0,
+                                } {
                                     return Err(protocol("invalid ENABLE_PUSH"));
                                 }
                             }
@@ -1233,7 +1332,43 @@ impl Connection {
                     step.event = Some(Event::Settings(settings));
                 }
             }
-            5 => return Err(protocol("server push disabled")),
+            5 => {
+                if self.role != Role::Client || !self.push_allowed {
+                    return Err(protocol("server push disabled"));
+                }
+                if f.stream == 0 {
+                    return Err(protocol("PUSH_PROMISE on connection"));
+                }
+                let payload = unpadded(f)?;
+                if payload.len() < 4 {
+                    return Err(frame_error());
+                }
+                let promised = u32be(payload) & 0x7fffffff;
+                if promised == 0 || promised % 2 != 0 || promised <= self.highest_remote {
+                    return Err(protocol("invalid promised stream"));
+                }
+                // A promise rides on a stream we opened. One we have already
+                // reset may still have a promise in flight: decode it to keep
+                // HPACK in step and cancel the promised stream.
+                let discard = match self.index(f.stream) {
+                    Ok(i) if self.streams[i].remote_end => {
+                        return Err(error("STREAM_CLOSED", "PUSH_PROMISE after END_STREAM"));
+                    }
+                    Ok(_) => false,
+                    Err(_) if self.seen(f.stream) => true,
+                    Err(_) => return Err(protocol("PUSH_PROMISE on idle stream")),
+                };
+                self.highest_remote = promised;
+                self.disposal = None;
+                self.block.clear();
+                self.append_block(&payload[4..])?;
+                self.promise = Some((promised, discard));
+                if f.flags & 4 != 0 {
+                    step.event = self.finish_block(f.stream, false)?;
+                } else {
+                    self.continuation = Some((f.stream, false, 0));
+                }
+            }
             6 => {
                 if f.stream != 0 {
                     return Err(protocol("PING on stream"));
@@ -1245,6 +1380,12 @@ impl Connection {
                 let ack = f.flags & 1 != 0;
                 if !ack {
                     self.frame(6, 1, 0, f.payload)?;
+                } else if self.pings == 0 {
+                    // Node answers GOAWAY(INTERNAL_ERROR) and drops the
+                    // connection (measured against a raw peer).
+                    return Err(error("INTERNAL_ERROR", "unsolicited PING acknowledgement"));
+                } else {
+                    self.pings -= 1;
                 }
                 step.event = Some(Event::Ping { ack, data });
             }
@@ -1319,6 +1460,9 @@ impl Connection {
     }
     /// Complete a header block: the stream's own, or one being thrown away.
     fn finish_block(&mut self, id: u32, end: bool) -> Result<Option<Event<'static>>> {
+        if let Some((promised, discard)) = self.promise.take() {
+            return self.finish_promise(id, promised, discard);
+        }
         let Some(disposal) = self.disposal.take() else {
             return self.finish_headers(id, end).map(Some);
         };
@@ -1333,6 +1477,45 @@ impl Connection {
             }
             Disposal::Unprocessed => Ok(Some(Event::Unprocessed { stream: id })),
             Disposal::Discard => Ok(None),
+        }
+    }
+    /// Complete a PUSH_PROMISE: reserve the promised stream, or decline it.
+    fn finish_promise(
+        &mut self,
+        id: u32,
+        promised: u32,
+        discard: bool,
+    ) -> Result<Option<Event<'static>>> {
+        let mut headers = Vec::new();
+        self.decoder.decode(&self.block, &mut headers)?;
+        if discard {
+            self.frame(3, 0, promised, &8u32.to_be_bytes())?;
+            return Ok(None);
+        }
+        validate_headers(&headers, true, false)?;
+        match self.add_stream(promised) {
+            Ok(i) => {
+                let s = &mut self.streams[i];
+                // The client never sends on a pushed stream.
+                s.local_end = true;
+                s.head_request = headers
+                    .iter()
+                    .any(|h| h.name == ":method" && h.value == b"HEAD");
+                self.last_remote = promised;
+                Ok(Some(Event::PushPromise {
+                    stream: id,
+                    promised,
+                    headers,
+                }))
+            }
+            Err(e) if e.code == "REFUSED_STREAM" => {
+                self.frame(3, 0, promised, &7u32.to_be_bytes())?;
+                Ok(Some(Event::Reset {
+                    stream: promised,
+                    code: 7,
+                }))
+            }
+            Err(e) => Err(e),
         }
     }
     fn finish_headers(&mut self, id: u32, end: bool) -> Result<Event<'static>> {

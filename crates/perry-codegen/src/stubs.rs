@@ -408,7 +408,11 @@ pub fn static_shape_seed_ll_with_plan(
                 atom_items.push(format!(
                     "{} {{ ptr @{atom}, i32 {slot}, i8 0, i8 0, i16 {} }}",
                     crate::layout_desc::KEY_TY,
-                    crate::target_layout::layout_key_off(&llmod.target_triple, slot as u32)
+                    crate::target_layout::layout_key_off(
+                        &llmod.target_triple,
+                        crate::target_layout::HeaderForm::Meta,
+                        slot as u32
+                    )
                 ));
                 key_records.push(record);
             }

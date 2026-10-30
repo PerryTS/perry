@@ -2,10 +2,11 @@
 //! declarations, so taking one member keeps identity without retaining siblings.
 use super::*;
 macro_rules! declarations {
-    ($(($spec:ident, $module:literal, $key:literal,
+    ($(($spec:ident, $module:literal, $key:literal, $bucket:ident,
         [$(($getter:ident, $name:literal, $($info:tt)*)),* $(,)?])),* $(,)?) => {
         $(pub(super) static $spec: SubmoduleSpec = SubmoduleSpec {
             key: $key,
+            bucket: SubmodBucket::$bucket,
             exports: &[$(&$getter::SPEC),*],
         };
         $(#[allow(non_snake_case)]
@@ -16,7 +17,7 @@ macro_rules! declarations {
             pub extern "C" fn $getter(observe_writes: i32) -> f64 {
                 crate::object::native_module::selected_native_export_value(
                     $module, $name, observe_writes != 0, || {
-                        selected_export($spec.key, &SPEC)
+                        selected_export(&$spec, &SPEC)
                     })
             }
         })*)*
@@ -25,7 +26,8 @@ macro_rules! declarations {
 perry_dispatch::native_submodule_exports!(declarations);
 
 #[inline(always)]
-fn selected_export(key: &'static str, export: &'static ExportSpec) -> f64 {
+fn selected_export(submod: &'static SubmoduleSpec, export: &'static ExportSpec) -> f64 {
+    let key = submod.key;
     if let Some(value) = special_export_value(key, export.name) {
         return value;
     }
@@ -35,19 +37,19 @@ fn selected_export(key: &'static str, export: &'static ExportSpec) -> f64 {
         }
     }
     // node:test's callable aliases have one declaration identity.
-    let name = if key == "test" {
+    let owner: &'static ExportSpec = if key == "test" {
         match export.name {
-            "default" | "test" | "it" => js_node_export_test_test::SPEC.name,
-            "suite" | "describe" => js_node_export_test_suite::SPEC.name,
-            _ => export.name,
+            "default" | "test" | "it" => &js_node_export_test_test::SPEC,
+            "suite" | "describe" => &js_node_export_test_suite::SPEC,
+            _ => export,
         }
     } else {
-        export.name
+        export
     };
     let ptr = ensure_selected_export(
-        key,
+        submod,
         export,
-        name,
+        owner,
         crate::object::native_module::constructor_shapes::nm_attach_readline,
     );
     f64::from_bits(JSValue::pointer(ptr.cast()).bits())

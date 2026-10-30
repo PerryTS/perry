@@ -201,6 +201,7 @@ pub(crate) fn is_known_global_identifier_name(name: &str) -> bool {
             | "DisposableStack"
             | "AsyncDisposableStack"
             | "SuppressedError"
+            | "Iterator"
             | "Proxy"
             | "Reflect"
             | "Uint8Array"

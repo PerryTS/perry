@@ -12,7 +12,7 @@
 # Exit 1 if a witness total is above main, or a function with +Ir is not listed in allow.txt
 # (one function name per line, '#' comments). A matched +/- pair from inlining is explained by
 # listing both names there.
-# Measurement controls are the accepted JST recipe (nightly/CW/STARTUP_RULE_2026-10-28.md): a minimal
+# Measurement controls (preload chain below: fixed inputs, maps shim, byte-loop string compares) follow the accepted JST recipe (nightly/CW/STARTUP_RULE_2026-10-28.md): a minimal
 # environment, the fixed-inputs preload (clock, entropy, /proc/self/maps normalization), ASLR off,
 # --cache-sim=no --branch-sim=no. IRDIFF_PRELOAD overrides the preload path.
 # IRDIFF_ONLY="hello commander_help" limits the run to those witnesses.
@@ -20,7 +20,7 @@
 # (fast_hash::AHashState); the fixed-inputs preload pins the entropy, so counts are layout-independent.
 # Each perry binary sits next to its runtime libs (PERRY_RUNTIME_DIR = dirname of the resolved
 # binary). Workspace roots: IRDIFF_WS_MAIN / IRDIFF_WS_HEAD (defaults /root/A1S0/main-src and
-# /root/A1S0/src). Witness roots: IRDIFF_SCORE (/root/hwp-move/score), IRDIFF_SAMPLES (/root/STU/samples),
+# /root/A1S0/src (arms need equal-length roots)). Witness roots: IRDIFF_SCORE (/root/hwp-move/score), IRDIFF_SAMPLES (/root/STU/samples),
 # IRDIFF_NSB (/root/NSB/jsc).
 set -u
 full=0; pos=()
@@ -30,14 +30,23 @@ ALLOW=${pos[3]:-/dev/null}
 SC=${IRDIFF_SCORE:-/root/hwp-move/score}; SAMPLES=${IRDIFF_SAMPLES:-/root/STU/samples}; NSB=${IRDIFF_NSB:-/root/NSB/jsc}
 WS_MAIN=${IRDIFF_WS_MAIN:-/root/A1S0/main-src}; WS_HEAD=${IRDIFF_WS_HEAD:-/root/A1S0/src}
 mkdir -p "$OUT/w" "$OUT/cg" "$OUT/tmp"; OUT=$(readlink -f "$OUT")
-PRELOAD=${IRDIFF_PRELOAD:-/root/JST/jst-cg/measurement/jst-fixed-inputs.so}
-[ -f "$PRELOAD" ] || { echo "missing measurement preload $PRELOAD" >&2; exit 2; }
+# Artifact controls (STARTUP_RULE_2026-10-28.md, addendum), applied to BOTH arms: the fixed-inputs preload
+# (clock, entropy, /proc/self/maps normalization), JAG10b's maps shim (std's stack-guard parse of
+# /proc/self/maps answers the main thread from the stack rlimit, so valgrind's mapping placement per arm
+# costs nothing) and the byte-loop string control (memcmp, bcmp, strcmp, strncmp, getenv, secure_getenv:
+# glibc avx2 compare cost follows rodata alignment). Each is overridable; all three must exist.
+FIXED=${IRDIFF_PRELOAD:-/root/JAG10/fixed-inputs.so}
+MAPS_SHIM=${IRDIFF_MAPS_SHIM:-/root/JAG10/tmp/stk-shim.so}
+STR_PLAIN=${IRDIFF_STR_PLAIN:-/root/IOV/ctl/str-plain.so}
+for f in "$FIXED" "$MAPS_SHIM" "$STR_PLAIN"; do [ -f "$f" ] || { echo "missing measurement preload $f" >&2; exit 2; }; done
+PRELOAD="$FIXED:$MAPS_SHIM:$STR_PLAIN"
 # minimal environment of both the compile and the run (same for both arms)
 ENVV=(PATH=/usr/lib/llvm-22/bin:/root/.cargo/bin:/usr/bin:/bin HOME="$HOME" LANG=C LC_ALL=C TZ=UTC LD_PRELOAD="$PRELOAD" PERRY_ALLOW_PERRY_FEATURES=1 TMPDIR="$OUT/tmp" NO_COLOR=1 PKG_BENCH_N=0 PKG_BENCH_WARM=0)
 
 # name|dir|source|args  (args are run as given; dir is the cwd of both compile and run)
 W=("hello|$SAMPLES|01-hello/main.ts|Perry"
    "commander_help|$SC/p/pk|commander/parse_argv.ts|--help"
+   "commander|$SC/p/pk|commander/parse_argv.ts|"
    "fastify_inject|$SC/p/pk|fastify/inject.ts|"
    "awfy_richards|$SC/p/awfy|harness.js|Richards 1 0"
    "binary_trees|$NSB|benches/23-binary-trees.ts|")
@@ -54,6 +63,24 @@ compile() { # arm perry ws name dir src
       "$perry" compile --cache-dir "$OUT/tmp/cache" "$s" -o "$OUT/w/$n" > "$OUT/cg/$n.$arm.compile.log" 2>&1 )
   local rc=$?; rm -rf "$OUT/tmp/cache"; return $rc
 }
+# per-function Ir of one callgrind run: fn<TAB>ir
+fn_ir() { # outfile
+  callgrind_annotate --auto=no --threshold=100 --show=Ir --show-percs=no --inclusive=no "$1" 2>/dev/null \
+    | awk '/^ *[0-9][0-9,]* +[^ ]/ { ir=$1; gsub(",","",ir); $1=""; sub(/^ +/,""); if ($0 ~ /PROGRAM TOTALS/) next
+             sub(/ \[[^]]*\]$/,""); i=index($0,":"); if (i>0) $0=substr($0,i+1); gsub(/::h[0-9a-f]{16}/,"")
+             if ($0 ~ /^0x[0-9a-f]+$/) $0="<unresolved address>"; a[$0]+=ir }
+           END { for (f in a) printf "%s\t%d\n", f, a[f] }'
+}
+# writes $OUT/cg/$n.$arm.unstable (fn<TAB>min<TAB>max<TAB>spread): functions whose Ir differs between the
+# runs of the same arm (work that depends on stack garbage, not on the code); they are excluded from the
+# per-function +row gate and listed in summary.tsv. The witness total gate is unchanged.
+unstable() { # arm name
+  local arm=$1 n=$2 i
+  for i in 1 2 3; do fn_ir "$OUT/cg/$n.$arm.$i.out" > "$OUT/cg/$n.$arm.$i.fn"; done
+  awk -F'\t' '{ if (!($1 in mn) || $2<mn[$1]) mn[$1]=$2; if (!($1 in mx) || $2>mx[$1]) mx[$1]=$2; seen[$1]++ }
+       END { for (f in mn) if (mx[f]!=mn[f] || seen[f]!=3) printf "%s\t%d\t%d\t%d\n", f, mn[f], mx[f], mx[f]-mn[f] }' \
+    "$OUT/cg/$n.$arm.1.fn" "$OUT/cg/$n.$arm.2.fn" "$OUT/cg/$n.$arm.3.fn" | sort > "$OUT/cg/$n.$arm.unstable"
+}
 # prints "total" and writes $OUT/cg/$n.$arm.fn (fn<TAB>ir)
 measure() { # arm name dir args
   local arm=$1 n=$2 d=$3 a=$4 totals=() i
@@ -61,13 +88,10 @@ measure() { # arm name dir args
     ( cd "$d"; ulimit -v 8000000; timeout 900 env -i "${ENVV[@]}" setarch x86_64 -R valgrind --tool=callgrind --cache-sim=no --branch-sim=no --callgrind-out-file="$OUT/cg/$n.$arm.$i.out" "$OUT/w/$n" $a > /dev/null 2> "$OUT/cg/$n.$arm.$i.log" )
     totals+=("$(grep -o 'Collected : [0-9]*' "$OUT/cg/$n.$arm.$i.log" | grep -o '[0-9]*$')")
   done
+  unstable "$arm" "$n"
   if [ -z "${totals[0]}" ] || [ "${totals[0]}" != "${totals[1]}" ] || [ "${totals[0]}" != "${totals[2]}" ]; then
-    echo "NONDETERMINISTIC $n $arm: ${totals[*]}" >&2; return 1; fi
-  callgrind_annotate --auto=no --threshold=100 --show=Ir --show-percs=no --inclusive=no "$OUT/cg/$n.$arm.1.out" 2>/dev/null \
-    | awk '/^ *[0-9][0-9,]* +[^ ]/ { ir=$1; gsub(",","",ir); $1=""; sub(/^ +/,""); if ($0 ~ /PROGRAM TOTALS/) next
-             sub(/ \[[^]]*\]$/,""); i=index($0,":"); if (i>0) $0=substr($0,i+1); gsub(/::h[0-9a-f]{16}/,"")
-             if ($0 ~ /^0x[0-9a-f]+$/) $0="<unresolved address>"; a[$0]+=ir }
-           END { for (f in a) printf "%s\t%d\n", f, a[f] }' > "$OUT/cg/$n.$arm.fn"
+    echo "NONDETERMINISTIC $n $arm: ${totals[*]} (unstable functions: $(cut -f1,4 "$OUT/cg/$n.$arm.unstable" | tr '\t\n' ' ' | cut -c1-300))" >&2; return 1; fi
+  cp "$OUT/cg/$n.$arm.1.fn" "$OUT/cg/$n.$arm.fn"
   echo "${totals[0]}"
 }
 
@@ -85,11 +109,15 @@ for spec in "${W[@]}"; do
     "$OUT/cg/$n.main.fn" "$OUT/cg/$n.head.fn" | awk -F'\t' '$4!=0' | sort -t$'\t' -k4,4nr > "$OUT/$n.tsv"
   grep -v '^#' "$ALLOW" 2>/dev/null | sed '/^$/d' | sort -u > "$OUT/tmp/allow.$n"
   plus=$(awk -F'\t' '$4>0' "$OUT/$n.tsv" | wc -l)
-  bad=$(awk -F'\t' 'NR==FNR { ok[$0]; next } $4>0 && !($1 in ok)' "$OUT/tmp/allow.$n" "$OUT/$n.tsv" | wc -l)
+  cat "$OUT/cg/$n.main.unstable" "$OUT/cg/$n.head.unstable" | cut -f1 | sort -u > "$OUT/tmp/unst.$n"
+  # a +row is checked unless it is allowed or unstable; FILENAME (not NR==FNR) so an empty list does not pass vacuously
+  bad=$(awk -F'\t' 'FILENAME==ARGV[1] || FILENAME==ARGV[2] { ok[$0]; next } $4>0 && !($1 in ok)' "$OUT/tmp/allow.$n" "$OUT/tmp/unst.$n" "$OUT/$n.tsv" | wc -l)
+  for a in main head; do awk -F'\t' -v w="$n" -v a="$a" '{ printf "unstable\t%s\t%s\t%s\tspread=%d\n", w, a, $1, $4 }' "$OUT/cg/$n.$a.unstable" >> "$OUT/unstable.tsv"; done
   printf "%s\t%s\t%s\t%d\t%d\n" "$n" "$tm" "$th" $((th-tm)) "$plus" >> "$OUT/summary.tsv"
   [ "$th" -gt "$tm" ] && { echo "TOTAL ABOVE MAIN: $n (+$((th-tm)))"; fail=1; }
   [ "$bad" -gt 0 ] && { echo "UNEXPLAINED +Ir in $n: $bad functions (see $OUT/$n.tsv)"; fail=1; }
 done
+[ -f "$OUT/unstable.tsv" ] && cat "$OUT/unstable.tsv" >> "$OUT/summary.tsv"
 cat "$OUT/summary.tsv"
 echo "IRDIFF-DONE fail=$fail"
 exit $fail

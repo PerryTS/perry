@@ -340,6 +340,7 @@ extern "C" fn process_ipc_send_fn(
 }
 
 pub(crate) fn process_ipc_send_call_impl(message: f64, a2: f64, a3: f64, a4: f64) -> f64 {
+    crate::process::worker_restrictions::ensure_worker_operation_allowed("send");
     let callback = [a4, a3, a2].into_iter().find(|v| {
         JSValue::from_bits(v.to_bits()).is_pointer()
             && !crate::fs::extract_closure_ptr(*v).is_null()
@@ -352,6 +353,7 @@ pub(crate) fn process_ipc_send_call_impl(message: f64, a2: f64, a3: f64, a4: f64
 }
 
 pub(crate) fn process_ipc_disconnect_call_impl() -> f64 {
+    crate::process::worker_restrictions::ensure_worker_operation_allowed("disconnect");
     process_ipc_disconnect_local();
     undefined_value()
 }
