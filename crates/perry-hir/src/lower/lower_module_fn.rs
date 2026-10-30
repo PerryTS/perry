@@ -1027,7 +1027,10 @@ pub fn lower_module_full_with_platform_globals(
     // First pass: collect all function declarations (both exported and non-exported)
     // Skip 'declare function' statements (functions with no body) - they are external FFI
     // BUT: also skip overload signatures if an implementation exists
-    let reassigned_function_candidates = collect_assigned_function_binding_candidates(ast_module);
+    let mut reassigned_function_candidates =
+        collect_assigned_function_binding_candidates(ast_module);
+    reassigned_function_candidates
+        .extend(super::scoped_assignments::collect_scoped_assigned_identifiers(ast_module));
     let module_var_binding_names = collect_module_var_binding_names(ast_module);
     // #5833: a narrower, binding-aware-enough scan stashed on `ctx` so
     // `stmt.rs`'s top-level `Decl::Class` arm can gate its opt-in local-slot
