@@ -518,7 +518,17 @@ impl Model {
                 self.constructed.insert(f);
                 self.ctor_calls.insert(call);
                 match self.foreign_ctor[&f] {
-                    Some((n, _)) => self.edge(n, c.ret),
+                    Some((n, tm)) => {
+                        self.edge(n, c.ret);
+                        // Its owner's function may return an object: `new`
+                        // yields that value, which this unit cannot name.
+                        if self.foreign_ctor_returns.contains(&tm) {
+                            self.add_top(c.ret, |_| {
+                                "`new` of another unit's constructor function that returns an object"
+                                    .into()
+                            });
+                        }
+                    }
                     None => self.add_top(c.ret, |_| {
                         "instance of another unit's constructor function (layout not published)"
                             .into()

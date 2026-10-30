@@ -46,3 +46,25 @@ console.log("self", s.x, s instanceof Self);
 // in a function: the binding is read after a call
 function readX(): unknown { const b: any = new Direct(); return b.x; }
 console.log("fn", readX());
+
+// a constructor function returning an object (or its argument)
+function Fn(this: any, o: any): any { this.x = 5; return o; }
+const f1: any = new (Fn as any)({ z: 3 });
+console.log("fnobj", f1.x, f1.z, f1 instanceof (Fn as any));
+const f2: any = new (Fn as any)(7);
+console.log("fnprim", f2.x, f2 instanceof (Fn as any));
+
+// the other construct paths
+const r1: any = Reflect.construct(Fn as any, [{ z: 4 }]);
+console.log("reflect", r1.x, r1.z);
+const r2: any = Reflect.construct(Direct as any, []);
+console.log("reflectclass", r2.x, r2.z);
+const Bound: any = (Fn as any).bind(null, { z: 5 });
+const b1: any = new Bound();
+console.log("bound", b1.x, b1.z);
+const Expr = class { x = 5; constructor(o: any) { return o; } };
+const e1: any = new Expr({ z: 6 });
+console.log("clsexpr", e1.x, e1.z);
+class FromFn extends (Fn as any) { y = 1; constructor(o: any) { super(o); } }
+const s1: any = new FromFn({ z: 8 });
+console.log("superfn", s1.x, s1.z, s1.y);

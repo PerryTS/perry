@@ -1604,7 +1604,7 @@ pub(super) fn fn_inst_contract(
         birth_keys: atoms_of(g, &tpl.birth_keys),
         definite: atoms_of(g, &tpl.definite),
         ctor_leaks: true,
-                    ctor_returns: true,
+        ctor_returns: m.ctor_returns_object(f),
         binding_prim: 0,
         fn_inst: true,
     })
