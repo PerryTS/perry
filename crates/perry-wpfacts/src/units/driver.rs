@@ -352,6 +352,8 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         let mut published_fns: FxHashSet<String> = FxHashSet::default();
         let mut reports: FxHashSet<String> = FxHashSet::default();
         let mut work = 0u64;
+        // The units this round solves: only their shared writes can be new.
+        let mut solved: Vec<usize> = Vec::new();
         for level in &levels {
             // A unit over the bound keeps its result (`dependents`).
             for &si in level {
@@ -394,6 +396,7 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
                     }
                 }
                 per_unit[si] = Some(u);
+                solved.push(si);
                 shared_seen[si] = shared_rounds.len() - 1;
             }
             if cfg.report && !todo.is_empty() {
@@ -874,11 +877,19 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         }
         input.writes = writes;
         // The shared objects' writes (`model::SharedWrite`): last round's
-        // joined with every unit's latest, so they only grow (D16). When
+        // joined with every unit's latest, so they only grow (D16). Last
+        // round's already holds every other unit's writes, so joining the
+        // units this round solved is that join; a unit's writes are mostly
+        // the program's few shared ones, so only new ones are cloned. When
         // they grew, the units that can see a new one are solved again.
         let mut shared = input.shared.clone();
-        for u in per_unit.iter().flatten() {
-            shared.extend(u.shared_out.iter().cloned());
+        for &si in &solved {
+            let u = per_unit[si].as_ref().expect("every unit solved");
+            for w in &u.shared_out {
+                if !shared.contains(w) {
+                    shared.insert(w.clone());
+                }
+            }
         }
         shared_closure(&mut shared);
         if shared != input.shared {
