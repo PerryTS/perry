@@ -133,6 +133,7 @@ pub(crate) enum Route {
     Reflective,
     External,
     Buffer,
+    Unmodeled,
 }
 
 /// `E<n> ...` / `B<n> ...`: a numbered hard-escape (design E-codes) or
@@ -173,10 +174,19 @@ pub(crate) fn route(why: &str) -> Option<Route> {
             Route::Reflective
         } else if code(w, 'B') {
             Route::Buffer
-        } else if starts("node:module namespace")
+        } else if starts("node:module")
             || (starts("globalThis.") && w.ends_with("unmodeled code"))
+            || starts("process event handler")
+            || starts("FinalizationRegistry")
         {
             Route::External
+        } else if starts("class capture of an unnamed class expression")
+            || starts("untransformed yield")
+            || starts("super() outside a known class")
+            || starts("method registered on an unresolved class")
+            || starts("result of unmodeled HIR construct")
+        {
+            Route::Unmodeled
         } else if w.contains("unknown function")
             || w.contains("unknown constructor")
             || w.contains("from unmodeled code")
@@ -192,6 +202,8 @@ pub(crate) fn route(why: &str) -> Option<Route> {
             || starts("argument of a primitive method")
             || starts("argument of unmodeled runtime entry")
             || starts("argument of runtime glue")
+            || starts("result of unmodeled runtime entry")
+            || starts("result of runtime glue")
             || starts("Array.prototype method on an array-like")
             || starts("passed to an opaque builtin")
             || w.contains("of an opaque builtin function")
@@ -266,6 +278,7 @@ fn composite(origin: &str) -> Option<Unknown> {
         (Route::Reflective, _) => ReflectiveOperation,
         (Route::External, _) => ExternalInput,
         (Route::Buffer, _) => BufferAliasing,
+        (Route::Unmodeled, _) => UnmodeledConstruct,
         (Route::Unknown, Head::Param) => EscapedParameter,
         (Route::Unknown, Head::This) => EscapedThis,
         (Route::Unknown, Head::Field) => EscapedObjectField,
@@ -375,6 +388,7 @@ pub(crate) fn classify(origin: &str) -> Option<Unknown> {
                 Route::Reflective => ReflectiveOperation,
                 Route::External => ExternalInput,
                 Route::Buffer => BufferAliasing,
+                Route::Unmodeled => UnmodeledConstruct,
             });
         },
     )
@@ -409,6 +423,7 @@ pub(crate) fn verdict_cause(v: &crate::Verdict) -> Option<Result<Unknown, String
             Some(Route::Reflective) => ReflectiveOperation,
             Some(Route::External) => ExternalInput,
             Some(Route::Buffer) => BufferAliasing,
+            Some(Route::Unmodeled) => UnmodeledConstruct,
             None => return Some(Err(why.clone())),
         }
     } else if starts("hard: ") || starts("chain: ") {
