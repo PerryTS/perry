@@ -477,7 +477,11 @@ fn numeric_function<'a>(
         }
         _ => return None,
     };
-    ctx.wpfacts.numeric_functions.get(&id)
+    let f = ctx.wpfacts.numeric_functions.get(&id);
+    if f.is_some() {
+        crate::facts_consumed::used();
+    }
+    f
 }
 
 fn owner_proof<'a>(
@@ -488,10 +492,15 @@ fn owner_proof<'a>(
     if ctx.wpfacts_off || ctx.wpfacts.interp_guard {
         return None;
     }
-    ctx.wpfacts
+    let p = ctx
+        .wpfacts
         .indexed_owners
         .get(&id)
-        .filter(|p| p.kind == kind)
+        .filter(|p| p.kind == kind);
+    if p.is_some() {
+        crate::facts_consumed::used();
+    }
+    p
 }
 
 fn static_interval(ctx: &FnCtx<'_>, p: &Plan, e: &Expr, bound: i64) -> Option<(i64, i64)> {
@@ -1523,6 +1532,8 @@ pub(super) fn lower(
         ) || ctx.numeric_accumulator_f64_slots.contains_key(id);
         if !native_number && (ctx.wpfacts_off || !ctx.wpfacts.number_inputs.contains(id)) {
             branch_guard(ctx, &number, &slow_l);
+        } else if !native_number {
+            crate::facts_consumed::used();
         }
         values.insert(*id, Number::F(v));
     }
