@@ -30,6 +30,7 @@ mod for_in_keys;
 mod function_values;
 mod hub_tokens;
 mod indexed_owner;
+mod inherited_layout;
 mod layout_key;
 mod named_accessors;
 mod native_fs;
