@@ -1366,3 +1366,78 @@ fn generated_native_namespaces_compile_without_package_opt_ins() {
         }));
     }
 }
+
+#[test]
+fn package_aliases_apply_to_every_reexport_form() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let package_entry = |name: &str| {
+        let package = root.join("node_modules").join(name);
+        std::fs::create_dir_all(&package).expect("create package");
+        std::fs::write(
+            package.join("package.json"),
+            format!(r#"{{"name":"{name}","version":"1.0.0","main":"./index.js"}}"#),
+        )
+        .expect("write package json");
+        let index = package.join("index.js");
+        std::fs::write(&index, "exports.x = 1;\n").expect("write package entry");
+        index.canonicalize().unwrap()
+    };
+    let unaliased: Vec<_> = ["from-all", "from-named", "from-ns"]
+        .into_iter()
+        .map(package_entry)
+        .collect();
+    let aliased: Vec<_> = ["to-all", "to-named", "to-ns"]
+        .into_iter()
+        .map(package_entry)
+        .collect();
+    let untouched = package_entry("plain");
+
+    let entry = root.join("entry.ts");
+    std::fs::write(
+        &entry,
+        "export * from \"from-all\";\n\
+         export { x } from \"from-named\";\n\
+         export * as ns from \"from-ns\";\n\
+         export { x as plain } from \"plain\";\n",
+    )
+    .expect("write entry");
+
+    let mut ctx = CompilationContext::new(root.to_path_buf());
+    ctx.allow_compile_packages.push("*".to_string());
+    for (from, to) in [
+        ("from-all", "to-all"),
+        ("from-named", "to-named"),
+        ("from-ns", "to-ns"),
+    ] {
+        ctx.package_aliases.insert(from.to_string(), to.to_string());
+    }
+    ctx.entry_canonical = Some(entry.canonicalize().unwrap());
+    let mut visited = HashSet::new();
+    let mut next_class_id: perry_hir::ClassId = 1;
+    let progress = VerboseProgress::new(OutputFormat::Text, 0);
+    collect_modules(
+        &entry.to_path_buf(),
+        &mut ctx,
+        &mut visited,
+        OutputFormat::Text,
+        None,
+        &mut next_class_id,
+        false,
+        &progress,
+        None,
+    )
+    .expect("collect re-exports through aliased packages");
+
+    let collected = |path: &std::path::PathBuf| {
+        ctx.native_modules.contains_key(path)
+            || ctx.js_modules.values().any(|module| &module.path == path)
+    };
+    for path in &aliased {
+        assert!(collected(path), "aliased target not collected: {path:?}");
+    }
+    for path in &unaliased {
+        assert!(!collected(path), "unaliased package collected: {path:?}");
+    }
+    assert!(collected(&untouched), "non-aliased re-export source lost");
+}
