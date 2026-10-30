@@ -29,6 +29,13 @@ pub fn class_uses_this_as_value(
     class: &perry_hir::Class,
     classes: &std::collections::HashMap<String, &perry_hir::Class>,
 ) -> bool {
+    // A value-bearing `return` anywhere on the constructor chain (or a base the
+    // compiler cannot see) replaces `this` with a foreign object; the
+    // per-field allocas of scalar replacement would then answer reads for an
+    // object that never held them.
+    if crate::lower_call::ctor_chain_can_replace_this(classes, &class.name) {
+        return true;
+    }
     // Collect all instance fields from this class + parent chain so the
     // "is this.X a field?" check honors inheritance.
     let mut field_names: HashSet<String> = HashSet::new();

@@ -650,6 +650,11 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
                 .get(class_name.as_str())
                 .cloned()
                 .unwrap_or_else(|| class_name.clone());
+            // A constructor that returns a value yields an object whose layout
+            // is not the class's; the local keeps only the Object proof.
+            if crate::lower_call::ctor_chain_has_value_return(ctx.classes, &resolved) {
+                return Some(HirType::Object(Default::default()));
+            }
             Some(HirType::Named(resolved))
         }
         // Buffer / Uint8Array constructors all produce a Buffer instance.
