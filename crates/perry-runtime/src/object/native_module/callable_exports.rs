@@ -1282,7 +1282,8 @@ unsafe fn bound_native_callable_closure(
     // class/subclass/superclass-{arrow,async,generator,async-generator}-function.
     if !crate::closure::is_closure_ptr(closure as usize)
         || ((*closure).code() != crate::closure::BOUND_METHOD_FUNC_PTR
-            && (*(*closure).info).flags & crate::codegen_abi::FN_NATIVE_EXPORT == 0)
+            && crate::closure::closure_info(closure)
+                .is_none_or(|info| info.flags & crate::codegen_abi::FN_NATIVE_EXPORT == 0))
     {
         return None;
     }
