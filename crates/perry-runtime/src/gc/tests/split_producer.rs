@@ -68,14 +68,24 @@ fn split_into_large_result_births_young_parts_and_one_minor_frees_them() {
     );
     unsafe {
         for i in 0..LARGE_RESULT_PARTS {
-            assert!(is_young(part_ptr(arr, i) as usize), "part {i} is born young");
+            assert!(
+                is_young(part_ptr(arr, i) as usize),
+                "part {i} is born young"
+            );
         }
     }
-    assert_eq!(remembered_set_size(), 0, "young stores into a young result remember nothing");
+    assert_eq!(
+        remembered_set_size(),
+        0,
+        "young stores into a young result remember nothing"
+    );
 
     // Kept: one minor promotes the result at its address with its parts.
     let _ = collect_minor_trace(GcTriggerKind::Direct);
-    assert_eq!((js_shadow_slot_get(0) & POINTER_MASK) as usize, arr as usize);
+    assert_eq!(
+        (js_shadow_slot_get(0) & POINTER_MASK) as usize,
+        arr as usize
+    );
     assert_parts_intact(0, LARGE_RESULT_PARTS);
     js_shadow_slot_set(1, 0);
     js_gc_collect();
@@ -85,7 +95,10 @@ fn split_into_large_result_births_young_parts_and_one_minor_frees_them() {
     let source = split_source(LARGE_RESULT_PARTS);
     let dropped = split_on_space(source) as usize;
     let _ = collect_minor_trace(GcTriggerKind::Direct);
-    assert_eq!(crate::arena::classify_heap_space(dropped), crate::arena::HeapSpace::Unknown);
+    assert_eq!(
+        crate::arena::classify_heap_space(dropped),
+        crate::arena::HeapSpace::Unknown
+    );
     js_shadow_slot_set(0, 0);
 }
 
@@ -165,7 +178,10 @@ fn split_into_large_result_during_active_mark_survives() {
     assert!(is_young(arr as usize) && crate::arena::is_large_storage(arr as usize));
     unsafe {
         for i in 0..LARGE_RESULT_PARTS {
-            assert!(is_young(part_ptr(arr, i) as usize), "part {i} is born young");
+            assert!(
+                is_young(part_ptr(arr, i) as usize),
+                "part {i} is born young"
+            );
         }
     }
     let _ = collect_minor_trace(GcTriggerKind::Direct);

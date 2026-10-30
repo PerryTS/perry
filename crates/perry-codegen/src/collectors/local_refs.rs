@@ -54,6 +54,7 @@ pub fn expr_contains_local_get(e: &perry_hir::Expr, target_id: u32) -> bool {
             object,
             index,
             value,
+            ..
         } => {
             expr_contains_local_get(object, target_id)
                 || expr_contains_local_get(index, target_id)

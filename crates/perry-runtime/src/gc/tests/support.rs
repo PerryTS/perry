@@ -840,7 +840,11 @@ pub(super) unsafe fn promote_young_large<T>(p: *mut T) -> *mut T {
     register_global_root(root);
     let _ = collect_minor_trace(GcTriggerKind::Direct);
     GLOBAL_ROOTS.with(|roots| roots.borrow_mut().retain(|&r| r != root));
-    assert_eq!((*slot & POINTER_MASK) as usize, addr, "promoted at its address");
+    assert_eq!(
+        (*slot & POINTER_MASK) as usize,
+        addr,
+        "promoted at its address"
+    );
     assert!(crate::arena::pointer_in_old_gen(addr));
     p
 }

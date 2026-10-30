@@ -16,8 +16,9 @@ fn old_defrag_and_idle_compaction_never_select_large_or_byte_extents() {
         dead.push(crate::arena::arena_alloc_gc_old(56, 8, GC_TYPE_STRING) as usize);
         let mut extents = Vec::new();
         for obj_type in [GC_TYPE_STRING, GC_TYPE_BUFFER_ARRAY_BUFFER] {
-            let big = crate::arena::arena_alloc_gc_old(3 * crate::arena::BLOCK_SIZE + 64, 8, obj_type)
-                as usize;
+            let big =
+                crate::arena::arena_alloc_gc_old(3 * crate::arena::BLOCK_SIZE + 64, 8, obj_type)
+                    as usize;
             assert!(crate::arena::pointer_in_old_gen(big));
             extents.push(big);
             live.push(big);

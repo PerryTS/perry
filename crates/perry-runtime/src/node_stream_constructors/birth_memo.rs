@@ -131,8 +131,7 @@ unsafe fn plain_fields(obj: *mut ObjectHeader, names: &[&[u8]], write: bool) -> 
     }
     let keys = shape.keys_view();
     names.iter().all(|name| {
-        let Some(slot) =
-            crate::object::keys_find_property_slot_by_bytes(keys, keys.count(), name)
+        let Some(slot) = crate::object::keys_find_property_slot_by_bytes(keys, keys.count(), name)
         else {
             return true;
         };

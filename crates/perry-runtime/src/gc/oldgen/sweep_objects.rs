@@ -170,11 +170,12 @@ impl ArenaSweepObjectsState {
             if snapshot.data == 0 || snapshot.offset == 0 {
                 continue;
             }
-            let cleanup_reclaims_dead_block = if block_idx < self.resettable_general_n && !snapshot.large_storage {
-                !crate::arena::general_block_in_recent_window(block_idx)
-            } else {
-                survivors.contains(&block_idx) || block_idx >= self.old_block_start
-            };
+            let cleanup_reclaims_dead_block =
+                if block_idx < self.resettable_general_n && !snapshot.large_storage {
+                    !crate::arena::general_block_in_recent_window(block_idx)
+                } else {
+                    survivors.contains(&block_idx) || block_idx >= self.old_block_start
+                };
             if !cleanup_reclaims_dead_block {
                 continue;
             }
@@ -340,11 +341,12 @@ impl ArenaSweepObjectsState {
         let is_old = block_idx >= self.old_block_start;
         let general = block_idx < self.resettable_general_n && !self.large_block(block_idx);
         let age_bump = self.do_age_bump && general;
-        let from_space = general && crate::arena::block_in_copying_from_space(
-            block_idx,
-            self.resettable_general_n,
-            &self.active_survivor_blocks,
-        );
+        let from_space = general
+            && crate::arena::block_in_copying_from_space(
+                block_idx,
+                self.resettable_general_n,
+                &self.active_survivor_blocks,
+            );
         #[cfg(test)]
         let record_live = super::super::mark::block_skip::sabotage::get()
             & super::super::mark::block_skip::sabotage::FORGET_WHOLE_BLOCK_LIVE
@@ -548,7 +550,9 @@ impl ArenaSweepObjectsState {
 impl ArenaSweepObjectsState {
     #[inline(always)]
     fn large_block(&self, block_idx: usize) -> bool {
-        self.block_snapshots.get(block_idx).is_some_and(|s| s.large_storage)
+        self.block_snapshots
+            .get(block_idx)
+            .is_some_and(|s| s.large_storage)
     }
 
     unsafe fn keep_live_object(
@@ -585,7 +589,8 @@ impl ArenaSweepObjectsState {
                 block_idx,
                 self.resettable_general_n,
                 &self.active_survivor_blocks,
-            ) && !self.large_block(block_idx) {
+            ) && !self.large_block(block_idx)
+            {
                 self.arena_live_from_space_bytes =
                     self.arena_live_from_space_bytes.saturating_add(size);
             }

@@ -898,6 +898,8 @@ fn collect_module_one(
                 }),
                 property: "Bun".to_string(),
                 value: Box::new(perry_hir::Expr::NativeModuleRef("bun".to_string())),
+                byte_offset: 0,
+                byte_end: 0,
             }),
         );
         // #10360: tell the runtime too, for Web APIs whose Bun behavior

@@ -27,9 +27,7 @@
 //! The bit is set-only. Old-generation page accounting counts never-move
 //! bytes as pinned bytes, so defragmentation selection skips their pages
 //! instead of selecting a block it then has to decline.
-use super::types::{
-    GcHeader, GC_HEADER_SIZE, OBJ_FLAG_MEMO_NAMED, OBJ_FLAG_NEVER_MOVE,
-};
+use super::types::{GcHeader, GC_HEADER_SIZE, OBJ_FLAG_MEMO_NAMED, OBJ_FLAG_NEVER_MOVE};
 
 /// Does this header word say "never moves once old"?
 #[inline(always)]
@@ -77,7 +75,9 @@ pub(crate) unsafe fn blocks_evacuation(header: *const GcHeader) -> bool {
 /// `addr` is a live `GC_TYPE_OBJECT` user pointer.
 pub(crate) unsafe fn request_never_move(addr: usize) {
     let header = (addr - GC_HEADER_SIZE) as *mut GcHeader;
-    if crate::gc_type_is_not_object!((*header).obj_type) || (*header)._reserved & OBJ_FLAG_NEVER_MOVE != 0 {
+    if crate::gc_type_is_not_object!((*header).obj_type)
+        || (*header)._reserved & OBJ_FLAG_NEVER_MOVE != 0
+    {
         return;
     }
     // GC_STORE_AUDIT(POINTER_FREE): a scalar header classification bit.

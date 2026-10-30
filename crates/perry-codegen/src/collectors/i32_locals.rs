@@ -1423,6 +1423,7 @@ pub fn collect_localset_ids_in_expr_filtered(
             object,
             index,
             value,
+            ..
         } => {
             walk(object, out);
             walk(index, out);

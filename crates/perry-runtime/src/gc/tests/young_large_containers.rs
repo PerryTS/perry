@@ -45,20 +45,31 @@ fn large_array_is_born_young_large_and_dies_at_the_next_minor() {
         let p = arr as usize;
         let header = header_from_user_ptr(p as *const u8);
         let total = (*header).size as usize;
-        assert_eq!(crate::arena::classify_heap_generation(p), HeapGeneration::Nursery);
+        assert_eq!(
+            crate::arena::classify_heap_generation(p),
+            HeapGeneration::Nursery
+        );
         assert!(crate::arena::is_large_storage(p));
         assert_eq!((*header).gc_flags & GC_FLAG_TENURED, 0);
         assert!(crate::arena::young_large_containers_exist());
         let child = small_array();
         crate::array::js_array_set_f64_extend(arr, 0, f64::from_bits(ptr_bits(child as usize)));
-        assert_eq!(remembered_set_size(), 0, "a young parent owes no remembered entry");
+        assert_eq!(
+            remembered_set_size(),
+            0,
+            "a young parent owes no remembered entry"
+        );
         let trace = collect_minor_trace(GcTriggerKind::Direct);
         assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
         assert!(trace.sweep.freed_bytes >= total as u64);
         assert_eq!(crate::arena::classify_heap_space(p), HeapSpace::Unknown);
         assert_eq!(crate::arena::young_large_in_use_bytes(), 0);
         assert!(!crate::arena::young_large_containers_exist());
-        assert_eq!(remembered_set_size(), 0, "nothing keeps the dead child alive");
+        assert_eq!(
+            remembered_set_size(),
+            0,
+            "nothing keeps the dead child alive"
+        );
     })
     .join()
     .unwrap();
@@ -76,14 +87,28 @@ fn live_large_array_is_promoted_by_identity_and_remembers_its_young_child() {
         crate::array::js_array_set_f64_extend(arr, 0, f64::from_bits(ptr_bits(child as usize)));
         let trace = collect_minor_trace(GcTriggerKind::Direct);
         assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
-        assert_eq!((js_shadow_slot_get(0) & POINTER_MASK) as usize, p, "never moved");
-        assert_eq!(crate::arena::classify_heap_generation(p), HeapGeneration::Old);
+        assert_eq!(
+            (js_shadow_slot_get(0) & POINTER_MASK) as usize,
+            p,
+            "never moved"
+        );
+        assert_eq!(
+            crate::arena::classify_heap_generation(p),
+            HeapGeneration::Old
+        );
         assert!(crate::arena::is_large_storage(p));
         let header = header_from_user_ptr(p as *const u8);
         assert_ne!((*header).gc_flags & GC_FLAG_TENURED, 0);
-        assert_eq!((*header).gc_flags & GC_FLAG_MARKED, 0, "promotion clears its mark");
+        assert_eq!(
+            (*header).gc_flags & GC_FLAG_MARKED,
+            0,
+            "promotion clears its mark"
+        );
         let moved = slot_value(arr, 0);
-        assert_ne!(moved, child as usize, "the small child moved and its slot was rewritten");
+        assert_ne!(
+            moved, child as usize,
+            "the small child moved and its slot was rewritten"
+        );
         assert_eq!(crate::array::js_array_get_f64(moved as *mut _, 0), 42.0);
         if crate::arena::pointer_in_nursery(moved) {
             let slot = crate::array::array_elements_ptr(arr) as usize;
@@ -96,7 +121,10 @@ fn live_large_array_is_promoted_by_identity_and_remembers_its_young_child() {
         let _ = collect_minor_trace(GcTriggerKind::Direct);
         let again = slot_value(arr, 0);
         assert_eq!(crate::array::js_array_get_f64(again as *mut _, 0), 42.0);
-        assert_eq!(crate::arena::classify_heap_generation(p), HeapGeneration::Old);
+        assert_eq!(
+            crate::arena::classify_heap_generation(p),
+            HeapGeneration::Old
+        );
     })
     .join()
     .unwrap();
@@ -118,7 +146,10 @@ fn old_parent_retains_young_large_array_and_a_later_full_reclaims_it() {
         assert!(remembered_child_needs_tracking(p));
         let _ = collect_minor_trace(GcTriggerKind::Direct);
         assert_eq!((*elements & POINTER_MASK) as usize, p);
-        assert_eq!(crate::arena::classify_heap_generation(p), HeapGeneration::Old);
+        assert_eq!(
+            crate::arena::classify_heap_generation(p),
+            HeapGeneration::Old
+        );
         let kept = slot_value(arr, 7);
         assert_eq!(crate::array::js_array_get_f64(kept as *mut _, 0), 42.0);
         *elements = 0;
@@ -146,12 +177,25 @@ fn growth_past_the_cutoff_forwards_into_young_large_storage() {
         let grown = crate::array::js_array_grow(source, LARGE_CAPACITY);
         let g = grown as usize;
         assert_ne!(g, source as usize);
-        assert_eq!(crate::arena::classify_heap_generation(g), HeapGeneration::Nursery);
-        assert!(crate::arena::is_large_storage(g), "a young source grows into young large storage");
+        assert_eq!(
+            crate::arena::classify_heap_generation(g),
+            HeapGeneration::Nursery
+        );
+        assert!(
+            crate::arena::is_large_storage(g),
+            "a young source grows into young large storage"
+        );
         let trace = collect_minor_trace(GcTriggerKind::Direct);
         assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
-        assert_eq!((js_shadow_slot_get(0) & POINTER_MASK) as usize, g, "root rewritten past the stub");
-        assert_eq!(crate::arena::classify_heap_generation(g), HeapGeneration::Old);
+        assert_eq!(
+            (js_shadow_slot_get(0) & POINTER_MASK) as usize,
+            g,
+            "root rewritten past the stub"
+        );
+        assert_eq!(
+            crate::arena::classify_heap_generation(g),
+            HeapGeneration::Old
+        );
         let kept = slot_value(grown, 1);
         assert_eq!(crate::array::js_array_get_f64(kept as *mut _, 0), 42.0);
         // A young large source grows young again, and its stub dies at the minor.
@@ -159,11 +203,20 @@ fn growth_past_the_cutoff_forwards_into_young_large_storage() {
         let big = large_array();
         js_shadow_slot_set(0, ptr_bits(big as usize));
         let bigger = crate::array::js_array_grow(big, 2 * LARGE_CAPACITY) as usize;
-        assert_eq!(crate::arena::classify_heap_generation(bigger), HeapGeneration::Nursery);
+        assert_eq!(
+            crate::arena::classify_heap_generation(bigger),
+            HeapGeneration::Nursery
+        );
         let _ = collect_minor_trace(GcTriggerKind::Direct);
         assert_eq!((js_shadow_slot_get(0) & POINTER_MASK) as usize, bigger);
-        assert_eq!(crate::arena::classify_heap_space(big as usize), HeapSpace::Unknown);
-        assert_eq!(crate::arena::classify_heap_generation(bigger), HeapGeneration::Old);
+        assert_eq!(
+            crate::arena::classify_heap_space(big as usize),
+            HeapSpace::Unknown
+        );
+        assert_eq!(
+            crate::arena::classify_heap_generation(bigger),
+            HeapGeneration::Old
+        );
     })
     .join()
     .unwrap();
@@ -180,7 +233,10 @@ fn full_collection_promotes_a_young_container_and_remembers_its_young_child() {
         let child = small_array();
         crate::array::js_array_set_f64_extend(arr, 3, f64::from_bits(ptr_bits(child as usize)));
         full_collection();
-        assert_eq!(crate::arena::classify_heap_generation(p), HeapGeneration::Old);
+        assert_eq!(
+            crate::arena::classify_heap_generation(p),
+            HeapGeneration::Old
+        );
         let after = slot_value(arr, 3);
         if crate::arena::pointer_in_nursery(after) {
             let slot = crate::array::array_elements_ptr(arr) as usize + 3 * 8;
@@ -204,11 +260,21 @@ fn weak_ref_to_a_dead_young_large_array_is_cleared_by_the_minor() {
         let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
         let arr = large_array();
         let p = arr as usize;
-        let mut collector = CopyingNurseryCollector::new::<{ cfg!(test) }>(CopyingPointerSet::new());
-        assert_eq!(collector.ptrs.classify(p).unwrap().kind, CopyingPointerKind::YoungLarge);
-        assert!(crate::weakref::weak_target_should_clear_copied(ptr_bits(p), &collector.ptrs));
+        let mut collector =
+            CopyingNurseryCollector::new::<{ cfg!(test) }>(CopyingPointerSet::new());
+        assert_eq!(
+            collector.ptrs.classify(p).unwrap().kind,
+            CopyingPointerKind::YoungLarge
+        );
+        assert!(crate::weakref::weak_target_should_clear_copied(
+            ptr_bits(p),
+            &collector.ptrs
+        ));
         assert_eq!(collector.mark_addr::<{ cfg!(test) }>(p), Some(p));
-        assert!(!crate::weakref::weak_target_should_clear_copied(ptr_bits(p), &collector.ptrs));
+        assert!(!crate::weakref::weak_target_should_clear_copied(
+            ptr_bits(p),
+            &collector.ptrs
+        ));
         collector.drain::<{ cfg!(test) }>();
         collector.clear_marks();
     })

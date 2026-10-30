@@ -975,6 +975,17 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         };
         // The program's writes of the shared objects: every unit's, joined.
         pf.shared_out = input.shared.iter().cloned().collect();
+        if cfg.diagnostics {
+            let walked: Vec<(&str, &Module)> = sorted
+                .iter()
+                .zip(&flats)
+                .map(|(&(p, m), f)| (p, f.as_ref().unwrap_or(m)))
+                .collect();
+            pf.diagnostics.push((
+                "<census>".into(),
+                crate::ledger::census(&walked, &pf.diagnostic_sites),
+            ));
+        }
         return pf;
     }
 }
@@ -1527,6 +1538,7 @@ pub(super) fn merge_unit(
         t.id = pf.templates.len() as crate::model::TmplId;
         pf.templates.push(t);
     }
+    pf.diagnostic_sites.extend(u.diagnostic_sites);
     pf.diagnostics.extend(
         u.diagnostics
             .into_iter()

@@ -595,7 +595,8 @@ impl Serializer {
         let num_fields = crate::object::object_live_slot_count(obj);
         let alloc_limit = std::cmp::max(num_fields, crate::object::INLINE_SLOT_FLOOR as u32);
         // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
-        let fields_ptr = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)) as *const f64;
+        let fields_ptr =
+            crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)) as *const f64;
         let mut count = 0u64;
         for f in 0..keys_len {
             let key = crate::array::js_array_get_f64(keys_arr, f);

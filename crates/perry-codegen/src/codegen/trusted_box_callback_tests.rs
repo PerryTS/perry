@@ -602,6 +602,8 @@ fn versioned_callback_selector_rejects_calls_and_heap_writes() {
             object: Box::new(Expr::LocalGet(30)),
             property: "x".to_string(),
             value: Box::new(Expr::Integer(1)),
+            byte_offset: 0,
+            byte_end: 0,
         })],
     ] {
         let rejected = callback_with(

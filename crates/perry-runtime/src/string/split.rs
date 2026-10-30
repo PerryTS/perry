@@ -24,7 +24,11 @@ unsafe fn store_split_string(arr: *mut ArrayHeader, index: usize, string: *mut S
     // GC_STORE_AUDIT(BARRIERED): split result string slot is followed by a runtime write barrier.
     std::ptr::write(elements_ptr.add(index), f64::from_bits(value_bits));
     if crate::gc::newborn_parent_needs_barrier(arr as usize) {
-        crate::gc::runtime_write_barrier_slot(arr as usize, elements_ptr.add(index) as usize, value_bits);
+        crate::gc::runtime_write_barrier_slot(
+            arr as usize,
+            elements_ptr.add(index) as usize,
+            value_bits,
+        );
     }
     // The all-pointer layout only covers the initialized prefix. Publish this
     // element after the write and barrier, before the next allocation can run
@@ -634,8 +638,8 @@ fn split_by_delimiter(s: *const StringHeader, delimiter: &str, limit: i32) -> *m
                 match crate::string::string_storage_alloc_no_collect(byte_len) {
                     Some(allocated) => (allocated, s_cur, arr_cur),
                     None => {
-                        let (((sh, data_ptr), s_now), arr_now) =
-                            arr_handle.across_mut::<ArrayHeader, _>(|| {
+                        let (((sh, data_ptr), s_now), arr_now) = arr_handle
+                            .across_mut::<ArrayHeader, _>(|| {
                                 s_handle.across_const::<StringHeader, _>(|| {
                                     string_storage_alloc(byte_len)
                                 })

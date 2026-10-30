@@ -50,6 +50,8 @@ fn anon_shape(id: u32, name: &str, ctor_id: u32, param_base: u32) -> Class {
                 object: Box::new(Expr::This),
                 property: p.name.clone(),
                 value: Box::new(Expr::LocalGet(p.id)),
+                byte_offset: 0,
+                byte_end: 0,
             })
         })
         .collect();
@@ -118,6 +120,8 @@ fn method(func_id: u32, is_arrow: bool, is_strict: bool) -> Expr {
                 object: Box::new(Expr::This),
                 property: "a".to_string(),
                 value: Box::new(Expr::String("s".to_string())),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(Expr::Binary {
                 op: BinaryOp::Add,

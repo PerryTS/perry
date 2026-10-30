@@ -608,6 +608,8 @@ mod tests {
                 object: Box::new(Expr::LocalGet(1)),
                 index: Box::new(Expr::Integer(0)),
                 value: Box::new(value),
+                byte_offset: 0,
+                byte_end: 0,
             })],
             is_async: false,
             is_generator: false,

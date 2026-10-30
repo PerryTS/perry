@@ -246,10 +246,14 @@ pub(crate) fn owned_space(addr: usize) -> Option<(HeapSpace, usize, *mut u64)> {
 pub(crate) fn owned_storage(addr: usize) -> Option<(HeapSpace, usize, *mut u64, bool)> {
     let (d, word) = owned_descriptor(addr)?;
     let space = decode_space(word);
-    (space != HeapSpace::Unknown).then(|| (
-        space, d.base.load(SeqCst), d.starts.load(SeqCst) as *mut u64,
-        (word >> 8) & 15 == 3,
-    ))
+    (space != HeapSpace::Unknown).then(|| {
+        (
+            space,
+            d.base.load(SeqCst),
+            d.starts.load(SeqCst) as *mut u64,
+            (word >> 8) & 15 == 3,
+        )
+    })
 }
 
 pub(crate) fn owned_uniform_generation(base: usize, end: usize) -> Option<HeapGeneration> {
@@ -471,7 +475,11 @@ pub(crate) fn set_space(base: usize, len: usize, space: HeapSpace, starts: Optio
 }
 
 pub(crate) fn set_space_with_kind(
-    base: usize, len: usize, space: HeapSpace, starts: Option<usize>, explicit_kind: Option<Kind>,
+    base: usize,
+    len: usize,
+    space: HeapSpace,
+    starts: Option<usize>,
+    explicit_kind: Option<Kind>,
 ) -> bool {
     let Some(r) = existing() else {
         return false;

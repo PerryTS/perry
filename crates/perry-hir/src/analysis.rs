@@ -828,6 +828,8 @@ fn remap_with_propagation(
                 object: Box::new(Expr::This),
                 property,
                 value,
+                byte_offset: 0,
+                byte_end: 0,
             },
             CaptureWriteTarget::Env {
                 class_name,
@@ -1185,6 +1187,7 @@ fn replace_this_in_expr(expr: &mut Expr, this_id: LocalId) {
             object,
             index,
             value,
+            ..
         } => {
             replace_this_in_expr(object, this_id);
             replace_this_in_expr(index, this_id);

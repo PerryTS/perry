@@ -614,6 +614,8 @@ fn assign_prepared_target(
             value: Box::new(value),
             receiver: Box::new(object),
             strict: ctx.current_strict,
+            byte_offset: 0,
+            byte_end: 0,
         })]),
         PreparedTarget::Index { object, index } => Ok(vec![Stmt::Expr(Expr::PutValueSet {
             target: Box::new(object.clone()),
@@ -621,6 +623,8 @@ fn assign_prepared_target(
             value: Box::new(value),
             receiver: Box::new(object),
             strict: ctx.current_strict,
+            byte_offset: 0,
+            byte_end: 0,
         })]),
         PreparedTarget::Array(arr) => {
             let mut setup = Vec::new();

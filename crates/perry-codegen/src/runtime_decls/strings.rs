@@ -67,7 +67,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     for n in 2..=5 {
         module.declare_function(&format!("js_string_concat_parts_{n}"), I64, &[I64]);
     }
-    module.declare_function("js_string_concat_lit_value_box", DOUBLE, &[I64, I64, DOUBLE]);
+    module.declare_function(
+        "js_string_concat_lit_value_box",
+        DOUBLE,
+        &[I64, I64, DOUBLE],
+    );
     module.declare_function("js_to_primitive_default_for_add", DOUBLE, &[DOUBLE]);
     module.declare_function("js_add_throw_if_symbol", VOID, &[DOUBLE]);
     // Self-append variant of the N-way chain. The first part is the binding's

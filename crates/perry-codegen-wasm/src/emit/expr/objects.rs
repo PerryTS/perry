@@ -181,6 +181,7 @@ impl<'a> FuncEmitCtx<'a> {
                 object,
                 property,
                 value,
+                ..
             } => {
                 self.emit_expr(func, object);
                 let key_id = self
@@ -276,6 +277,7 @@ impl<'a> FuncEmitCtx<'a> {
                 object,
                 index,
                 value,
+                ..
             } => {
                 self.emit_frame_begin(func, 3);
                 self.emit_store_arg(func, 0, object);

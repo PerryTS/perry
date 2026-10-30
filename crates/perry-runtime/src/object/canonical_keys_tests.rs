@@ -430,10 +430,22 @@ fn batch_prune_orphans_children_before_reusing_ids() {
     assert!(!table.edges.contains_key(&(reused_parent, 20)));
     // A live child keeps its own identity: its node still validates for
     // exactly its `(backing, count)`, and a reused id never answers for it.
-    assert_eq!(validated_node(&table, 2 as *const ArrayHeader, 2, child), Some(child));
-    assert_eq!(validated_node(&table, 4 as *const ArrayHeader, 2, sibling), Some(sibling));
-    assert_eq!(validated_node(&table, 3 as *const ArrayHeader, 2, reused_child), None);
-    assert_eq!(validated_node(&table, 1 as *const ArrayHeader, 1, reused_parent), None);
+    assert_eq!(
+        validated_node(&table, 2 as *const ArrayHeader, 2, child),
+        Some(child)
+    );
+    assert_eq!(
+        validated_node(&table, 4 as *const ArrayHeader, 2, sibling),
+        Some(sibling)
+    );
+    assert_eq!(
+        validated_node(&table, 3 as *const ArrayHeader, 2, reused_child),
+        None
+    );
+    assert_eq!(
+        validated_node(&table, 1 as *const ArrayHeader, 1, reused_parent),
+        None
+    );
     table.free_nodes(&[child, sibling, grandchild, reused_child, reused_parent]);
     assert!(table.edges.is_empty());
     assert_eq!(table.published_count(), 0);
@@ -882,18 +894,39 @@ fn a_freed_and_reused_node_never_answers_for_its_old_list() {
     let _lock = crate::gc::global_side_table_test_lock();
     let mut table = CanonicalTable::new();
     let old = table.alloc_node(0x1000, ROOT_NODE, 11, 1, true, true);
-    assert_eq!(validated_node(&table, 0x1000 as *const ArrayHeader, 1, old), Some(old));
+    assert_eq!(
+        validated_node(&table, 0x1000 as *const ArrayHeader, 1, old),
+        Some(old)
+    );
     table.free_nodes(&[old]);
-    assert_eq!(validated_node(&table, 0x1000 as *const ArrayHeader, 1, old), None);
+    assert_eq!(
+        validated_node(&table, 0x1000 as *const ArrayHeader, 1, old),
+        None
+    );
     let reused = table.alloc_node(0x2000, ROOT_NODE, 12, 1, true, true);
     assert_eq!(reused, old, "premise: the free list hands the id back");
-    assert_eq!(validated_node(&table, 0x1000 as *const ArrayHeader, 1, old), None);
-    assert_eq!(validated_node(&table, 0x2000 as *const ArrayHeader, 2, reused), None);
-    assert_eq!(validated_node(&table, 0x2000 as *const ArrayHeader, 1, reused), Some(reused));
+    assert_eq!(
+        validated_node(&table, 0x1000 as *const ArrayHeader, 1, old),
+        None
+    );
+    assert_eq!(
+        validated_node(&table, 0x2000 as *const ArrayHeader, 2, reused),
+        None
+    );
+    assert_eq!(
+        validated_node(&table, 0x2000 as *const ArrayHeader, 1, reused),
+        Some(reused)
+    );
     // An unpublished witness does not answer either (rewitness).
     table.rewitness(reused, 0x3000);
-    assert_eq!(validated_node(&table, 0x2000 as *const ArrayHeader, 1, reused), None);
-    assert_eq!(validated_node(&table, 0x3000 as *const ArrayHeader, 1, reused), None);
+    assert_eq!(
+        validated_node(&table, 0x2000 as *const ArrayHeader, 1, reused),
+        None
+    );
+    assert_eq!(
+        validated_node(&table, 0x3000 as *const ArrayHeader, 1, reused),
+        None
+    );
     table.free_nodes(&[reused]);
 }
 
@@ -920,7 +953,10 @@ fn a_symbol_edge_hashes_its_serial_not_its_address() {
         let here = Appended::Slot(at(sym)).slot_hash();
         let there = Appended::Slot(at(&moved.symbol)).slot_hash();
         assert_ne!(sym as usize, &moved.symbol as *const _ as usize);
-        assert_eq!(here, there, "a symbol's edge must not depend on where it lives");
+        assert_eq!(
+            here, there,
+            "a symbol's edge must not depend on where it lives"
+        );
         // A hole keeps its constant word's hash.
         let hole = JSValue::from_bits(crate::value::TAG_HOLE);
         assert_eq!(

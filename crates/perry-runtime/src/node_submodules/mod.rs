@@ -812,8 +812,8 @@ fn ensure_selected_export(
     with_submod_slots_mut(|slots| {
         slots[bucket]
             .exports
-            .get_or_insert_with(|| Box::new(vec![std::ptr::null_mut(); slot.count]))
-            [ordinal] = allocated;
+            .get_or_insert_with(|| Box::new(vec![std::ptr::null_mut(); slot.count]))[ordinal] =
+            allocated;
     });
     ANY_SINGLETON_ALLOCATED.store(1, Ordering::Release);
     allocated

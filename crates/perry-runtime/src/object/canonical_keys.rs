@@ -608,7 +608,10 @@ impl CanonicalTable {
     /// used to hold).
     #[cfg(test)]
     fn published_count(&self) -> usize {
-        self.nodes.iter().filter(|n| n.published && n.addr != 0).count()
+        self.nodes
+            .iter()
+            .filter(|n| n.published && n.addr != 0)
+            .count()
     }
 
     fn alloc_node(
@@ -666,8 +669,11 @@ impl CanonicalTable {
     #[inline]
     fn share_backing_owner(&mut self, id: u32, parent: u32) {
         let inherited = self.shapes[parent as usize].backing_owner;
-        self.shapes[id as usize].backing_owner =
-            if inherited == NO_NODE { parent } else { inherited };
+        self.shapes[id as usize].backing_owner = if inherited == NO_NODE {
+            parent
+        } else {
+            inherited
+        };
     }
 
     /// Turn a validation-only prefix into an independently owned keys list.
@@ -1154,7 +1160,12 @@ fn edge_hash_with_entry(hash: u64, entry: u64) -> u64 {
 /// answered; a node pruned, rewitnessed or reused for another list since the
 /// holder learned it answers `None`.
 #[inline]
-fn validated_node(t: &CanonicalTable, arr: *const ArrayHeader, count: u32, node: u32) -> Option<u32> {
+fn validated_node(
+    t: &CanonicalTable,
+    arr: *const ArrayHeader,
+    count: u32,
+    node: u32,
+) -> Option<u32> {
     let n = t.nodes.get(node as usize)?;
     (n.published && n.addr == arr as usize && n.len == count).then_some(node)
 }
@@ -1238,9 +1249,11 @@ unsafe fn probe(
     with_table_or(None, |t| {
         let id = probe_node(t, node_of(t, parent)?, parent_len, appended, entry, h)?;
         let node = &t.nodes[id as usize];
-        let hit = node
-            .published
-            .then_some(CanonicalKeys::new(node.addr as *mut ArrayHeader, node.len, id));
+        let hit = node.published.then_some(CanonicalKeys::new(
+            node.addr as *mut ArrayHeader,
+            node.len,
+            id,
+        ));
         if hit.is_some() {
             t.note_reached(id);
         }
@@ -1275,9 +1288,11 @@ pub(crate) unsafe fn probe_born_layout(
             })?;
         }
         let node = &t.nodes[parent as usize];
-        let hit = node
-            .published
-            .then_some(CanonicalKeys::new(node.addr as *mut ArrayHeader, node.len, parent));
+        let hit = node.published.then_some(CanonicalKeys::new(
+            node.addr as *mut ArrayHeader,
+            node.len,
+            parent,
+        ));
         if hit.is_some() {
             t.note_reached(parent);
         }
@@ -1824,9 +1839,11 @@ unsafe fn find_canonical(
             parent = probe_node(t, parent, i, slot, entry, slot.edge_hash(entry))?;
         }
         let node = &t.nodes[parent as usize];
-        let hit = node
-            .published
-            .then_some(CanonicalKeys::new(node.addr as *mut ArrayHeader, node.len, parent));
+        let hit = node.published.then_some(CanonicalKeys::new(
+            node.addr as *mut ArrayHeader,
+            node.len,
+            parent,
+        ));
         // A declared whole list is not one receiver's growth. The list this
         // very array already spells at this count is the holder's own: it
         // arrives nowhere new.
@@ -2119,7 +2136,9 @@ pub(crate) fn with_backing_shapes<R>(
 /// Every list's shape state with its backing address, in node order. The
 /// shape table's collector walk and census read families through this; `f`
 /// must not reach the trie.
-pub(crate) fn for_each_list_shapes(mut f: impl FnMut(u32, usize, &mut crate::object::shapes::ListShapes)) {
+pub(crate) fn for_each_list_shapes(
+    mut f: impl FnMut(u32, usize, &mut crate::object::shapes::ListShapes),
+) {
     try_with_table(|t| {
         for id in 0..t.nodes.len() {
             let addr = t.nodes[id].addr;
@@ -2225,7 +2244,11 @@ pub(crate) fn canonical_trie_stats() -> (usize, usize, usize) {
     with_table_or((0, 0, 0), |t| {
         let bytes = t.nodes.capacity() * std::mem::size_of::<Node>()
             + t.edges.capacity() * std::mem::size_of::<((u32, u64), u32)>();
-        let published = t.nodes.iter().filter(|n| n.published && n.addr != 0).count();
+        let published = t
+            .nodes
+            .iter()
+            .filter(|n| n.published && n.addr != 0)
+            .count();
         (t.edges.len(), published, bytes)
     })
 }
