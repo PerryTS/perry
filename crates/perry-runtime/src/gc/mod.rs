@@ -311,10 +311,10 @@ pub(crate) mod poll_arm;
 pub(crate) mod schedule;
 pub(crate) use instruments::note_loop_poll_reached;
 pub use instruments::{copying_minor_cycles, loop_polls_reached, moved_objects_total};
-pub use poll_arm::PERRY_GC_POLL_ARMED;
-pub(crate) use poll_arm::{arm_poll, disarm_poll, resolve_poll_seed};
 #[cfg(not(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu")))]
 pub(crate) use poll_arm::poll_armed;
+pub use poll_arm::PERRY_GC_POLL_ARMED;
+pub(crate) use poll_arm::{arm_poll, disarm_poll, resolve_poll_seed};
 pub use schedule::{
     gc_schedule_forced_collections, gc_schedule_safepoints, schedule_liveness_report,
     schedule_polls_paced,
