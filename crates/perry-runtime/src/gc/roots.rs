@@ -25,9 +25,7 @@ pub(super) use stack_maps::record_native_stack_walk_source;
 pub(super) use stack_maps::verify_native_slots_post_walk as stack_maps_native_slot_verify;
 #[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
 pub(crate) use walk_origin::offering_entry_asm;
-pub(crate) use walk_origin::{
-    offered as offered_walk_origin, EntryOrigin as EntryWalkOrigin, WalkOrigin,
-};
+pub(crate) use walk_origin::{EntryOrigin as EntryWalkOrigin, WalkOrigin};
 
 pub use rooted_values::RootedValues;
 pub(super) use runtime_handles::{

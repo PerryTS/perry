@@ -4171,7 +4171,7 @@ pub extern "C" fn js_gc_loop_safepoint() {
     if !super::poll_armed() {
         return;
     }
-    js_gc_loop_safepoint_armed();
+    js_gc_loop_safepoint_armed(0, 0, 0);
 }
 
 /// x86-64 Linux: the same unarmed path written out (load the word through the
@@ -4196,21 +4196,26 @@ pub extern "C" fn js_gc_loop_safepoint() {
         "mov rdx, rbp",
         "jmp {body}",
         armed = sym super::PERRY_GC_POLL_ARMED,
-        body = sym js_gc_loop_safepoint_from,
+        body = sym js_gc_loop_safepoint_armed,
     );
 }
 
-/// The armed poll, entered from the shim with its caller's frame.
-#[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
-extern "C" fn js_gc_loop_safepoint_from(pc: usize, sp: usize, fp: usize) {
-    let _origin = super::EntryWalkOrigin::enter(super::WalkOrigin { pc, sp, fp });
-    js_gc_loop_safepoint_armed();
+/// The moving minor of an armed poll, walking from the poll's caller when the
+/// shim passed one (`pc != 0`). Offered only here, where a collection can
+/// start: most armed polls return before it.
+#[inline(always)]
+fn gc_safepoint_moving_minor_from(pc: usize, sp: usize, fp: usize) -> bool {
+    let _origin =
+        (pc != 0).then(|| super::EntryWalkOrigin::enter(super::WalkOrigin { pc, sp, fp }));
+    gc_safepoint_moving_minor()
 }
 
 /// Out of line so the hot entry point above stays a load, a compare and a
-/// return — no frame, no spills.
+/// return — no frame, no spills. `(pc, sp, fp)` is the poll's caller frame
+/// on x86-64 Linux, where the shim tail-jumps here with it in the argument
+/// registers, and `(0, 0, 0)` elsewhere.
 #[inline(never)]
-fn js_gc_loop_safepoint_armed() {
+extern "C" fn js_gc_loop_safepoint_armed(pc: usize, sp: usize, fp: usize) {
     // Releases the startup seed unless a resolved seed wants the poll kept
     // reachable. Must run before the opt-in check below: a build with the polls
     // killed still has to get the word back to zero, or every back-edge keeps
@@ -4261,14 +4266,14 @@ fn js_gc_loop_safepoint_armed() {
         // candidate costs a full stride of new allocation on top of whatever
         // survived — see `gc/schedule.rs` for why this is a high-water mark and
         // not a delta.
-        if gc_safepoint_moving_minor() {
+        if gc_safepoint_moving_minor_from(pc, sp, fp) {
             super::schedule::note_schedule_poll_collection(
                 crate::arena::copying_from_space_in_use_bytes(),
             );
         }
         return;
     }
-    gc_safepoint_moving_minor();
+    gc_safepoint_moving_minor_from(pc, sp, fp);
 }
 
 struct BudgetedGcStepGuard;
