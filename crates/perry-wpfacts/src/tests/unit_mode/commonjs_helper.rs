@@ -73,3 +73,45 @@ fn the_no_fixpoint_report_names_the_changed_fields() {
     assert_eq!(crate::units::driver::changed_fields(&a, &b), ["reach", "ret"]);
     assert!(crate::units::driver::changed_fields(&a, &a).is_empty());
 }
+
+/// Babel's `fe` (oxfmt's bundle): a recursive arrow assigned in an init
+/// function calls itself through its module cell, so its unit reads its own
+/// contract back. The contract says the result is the argument or what the
+/// argument reaches under `expression`; replaying that through the
+/// stand-in loaded `p.expression` into a node outside the stand-in's run,
+/// so the caller's own `a.expression` came back as a marker of no run, the
+/// result read as another call's value and escaped, and the next solve
+/// published the transfer again. Converges on the transfer, claiming no
+/// more than the whole program for the caller's deep field it writes
+/// through the result.
+#[test]
+fn a_recursive_helper_reading_its_own_result_transfer_reaches_a_fixpoint() {
+    const T: &str = r#"
+var fe;
+var init0 = () => { fe = (a) => a.type === "P" ? fe(a.expression) : a; };
+export var strip = (x) => { init0(); return fe(x); };
+"#;
+    const M: &str = "import { strip } from './t'; const o = { type: 'P', expression: { type: 'P', expression: { type: 'I', v: 1 } } }; const r = strip(o); r.v = 2; console.log(o.expression.expression.v);";
+    let mods: &'static [(&'static str, &'static str)] = &[("t", T), ("m", M)];
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(units_of(mods));
+    });
+    let u = rx
+        .recv_timeout(std::time::Duration::from_secs(60))
+        .expect("per-unit facts reach a fixpoint");
+    assert!(u.rounds <= 4, "rounds {}", u.rounds);
+    let w = whole_of(mods);
+    let v = |pf: &ProgramFacts| -> Vec<bool> {
+        let mut r: Vec<bool> = pf
+            .templates
+            .iter()
+            .filter(|t| t.display.starts_with("m.ts"))
+            .flat_map(|t| t.fields.iter().filter(|f| f.key == "v").map(|f| f.readonly))
+            .collect();
+        r.sort();
+        r
+    };
+    assert_eq!(v(&u), v(&w), "{}", u.dump_text());
+    assert!(v(&u).iter().all(|&ro| !ro), "r.v = 2 writes the deep literal");
+}
