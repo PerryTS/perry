@@ -7,6 +7,13 @@
 # cargo-check work for thousands of lines downstream). This script
 # enforces an upper bound and is run on every PR.
 #
+# What counts is CODE. Comments, doc comments, blank lines and block-comment
+# continuation lines do not count: a reviewer reads code, and pricing a
+# comment like a line of code pushes an author to delete the reasoning instead
+# of splitting the file. Test code still counts, because it is review surface
+# too. Measured this way the tree carries ~15% fewer lines than `wc -l` sees,
+# which is why ten allowlist entries were retired when the rule changed.
+#
 # Threshold is **2,000 lines** as of v0.5.1020. Started at 5,000 in
 # v0.5.1019 with the first wave of splits (compile.rs / expr/mod.rs /
 # native_table.rs / etc.), tightened to 2,000 once the long-tail
@@ -23,8 +30,16 @@
 # bundles) intentionally not policed — they aren't really "review
 # surface" the way production Rust is.
 #
-# Allowlisted (real Rust source, deferred for a specific reason —
-# **each entry needs a one-line rationale**):
+# Allowlisted (real Rust source, deferred for a specific reason):
+#
+# Each entry is `<path><TAB><code-line count>`. The count is asserted, not
+# documentary: the gate fails when the file's current size stops matching it,
+# so an exemption has to be re-argued instead of silently covering growth. An
+# entry justified at "2009 lines" once guarded 5,430. `--update` re-records
+# every count and drops the entries that no longer need one; an entry naming a
+# path that is not tracked fails the gate on its own.
+#
+# Every entry also carries a one-line rationale:
 #
 #   - crates/perry-hir/src/ir/expr.rs — a single `pub enum Expr`
 #     definition (~2,560 LOC of documented variants). A lone enum
@@ -44,14 +59,9 @@ set -euo pipefail
 
 THRESHOLD="${PERRY_FILE_SIZE_THRESHOLD:-2000}"
 
-# Allowlist (one file per line; blank lines + `#` comments OK).
+# Allowlist (one file per line as `<path><TAB><count>`; blank lines + `#`
+# comments OK; `--update` rewrites it).
 ALLOWLIST=$(cat <<'EOF'
-# Single `pub enum Expr` definition (~2,560 LOC of documented variants). A lone
-# enum can't be split across files; decomposing it into sub-enums would be a
-# semantic refactor touching every match site (codegen + walker), not a file
-# split. Auxiliary enums/impls already peeled into siblings; the rest is the
-# irreducible variant list.
-crates/perry-hir/src/ir/expr.rs
 # A single ~5,650-LOC function: `run_with_parse_cache`, the per-module `par_iter`
 # codegen pipeline with ~30 captured locals threaded through one closure. The
 # rest of the old 6,114-line compile.rs was split into compile/ siblings
@@ -59,33 +69,12 @@ crates/perry-hir/src/ir/expr.rs
 # one deeply-coupled function. Decomposing it means extracting a context struct
 # for the ~30 locals — high-risk surgery on the compiler's hot path, deferred to
 # a focused follow-up. Tracked under #1435.
-crates/perry/src/commands/compile/run_pipeline.rs
-# node:vm surface: the Script / Module / SourceTextModule / SyntheticModule FFI
-# plus a self-contained manifest-expression mini-evaluator (`EvalEnv` + the
-# `eval_*` / `normalize_literal_to_json` interpreter). These share one `EvalEnv`,
-# a large `FIELD_*` field-key constant set, and ~40 private helpers, so a clean
-# split needs a dedicated decomposition (a shared `node_vm/common` module for
-# `EvalEnv`/`FIELD_*`/helpers + an `eval` sub-module) rather than a mechanical
-# file cut — deferred to a focused follow-up. Tracked under #1435.
-crates/perry-runtime/src/node_vm.rs
+crates/perry/src/commands/compile/run_pipeline.rs	6182
 # Generator for-of destructuring in function bodies: this PR (#5807) added
 # ~22 net lines for pattern-matching VarDecl heads in async-generator iterator
 # bodies. The file is 2018 lines (18 over the gate). A structural split of the
 # generator for-of lowering into a sibling module is tracked as a follow-up.
-crates/perry-hir/src/lower_decl/body_stmt.rs
-# Promise reaction-slot occupancy fix (#5867) added ~120 net lines of
-# correctness code + rationale comments across js_promise_then /
-# js_promise_attach_handlers / js_promise_finally; the file is 2008 lines
-# (8 over the gate). The topical split — the #1545 value-read thunks + spec
-# finally-wrapper tail (~790 lines) into a sibling module — is a mechanical
-# cut deferred to a focused follow-up, same pattern as body_stmt.rs above.
-crates/perry-runtime/src/promise/then.rs
-# #10595 shadowed-field fix: `get_field_ic_miss_impl`'s inline own-key scan
-# now walks back-to-front (1 line) with a 1-line rationale comment, matching
-# the compile-time-typed path's most-derived-wins rule. The file was already
-# exactly at the 2000-line gate; a structural split of the IC-miss ladder
-# into a sibling module is deferred to a focused follow-up.
-crates/perry-runtime/src/object/field_get_set/ic_miss.rs
+crates/perry-hir/src/lower_decl/body_stmt.rs	2063
 # --- Representation-aware type lowering (#5466 / #5464) ---
 # These files crossed the gate on the type-lowering branch (native i32/u32/f64/
 # i128/StringRef reps, guarded fast/fallback splits, and the material-evidence
@@ -93,136 +82,243 @@ crates/perry-runtime/src/object/field_get_set/ic_miss.rs
 # was mechanical; the remainders are the coupled cores (typed-clone decision
 # tables, packed-loop versioning, evidence recording) whose decomposition is a
 # focused follow-up under #1435 rather than a merge-time file cut.
-crates/perry-codegen/src/codegen/mod.rs
-crates/perry-codegen/src/collectors/hir_facts.rs
-crates/perry-codegen/src/expr/mod.rs
-crates/perry-codegen/src/stmt/loops.rs
-crates/perry-runtime/src/map.rs
-crates/perry-runtime/src/set.rs
-crates/perry-runtime/src/typed_feedback.rs
+crates/perry-codegen/src/codegen/mod.rs	3574
+crates/perry-codegen/src/collectors/hir_facts.rs	2740
+crates/perry-codegen/src/expr/mod.rs	2798
+crates/perry-codegen/src/stmt/loops.rs	7677
+crates/perry-runtime/src/map.rs	2845
+crates/perry-runtime/src/set.rs	2335
+crates/perry-runtime/src/typed_feedback.rs	2437
 # Typed-feedback + native-ABI evidence regression suites: table-driven test
 # bodies (one fn per proof shape, 185 codegen regression tests). Length tracks
 # proof-surface breadth, not complexity; splitting is a test-organization
 # follow-up (part is already peeled into native_proof_regressions/*.rs).
-crates/perry-codegen/tests/native_proof_regressions.rs
-crates/perry-runtime/src/typed_feedback/tests.rs
+crates/perry-codegen/tests/native_proof_regressions.rs	15627
+crates/perry-runtime/src/typed_feedback/tests.rs	2278
 # `--explain-lowering` report builder: one report schema (aggregation structs +
 # JSON/pretty emitters + self-tests in one file). Splitting the emitters from
 # the schema they render obscures the report contract; revisit if it grows.
-crates/perry/src/commands/compile/lowering_report.rs
-# --- Grew a few lines past the gate on main (2026-07); each is a coupled
-# core whose split is a mechanical follow-up, allowlisted here to unblock the
-# required lint gate rather than fold an unrelated refactor into an in-flight
-# PR. Tracked under #1435. ---
-# HIR member-access lowering: the `Expr::Member` dispatch tree (per-builtin
-# static-method + property arms). 2049 lines; splitting the arm groups into
-# sibling modules is a mechanical follow-up.
-crates/perry-hir/src/lower/expr_member.rs
-# Runtime `js_native_call_method` dispatch trunk (2002 lines): the by-name
-# native method switch; the peeled arms already live in native_call_method/.
-crates/perry-runtime/src/object/native_call_method.rs
-# Proxy runtime registry and trap dispatch: the shared ProxyEntry registry,
-# metadata state, and cross-cutting trap helpers currently form one coupled
-# dispatch surface. The object-write proxy routing in #6812 pushed it over the
-# gate; split the registry/metadata core in a dedicated follow-up rather than
-# mixing structural surgery into the optimization PR.
-crates/perry-runtime/src/proxy.rs
+crates/perry/src/commands/compile/lowering_report.rs	2320
 # Inliner call-site rewriter (2056 lines): the single `CallInliner` pass with
 # its argument/return remapping tables threaded through one walker.
-crates/perry-transform/src/inline/call_inliner.rs
-# Windows UI widget registry (2118 lines): the Win32 widget create/dispatch
-# table; a per-widget-family split is a mechanical follow-up.
-crates/perry-ui-windows/src/widgets/mod.rs
-# Regex grammar/parser (2075 lines): the single recursive-descent PCRE grammar;
-# #6711 (ReDoS-guard bounded-quantifier collapse) pushed it 75 lines over. A
-# split of the character-class / quantifier sub-parsers is a mechanical
-# follow-up.
-crates/perry-runtime/src/regex/grammar.rs
+crates/perry-transform/src/inline/call_inliner.rs	2091
 # Web Streams core (2011 lines): #6476's throwing-pull resilience fix added the
 # js_call_catching wiring, 11 lines over. A split of the reader/tee/BYOB
 # sub-controllers into siblings (tee.rs / byob already peeled) is a mechanical
 # follow-up.
-crates/perry-stdlib/src/streams.rs
+crates/perry-stdlib/src/streams.rs	2418
 # GC policy core (2009 lines): phase-C descriptor-summary accounting pushed the
 # coupled collection-policy state machine nine lines over the gate on main. Its
 # phase/debt/budget groups should be split together in the tracked #1435 file
 # decomposition rather than mixed into an unrelated runtime fast-path PR.
-crates/perry-runtime/src/gc/policy.rs
-# Stable-tombstone IC validation (#9064/#9065) pushed the coupled generated
-# read/write dispatch trunk 19 lines over; splitting its proxy/Reflect and PIC
-# emitters is structural follow-up work, not part of this runtime fast path.
-crates/perry-codegen/src/expr/proxy_reflect.rs
+crates/perry-runtime/src/gc/policy.rs	2765
 # The shape-registry core is 16 lines over after documenting mutable private
 # tombstone epochs. Its table/index/publish invariants need a coordinated split
 # rather than moving one half of the invariant for this optimization.
-crates/perry-runtime/src/object/shapes.rs
-# --- Vendored third-party sources (third_party/windows-winui/, see its
-# VENDORED.md): a verbatim snapshot of Microsoft windows-rs / Windows Reactor
-# at commit 65066a7109c214f317ed66261cfb7518160b8aaf. These are NOT Perry
-# review surface and must stay byte-identical to upstream so the snapshot can
-# be re-diffed and re-pulled; splitting them would fork them permanently. ---
-# Pinned wac-graph snapshot with nominal resource-import registration added.
-# Keep the upstream layout for re-diffing; see third_party/wac-graph/VENDORED.md.
-third_party/wac-graph/src/graph.rs
+crates/perry-runtime/src/object/shapes.rs	4782
 # Exact qualified Turnloop snapshot; retain upstream layout for comparison.
 # Source hashes and registry provenance: third_party/turnloop/VENDORED.md.
-third_party/turnloop/turnloop/src/driver.rs
+third_party/turnloop/turnloop/src/driver.rs	2283
 # Machine-generated WinRT metadata bindings for Windows.Foundation.Collections.
-third_party/windows-winui/windows-collections/src/bindings.rs
-# Machine-generated WinRT metadata bindings for Windows.Foundation (IAsyncInfo).
-third_party/windows-winui/windows-future/src/bindings.rs
+third_party/windows-winui/windows-collections/src/bindings.rs	3032
 # Machine-generated WinRT metadata bindings for Microsoft.UI.Xaml — the whole
 # WinUI 3 control surface in one generated file (26k lines).
-third_party/windows-winui/windows-reactor/src/bindings.rs
+third_party/windows-winui/windows-reactor/src/bindings.rs	25479
 # Upstream Windows Reactor XAML backend: the single Element -> Microsoft.UI.Xaml
 # realization/diff trunk shipped as one module by upstream.
-third_party/windows-winui/windows-reactor/src/winui/backend/mod.rs
-# Module-collection trunk: `collect_module_one` is a single ~1,890-line walk
-# (lines 111-1999) beneath 15 already-peeled sibling modules, so the remaining
-# bulk is one function, not a group of arms that can be lifted out. It sat at
-# EXACTLY 2000 lines on main -- the cap with zero headroom -- so the next PR to
-# add any line to it fails; that is what caught #10874/#10867's module
-# resolution work. Splitting the walk into phases is real surgery and does not
-# belong folded into an in-flight resolution fix, same rationale as the #1435
-# block above. Follow-up: peel `collect_module_one` into phase submodules.
-crates/perry/src/commands/compile/collect_modules.rs
+third_party/windows-winui/windows-reactor/src/winui/backend/mod.rs	4032
 EOF
 )
 
 # Anchor at repo root so the script can be invoked from anywhere.
 cd "$(git rev-parse --show-toplevel)"
 
-# Build the offender list — tracked Rust files only.
-violations=""
-total=0
+# What counts as code. A reviewer reads code; comments and blank lines are not
+# code, and pricing them like code pushes an author to delete the reasoning
+# rather than split the file. Test code still counts — it is review surface too.
+code_lines() {
+    awk '
+        { line = $0; sub(/^[ \t]+/, "", line) }
+        line == ""      { next }
+        line ~ /^\/\//  { next }
+        line ~ /^\/\*/  { next }
+        line ~ /^\*/    { next }
+        { n++ }
+        END { printf "%d", n + 0 }
+    ' "$1"
+}
+
+# The decision, isolated from the repository so --self-test can exercise every
+# branch: verdict <code-lines> <asserted-or-empty> <threshold>
+verdict() {
+    if [ -n "$2" ]; then
+        if [ "$1" = "$2" ]; then echo exempt; else echo stale; fi
+        return
+    fi
+    if [ "$1" -gt "$3" ]; then echo over; else echo within; fi
+}
+
+asserted_for() {
+    printf '%s\n' "$ALLOWLIST" | awk -F'\t' -v p="$1" '
+        $0 ~ /^[[:space:]]*#/ { next }
+        NF >= 2 && $1 == p   { print $2; exit }
+    '
+}
+
+case "${1:-}" in
+--self-test)
+    fail=0
+    expect() {
+        got="$(verdict "$1" "$2" "$3")"
+        if [ "$got" != "$4" ]; then
+            echo "::error::self-test: verdict($1, '$2', $3) returned '$got', expected '$4'" >&2
+            fail=1
+        fi
+    }
+    expect 2100 ""   2000 over
+    expect 2000 ""   2000 within
+    expect 1999 ""   2000 within
+    expect 5000 5000 2000 exempt
+    expect 5001 5000 2000 stale
+    expect 100  300  2000 stale
+
+    fixture="$(mktemp)"
+    printf '// why\n\n/// doc\nfn one() {}\n/* block\n * star\n */\n   \nfn two() {}\n' > "$fixture"
+    counted="$(code_lines "$fixture")"
+    if [ "$counted" != "2" ]; then
+        echo "::error::self-test: code_lines counted $counted lines of code, expected 2" >&2
+        fail=1
+    fi
+    rm -f "$fixture"
+
+    if [ "$fail" -eq 0 ]; then
+        echo "self-test ok: over-threshold, stale exemption, and code-vs-comment counting all still fail where they should"
+    fi
+    exit "$fail"
+    ;;
+--update)
+    # Re-record every exemption at its current size and drop the ones that no
+    # longer need it. mv, not cat>: bash keeps reading this script through its
+    # open descriptor, so the old inode must stay alive.
+    self="$0"
+    tmp="$(mktemp)"
+    awk -v thr="$THRESHOLD" '
+        function count_code(path,   line, s, n) {
+            n = 0
+            while ((getline line < path) > 0) {
+                s = line; sub(/^[ \t]+/, "", s)
+                if (s == "") continue
+                if (s ~ /^\/\//) continue
+                if (s ~ /^\/\*/) continue
+                if (s ~ /^\*/) continue
+                n++
+            }
+            close(path)
+            return n
+        }
+        /^ALLOWLIST=\$\(cat <<.EOF.$/ { inblock = 1; print; next }
+        inblock && /^EOF$/            { inblock = 0; print; next }
+        inblock && $0 !~ /^[[:space:]]*#/ && NF {
+            split($0, parts, "\t")
+            path = parts[1]
+            n = count_code(path)
+            if (n <= thr) {
+                pruned = pruned "\n  " path " — " n " code lines, exemption no longer needed"
+                next
+            }
+            print path "\t" n
+            next
+        }
+        { print }
+        END { if (pruned != "") print pruned > "/dev/stderr" }
+    ' "$self" > "$tmp" && mv "$tmp" "$self" && chmod +x "$self"
+    echo "allowlist re-recorded: every exemption now asserts its current code-line count"
+    exit 0
+    ;;
+"") ;;
+*)
+    echo "usage: $0 [--update|--self-test]" >&2
+    exit 2
+    ;;
+esac
+
+tracked="$(mktemp)"
+git ls-files '*.rs' > "$tracked"
+
+offenders=""
+stale_entries=""
+dangling=""
+count_offenders=0
+count_stale=0
+count_dangling=0
+
 while IFS= read -r f; do
     [ -f "$f" ] || continue
-
-    # Allowlist match.
-    if grep -Fxq "$f" <<<"$ALLOWLIST"; then continue; fi
-
-    lines=$(wc -l < "$f" 2>/dev/null || echo 0)
-    if [ "$lines" -gt "$THRESHOLD" ]; then
-        violations+="$(printf '%7d  %s\n' "$lines" "$f")"$'\n'
-        total=$((total + 1))
-    fi
+    actual="$(code_lines "$f")"
+    asserted="$(asserted_for "$f")"
+    case "$(verdict "$actual" "$asserted" "$THRESHOLD")" in
+    over)
+        offenders+="$(printf '%7d  %s\n' "$actual" "$f")"$'\n'
+        count_offenders=$((count_offenders + 1))
+        ;;
+    stale)
+        stale_entries+="$(printf '%7d  asserted %-7s %s\n' "$actual" "$asserted" "$f")"$'\n'
+        count_stale=$((count_stale + 1))
+        ;;
+    esac
 done < <(git ls-files '*.rs')
 
-if [ "$total" -gt 0 ]; then
-    echo "::error::File size limit exceeded ($THRESHOLD lines)."
+# An exemption for a path that no longer exists is an exemption nobody reviews.
+while IFS=$'\t' read -r path asserted; do
+    case "$path" in ''|'#'*) continue ;; esac
+    if ! grep -Fxq "$path" "$tracked"; then
+        dangling+="  $path"$'\n'
+        count_dangling=$((count_dangling + 1))
+    fi
+done <<< "$ALLOWLIST"
+rm -f "$tracked"
+
+failed=0
+
+if [ "$count_offenders" -gt 0 ]; then
+    failed=1
+    echo "::error::File size limit exceeded ($THRESHOLD lines of code)."
     echo ""
     echo "The following files are too large:"
-    echo "$violations"
-    echo ""
-    echo "Split the offending files into topical sub-modules. See"
-    echo "v0.5.1019/v0.5.1020 commits on chore/split-large-files for"
-    echo "the recipe: extract function groups into sibling files,"
-    echo "re-export from mod.rs with explicit named use statements"
-    echo "(globs don't propagate through transitive re-exports). To"
-    echo "deliberately exclude a file (e.g. a refactor in progress"
-    echo "tracked elsewhere) add it to the ALLOWLIST block at the top"
-    echo "of this script with a one-line rationale."
-    exit 1
+    echo "$offenders"
 fi
 
-echo "OK: no Rust source files exceed $THRESHOLD lines."
+if [ "$count_stale" -gt 0 ]; then
+    failed=1
+    echo "::error::An allowlist entry records a code-line count the file no longer has ($count_stale)."
+    echo ""
+    echo "The exemption is re-asserted, not inherited, so a stale entry cannot"
+    echo "quietly cover years of growth:"
+    echo "$stale_entries"
+    echo ""
+    echo "Run '$0 --update' to re-record every entry, or split the file and drop"
+    echo "its entry entirely."
+fi
+
+if [ "$count_dangling" -gt 0 ]; then
+    failed=1
+    echo "::error::An allowlist entry names a path that is not tracked ($count_dangling)."
+    echo ""
+    echo "$dangling"
+    echo "Run '$0 --update' to drop it."
+fi
+
+if [ "$failed" -eq 0 ]; then
+    echo "OK: no Rust source file exceeds $THRESHOLD lines of code, and every exemption asserts its current size."
+    exit 0
+fi
+
+echo ""
+echo "Split the offending files into topical sub-modules. See"
+echo "v0.5.1019/v0.5.1020 commits on chore/split-large-files for"
+echo "the recipe: extract function groups into sibling files,"
+echo "re-export from mod.rs with explicit named use statements"
+echo "(globs don't propagate through transitive re-exports). To"
+echo "deliberately exempt a file, add it to the ALLOWLIST block"
+echo "with its rationale and its code-line count."
+exit 1
