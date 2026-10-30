@@ -276,7 +276,7 @@ fn classify_pointer(recv: f64) -> Option<PtrKind> {
 }
 
 /// `LengthOfArrayLike(ToObject(recv))`.
-pub(super) fn al_length(recv: f64) -> i64 {
+pub(crate) fn al_length(recv: f64) -> i64 {
     let arr = as_real_array(recv);
     if !arr.is_null() {
         return unsafe { (*arr).length as i64 };
@@ -327,7 +327,7 @@ pub(super) fn al_length(recv: f64) -> i64 {
 }
 
 /// `Get(ToObject(recv), k)` (returns `undefined` for absent/out-of-range).
-pub(super) fn al_get(recv: f64, k: i64) -> f64 {
+pub(crate) fn al_get(recv: f64, k: i64) -> f64 {
     let arr = as_real_array(recv);
     if !arr.is_null() {
         if k < 0 {

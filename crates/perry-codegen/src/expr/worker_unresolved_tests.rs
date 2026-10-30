@@ -56,7 +56,7 @@ fn assert_valid_ir(case: &str, body: Vec<Stmt>) {
     )
     .unwrap();
     assert!(
-        ir.contains("@js_worker_threads_worker_new_by_spec("),
+        ir.contains("@js_worker_threads_worker_new_with_source("),
         "{case}: the unresolved Worker did not fall back to the entry table"
     );
     let llvm = inkwell::context::Context::create();

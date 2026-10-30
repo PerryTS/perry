@@ -4,7 +4,7 @@
 //! Pure mechanical move — match arm bodies are verbatim copies, called from
 //! `lower_expr`'s outer dispatch.
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::Result;
 use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
 
@@ -622,86 +622,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             paths,
             filename,
             options,
-            is_eval: _,
-            partial,
-        } => {
-            if !paths.is_empty() && (*partial || paths.len() > 1) {
-                return worker_new::lower_candidates(ctx, paths, filename, options.as_deref());
-            }
-            // An empty `paths` list means collect_modules could not resolve
-            // the filename statically (it warned at compile time). The
-            // runtime looks it up in the worker entry table and throws
-            // ERR_WORKER_NOT_COMPILED only if no entry matches. Many real
-            // packages construct such Workers only on cold paths (e.g.
-            // Next.js build-time worker pools), so this must not fail the
-            // compile.
-            if paths.is_empty() {
-                return worker_new::lower_by_spec(ctx, filename, options.as_deref());
-            }
-            let _ = lower_expr(ctx, filename)?;
-            if ctx.block().is_terminated() {
-                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            }
-            let options_val = if let Some(options) = options {
-                let value = lower_expr(ctx, options)?;
-                if ctx.block().is_terminated() {
-                    return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-                }
-                value
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
-            if paths.len() != 1 {
-                bail!(
-                    "worker_threads Worker requires exactly one compile-time-resolved filename, got {}",
-                    paths.len()
-                );
-            }
-            let path = &paths[0];
-            let target_prefix = ctx
-                .dynamic_import_path_to_prefix
-                .get(path)
-                .cloned()
-                .ok_or_else(|| anyhow!("worker_threads Worker target was not compiled: {path}"))?;
-            if target_prefix.starts_with("__node_submod__")
-                || target_prefix.starts_with("__native_mod__")
-            {
-                bail!("worker_threads Worker target must be a compiled source file: {path}");
-            }
-            // #10399: which entry symbol the worker thread starts on.
-            //
-            // `<prefix>__init` is the guarded wrapper: it initializes the
-            // module's DEPENDENCIES and then runs the body. `__init_body` is
-            // the body alone.
-            //
-            // When the program has a Worker the `__perry_init_done_*` guard is
-            // thread-local, so the wrapper is correct and necessary: it runs
-            // once per thread, and it is the only thing that initializes the
-            // worker entry's own imports. Calling the bare body instead left
-            // every module the entry imports uninitialized on that thread —
-            // a module reachable only from the worker never ran at all and its
-            // bindings stayed `undefined`.
-            //
-            // The bare body remains the fallback for the (unreachable in
-            // practice) case where the guard is still process-wide: there the
-            // wrapper's flag would be set by the first worker or by
-            // main-thread import init and every later worker's entry would be
-            // a no-op, leaving the spawned thread idle and the parent waiting
-            // forever.
-            let init_name = if ctx.program_has_worker {
-                format!("{}__init", target_prefix)
-            } else {
-                format!("{}__init_body", target_prefix)
-            };
-            ctx.pending_declares
-                .push((init_name.clone(), crate::types::VOID, vec![]));
-            let entry_ptr = ctx.block().ptrtoint(&format!("@{}", init_name), I64);
-            Ok(ctx.block().call(
-                DOUBLE,
-                "js_worker_threads_worker_new",
-                &[(I64, &entry_ptr), (DOUBLE, &options_val)],
-            ))
-        }
+            is_eval,
+            ..
+        } => worker_new::lower(ctx, paths, filename, options.as_deref(), *is_eval),
         Expr::DynamicImport {
             paths,
             arg,
