@@ -339,6 +339,10 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
     let mut shared_rounds: Vec<std::collections::BTreeSet<crate::model::SharedWrite>> =
         vec![Default::default()];
     let mut shared_seen: Vec<usize> = vec![0; solves.len()];
+    // The dump only: per broken display, the round it broke in and the
+    // units whose reports broke it, with their reasons.
+    type Reporters = Vec<(String, Vec<String>)>;
+    let mut broke: FxHashMap<String, (u32, Reporters)> = FxHashMap::default();
     loop {
         rounds += 1;
         input.classes.clear();
@@ -911,6 +915,18 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             .into_iter()
             .filter(|d| !input.broken.contains(d))
             .collect();
+        if cfg.diagnostics {
+            let fresh: FxHashSet<&String> = fresh.iter().collect();
+            for (si, u) in per_unit.iter().enumerate() {
+                let u = u.as_ref().expect("every unit solved");
+                for (d, rs) in &u.report_reasons {
+                    if fresh.contains(d) {
+                        let e = broke.entry(d.clone()).or_insert_with(|| (rounds, Vec::new()));
+                        e.1.push((solves[si].key.clone(), rs.clone()));
+                    }
+                }
+            }
+        }
         if !fresh.is_empty() || !seeds.is_empty() {
             dirty = if fresh.is_empty() {
                 vec![false; solves.len()]
@@ -929,6 +945,11 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             input.broken.extend(fresh);
             continue;
         }
+        let report_records = if cfg.diagnostics {
+            report_records(&solves, &per_unit, &input, &broke)
+        } else {
+            Vec::new()
+        };
         let mut pf = ProgramFacts {
             module_paths: sorted.iter().map(|(p, _)| p.to_string()).collect(),
             dynamic_code_reach: cfg.dynamic_code_reach.clone(),
@@ -981,10 +1002,9 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
                 .zip(&flats)
                 .map(|(&(p, m), f)| (p, f.as_ref().unwrap_or(m)))
                 .collect();
-            pf.diagnostics.push((
-                "<census>".into(),
-                crate::ledger::census(&walked, &pf.diagnostic_sites),
-            ));
+            let mut lines = crate::ledger::census(&walked, &pf.diagnostic_sites);
+            lines.extend(report_records);
+            pf.diagnostics.push(("<census>".into(), lines));
         }
         return pf;
     }
@@ -1469,6 +1489,65 @@ pub(crate) fn digest<T: std::hash::Hash>(v: &T) -> u64 {
 
 /// The units defining each display. A display may have several owners:
 /// every unit holding a copy of one literal shape (`decl_units`).
+/// The dump's `report` records (design §11.3): per broken display its
+/// owners, the round it broke in, the units whose reports broke it and the
+/// units reporting it at the fixpoint, each with its reasons
+/// (`Gen::report_reasons`).
+fn report_records(
+    solves: &[Solve],
+    per_unit: &[Option<ProgramFacts>],
+    input: &Published,
+    broke: &FxHashMap<String, (u32, Vec<(String, Vec<String>)>)>,
+) -> Vec<String> {
+    use crate::diagnostics::quote;
+    let owner = owners(per_unit);
+    let mut at_end: FxHashMap<&str, Vec<(&str, &Vec<String>)>> = FxHashMap::default();
+    for (si, u) in per_unit.iter().enumerate() {
+        for (d, rs) in &u.as_ref().expect("every unit solved").report_reasons {
+            at_end.entry(d.as_str()).or_default().push((solves[si].key.as_str(), rs));
+        }
+    }
+    let by = |v: &mut dyn Iterator<Item = (&str, &Vec<String>)>| -> String {
+        let mut v: Vec<String> = v
+            .map(|(u, rs)| {
+                let rs: Vec<String> = rs.iter().map(|r| quote(r)).collect();
+                format!("{{\"unit\":{},\"reasons\":[{}]}}", quote(u), rs.join(","))
+            })
+            .collect();
+        v.sort();
+        v.join(",")
+    };
+    let mut broken: Vec<&String> = input.broken.iter().collect();
+    broken.sort();
+    broken
+        .into_iter()
+        .map(|d| {
+            // An override or typed-array report is against the class it names.
+            let of = d
+                .strip_prefix("override ")
+                .or_else(|| d.strip_prefix("ta "))
+                .and_then(|r| r.split_once(" of "))
+                .map_or(d.as_str(), |(_, c)| c);
+            let mut owners: Vec<String> = owner
+                .get(of)
+                .into_iter()
+                .flatten()
+                .map(|&si| quote(&solves[si].key))
+                .collect();
+            owners.sort();
+            owners.dedup();
+            let (round, first) = broke.get(d).map_or((0, &[][..]), |(r, v)| (*r, &v[..]));
+            format!(
+                "{{\"record\":\"report\",\"display\":{},\"owners\":[{}],\"round\":{round},\"by\":[{}],\"final\":[{}]}}",
+                quote(d),
+                owners.join(","),
+                by(&mut first.iter().map(|(u, rs)| (u.as_str(), rs))),
+                by(&mut at_end.get(d.as_str()).into_iter().flatten().copied()),
+            )
+        })
+        .collect()
+}
+
 pub(super) fn owners(per_unit: &[Option<ProgramFacts>]) -> FxHashMap<String, Vec<usize>> {
     let mut owner: FxHashMap<String, Vec<usize>> = FxHashMap::default();
     for (si, u) in per_unit.iter().enumerate() {

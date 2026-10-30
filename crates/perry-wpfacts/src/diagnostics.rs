@@ -35,6 +35,11 @@ pub(crate) struct Trace {
     /// that slot: what an instance holds without a recorded predecessor it
     /// holds as its summary does.
     pub inst_orig: BTreeMap<NodeId, NodeId>,
+    /// Per template, why this unit's stores into it are no store effect
+    /// (`Model::foreign_written`): the key and the object stored into.
+    pub written: BTreeMap<TmplId, BTreeSet<String>>,
+    /// Per template, the keys it gained after birth (`Model::adds_keys`).
+    pub added: BTreeMap<TmplId, BTreeSet<String>>,
 }
 
 /// The operation an event belongs to: a function body's (`Fn`), a token's

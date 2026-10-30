@@ -349,7 +349,7 @@ impl Model {
                                     }
                             ) && !tpl.birth_keys.contains(&key);
                             if new_key {
-                                *self.adds_keys.entry(tm).or_default() += 1;
+                                self.add_key(tm, |m| format!("{} (defined)", m.atoms[key as usize]));
                             } else {
                                 self.mark_hard(t, Hard::E5DefineProperty, reason);
                             }
@@ -416,7 +416,7 @@ impl Model {
                         .copied()
                         .unwrap_or(t);
                     if let Some(tm) = self.tmpl_of(t) {
-                        *self.adds_keys.entry(tm).or_default() += 1;
+                        self.add_key(tm, |_| "* (builtin adds keys)".into());
                     }
                 }
             }

@@ -584,6 +584,26 @@ impl Model {
                 }
                 _ => {
                     self.foreign_written.insert(tm);
+                    if self.diagnostic.is_some() {
+                        let k = match key {
+                            Key::Named(a) => self.atoms[a as usize].clone(),
+                            Key::Any => "*".into(),
+                        };
+                        let facts = &self.foreign[&tm];
+                        let on = match self.toks[t as usize] {
+                            TokKind::ClassObj(_) => "class object",
+                            TokKind::Proto(_) => "prototype",
+                            _ => match facts.fields.iter().find(|f| f.key == k) {
+                                None => "undeclared key",
+                                Some(f) if !f.data_field => "accessor key",
+                                Some(_) => "key not definite",
+                            },
+                        };
+                        let w = format!("{k} ({} {on})", facts.kind);
+                        if let Some(d) = &mut self.diagnostic {
+                            d.written.entry(tm).or_default().insert(w);
+                        }
+                    }
                 }
             }
         }
@@ -632,7 +652,7 @@ impl Model {
                     }
                     // A store effect's key exists in the defining unit's layout.
                     if !self.tmpls[tm as usize].birth_keys.contains(&a) && !ctor && !effect {
-                        *self.adds_keys.entry(tm).or_default() += 1;
+                        self.add_key(tm, |m| m.atoms[a as usize].clone());
                         *self.adds_named.entry((tm, a)).or_default() += 1;
                     }
                 }
@@ -653,7 +673,7 @@ impl Model {
                         // A store effect (DECISIONS 188): its defining unit
                         // opens the key set, performing it.
                         if !effect {
-                            *self.adds_keys.entry(tm).or_default() += 1;
+                            self.add_key(tm, |_| "* (computed store)".into());
                         }
                     }
                 }

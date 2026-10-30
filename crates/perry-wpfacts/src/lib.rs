@@ -245,6 +245,8 @@ pub struct ProgramFacts {
     /// What its solve can observe of them (`model::SharedReads`).
     pub(crate) shared_reads: model::SharedReads,
     pub(crate) reports: Vec<String>,
+    /// The dump only: why it files each report (`Gen::report_reasons`).
+    pub(crate) report_reasons: Vec<(String, Vec<String>)>,
     module_digests: Vec<u64>,
 }
 
@@ -674,6 +676,11 @@ fn compute_act<'a>(
     // Per-unit run: the classes this unit publishes as contracts, and what
     // it did beyond other units' contracts (design §11.2, §11.3).
     let reports = if cfg.unit { g.reports() } else { Vec::new() };
+    let report_reasons = if cfg.unit && cfg.diagnostics {
+        g.report_reasons(&reports)
+    } else {
+        Vec::new()
+    };
     let store_nodes = if cfg.unit {
         g.store_effects()
     } else {
@@ -1592,6 +1599,7 @@ fn compute_act<'a>(
         args_out,
         ctor_args_out,
         reports,
+        report_reasons,
         stores_out,
         cells_out,
         cells_read: std::mem::take(&mut g.cells_read),

@@ -298,6 +298,17 @@ impl Model {
         self.add(n, &[], p);
     }
 
+    /// `tm` gains a key after birth (`adds_keys`); the dump names what.
+    pub(crate) fn add_key(&mut self, tm: TmplId, what: impl FnOnce(&Self) -> String) {
+        *self.adds_keys.entry(tm).or_default() += 1;
+        if self.diagnostic.is_some() {
+            let w = what(self);
+            if let Some(d) = &mut self.diagnostic {
+                d.added.entry(tm).or_default().insert(w);
+            }
+        }
+    }
+
     /// Seed ⊤ into `n` as an ORIGIN (not a propagation): `why` names the
     /// unmodeled thing; only interned in explain mode (diagnostics).
     pub fn add_top(&mut self, n: NodeId, why: impl FnOnce(&Self) -> String) {
