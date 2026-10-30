@@ -463,6 +463,35 @@ fn with_submod_slots_mut<R>(write: impl FnOnce(&mut [SubmodSlots; SUBMOD_COUNT])
     })
 }
 
+/// Where one export's singleton lives. A getter builds it from constants, so
+/// taking one member never names the sibling declarations.
+#[derive(Clone, Copy)]
+struct ExportSlot {
+    key: &'static str,
+    bucket: SubmodBucket,
+    count: usize,
+    ordinal: usize,
+}
+
+/// `names`' index of `name`, evaluated at compile time.
+const fn const_ordinal(names: &[&str], name: &str) -> usize {
+    let mut i = 0;
+    while i < names.len() {
+        let (a, b) = (names[i].as_bytes(), name.as_bytes());
+        if a.len() == b.len() {
+            let mut j = 0;
+            while j < a.len() && a[j] == b[j] {
+                j += 1;
+            }
+            if j == a.len() {
+                return i;
+            }
+        }
+        i += 1;
+    }
+    panic!("export is not in its submodule's list")
+}
+
 /// `export`'s ordinal in `submod.exports`.
 fn export_ordinal(submod: &SubmoduleSpec, export: &ExportSpec) -> usize {
     submod
@@ -688,7 +717,13 @@ fn ensure_export_singleton(
     } else {
         export
     };
-    ensure_selected_export(submod, export, owner, attach_readline_if_installed)
+    let slot = ExportSlot {
+        key: submod.key,
+        bucket: submod.bucket,
+        count: submod.exports.len(),
+        ordinal: export_ordinal(submod, owner),
+    };
+    ensure_selected_export(slot, export, owner, attach_readline_if_installed)
 }
 
 unsafe fn attach_readline_if_installed(name: &str, value: f64, addr: usize) -> f64 {
@@ -697,13 +732,13 @@ unsafe fn attach_readline_if_installed(name: &str, value: f64, addr: usize) -> f
 
 #[inline(always)]
 fn ensure_selected_export(
-    submod: &'static SubmoduleSpec,
+    slot: ExportSlot,
     export: &'static ExportSpec,
     owner: &'static ExportSpec,
     attach_readline: unsafe fn(&str, f64, usize) -> f64,
 ) -> *mut ClosureHeader {
-    let (submod_key, key_name) = (submod.key, owner.name);
-    let (bucket, ordinal) = (submod.bucket as usize, export_ordinal(submod, owner));
+    let (submod_key, key_name) = (slot.key, owner.name);
+    let (bucket, ordinal) = (slot.bucket as usize, slot.ordinal);
     if let Some(cached) = export_singleton(bucket, ordinal) {
         return cached;
     }
@@ -777,7 +812,7 @@ fn ensure_selected_export(
     with_submod_slots_mut(|slots| {
         slots[bucket]
             .exports
-            .get_or_insert_with(|| Box::new(vec![std::ptr::null_mut(); submod.exports.len()]))
+            .get_or_insert_with(|| Box::new(vec![std::ptr::null_mut(); slot.count]))
             [ordinal] = allocated;
     });
     ANY_SINGLETON_ALLOCATED.store(1, Ordering::Release);
