@@ -4,10 +4,14 @@
 
 #[macro_export]
 macro_rules! fn_info {
-    (@image_name $body:path, $n:tt, [$($builder:ident($($arg:tt)*)),*]) => {
+    // The body is taken as identifier segments, not a `path` fragment:
+    // stringify!(a path) follows the tokens' spacing, which differs when the
+    // declaration reached this macro through another crate's macro
+    // (`crate :: m :: f`), so the export and its importers would disagree.
+    (@image_name $($body:ident)::+, $n:tt, [$($builder:ident($($arg:tt)*)),*]) => {
         concat!(
-            "perry_fn_info_", env!("CARGO_PKG_NAME"), "::", stringify!($body),
-            "::", stringify!($n), "::",
+            "perry_fn_info_", env!("CARGO_PKG_NAME"), "::", $(stringify!($body), "::",)+
+            stringify!($n), "::",
             $(stringify!($builder), "(", $crate::fn_info!(@image_tokens $($arg)*), ");",)*
         )
     };
@@ -15,9 +19,9 @@ macro_rules! fn_info {
         // The owning/imported record is immutable static storage.
         unsafe { &*$crate::fn_info!(for $header; $($rest)*) }
     }};
-    (for $header:ty; import $body:path, $n:tt $(; $($m:ident($($a:tt)*)),* $(,)?)?) => {{
+    (for $header:ty; import $($body:ident)::+, $n:tt $(; $($m:ident($($a:tt)*)),* $(,)?)?) => {{
         unsafe extern "C" {
-            #[link_name = $crate::fn_info!(@image_name $body, $n, [$($($m($($a)*)),*)?])]
+            #[link_name = $crate::fn_info!(@image_name $($body)::+, $n, [$($($m($($a)*)),*)?])]
             static INFO: $crate::JsFunctionInfo;
         }
         ::core::ptr::addr_of!(INFO)
@@ -44,35 +48,35 @@ macro_rules! fn_info {
         concat!("{ ", $crate::fn_info!(@image_tokens $($token)*), "}")
     };
     (@image_token $token:tt) => { stringify!($token) };
-    (@image_static $vis:vis $name:ident, $body:path, $n:tt, [$($builder:ident($($arg:tt)*)),*], $init:expr) => {
-        #[export_name = $crate::fn_info!(@image_name $body, $n, [$($builder($($arg)*)),*])]
+    (@image_static $vis:vis $name:ident, $($body:ident)::+, $n:tt, [$($builder:ident($($arg:tt)*)),*], $init:expr) => {
+        #[export_name = $crate::fn_info!(@image_name $($body)::+, $n, [$($builder($($arg)*)),*])]
         $vis static $name: $crate::JsFunctionInfo = $init;
     };
-    (@image_record plain $body:path, $n:tt, [$($builder:ident($($arg:tt)*)),*], $init:expr) => {{
-        $crate::fn_info!(@image_static INFO, $body, $n, [$($builder($($arg)*)),*], $init);
+    (@image_record plain $($body:ident)::+, $n:tt, [$($builder:ident($($arg:tt)*)),*], $init:expr) => {{
+        $crate::fn_info!(@image_static INFO, $($body)::+, $n, [$($builder($($arg)*)),*], $init);
         &INFO as *const $crate::JsFunctionInfo
     }};
     // A runtime-native record owns its canonical metadata entry, exactly as
     // the runtime's unexported records do; the export names the same storage.
-    (@image_record owned $body:path, $n:tt, [$($builder:ident($($arg:tt)*)),*], $init:expr) => {{
+    (@image_record owned $($body:ident)::+, $n:tt, [$($builder:ident($($arg:tt)*)),*], $init:expr) => {{
         static OWNER: $crate::FunctionMetadataOwner = $crate::FunctionMetadataOwner::native();
-        #[export_name = $crate::fn_info!(@image_name $body, $n, [$($builder($($arg)*)),*])]
+        #[export_name = $crate::fn_info!(@image_name $($body)::+, $n, [$($builder($($arg)*)),*])]
         static INFO: $crate::NativeFunctionInfo = $crate::NativeFunctionInfo::new($init, &OWNER);
         &INFO.info as *const $crate::JsFunctionInfo
     }};
-    (for $header:ty; export static $vis:vis $name:ident = sentinel $body:path, $n:tt $(; $($m:ident($($a:tt)*)),* $(,)?)?) => {
-        $crate::fn_info!(@image_static $vis $name, $body, $n, [$($($m($($a)*)),*)?],
-            unsafe { $crate::JsFunctionInfo::from_code($body, $n) } $($(.$m($($a)*))*)?);
+    (for $header:ty; export static $vis:vis $name:ident = sentinel $($body:ident)::+, $n:tt $(; $($m:ident($($a:tt)*)),* $(,)?)?) => {
+        $crate::fn_info!(@image_static $vis $name, $($body)::+, $n, [$($($m($($a)*)),*)?],
+            unsafe { $crate::JsFunctionInfo::from_code($($body)::+, $n) } $($(.$m($($a)*))*)?);
     };
-    (for $header:ty; export static $vis:vis $name:ident = native_args $body:path, $n:tt $(; $($m:ident($($a:tt)*)),* $(,)?)?) => {
-        $crate::fn_info!(@image_static $vis $name, $body, $n, [$($($m($($a)*)),*)?],
+    (for $header:ty; export static $vis:vis $name:ident = native_args $($body:ident)::+, $n:tt $(; $($m:ident($($a:tt)*)),* $(,)?)?) => {
+        $crate::fn_info!(@image_static $vis $name, $($body)::+, $n, [$($($m($($a)*)),*)?],
             $crate::JsFunctionInfo::of_native_args(
-                $body as $crate::JsNativeArgsBody<$header>, $n
+                $($body)::+ as $crate::JsNativeArgsBody<$header>, $n
             ) $($(.$m($($a)*))*)?);
     };
-    (for $header:ty; export static $vis:vis $name:ident = $body:path, $n:tt $(; $($m:ident($($a:tt)*)),* $(,)?)?) => {
-        $crate::fn_info!(@image_static $vis $name, $body, $n, [$($($m($($a)*)),*)?],
-            $crate::JsFunctionInfo::of($body as $crate::fn_info!(@ty $header, $n)) $($(.$m($($a)*))*)?);
+    (for $header:ty; export static $vis:vis $name:ident = $($body:ident)::+, $n:tt $(; $($m:ident($($a:tt)*)),* $(,)?)?) => {
+        $crate::fn_info!(@image_static $vis $name, $($body)::+, $n, [$($($m($($a)*)),*)?],
+            $crate::JsFunctionInfo::of($($body)::+ as $crate::fn_info!(@ty $header, $n)) $($(.$m($($a)*))*)?);
     };
     // Expression forms: providers' records are plain; the runtime asks for
     // records that own their metadata entry (`owned for ...`).
@@ -83,33 +87,33 @@ macro_rules! fn_info {
         unsafe { &*$crate::fn_info!(owned for $header; $($rest)*) }
     }};
     (owned for $header:ty; $($rest:tt)*) => { $crate::fn_info!(for $header; $($rest)*) };
-    (@export $mode:ident $header:ty; native_args $body:path, $declared:tt $(; $($m:ident($($a:tt)*)),* $(,)?)?) => {{
-        $crate::fn_info!(@image_record $mode $body, $declared,
+    (@export $mode:ident $header:ty; native_args $($body:ident)::+, $declared:tt $(; $($m:ident($($a:tt)*)),* $(,)?)?) => {{
+        $crate::fn_info!(@image_record $mode $($body)::+, $declared,
             [$($($m($($a)*)),*)?],
             $crate::JsFunctionInfo::of_native_args(
-                $body as $crate::JsNativeArgsBody<$header>,
+                $($body)::+ as $crate::JsNativeArgsBody<$header>,
                 $declared,
             ) $($(.$m($($a)*))*)?
         )
     }};
-    (@export $mode:ident $header:ty; unwind_in_tests $body:path, $n:tt $(; $($m:ident($($a:tt)*)),* $(,)?)?) => {{
+    (@export $mode:ident $header:ty; unwind_in_tests $($body:ident)::+, $n:tt $(; $($m:ident($($a:tt)*)),* $(,)?)?) => {{
         #[cfg(panic = "abort")]
-        let info = $crate::fn_info!(@export $mode $header; $body, $n $(; $($m($($a)*)),*)?);
+        let info = $crate::fn_info!(@export $mode $header; $($body)::+, $n $(; $($m($($a)*)),*)?);
         #[cfg(not(panic = "abort"))]
-        let info = $crate::fn_info!(@export $mode $header; unwind $body, $n $(; $($m($($a)*)),*)?);
+        let info = $crate::fn_info!(@export $mode $header; unwind $($body)::+, $n $(; $($m($($a)*)),*)?);
         info
     }};
-    (@export $mode:ident $header:ty; unwind $body:path, $n:tt $(; $($m:ident($($a:tt)*)),* $(,)?)?) => {{
-        $crate::fn_info!(@image_record $mode $body, $n,
+    (@export $mode:ident $header:ty; unwind $($body:ident)::+, $n:tt $(; $($m:ident($($a:tt)*)),* $(,)?)?) => {{
+        $crate::fn_info!(@image_record $mode $($body)::+, $n,
             [$($($m($($a)*)),*)?],
-            $crate::JsFunctionInfo::of($body as $crate::fn_info!(@uty $header, $n))
+            $crate::JsFunctionInfo::of($($body)::+ as $crate::fn_info!(@uty $header, $n))
                 $($(.$m($($a)*))*)?
         )
     }};
-    (@export $mode:ident $header:ty; $body:path, $n:tt $(; $($m:ident($($a:tt)*)),* $(,)?)?) => {{
-        $crate::fn_info!(@image_record $mode $body, $n,
+    (@export $mode:ident $header:ty; $($body:ident)::+, $n:tt $(; $($m:ident($($a:tt)*)),* $(,)?)?) => {{
+        $crate::fn_info!(@image_record $mode $($body)::+, $n,
             [$($($m($($a)*)),*)?],
-            $crate::JsFunctionInfo::of($body as $crate::fn_info!(@ty $header, $n))
+            $crate::JsFunctionInfo::of($($body)::+ as $crate::fn_info!(@ty $header, $n))
                 $($(.$m($($a)*))*)?
         )
     }};
