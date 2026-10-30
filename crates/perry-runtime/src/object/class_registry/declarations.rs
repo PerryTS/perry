@@ -77,6 +77,11 @@ pub const CLASS_DECL_DEFAULT_DERIVED: u32 = 4;
 pub const CLASS_DECL_ANONYMOUS: u32 = 8;
 /// A declared/native class identity, independent of its current live members.
 pub const CLASS_DECL_DECLARED: u32 = 16;
+/// [`ClassDeclaration::flags`]: the emitter drew every literal member name of
+/// this declaration from one per-module string pool, so two literal members
+/// have equal names exactly when their `name` pointers are equal. Without it
+/// (a native or hand-built declaration) names compare by bytes.
+pub const CLASS_DECL_NAMES_POOLED: u32 = 32;
 const CLASS_DECL_ROLE_MASK: u32 = CLASS_DECL_ANONYMOUS | CLASS_DECL_DECLARED;
 
 /// A class's instance members, in definition order, the compiler's candidate
@@ -106,9 +111,7 @@ const _: () = {
     let ptr = std::mem::size_of::<*const u8>();
     assert!(std::mem::size_of::<ClassMemberDecl>() == 3 * ptr + 16);
     assert!(std::mem::offset_of!(ClassMemberDecl, flags) == 3 * ptr + 13);
-    assert!(
-        CLASS_MEMBER_NAME_UTF8 & (CLASS_MEMBER_SYNTHETIC_ARGUMENTS | CLASS_MEMBER_REST) == 0
-    );
+    assert!(CLASS_MEMBER_NAME_UTF8 & (CLASS_MEMBER_SYNTHETIC_ARGUMENTS | CLASS_MEMBER_REST) == 0);
 };
 
 unsafe impl Sync for ClassMemberDecl {}
@@ -194,6 +197,18 @@ impl ClassDeclaration {
     #[inline]
     pub(crate) fn has_accessors(&self) -> bool {
         self.flags & CLASS_DECL_HAS_ACCESSORS != 0
+    }
+
+    /// Do two literal members of this declaration have the same name? A
+    /// pooled declaration answers from the `name` pointers (the pool has one
+    /// string per distinct name), with no byte compare.
+    #[inline]
+    fn same_literal_name(&self, a: &ClassMemberDecl, b: &ClassMemberDecl) -> bool {
+        if self.flags & CLASS_DECL_NAMES_POOLED != 0 {
+            a.name == b.name
+        } else {
+            a.name_bytes() == b.name_bytes()
+        }
     }
 }
 
@@ -816,31 +831,143 @@ fn first_unnamed(class_id: u32, decl: &ClassDeclaration) -> Option<usize> {
         .position(|m| m.name.is_null() && computed_member_name(class_id, m) == MemberName::Unnamed)
 }
 
+/// No member: the index sentinel of [`DeclAt`].
+pub(crate) const NO_MEMBER: u32 = u32::MAX;
+
+/// Where one declared prototype member sits in its class's declaration: the
+/// index of the member that supplies a method (the last one declaring the
+/// name), or the indices of an accessor's getter and setter halves (the last
+/// of each with a body). Found once, while the declaration is walked, and
+/// carried to every reader of the member, so none of them searches the
+/// declaration by name again.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct DeclAt {
+    pub method: u32,
+    pub get: u32,
+    pub set: u32,
+}
+
+impl DeclAt {
+    const NONE: DeclAt = DeclAt {
+        method: NO_MEMBER,
+        get: NO_MEMBER,
+        set: NO_MEMBER,
+    };
+
+    /// The method member's index, if this is a method.
+    #[inline]
+    pub(crate) fn method_index(self) -> Option<u32> {
+        (self.method != NO_MEMBER).then_some(self.method)
+    }
+}
+
+/// One string-keyed prototype member of a declaration: its name and where it
+/// sits.
+pub(crate) struct DeclaredMember {
+    pub name: Vec<u8>,
+    pub at: DeclAt,
+    /// The literal member that first declared the name, `None` when a
+    /// computed key named it.
+    literal: Option<&'static ClassMemberDecl>,
+}
+
 /// The string-keyed members of class `class_id` the decl prototype holds
 /// (or would hold if born now), each once per kind in declaration order:
 /// `(methods, accessors)`. Members from the first one whose computed key the
-/// definition has not evaluated onward are left out.
-pub(crate) fn class_declared_member_names(class_id: u32) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
-    let mut methods: Vec<Vec<u8>> = Vec::new();
-    let mut accessors: Vec<Vec<u8>> = Vec::new();
+/// definition has not evaluated onward are left out (a later member only
+/// moves the position of a name already listed).
+pub(crate) fn class_declared_members(class_id: u32) -> (Vec<DeclaredMember>, Vec<DeclaredMember>) {
+    let mut methods: Vec<DeclaredMember> = Vec::new();
+    let mut accessors: Vec<DeclaredMember> = Vec::new();
     let Some(decl) = class_declaration(class_id) else {
         return (methods, accessors);
     };
     let end = first_unnamed(class_id, decl).unwrap_or(decl.members().len());
-    for member in &decl.members()[..end] {
-        let MemberName::Str(name) = class_member_name(class_id, member) else {
-            continue;
-        };
+    for (index, member) in decl.members().iter().enumerate() {
         let list = if member.is_method() {
             &mut methods
         } else {
             &mut accessors
         };
-        if !list.contains(&name) {
-            list.push(name);
+        let hit = if member.name.is_null() {
+            // A computed name is a runtime string: compare its bytes.
+            let MemberName::Str(name) = computed_member_name(class_id, member) else {
+                continue;
+            };
+            match list.iter().position(|e| e.name == name) {
+                Some(hit) => hit,
+                None if index < end => {
+                    list.push(DeclaredMember {
+                        name,
+                        at: DeclAt::NONE,
+                        literal: None,
+                    });
+                    list.len() - 1
+                }
+                None => continue,
+            }
+        } else {
+            let found = list.iter().position(|e| match e.literal {
+                Some(first) => decl.same_literal_name(first, member),
+                None => Some(e.name.as_slice()) == member.name_bytes(),
+            });
+            match found {
+                Some(hit) => hit,
+                None if index < end => {
+                    list.push(DeclaredMember {
+                        name: member.name_bytes().unwrap_or_default().to_vec(),
+                        at: DeclAt::NONE,
+                        literal: Some(member),
+                    });
+                    list.len() - 1
+                }
+                None => continue,
+            }
+        };
+        let at = &mut list[hit].at;
+        let index = index as u32;
+        if member.is_method() {
+            at.method = index;
+        } else if !member.code.is_null() {
+            if member.kind == CLASS_MEMBER_SETTER {
+                at.set = index;
+            } else {
+                at.get = index;
+            }
         }
     }
     (methods, accessors)
+}
+
+/// How many members class `class_id`'s declaration lists.
+pub(crate) fn class_member_count(class_id: u32) -> usize {
+    class_declaration(class_id).map_or(0, |decl| decl.members().len())
+}
+
+/// The method declared at `index` of class `class_id`'s declaration.
+#[inline]
+pub(crate) fn class_method_decl_at(class_id: u32, index: u32) -> Option<&'static ClassMemberDecl> {
+    class_declaration(class_id)?
+        .members()
+        .get(index as usize)
+        .filter(|m| m.is_method())
+}
+
+/// The accessor whose halves sit at `at`.
+pub(crate) fn class_accessor_decl_at(class_id: u32, at: DeclAt) -> Option<AccessorDecl> {
+    let members = class_declaration(class_id)?.members();
+    let mut out = AccessorDecl::default();
+    let mut any = false;
+    if let Some(m) = members.get(at.get as usize) {
+        out.get = m.code as usize;
+        any = true;
+    }
+    if let Some(m) = members.get(at.set as usize) {
+        out.set = m.code as usize;
+        out.set_length = m.set_length();
+        any = true;
+    }
+    any.then_some(out)
 }
 
 /// The method of class `class_id` whose closure-convention entry is `entry`,
@@ -987,7 +1114,7 @@ fn name_computed_member_by_key(class_id: u32, definition_order: u32, value: f64)
     // alias and a re-added deleted key are not among them).
     let members: Vec<Vec<u8>> = super::state::class_prototype_member_names(class_id)
         .into_iter()
-        .map(|(name, _)| name)
+        .map(|member| member.name)
         .collect();
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto_h = scope.root_raw_mut_ptr(proto);
@@ -1164,6 +1291,41 @@ fn test_declare_member_with(
     if surface {
         declaration_registered(class_id, decl, &previous);
     }
+}
+
+/// Declare class `class_id` with one method per entry of `names`, each
+/// named by exactly that pointer (two entries with one pointer share a name
+/// as an emitter's pool does), and `pooled` as the emitter's pooling flag.
+#[cfg(test)]
+pub(crate) fn test_declare_pointer_named(class_id: u32, names: &[&'static [u8]], pooled: bool) {
+    let members: Vec<ClassMemberDecl> = names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| ClassMemberDecl {
+            name: name.as_ptr(),
+            code: 1 as *const u8,
+            entry: std::ptr::null(),
+            name_len: name.len() as u32,
+            definition_order: 100 + i as u32,
+            param_count: 0,
+            kind: CLASS_MEMBER_METHOD,
+            flags: CLASS_MEMBER_NAME_UTF8,
+            set_length: -1,
+        })
+        .collect();
+    let members: &'static [ClassMemberDecl] = Box::leak(members.into_boxed_slice());
+    let decl: &'static ClassDeclaration = Box::leak(Box::new(ClassDeclaration {
+        members: members.as_ptr(),
+        flags: ClassDeclaration::flags_of(members)
+            | CLASS_DECL_DECLARED
+            | if pooled { CLASS_DECL_NAMES_POOLED } else { 0 },
+        ..ClassDeclaration::native(members)
+    }));
+    CLASS_DECLARATIONS
+        .write()
+        .expect("declaration index")
+        .set(class_id, decl)
+        .expect("fixture class role must agree");
 }
 
 /// Append a computed member (no name; its definition names it by

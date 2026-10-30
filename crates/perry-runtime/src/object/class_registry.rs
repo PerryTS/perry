@@ -50,8 +50,8 @@ pub(crate) mod declarations;
 pub(crate) use decl_accessors::{
     class_chain_getter_value, class_chain_getter_value_bytes, class_chain_setter_apply,
     decl_prototype_own_accessor, decl_prototype_own_accessor_bytes,
-    install_decl_prototype_accessor_bytes, instance_chain_getter_value,
-    instance_chain_setter_apply, instance_chain_setter_apply_bytes,
+    install_decl_prototype_accessor_at, instance_chain_getter_value, instance_chain_setter_apply,
+    instance_chain_setter_apply_bytes,
 };
 pub use declarations::{
     js_register_class_declaration, ClassDeclaration, ClassMemberDecl, CLASS_MEMBER_GETTER,
@@ -97,19 +97,20 @@ pub(crate) use state::stashed_dynamic_parent_value;
 pub(crate) use state::{
     builtin_parent_ctor_in_chain, class_decl_prototype_object, class_decl_prototype_value,
     class_decl_prototype_value_for_instance_class, class_decl_prototype_value_selected,
-    class_declaration_value, class_declaration_value_bytes, class_declaration_value_store,
-    class_declaration_value_store_bytes, class_delete_own_dynamic_prop,
+    class_declaration_value, class_declaration_value_known, class_declaration_value_store,
+    class_declaration_value_store_known, class_delete_own_dynamic_prop,
     class_dynamic_prop_root_store, class_has_own_dynamic_prop, class_id_for_decl_prototype_object,
-    class_method_entry_bytes, class_object_value_for_cid, class_object_value_root_store,
-    class_own_dynamic_prop_names, class_own_enumerable_field_names, class_own_static_field_value,
-    class_own_static_field_value_bytes, class_own_string_member_names, class_parent_closure,
-    class_parent_closure_root_store, class_proto_key_deleted, class_proto_key_deleted_bytes,
-    class_prototype_member_names, class_prototype_object_addr_index_contains,
-    class_prototype_object_addr_index_rekey, class_prototype_object_root_store,
-    class_ref_dynamic_prop_root_store, class_register_declared_static_global_slot,
-    class_static_alias_sync, class_static_clear_defined_attrs, class_static_defined_attrs,
-    class_static_defined_attrs_bytes, class_static_key_deleted, class_static_key_deleted_bytes,
-    class_static_prototype, class_static_prototype_is_nulled, class_static_prototype_root_clear,
+    class_method_entry_at, class_method_entry_bytes, class_object_value_for_cid,
+    class_object_value_root_store, class_own_dynamic_prop_names, class_own_enumerable_field_names,
+    class_own_static_field_value, class_own_static_field_value_bytes,
+    class_own_string_member_names, class_parent_closure, class_parent_closure_root_store,
+    class_proto_key_deleted, class_proto_key_deleted_bytes, class_prototype_member_names,
+    class_prototype_object_addr_index_contains, class_prototype_object_addr_index_rekey,
+    class_prototype_object_root_store, class_ref_dynamic_prop_root_store,
+    class_register_declared_static_global_slot, class_static_alias_sync,
+    class_static_clear_defined_attrs, class_static_defined_attrs, class_static_defined_attrs_bytes,
+    class_static_key_deleted, class_static_key_deleted_bytes, class_static_prototype,
+    class_static_prototype_is_nulled, class_static_prototype_root_clear,
     class_static_prototype_root_store, class_static_set_defined_attrs,
     class_static_set_defined_attrs_bytes, decl_prototype_identity_id, global_object_prototype_bits,
     is_bound_native_constructor_closure_value, is_non_constructable_builtin_function_value,
@@ -197,7 +198,8 @@ pub(crate) use gc_roots::{
 // ── registration.rs ─────────────────────────────────────────────────────────
 pub(crate) use registration::{
     class_accessor_function_value, class_accessor_function_value_bytes,
-    class_accessor_source_func_ptr, class_own_accessor_ptrs_bytes, class_own_setter_length_bytes,
+    class_accessor_source_func_ptr, class_own_accessor_ptrs_at, class_own_accessor_ptrs_bytes,
+    class_own_setter_length_at, class_own_setter_length_bytes,
     class_registered_static_accessor_ptrs, class_registered_static_accessor_ptrs_bytes,
     invalidate_class_string_member_order,
 };
