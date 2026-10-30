@@ -591,6 +591,23 @@ impl LlModule {
             .into_iter()
             .filter(|body| self.has_function(body))
             .collect();
+        // The bodies the runtime names in a stack trace (a published info
+        // with a non-empty name) are the JS text section's functions.
+        let named: std::collections::HashSet<&str> = bodies
+            .iter()
+            .filter(|b| {
+                self.fn_infos
+                    .borrow()
+                    .facts(b)
+                    .name
+                    .as_ref()
+                    .is_some_and(|n| n.byte_len > 0)
+            })
+            .map(String::as_str)
+            .collect();
+        for function in &mut self.functions {
+            function.js_text = named.contains(function.name.as_str());
+        }
         if bodies.is_empty() {
             // Publishing an empty descriptor cannot make any metadata visible.
             // Omit the dead registration at the same final inventory boundary.
