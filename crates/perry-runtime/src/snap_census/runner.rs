@@ -306,6 +306,9 @@ struct State {
     /// populating itself on first use. (what, call chain), first per what.
     realm_hosts: Vec<(&'static str, [usize; 6])>,
     excluded: u64,
+    /// Global root slots on no tracked page (the thread pointer's page,
+    /// or not a binding: a root slot elsewhere): not watched.
+    untracked_slots: u64,
     /// `PERRY_SNAP_MODE=top`: every member of D may read and write every
     /// location that exists when it starts (a ⊤ summary). Members run
     /// untracked; any other init that touches such a location joins D.
@@ -405,8 +408,11 @@ unsafe fn start(out: String) {
     // The executable's static TLS block sits right below the thread pointer
     // (x86_64 variant II): [fs - memsz rounded to its alignment, fs).
     let tls_size = executable_tls_size();
+    // The page holding the thread pointer is never protected: the kernel
+    // writes the thread's rseq area (in the TCB, right above it) on every
+    // return to user space, and a protected page there kills the thread.
     let (tls_lo, tls_hi) = if fs != 0 && tls_size != 0 {
-        (fs - tls_size, fs)
+        (fs - tls_size, fs & !(PAGE - 1))
     } else {
         (fs, fs)
     };
@@ -427,6 +433,7 @@ unsafe fn start(out: String) {
         starts: map_zeroed::<u64>(((res_hi - res_lo) / 8).div_ceil(64).max(1)),
         realm_hosts: Vec::new(),
         excluded: 0,
+        untracked_slots: 0,
         top_mode: std::env::var("PERRY_SNAP_MODE").is_ok_and(|v| v == "top"),
         pre_bits: map_zeroed::<u64>(((res_hi - res_lo) / 8).div_ceil(64).max(1)),
         pre_upto: 0,
@@ -494,6 +501,9 @@ unsafe fn start(out: String) {
     let mut slots = Vec::new();
     crate::gc::for_each_global_root_slot(|slot| slots.push(slot));
     for slot in slots {
+        if page_flags(st, slot).is_none() {
+            st.untracked_slots += 1;
+        }
         st.globals.insert(slot as u64);
         st.globals_log.push(slot);
         mark_tracked(slot, slot + 8);
@@ -851,6 +861,9 @@ pub(super) fn region_mapped(base: usize, len: usize) {
 
 pub(super) fn global_root(slot: usize) {
     let st = state();
+    if page_flags(st, slot).is_none() {
+        st.untracked_slots += 1;
+    }
     st.globals.insert(slot as u64);
     st.globals_log.push(slot);
     mark_tracked(slot, slot + 8);
@@ -1724,6 +1737,7 @@ fn write_report(st: &mut State) {
         let _ = writeln!(f, "#digest_total\t{total:016x}\t{}", per.len());
     }
     let _ = writeln!(f, "#excluded\t{}", st.excluded);
+    let _ = writeln!(f, "#untracked_slots\t{}\tof\t{}", st.untracked_slots, st.globals.len);
     for (what, pcs) in &st.realm_hosts {
         let pcs: Vec<String> = pcs.iter().map(|p| format!("{p:x}")).collect();
         let _ = writeln!(f, "#realm_host\t{what}\t{}", pcs.join(","));
