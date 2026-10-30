@@ -17,13 +17,12 @@ struct NativeExportInfo {
 
 pub(crate) unsafe fn construct(value: f64, args: *const f64, len: usize) -> Option<f64> {
     let ptr = crate::value::js_nanbox_get_pointer(value) as *const crate::closure::ClosureHeader;
-    if !crate::closure::is_closure_ptr(ptr as usize) {
+    // A closure's info word may be null (a header born without a body record).
+    let info = crate::closure::closure_info(ptr)?;
+    if info.flags & crate::codegen_abi::FN_NATIVE_EXPORT == 0 {
         return None;
     }
-    let info = (*ptr).info;
-    if (*info).flags & crate::codegen_abi::FN_NATIVE_EXPORT == 0 {
-        return None;
-    }
+    let info: *const JsFunctionInfo = info;
     ((*info.cast::<NativeExportInfo>()).construct)(args, len)
 }
 
@@ -260,8 +259,8 @@ pub(crate) unsafe fn call_minted(
         .map(f64::from_bits)?;
     let closure =
         crate::value::js_nanbox_get_pointer(value) as *const crate::closure::ClosureHeader;
-    if !crate::closure::is_closure_ptr(closure as usize)
-        || (*(*closure).info).code == crate::closure::BOUND_METHOD_FUNC_PTR
+    if crate::closure::closure_info(closure)
+        .is_none_or(|info| info.code == crate::closure::BOUND_METHOD_FUNC_PTR)
     {
         return None;
     }
