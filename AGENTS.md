@@ -50,6 +50,16 @@ cargo run --release -- file.ts --trace llvm                 # IR in .perry-trace
   transitive, target-specific, dev or build dependencies. Run
   `python3 scripts/tokio_inventory.py --offline` before changing dependencies.
 
+## Which layer owns a test
+
+Three suites answer three different questions. A test written in the wrong one either cannot see its subject or duplicates another suite's work:
+
+- **Beside the code** (`#[cfg(test)]`, `tests.rs` siblings) asserts an invariant of the implementation: an allocation count, a rooting or ordering rule, a release path, private state. This is the layer that can see what a compiled program cannot, and it is where acceptance coverage goes, because a failure here names the mechanism.
+- **`crates/*/tests/`** asserts the public API across modules. CI selects these from the changed paths (`scripts/ci_test_scope.py`), so a behavior that must never regress silently belongs in a unit test instead.
+- **`test-parity/` and `test-files/test_parity_*.ts`** assert observable behavior of the compiled program, diffed against Node. If the assertion reads as "this program prints X", it belongs here; if it needs to reach inside the runtime, it does not.
+
+The duplication worth deleting is a Rust test whose only assertion is output a parity case already compares byte for byte, and a parity case built to observe something the runtime must keep internal.
+
 ## TypeScript Parity Status
 
 The gap suite (`test-files/test_gap_*.ts`) is compared byte-for-byte against `node --experimental-strip-types`. The oracle is Node `26.12.1`, pinned in `.node-version`. Use that exact version locally: when Node cannot run a test, the harness marks it `node_fail` and drops it from the gate silently. The builtin-module matrix (`node scripts/node_compat_matrix.mjs --module <name>`) uses its own pin, `tools.node.version` — currently **26.12.1**, in `external-tools.json`.
