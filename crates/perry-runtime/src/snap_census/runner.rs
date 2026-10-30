@@ -306,6 +306,18 @@ struct State {
     /// populating itself on first use. (what, call chain), first per what.
     realm_hosts: Vec<(&'static str, [usize; 6])>,
     excluded: u64,
+    /// `PERRY_SNAP_MODE=top`: every member of D may read and write every
+    /// location that exists when it starts (a ⊤ summary). Members run
+    /// untracked; any other init that touches such a location joins D.
+    top_mode: bool,
+    /// One bit per reservation word, at birth starts: born before the latest
+    /// member's start (the ⊤ pre-existing set).
+    pre_bits: *mut u64,
+    pre_upto: usize,
+    globals_log: Vec<usize>,
+    pre_globals: WordSet,
+    pre_globals_upto: usize,
+    top_armed: bool,
     births: Log<Birth>,
     listed: Log<usize>,
     regions: Vec<(usize, usize)>,
@@ -396,6 +408,13 @@ unsafe fn start(out: String) {
         starts: map_zeroed::<u64>(((res_hi - res_lo) / 8).div_ceil(64).max(1)),
         realm_hosts: Vec::new(),
         excluded: 0,
+        top_mode: std::env::var("PERRY_SNAP_MODE").is_ok_and(|v| v == "top"),
+        pre_bits: map_zeroed::<u64>(((res_hi - res_lo) / 8).div_ceil(64).max(1)),
+        pre_upto: 0,
+        globals_log: Vec::new(),
+        pre_globals: WordSet::new(22),
+        pre_globals_upto: 0,
+        top_armed: false,
         births: Log::new(1 << 28),
         listed: Log::new(1 << 26),
         regions: Vec::new(),
@@ -453,6 +472,7 @@ unsafe fn start(out: String) {
     crate::gc::for_each_global_root_slot(|slot| slots.push(slot));
     for slot in slots {
         st.globals.insert(slot as u64);
+        st.globals_log.push(slot);
         mark_tracked(slot, slot + 8);
     }
     install_handlers();
@@ -612,6 +632,9 @@ pub(super) fn init_enter(addr: usize) {
         || (parent_id != 0 && st.inits[parent_id as usize].from_entry_body);
     init.seeded = st.seeded.contains(&addr);
     init.in_d = init.seeded;
+    if st.top_mode && init.in_d {
+        unsafe { extend_top(st) };
+    }
     if init.dynamic && st.rule4 && !st.rule4_armed {
         unsafe { arm_rule4(st) };
     }
@@ -708,6 +731,9 @@ pub(super) fn host(class: Effect, what: &'static str) {
     i.host_count += 1;
     if class != Effect::TargetFact && !i.in_d {
         i.in_d = true;
+        if st.top_mode {
+            unsafe { extend_top(st) };
+        }
         set_mode_for_top(st);
     }
     let i = &mut st.inits[top as usize];
@@ -781,6 +807,7 @@ pub(super) fn region_mapped(base: usize, len: usize) {
 pub(super) fn global_root(slot: usize) {
     let st = state();
     st.globals.insert(slot as u64);
+    st.globals_log.push(slot);
     mark_tracked(slot, slot + 8);
     // Rule 2 names every binding a member of D initializes, written or not.
     let top = st.frames.last().map_or(0, |f| f.init) as usize;
@@ -822,6 +849,13 @@ fn policy(st: &State, page: usize) -> i32 {
     if f & PF_TRACKED == 0 {
         return libc::PROT_READ | libc::PROT_WRITE;
     }
+    if st.top_mode {
+        return if !st.d_mode && f & PF_PRE != 0 {
+            libc::PROT_NONE
+        } else {
+            libc::PROT_READ | libc::PROT_WRITE
+        };
+    }
     if st.d_mode {
         return libc::PROT_NONE;
     }
@@ -855,6 +889,20 @@ unsafe fn for_each_tracked_range(st: &State, mut f: impl FnMut(usize, usize)) {
 }
 
 unsafe fn apply_protection(st: &mut State) {
+    if st.top_mode {
+        for_each_tracked_range(st, |b, e| {
+            libc::mprotect(b as *mut _, e - b, libc::PROT_READ | libc::PROT_WRITE);
+        });
+        if !st.d_mode {
+            for &page in st.listed.as_slice() {
+                let p = policy(st, page);
+                if p != libc::PROT_READ | libc::PROT_WRITE {
+                    libc::mprotect(page as *mut _, PAGE, p);
+                }
+            }
+        }
+        return;
+    }
     if st.d_mode {
         for_each_tracked_range(st, |b, e| {
             libc::mprotect(b as *mut _, e - b, libc::PROT_NONE);
@@ -919,6 +967,55 @@ unsafe fn arm_rule4(st: &mut State) {
     }
     st.pre_sorted.sort_unstable();
     apply_protection(st);
+}
+
+/// ⊤ mode: everything born or registered so far is pre-existing for the
+/// member that starts now.
+unsafe fn extend_top(st: &mut State) {
+    let from = st.pre_upto;
+    st.pre_upto = st.births.len;
+    for k in from..st.pre_upto {
+        let b = *st.births.p.add(k);
+        if let Some(i) = start_bit(st, b.addr) {
+            *st.pre_bits.add(i / 64) |= 1 << (i % 64);
+        }
+        let mut p = b.addr & !(PAGE - 1);
+        while p < b.addr + b.size as usize {
+            flag_page(st, p, PF_PRE);
+            p += PAGE;
+        }
+    }
+    for k in st.pre_globals_upto..st.globals_log.len() {
+        let s = st.globals_log[k];
+        st.pre_globals.insert(s as u64);
+        flag_page(st, s & !(PAGE - 1), PF_PRE);
+    }
+    st.pre_globals_upto = st.globals_log.len();
+    if !st.top_armed {
+        st.top_armed = true;
+        let (rb, re) = st.realm;
+        let mut p = rb & !(PAGE - 1);
+        while p < re {
+            flag_page(st, p, PF_PRE);
+            p += PAGE;
+        }
+    }
+}
+
+fn top_pre_existing(st: &State, word: usize) -> bool {
+    if !st.top_armed {
+        return false;
+    }
+    if word >= st.realm.0 && word < st.realm.1 {
+        return true;
+    }
+    if st.pre_globals.contains(word as u64) {
+        return true;
+    }
+    match object_start(st, word).and_then(|h| start_bit(st, h)) {
+        Some(i) => unsafe { *st.pre_bits.add(i / 64) & (1 << (i % 64)) != 0 },
+        None => false,
+    }
 }
 
 fn pre_existing(st: &State, word: usize) -> bool {
@@ -1091,6 +1188,25 @@ fn note_access(st: &mut State, word: usize, write: bool, pc: usize) {
     let top = st.frames.last().map_or(0, |f| f.init) as usize;
     st.inits[top].faults += 1;
     let w = word as u64;
+    if st.top_mode {
+        if st.d_mode || top == 0 || !top_pre_existing(st, word) {
+            return;
+        }
+        let i = &mut st.inits[top];
+        if i.conflict.is_none() {
+            i.conflict = Some(Conflict {
+                rule: if write { 3 } else { 2 },
+                word,
+                pc,
+                write,
+            });
+        }
+        i.in_d = true;
+        unsafe { extend_top(st) };
+        st.d_mode = true;
+        unsafe { apply_protection(st) };
+        return;
+    }
     if st.d_mode {
         if write {
             st.w.insert(w);
