@@ -298,6 +298,7 @@ fn lower_constructor_in_scope(
         new_body.append(&mut body);
         body = new_body;
     }
+    super::super_arrow_this::bind_super_argument_arrows(ctx, &mut body);
     let class_expr_entries = ctx
         .body_class_expr_captures
         .split_off(class_expr_capture_mark);
