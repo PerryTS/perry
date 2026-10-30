@@ -304,7 +304,7 @@ pub(super) fn prepare_from_raw(
                 wrapped
             ));
         }
-        if inputs.debug_symbols {
+        if capture_wrap_offsets(inputs.debug_symbols) {
             // Preserve original-source locations after injecting the wrapper.
             body_prefix_lines = body_off.map(|off| {
                 wrapped.as_bytes()[..off]
@@ -357,7 +357,7 @@ pub(super) fn prepare_from_raw(
         }
     }
     let debug_prefix_line_count = match body_prefix_lines {
-        Some(prefix_lines) if was_cjs_wrapped && inputs.debug_symbols => {
+        Some(prefix_lines) if was_cjs_wrapped && capture_wrap_offsets(inputs.debug_symbols) => {
             let lines_after_transform = source.bytes().filter(|&b| b == b'\n').count();
             let added_lines = lines_after_transform.saturating_sub(lines_before_transform) as u32;
             Some(prefix_lines + added_lines)
@@ -374,6 +374,14 @@ pub(super) fn prepare_from_raw(
         stdlib_modules,
         debug_prefix_line_count,
     })
+}
+
+/// Whether to keep where each CommonJS module body lands in its wrapped text:
+/// for source locations (`--debug-symbols`), and with the facts dump on, so
+/// the ledger maps its wrapped-coordinate sites back to the source
+/// (`W` records of the dump; nothing is emitted without the dump).
+fn capture_wrap_offsets(debug_symbols: bool) -> bool {
+    debug_symbols || std::env::var_os("PERRY_FACTS_DUMP").is_some()
 }
 
 /// A plain source file (not an addon, Wasm or file-loader asset) read and,
