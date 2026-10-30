@@ -1018,6 +1018,10 @@ pub fn run_with_parse_cache(
     for hir_module in ctx.native_modules.values_mut() {
         super::cjs_link::resolve_open_sites(hir_module, ctx.cjs_closed)?;
     }
+    // Select from the surviving HIR, never from the wrapper's discarded
+    // dynamic loader. In particular a dead createRequire import cannot
+    // select URL/dgram, or contribute opaque keys to streams selection.
+    collect_modules::feature_detect::detect_program_optional_feature_usage(&mut ctx);
 
     collect_modules::collect_declared_addons(&mut ctx, args.target.as_deref())?;
 

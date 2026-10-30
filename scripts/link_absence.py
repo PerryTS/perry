@@ -71,6 +71,7 @@ NEGATIVES = {
     "without_bigint_querystring": ["bigint"],
     "fs_promises_without_streams": ["bundled_web_streams"],
     "fs_read_loop_without_streams": ["bundled_web_streams"],
+    "cjs_json_query": ["url_engine", "mod_dgram", "bundled_web_streams"],
 }
 
 

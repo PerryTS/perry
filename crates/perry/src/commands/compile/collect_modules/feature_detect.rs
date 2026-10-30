@@ -552,10 +552,31 @@ fn module_uses_json_format(module: &perry_hir::Module) -> bool {
         })
 }
 
-/// Inspect a lowered module and set the optional-feature gates it needs.
+/// Select features after CJS open arms have been resolved, retaining the full
+/// graph for the detector's imported-enum and other producer facts.
+pub(crate) fn detect_program_optional_feature_usage(ctx: &mut CompilationContext) {
+    let modules = std::mem::take(&mut ctx.native_modules);
+    for module in modules.values() {
+        let computed = computed_members::scan(module, &modules);
+        detect_optional_feature_usage_with_capabilities(ctx, module, computed);
+    }
+    ctx.native_modules = modules;
+}
+
+/// Inspect one lowered module using the producers already collected in ctx.
+#[cfg(test)]
 pub(super) fn detect_optional_feature_usage(
     ctx: &mut CompilationContext,
     hir_module: &perry_hir::Module,
+) {
+    let computed = computed_members::scan(hir_module, &ctx.native_modules);
+    detect_optional_feature_usage_with_capabilities(ctx, hir_module, computed);
+}
+
+fn detect_optional_feature_usage_with_capabilities(
+    ctx: &mut CompilationContext,
+    hir_module: &perry_hir::Module,
+    computed: computed_members::Capabilities,
 ) {
     // #11121: ONE token corpus for every text-grep gate below, and it covers
     // all three places lowered code lives. Class methods, accessors, static
@@ -788,7 +809,6 @@ pub(super) fn detect_optional_feature_usage(
     }) {
         ctx.uses_bigint = true;
     }
-    let computed = computed_members::scan(hir_module, &ctx.native_modules);
     ctx.uses_diagnostics |= computed.opaque_members
         && (ctx.native_module_imports.contains("process")
             || hir_debug.contains(r#"property: "process""#)
@@ -1719,5 +1739,45 @@ class C {
         );
         let strict_receiver = detect_for_source("class C { identity() { return this; } } console.log(new C().identity().constructor.name);");
         assert!(!strict_receiver.uses_global_json);
+    }
+    #[test]
+    fn program_feature_detection_retains_imported_enum_producers() {
+        use std::path::PathBuf;
+        for producer_present in [false, true] {
+            let consumer_path = "/tmp/a-consumer.ts";
+            let producer_path = "/tmp/z-producer.ts";
+            let ast = perry_parser::parse_typescript(
+                "import { Priority } from './z-producer'; console.log(new Date(0).getTime()); function read(key: string) { return Priority[key]; }",
+                consumer_path,
+            ).unwrap();
+            let mut consumer = perry_hir::lower_module(&ast, "consumer", consumer_path).unwrap();
+            consumer
+                .imports
+                .iter_mut()
+                .find(|i| i.source == "./z-producer")
+                .unwrap()
+                .resolved_path = Some(producer_path.into());
+            let mut ctx = crate::commands::compile::CompilationContext::new(PathBuf::from("/tmp"));
+            ctx.native_modules
+                .insert(PathBuf::from(consumer_path), consumer);
+            if producer_present {
+                let ast = perry_parser::parse_typescript(
+                    "export enum Priority { Low = 0, High = 1 }",
+                    producer_path,
+                )
+                .unwrap();
+                let producer = perry_hir::lower_module(&ast, "producer", producer_path).unwrap();
+                ctx.native_modules
+                    .insert(PathBuf::from(producer_path), producer);
+            }
+            super::detect_program_optional_feature_usage(&mut ctx);
+            assert!(ctx.uses_date);
+            assert_eq!(ctx.uses_computed_member_keys, !producer_present);
+            assert_eq!(ctx.uses_temporal, !producer_present);
+            assert_eq!(
+                ctx.native_modules.len(),
+                if producer_present { 2 } else { 1 }
+            );
+        }
     }
 }

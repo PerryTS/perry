@@ -71,6 +71,7 @@ impl SH for Module {
                     class.hash(h);
                 }
                 syntax.module_capability_uses.hash(h);
+                syntax.descriptor_capability_uses.hash(h);
             }
         }
         imports.hash(h);
