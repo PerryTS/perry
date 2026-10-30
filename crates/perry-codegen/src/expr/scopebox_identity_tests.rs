@@ -120,6 +120,8 @@ fn a_local_hole_fill_checks_capacity_length_and_prototype() {
                 object: Box::new(Expr::LocalGet(1)),
                 index: Box::new(Expr::Integer(0)),
                 value: Box::new(Expr::Integer(7)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
         ],
     );

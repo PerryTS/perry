@@ -1,0 +1,9 @@
+Register the one test file that existed on disk and ran in no registry.
+
+`check_test_registration.py` reported `DARK TEST test-files/test_gap_gc_numeric_callback_contract.ts`. The file arrived with `f9f0a9c8c0` (#13444, admitted closure capture/return ranges) and that commit touched neither `test-parity/gc_repsel_corpus.txt` nor the checker's exclusion list, so it was an oversight rather than a deliberate exclusion.
+
+Strictly, the gate's headline overstates it: `scripts/run_gap_tests.sh` compiles every `test-files/test_gap_*.ts`, so the test was already running in the gap suite. What it was missing from is the second harness, the GC x representation-selection stress matrix, which is where a callback-contract test earns its keep. Registered there; `gc-repsel-corpus` goes from 124/125 to 125/125.
+
+Verified, not assumed: the release build used to check it finished clean; the gap suite filtered to this test reports parity 100.0% with 0 skipped; and the repsel matrix, filtered and run with the pinned Node 26.12.1, reports `PASS=1 UNVER=6 XFAIL=0 FAIL=0`, exit 0. The matrix refused the first attempt outright with `ORACLE MISMATCH: node 26.10.0 but .node-version pins 26.12.1`, which is correct behaviour — a wrong oracle marks tests `node_fail` and drops them from the gate silently, so a green there would have meant nothing.
+
+One measurement worth recording rather than hiding: this 53-line test does not allocate enough to trigger a copying minor or a relocation, so all six GC arms report `UNVER` (output matched, arm inert) for it at 8 MB pressure and still at 1 MB. Its cells in the matrix are therefore green for the weaker reason — output parity — and not because it exercised the collector. That is a property of the test's allocation volume, not of this registration, and the arms are made live by the rest of the corpus; it is recorded here so the next person does not over-read those cells.

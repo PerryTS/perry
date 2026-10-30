@@ -81,7 +81,11 @@ fn install_state(owner: &FunctionMetadataOwner, value: OwnerState) -> &'static O
             return unsafe { &*current.cast::<OwnerState>() };
         }
         // The payload inherits a registration index the word already holds.
-        let index = if current.is_null() { 0 } else { (current as usize >> 1) as u32 };
+        let index = if current.is_null() {
+            0
+        } else {
+            (current as usize >> 1) as u32
+        };
         unsafe { (*pointer).registration.store(index, Ordering::Relaxed) };
         match owner.state.compare_exchange(
             current,
@@ -104,7 +108,10 @@ fn set_registration(owner: &FunctionMetadataOwner, index_plus_one: u32) {
             st.registration.store(index_plus_one, Ordering::Release);
             return;
         }
-        match owner.state.compare_exchange(current, tagged, Ordering::AcqRel, Ordering::Acquire) {
+        match owner
+            .state
+            .compare_exchange(current, tagged, Ordering::AcqRel, Ordering::Acquire)
+        {
             Ok(_) => return,
             Err(seen) => current = seen,
         }

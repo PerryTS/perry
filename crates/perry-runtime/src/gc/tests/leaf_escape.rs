@@ -49,11 +49,22 @@ fn barrier_sets_the_escape_bit_before_the_cached_dirty_page_exit() {
         assert_eq!(flags(l) & GC_FLAG_HAS_SURVIVED, 0);
         *fields.add(1) = sbits(l);
         js_write_barrier_slot_validated_parent(old as u64, fields.add(1) as u64, sbits(l));
-        assert_ne!(flags(l) & GC_FLAG_HAS_SURVIVED, 0, "cached-dirty store must still escape");
+        assert_ne!(
+            flags(l) & GC_FLAG_HAS_SURVIVED,
+            0,
+            "cached-dirty store must still escape"
+        );
         service();
-        assert_eq!(crate::arena::classify_heap_generation(l), HeapGeneration::Old);
+        assert_eq!(
+            crate::arena::classify_heap_generation(l),
+            HeapGeneration::Old
+        );
         assert_ne!(flags(l) & GC_FLAG_TENURED, 0);
-        assert_eq!(flags(l) & GC_FLAG_HAS_SURVIVED, 0, "promotion clears the shared bit");
+        assert_eq!(
+            flags(l) & GC_FLAG_HAS_SURVIVED,
+            0,
+            "promotion clears the shared bit"
+        );
         assert_eq!(flags(l) & GC_FLAG_MARKED, 0);
     })
     .join()
@@ -71,7 +82,11 @@ fn replay_sets_the_bit_for_slots_the_dirty_page_skip_passes_over() {
         *fields = ptr_bits(small);
         *fields.add(1) = sbits(l);
         crate::gc::barrier::replay_old_parent_slot_range(old as usize, fields, 2);
-        assert_ne!(flags(l) & GC_FLAG_HAS_SURVIVED, 0, "slot 1 shares slot 0's dirty page");
+        assert_ne!(
+            flags(l) & GC_FLAG_HAS_SURVIVED,
+            0,
+            "slot 1 shares slot 0's dirty page"
+        );
     })
     .join()
     .unwrap();
@@ -110,7 +125,10 @@ fn precise_root_retains_a_leaf_without_any_other_evidence() {
         let l = leaf();
         js_shadow_slot_set(0, sbits(l));
         service();
-        assert_eq!(crate::arena::classify_heap_generation(l), HeapGeneration::Old);
+        assert_eq!(
+            crate::arena::classify_heap_generation(l),
+            HeapGeneration::Old
+        );
     })
     .join()
     .unwrap();
@@ -126,7 +144,11 @@ fn planted_missed_escape_is_caught_by_the_precise_oracle() {
         let _sabotage = super::super::leaf_escape::SkipEscapeBit::arm();
         *fields = sbits(l);
         js_write_barrier_slot(ptr_bits(old as usize), fields as u64, sbits(l));
-        assert_eq!(flags(l) & GC_FLAG_HAS_SURVIVED, 0, "the sabotage must drop the bit");
+        assert_eq!(
+            flags(l) & GC_FLAG_HAS_SURVIVED,
+            0,
+            "the sabotage must drop the bit"
+        );
         service();
     })
     .join();
@@ -169,7 +191,11 @@ fn store_in_the_unarmed_window_is_recovered_by_the_arming_rebuild() {
         let l = leaf();
         *fields = sbits(l);
         js_write_barrier_slot(ptr_bits(old as usize), fields as u64, sbits(l));
-        assert_eq!(flags(l) & GC_FLAG_HAS_SURVIVED, 0, "unarmed barrier records nothing");
+        assert_eq!(
+            flags(l) & GC_FLAG_HAS_SURVIVED,
+            0,
+            "unarmed barrier records nothing"
+        );
         service();
         assert_eq!(
             crate::arena::classify_heap_generation(l),
@@ -198,4 +224,3 @@ fn only_the_exact_extent_base_is_a_leaf_header() {
     .join()
     .unwrap();
 }
-

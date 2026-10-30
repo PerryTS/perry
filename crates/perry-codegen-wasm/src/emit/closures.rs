@@ -176,6 +176,7 @@ pub(super) fn collect_closures_from_expr(
             object,
             index,
             value,
+            ..
         } => {
             collect_closures_from_expr(object, out);
             collect_closures_from_expr(index, out);

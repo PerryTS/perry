@@ -90,7 +90,14 @@ fn settings_payload(role_is_client: bool, settings: &Http2SettingsState) -> Vec<
         // Only a client may invite pushes (RFC 9113 section 6.5.2); a server
         // that raised ENABLE_PUSH would be a connection error on the client's
         // side, so its value is always zero.
-        put(id, if id == ENABLE_PUSH && !role_is_client { 0 } else { value });
+        put(
+            id,
+            if id == ENABLE_PUSH && !role_is_client {
+                0
+            } else {
+                value
+            },
+        );
     }
     payload
 }
@@ -314,9 +321,18 @@ mod tests {
     fn enable_push_is_sent_only_when_named_and_a_server_never_raises_it() {
         assert_eq!(push_entry(&settings_payload(false, &advertised())), None);
         assert_eq!(push_entry(&settings_payload(true, &advertised())), None);
-        assert_eq!(push_entry(&settings_payload(false, &naming_push(true))), Some(0));
-        assert_eq!(push_entry(&settings_payload(true, &naming_push(true))), Some(1));
-        assert_eq!(push_entry(&settings_payload(true, &naming_push(false))), Some(0));
+        assert_eq!(
+            push_entry(&settings_payload(false, &naming_push(true))),
+            Some(0)
+        );
+        assert_eq!(
+            push_entry(&settings_payload(true, &naming_push(true))),
+            Some(1)
+        );
+        assert_eq!(
+            push_entry(&settings_payload(true, &naming_push(false))),
+            Some(0)
+        );
     }
 
     /// The payload is a whole number of 6-byte entries, which is what keeps the

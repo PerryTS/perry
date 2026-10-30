@@ -329,7 +329,10 @@ fn the_record_geometry_is_bounded_and_facts_key_is_o1() {
         "record grew"
     );
     assert_eq!(std::mem::align_of::<ShapeRecord>(), 8, "record realigned");
-    assert_eq!(std::mem::offset_of!(ShapeRecord, keys_node_and_element_kind), 72);
+    assert_eq!(
+        std::mem::offset_of!(ShapeRecord, keys_node_and_element_kind),
+        72
+    );
     assert_eq!(
         std::mem::offset_of!(ShapeRecord, family_desc_index_plus_one),
         76
@@ -1104,8 +1107,14 @@ fn empty_body_mask_proves_absence_and_nonempty_masks_keep_exact_identity() {
     }
     let bodies = crate::builtins::fn_metadata_owner::test_registered_infos(2);
     for slot in 0..32 {
-        let infos = [ConstFnSlotInfo { slot, info: bodies[0] }];
-        let other = [ConstFnSlotInfo { slot, info: bodies[1] }];
+        let infos = [ConstFnSlotInfo {
+            slot,
+            info: bodies[0],
+        }];
+        let other = [ConstFnSlotInfo {
+            slot,
+            info: bodies[1],
+        }];
         let rep = with_slot_rep(0, slot as u32, REP_SPECIAL);
         let record = ShapeRecord::new(0x40, 32, 32, 0, ShapeObjectKind::Ordinary, 0)
             .with_special_facts(rep, &infos, &[]);

@@ -104,6 +104,8 @@ fn artifact_records_numeric_array_f64_fast_paths_and_fallback_reasons() {
                 object: Box::new(local(1)),
                 index: Box::new(int(0)),
                 value: Box::new(Expr::Number(7.0)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(Expr::IndexGet {
                 byte_offset: 0,
@@ -191,6 +193,8 @@ fn artifact_records_write_barrier_child_js_value_bits() {
                 object: Box::new(local(1)),
                 index: Box::new(local(2)),
                 value: Box::new(local(3)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(int(0))),
         ],
@@ -249,6 +253,8 @@ fn artifact_records_unproven_class_field_store_claims_no_raw_f64_facts() {
                 object: Box::new(local(1)),
                 property: "x".to_string(),
                 value: Box::new(Expr::Number(7.0)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(Expr::PropertyGet {
                 byte_end: 0,

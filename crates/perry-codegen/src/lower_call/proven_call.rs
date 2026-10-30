@@ -77,6 +77,7 @@ pub(crate) fn try_lower_proven_value_call(
     let Some(bodies) = ctx.wpfacts.local_bodies.get(id).cloned() else {
         return Ok(None);
     };
+    crate::facts_consumed::used();
     let Some(symbols) = bodies
         .iter()
         .map(|b| body_symbol(ctx, b))
@@ -145,7 +146,10 @@ pub(crate) fn try_lower_proven_field_call(
     let mut bodies: Vec<FactsBody> = Vec::new();
     for &cid in &p.class_ids {
         match ctx.wpfacts.field(cid, property) {
-            Some(f) if !f.fns.is_empty() => bodies.extend(f.fns.iter().cloned()),
+            Some(f) if !f.fns.is_empty() => {
+                crate::facts_consumed::used();
+                bodies.extend(f.fns.iter().cloned())
+            }
             _ => return Ok(None),
         }
     }
@@ -210,6 +214,7 @@ pub(crate) fn try_lower_proven_static_call(
     let Some(&cid) = ctx.wpfacts.local_classes.get(id) else {
         return Ok(None);
     };
+    crate::facts_consumed::used();
     let Some(class_name) = crate::expr::wpfacts_access::class_name_of(ctx, cid) else {
         return Ok(None);
     };

@@ -75,7 +75,7 @@ pub(super) fn prepare(options: f64) -> SerializedValue {
     perry_runtime::array::js_array_push_f64(array(), current());
     // One graph preserves data/environment aliases and commits transfers only
     // after both have cloned successfully, in Node's validation order.
-    clone_message(payload.get_nanbox_f64(), transfer.get_nanbox_f64())
+    super::clone::clone_worker_data(payload.get_nanbox_f64(), transfer.get_nanbox_f64())
 }
 
 pub(super) fn install(payload: SerializedValue) {

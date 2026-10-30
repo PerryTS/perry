@@ -41,10 +41,11 @@
     "region::map",
     "region::unmap"
    ],
-   "why": "Non-Linux mapping extents, not object identities. region::register records each native map; region::unmap removes its start key before apple::unmap or allocator dealloc. arena/block.rs routes pool overflow, pool drain, allocation failure and TLS teardown through that release path. Pooled mappings remain live and listed across agent reuse. The source pins bind the registry and all production region allocation/release callers to this audit. WRT3a re-audit: current Linux reservation branch never uses REGIONS; non-Linux map/register and all block.rs release paths still remove the extent before physical unmap/dealloc. Reuse keeps live pooled maps registered. Release re-audit 2026-10-28: all four production block release paths still call region::unmap; non-Linux removes REGIONS before apple::unmap/dealloc, while pooling and test-only retained mappings stay registered. Warning cleanup re-audit: ALIGN and mapped_len are now compiled only on Linux, matching their existing Linux-only callers. Registry insertion, removal-before-unmap, pooled mapping custody, and thread-exit release paths are unchanged. Re-audited #13405: block.rs delegates the bump bound to inline::allocation_limit, which closes the fast path during black allocation. Region allocation, registration, pooling, removal-before-unmap and TLS teardown are unchanged.",
+   "why": "Non-Linux mapping extents, not object identities. region::register records each native map; region::unmap removes its start key before apple::unmap or allocator dealloc. arena/block.rs routes pool overflow, pool drain, allocation failure and TLS teardown through that release path. Pooled mappings remain live and listed across agent reuse. The source pins bind the registry and all production region allocation/release callers to this audit. WRT3a re-audit: current Linux reservation branch never uses REGIONS; non-Linux map/register and all block.rs release paths still remove the extent before physical unmap/dealloc. Reuse keeps live pooled maps registered. Release re-audit 2026-10-28: all four production block release paths still call region::unmap; non-Linux removes REGIONS before apple::unmap/dealloc, while pooling and test-only retained mappings stay registered. Warning cleanup re-audit: ALIGN and mapped_len are now compiled only on Linux, matching their existing Linux-only callers. Registry insertion, removal-before-unmap, pooled mapping custody, and thread-exit release paths are unchanged. Re-audited #13405: block.rs delegates the bump bound to inline::allocation_limit, which closes the fast path during black allocation. Region allocation, registration, pooling, removal-before-unmap and TLS teardown are unchanged. Re-audited 2026-10-30 after #13463/#13479. `unmap` still removes the start key from `REGIONS` before any physical release (`.remove(&(data as usize)).expect(...)`, then `debug_assert_eq!` on the extent length, then `reservation::unmap` / `apple::unmap` / `dealloc`), so removal still precedes release on every target. #13463 changed the map's value from a bare end offset to `BackingExtent { end, alignment }` \u2014 extent bookkeeping only; the removal still comes first. The new pinned source is a boundary caller the same two commits created: `arena/young_large.rs` now allocates large-object backings through `region::map`, and its release path (`release_arena_block` -> `region::unmap`) keeps removal ahead of release too. It is pinned so the next change to it forces this re-audit.",
    "source_pins": {
-    "crates/perry-runtime/src/arena/region.rs": "54bd302d181433f3f2eb4a92c8ff07f021492dcf516f9069403b61d88f5c2a01",
-    "crates/perry-runtime/src/arena/block.rs": "170b10471a821673fce65710ec719489c5c8e793fed0c806fbdd163ca18a8d1a"
+    "crates/perry-runtime/src/arena/region.rs": "857794fb1f371cd77985bfe0f5e8d6b806e5a878a95902adca8c47371e42d12b",
+    "crates/perry-runtime/src/arena/block.rs": "a1e171218952b59e7d8479f613586d7841c0245cb90f896919946852c48a726e",
+    "crates/perry-runtime/src/arena/young_large.rs": "43bef7d86e024bf29011982b5e399165c67641f3ae9395458147e558d9b592d9"
    }
   },
   {
@@ -1459,78 +1460,6 @@
    ],
    "verdict": "no_heap_address",
    "why": "Stores js_async_local_storage_subclass_init's fn pointer, stored by value/handle.rs:159; every store in the tree is `func as *mut ()` (or null), so it is a code address, never a heap value."
-  },
-  {
-   "file": "crates/perry-runtime/src/gc/instruments.rs",
-   "names": [
-    "MARK_BARRIER_ARMED_SINCE_US"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Microseconds since the process epoch at which the current mark-barrier armed window opened (0 = closed); a timestamp set/cleared by the collector's arm/disarm instruments (instruments.rs:145/150)."
-  },
-  {
-   "file": "crates/perry-runtime/src/gc/instruments.rs",
-   "names": [
-    "SKIP_REENTRANT"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Telemetry counter of budgeted GC steps skipped for the reentrant reason, bumped by note_budgeted_step_skip; a plain count."
-  },
-  {
-   "file": "crates/perry-runtime/src/gc/instruments.rs",
-   "names": [
-    "SKIP_NO_TRIGGER"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Telemetry counter of budgeted GC steps skipped for the no-trigger reason, bumped by note_budgeted_step_skip; a plain count."
-  },
-  {
-   "file": "crates/perry-runtime/src/gc/instruments.rs",
-   "names": [
-    "SKIP_START_BLOCKED"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Telemetry counter of budgeted GC steps skipped for the start-blocked reason, bumped by note_budgeted_step_skip; a plain count."
-  },
-  {
-   "file": "crates/perry-runtime/src/gc/instruments.rs",
-   "names": [
-    "SKIP_RESUME_BLOCKED"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Telemetry counter of budgeted GC steps skipped for the resume-blocked reason, bumped by note_budgeted_step_skip; a plain count."
-  },
-  {
-   "file": "crates/perry-runtime/src/gc/instruments.rs",
-   "names": [
-    "SKIP_NURSERY_CAP_UNDISCHARGEABLE"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Telemetry counter of budgeted GC steps skipped for the nursery-cap-undischargeable reason, bumped by note_budgeted_step_skip; a plain count."
-  },
-  {
-   "file": "crates/perry-runtime/src/gc/instruments.rs",
-   "names": [
-    "STEP_MAX_US"
-   ],
-   "verdict": "no_heap_address",
-   "why": "High-water mark of a single budgeted GC step's duration in microseconds (bump_max telemetry); a duration."
-  },
-  {
-   "file": "crates/perry-runtime/src/gc/instruments.rs",
-   "names": [
-    "REMARK_MAX_US"
-   ],
-   "verdict": "no_heap_address",
-   "why": "High-water mark of the atomic final-remark duration in microseconds; a duration."
-  },
-  {
-   "file": "crates/perry-runtime/src/gc/instruments.rs",
-   "names": [
-    "WEAK_MAX_RECORDS_PER_STEP"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Most FinalizationRegistry records charged to one weak-processing step (bump_max at instruments.rs:399, reset at :464); a count."
   },
   {
    "file": "crates/perry-runtime/src/object/shape_mint_census.rs",
@@ -3277,14 +3206,6 @@
    "why": "Holds the address of the %Intl%.[[FallbackSymbol]] SymbolHeader, Box::into_raw'd once in intl_legacy_constructed_symbol (symbol.rs:688-712); never freed."
   },
   {
-   "file": "crates/perry-runtime/src/symbol.rs",
-   "names": [
-    "NEXT_SYMBOL_ID"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Monotonic u64 id counter handed out by next_id() to every new SymbolHeader."
-  },
-  {
    "file": "crates/perry-runtime/src/intl/segments_view.rs",
    "names": [
     "OPENS"
@@ -3920,6 +3841,22 @@
    ],
    "verdict": "no_heap_address",
    "why": "Outstanding work count incremented on submit and decremented by OutstandingGuard at delivery. AtomicUsize contains only a job count, never a pointer."
+  },
+  {
+   "file": "crates/perry-runtime/src/turnloop_pool/mod.rs",
+   "names": [
+    "CANCELLED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Turnloop pool lifetime total, initialized 0, only `fetch_add(1)` on `Delivery::Cancelled` (turnloop_pool/mod.rs:655) and `load` for the `PERRY_LOOP_STATS=1` exit line (:270). An `AtomicU64` holding a job count, never a pointer or an arena address. Also appears as a property-name identifier inside the `realm_decl!` block for `node:dns` / `node:dns/promises` in `crates/perry-runtime/src/object/namespace_create.rs` (`CANCELLED = \"ECANCELLED\"`, `REFUSED = \"EREFUSED\"`). That text follows the name with `= \"E...\";`, not a counter use, so rule 2 deliberately keeps this static a manual candidate instead of discharging it; the mention belongs to a different declaration, and this verdict is the review it asks for."
+  },
+  {
+   "file": "crates/perry-runtime/src/turnloop_pool/mod.rs",
+   "names": [
+    "REFUSED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Turnloop pool lifetime total, initialized 0, only `fetch_add(1)` at the two submit rejection sites (turnloop_pool/mod.rs:460 and :464) and `load` for the stats line (:280). An `AtomicU64` holding a job count, never a pointer or an arena address. Also appears as a property-name identifier inside the `realm_decl!` block for `node:dns` / `node:dns/promises` in `crates/perry-runtime/src/object/namespace_create.rs` (`CANCELLED = \"ECANCELLED\"`, `REFUSED = \"EREFUSED\"`). That text follows the name with `= \"E...\";`, not a counter use, so rule 2 deliberately keeps this static a manual candidate instead of discharging it; the mention belongs to a different declaration, and this verdict is the review it asks for."
   },
   {
    "file": "crates/perry-runtime/src/wasm_discard.rs",

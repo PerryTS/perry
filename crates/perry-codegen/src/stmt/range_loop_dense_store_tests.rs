@@ -71,6 +71,8 @@ fn set(arr: u32, idx: u32, value: Expr) -> Stmt {
         object: Box::new(Expr::LocalGet(arr)),
         index: Box::new(Expr::LocalGet(idx)),
         value: Box::new(value),
+        byte_offset: 0,
+        byte_end: 0,
     })
 }
 

@@ -92,7 +92,13 @@ pub(crate) struct ModInfo {
 
 /// A body generation walks once its function is active (DECISIONS 225).
 pub(crate) enum PendingWalk<'a> {
-    Fn(u32, FnIdx, &'a perry_hir::Function, Option<TmplId>, Option<TmplId>),
+    Fn(
+        u32,
+        FnIdx,
+        &'a perry_hir::Function,
+        Option<TmplId>,
+        Option<TmplId>,
+    ),
     Fields(u32, &'a perry_hir::Class),
     /// A closure's body (its emitted definition) in its creation context.
     Closure(crate::gen::Fx, &'a perry_hir::Expr),

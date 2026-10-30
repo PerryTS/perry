@@ -530,6 +530,7 @@ fn prologue_store<'a>(s: &'a Stmt, params: &BTreeSet<u32>) -> Option<(&'a str, b
             object,
             property,
             value,
+            ..
         }) if matches!(object.as_ref(), Expr::This) => {
             Some((property.as_str(), inert(value, params)))
         }
@@ -980,6 +981,7 @@ fn param_keys(class: &Class) -> Vec<(u32, String)> {
                 object,
                 property,
                 value,
+                ..
             }) => (object.as_ref(), property.as_str(), value.as_ref()),
             Stmt::Expr(Expr::PutValueSet {
                 target, key, value, ..

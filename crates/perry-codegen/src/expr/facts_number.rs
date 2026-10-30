@@ -281,6 +281,7 @@ fn this_kinds(ctx: &FnCtx<'_>, cids: &[u32], key: &str) -> Option<u16> {
     let mut mask = 0u16;
     for &cid in cids {
         let f = ctx.wpfacts.field(cid, key)?;
+        crate::facts_consumed::used();
         if f.declared {
             return None;
         }
@@ -321,7 +322,10 @@ fn expr_is_number(ctx: &FnCtx<'_>, e: &Expr, cids: &[u32], depth: u8) -> bool {
             then_expr,
             else_expr,
             ..
-        } => expr_is_number(ctx, then_expr, cids, depth) && expr_is_number(ctx, else_expr, cids, depth),
+        } => {
+            expr_is_number(ctx, then_expr, cids, depth)
+                && expr_is_number(ctx, else_expr, cids, depth)
+        }
         Expr::Call { callee, .. } => match callee.as_ref() {
             Expr::PropertyGet {
                 object, property, ..

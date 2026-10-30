@@ -1,7 +1,7 @@
 mod region_class;
 pub(crate) use region_class::{
-    classify_heap_generation, classify_heap_space_in_range, classify_heap_storage_in_range, classify_region_ownership,
-    uniform_heap_generation,
+    classify_heap_generation, classify_heap_space_in_range, classify_heap_storage_in_range,
+    classify_region_ownership, uniform_heap_generation,
 };
 mod maintenance;
 pub(crate) use maintenance::shrink_page_tables;
@@ -456,19 +456,35 @@ pub(crate) fn register_block_space_with_object_starts(
     space: HeapSpace,
     object_starts: *mut u64,
 ) {
-    register_block_with_kind(base, size, generation, space, object_starts,
-        super::region::kind_for(generation, size));
+    register_block_with_kind(
+        base,
+        size,
+        generation,
+        space,
+        object_starts,
+        super::region::kind_for(generation, size),
+    );
 }
 
 pub(crate) fn register_block_with_kind(
-    base: usize, size: usize, generation: HeapGeneration, space: HeapSpace,
-    object_starts: *mut u64, kind: super::region::Kind,
+    base: usize,
+    size: usize,
+    generation: HeapGeneration,
+    space: HeapSpace,
+    object_starts: *mut u64,
+    kind: super::region::Kind,
 ) {
     if base == 0 || size == 0 || matches!(generation, HeapGeneration::Unknown) {
         return;
     }
     #[cfg(target_os = "linux")]
-    if super::region::reservation::set_space_with_kind(base, size, space, Some(object_starts as usize), Some(kind)) {
+    if super::region::reservation::set_space_with_kind(
+        base,
+        size,
+        space,
+        Some(object_starts as usize),
+        Some(kind),
+    ) {
         if matches!(generation, HeapGeneration::Old) {
             register_old_block_pages(base, size);
         }

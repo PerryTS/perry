@@ -170,7 +170,9 @@ pub(crate) fn young_leaf_headers() -> Vec<*mut crate::gc::GcHeader> {
 /// dedicated leaf extent. Reads block bounds and headers only; the callback
 /// runs with no arena borrow held. Parses blocks as the promotion stamp walk
 /// does: hop by the header size, stop at an implausible size.
-pub(crate) fn for_each_young_small_header(mut visit: impl FnMut(*mut crate::gc::GcHeader)) -> usize {
+pub(crate) fn for_each_young_small_header(
+    mut visit: impl FnMut(*mut crate::gc::GcHeader),
+) -> usize {
     super::sync_inline_arena_state();
     let mut extents: Vec<(usize, usize, usize)> = Vec::new();
     let mut collect = |blocks: &[ArenaBlock]| {
@@ -354,15 +356,19 @@ fn finish(
 /// admits owns the whole block.
 pub(crate) fn copying_capacity_bytes() -> usize {
     fn dedicated(blocks: &[ArenaBlock]) -> usize {
-        blocks.iter().filter(|b| {
-            if b.data.is_null() || b.extent_kind != Kind::LargeObject || b.offset == 0 {
-                return false;
-            }
-            unsafe {
-                let h = &*b.data.cast::<crate::gc::GcHeader>();
-                h.size as usize == b.offset && crate::gc::young_large_storage_admits(h.obj_type)
-            }
-        }).map(|b| b.size).sum()
+        blocks
+            .iter()
+            .filter(|b| {
+                if b.data.is_null() || b.extent_kind != Kind::LargeObject || b.offset == 0 {
+                    return false;
+                }
+                unsafe {
+                    let h = &*b.data.cast::<crate::gc::GcHeader>();
+                    h.size as usize == b.offset && crate::gc::young_large_storage_admits(h.obj_type)
+                }
+            })
+            .map(|b| b.size)
+            .sum()
     }
     let leaves = ARENA.with(|a| unsafe { dedicated(&(*a.get()).blocks) })
         + OLD_ARENA.with(|a| unsafe { dedicated(&(*a.get()).blocks) });

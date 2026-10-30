@@ -604,6 +604,7 @@ pub fn check_array_escapes_in_expr(
             object,
             index,
             value,
+            ..
         } => {
             if let Expr::LocalGet(id) = object.as_ref() {
                 if candidates.contains_key(id) {

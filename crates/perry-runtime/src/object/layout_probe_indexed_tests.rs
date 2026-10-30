@@ -36,10 +36,15 @@ unsafe fn rigged(tag: &str, decoy_hash: impl Fn(u64) -> u64) -> (*mut ObjectHead
     assert_eq!(perry_probe_get(dir, biased, keys[0].0, keys[0].1), 1.0);
     let r = record_of(dir, LayoutWord((*obj).parent_class_id));
     let table = ((*r).probe & !PROBE_FLAGS) as *mut KeyIndex;
-    assert!(!table.is_null(), "nine keys exceed SCAN_KEYS: the list is indexed");
+    assert!(
+        !table.is_null(),
+        "nine keys exceed SCAN_KEYS: the list is indexed"
+    );
     let mask = (*table).mask as usize;
     let slots = KeyIndex::buckets(table) as *mut u32;
-    let at = |pos: u32| (0..=mask).find(|&b| *slots.add(b) & POS_BITS == pos && *slots.add(b) != u32::MAX);
+    let at = |pos: u32| {
+        (0..=mask).find(|&b| *slots.add(b) & POS_BITS == pos && *slots.add(b) != u32::MAX)
+    };
     // The target whose entry sits in its own first bucket, followed by a
     // bucket that is free or whose entry is not the target's.
     let (t, bt) = (0..9u32)

@@ -1613,11 +1613,11 @@ impl GcCycleState {
                     // #9754: per-table young-log rows for this cycle's root
                     // scans (initial + final remark), labelled by cycle kind.
                     if DIAGNOSTICS {
-                    super::young_log::report_and_reset(if self.minor.is_some() {
-                        "budgeted_minor"
-                    } else {
-                        "budgeted_full"
-                    });
+                        super::young_log::report_and_reset(if self.minor.is_some() {
+                            "budgeted_minor"
+                        } else {
+                            "budgeted_full"
+                        });
                     }
                     if DIAGNOSTICS {
                         trace_phase_record(&mut self.trace, "reclaim", reclaim_start)

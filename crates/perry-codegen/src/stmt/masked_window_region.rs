@@ -310,6 +310,7 @@ fn proven_view_store_parts<'e>(
             object,
             index,
             value,
+            ..
         } => (object, index, value),
         Expr::PutValueSet {
             target,

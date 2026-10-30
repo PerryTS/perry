@@ -597,7 +597,9 @@ crate::perry_thread_local! {
 /// runs the same image. Opaque: the only thing to do with it is
 /// [`adopt_path_init_image`] on the spawned thread before it runs any JS.
 #[derive(Clone)]
-pub struct PathInitImage(std::sync::Arc<std::collections::HashMap<String, usize, crate::fast_hash::AHashState>>);
+pub struct PathInitImage(
+    std::sync::Arc<std::collections::HashMap<String, usize, crate::fast_hash::AHashState>>,
+);
 
 /// Capture this thread's table for a worker it is about to spawn. The
 /// addresses are code pointers of this image, so they are valid on any thread

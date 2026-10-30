@@ -160,7 +160,14 @@ ACCESSOR_RETURN = re.compile(
 # 143 -> 122 removing). The floors keep the four-entry margin below them.
 # Function metadata ownership removes four maps (194 -> 190). Preserve
 # the existing three-entry parser-liveness margin.
-MIN_REGISTRIES = 187
+# Submodule slots, clone markers and environment inheritance replace six
+# address-keyed maps with better mechanisms rather than leaving holes:
+# node_submodules/mod.rs loses EXPORT_SINGLETONS, NAMESPACE_SINGLETONS and
+# DEFAULT_OBJECT_SINGLETONS (97e40e8826), and worker_threads.rs loses
+# UNCLONEABLE_OBJECTS and UNTRANSFERABLE_OBJECTS (cc1da0e683) and
+# ENVIRONMENT_DATA (bc1f7ec92e). Nothing was added (190 -> 184 enumerated), so
+# the floor keeps the same three-entry margin below them.
+MIN_REGISTRIES = 181
 # Phase A removes 21 maps previously counted as shrinking (167 -> 146).
 MIN_REMOVING = 118
 

@@ -113,8 +113,8 @@ mod compare_value_eq;
 #[cfg(test)]
 pub(crate) use compare::test_key_byte_reads;
 pub(crate) mod concat;
-pub(crate) mod concat_parts;
 mod concat_boundary;
+pub(crate) mod concat_parts;
 pub(crate) mod concat_site;
 mod format;
 mod html;

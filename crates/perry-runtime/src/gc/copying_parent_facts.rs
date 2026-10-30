@@ -177,7 +177,10 @@ impl CopyingNurseryCollector {
     /// resolved by the mark/move entry points; any other forwarded header
     /// retains its previous queueing obligation.
     #[inline(always)]
-    pub(super) unsafe fn queue_child_scan<const DIAGNOSTICS: bool>(&mut self, header: *mut GcHeader) {
+    pub(super) unsafe fn queue_child_scan<const DIAGNOSTICS: bool>(
+        &mut self,
+        header: *mut GcHeader,
+    ) {
         if (*header).gc_flags & GC_FLAG_FORWARDED != 0
             || (gc_type_rewrite_descriptor_kind((*header).obj_type)
                 != GcRewriteDescriptorKind::Leaf

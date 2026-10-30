@@ -184,6 +184,30 @@ impl<'a> Gen<'a> {
         self.ctor_phase.get(&tm).map_or(true, |ph| ph.leaks) || self.parent_chain_leaks(tm)
     }
 
+    /// Whether `tm`'s constructor, or one up its chain, may return an object
+    /// other than its `this` (published as `ClassContract::ctor_returns`).
+    /// `new` then yields the returned value, so the class's instance is not
+    /// the whole result. Unsettled parents and another unit's constructors
+    /// that return answer yes.
+    pub(crate) fn chain_returns(&self, tm: TmplId) -> bool {
+        if self.parent_pending(tm) {
+            return true;
+        }
+        let mut cur = Some(tm);
+        while let Some(c) = cur {
+            if self.stand_in_cc.get(&c).is_some_and(|cc| cc.ctor_returns) {
+                return true;
+            }
+            if let Some(f) = self.m.tmpls[c as usize].ctor {
+                if self.m.ctor_returns_object(f) {
+                    return true;
+                }
+            }
+            cur = self.m.tmpls[c as usize].parent;
+        }
+        false
+    }
+
     fn parent_chain_leaks(&self, tm: TmplId) -> bool {
         if self.m.tmpls[tm as usize].native_parent.is_some() || self.parent_pending(tm) {
             return true;

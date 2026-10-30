@@ -717,12 +717,24 @@ mod declared_format_tests {
         std::fs::write(plain.join("package.json"), r#"{ "name": "plain" }"#)
             .expect("plain manifest");
 
-        assert_eq!(declared_module_format_is_esm(&root.join("main.ts")), Some(true));
-        assert_eq!(declared_module_format_is_esm(&nested.join("main.ts")), Some(false));
+        assert_eq!(
+            declared_module_format_is_esm(&root.join("main.ts")),
+            Some(true)
+        );
+        assert_eq!(
+            declared_module_format_is_esm(&nested.join("main.ts")),
+            Some(false)
+        );
         // The nearest manifest decides even without a "type": syntax then does.
         assert_eq!(declared_module_format_is_esm(&plain.join("main.ts")), None);
         // The extension wins over any manifest.
-        assert_eq!(declared_module_format_is_esm(&nested.join("main.mts")), Some(true));
-        assert_eq!(declared_module_format_is_esm(&root.join("main.cts")), Some(false));
+        assert_eq!(
+            declared_module_format_is_esm(&nested.join("main.mts")),
+            Some(true)
+        );
+        assert_eq!(
+            declared_module_format_is_esm(&root.join("main.cts")),
+            Some(false)
+        );
     }
 }

@@ -56,6 +56,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             op,
             prefix,
             strict,
+            ..
         } => {
             // #8654: a statically-known class field has one canonical LLVM
             // global shared by its defining module and every importer.
@@ -376,6 +377,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             op,
             prefix,
             strict,
+            ..
         } => {
             // #7628. The operand pair is consumed by FOUR calls with collection
             // points between them:

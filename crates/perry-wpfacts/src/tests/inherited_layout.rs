@@ -68,17 +68,18 @@ fn a_key_outside_the_settled_layout_is_still_an_add() {
     );
     let pf = units(&src);
     let whole = facts(&src);
-    assert!(!tmpl(&whole, "Circle").fixed_layout, "{}", whole.dump_text());
+    assert!(
+        !tmpl(&whole, "Circle").fixed_layout,
+        "{}",
+        whole.dump_text()
+    );
     let c = tmpl(&pf, "Circle");
     assert!(!c.fixed_layout && c.adds_keys > 0, "{}", pf.dump_text());
 }
 
 #[test]
 fn a_delete_of_an_inherited_key_keeps_the_layout_open() {
-    let src = format!(
-        "{}\ndelete (shapes[0] as any).x;\n",
-        program("")
-    );
+    let src = format!("{}\ndelete (shapes[0] as any).x;\n", program(""));
     let pf = units(&src);
     let c = tmpl(&pf, "Circle");
     assert!(!c.fixed_layout, "{}", pf.dump_text());

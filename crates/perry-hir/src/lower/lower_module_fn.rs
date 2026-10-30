@@ -170,6 +170,8 @@ fn reflect_script_var_initializers(
                 object: Box::new(Expr::GlobalThisExpr),
                 property: name,
                 value: Box::new(Expr::LocalGet(id)),
+                byte_offset: 0,
+                byte_end: 0,
             }));
         }
     }
@@ -251,6 +253,8 @@ fn script_var_mirror_expr(id: LocalId, script_vars: &HashMap<LocalId, String>) -
             .expect("script var mirror requires a script var")
             .clone(),
         value: Box::new(Expr::LocalGet(id)),
+        byte_offset: 0,
+        byte_end: 0,
     }
 }
 

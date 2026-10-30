@@ -142,28 +142,63 @@ fn os_page() -> usize {
 }
 /// A Region smaller than the fixed dynamic base plus a few chunks cannot hold
 /// the process-wide chunk space.
-pub(super) const MIN_CAPACITY: usize = 2 * super::DYNAMIC_BASE_ROWS as usize;
+const MIN_CHUNK_CAPACITY: usize = 2 * super::DYNAMIC_BASE_ROWS as usize;
+
+/// Rows per directory page. A chunk page is the unit the agent seeds at birth.
+const PAGE_ROWS: usize = super::CHUNK_LEN * super::PAGE_LEN;
+
+/// Agent creation seeds the native birth layouts (`WEAKMAP_BIRTH_LAYOUT`,
+/// `WEAKSET_BIRTH_LAYOUT`) in the first dynamic plain granule, so the smallest
+/// reservation that can work must contain that whole page — the chunk space
+/// alone ends well before it.
+const FIRST_NATIVE_END: usize =
+    (crate::codegen_abi::WEAKSET_BIRTH_LAYOUT - super::SHAPE_ID_BASE) as usize + 1;
+
+pub(super) const MIN_CAPACITY: usize = {
+    let native_page = FIRST_NATIVE_END.div_ceil(PAGE_ROWS) * PAGE_ROWS;
+    if MIN_CHUNK_CAPACITY > native_page {
+        MIN_CHUNK_CAPACITY
+    } else {
+        native_page
+    }
+};
+/// Reserve the largest share of `want` rows that the address space accepts,
+/// halving until a reservation fits. The floor [`MIN_CAPACITY`] is REQUIRED to
+/// hold the native birth page: halving a power of two can step straight past
+/// it, so the floor is tried exactly once before giving up.
+fn reserve_with(
+    want: usize,
+    mut try_reserve: impl FnMut(usize) -> *mut u8,
+) -> (*mut ShapeRecord, usize) {
+    let mut rows = want;
+    loop {
+        let base = try_reserve(rows * RECORD);
+        if !base.is_null() {
+            return (base.cast(), rows);
+        }
+        assert!(
+            rows > MIN_CAPACITY,
+            "cannot reserve shape Region: no address space left for the native birth page"
+        );
+        rows = (rows / 2).max(MIN_CAPACITY);
+    }
+}
+
 impl Region {
     pub(super) fn new() -> Self {
-        let mut capacity = if cfg!(target_pointer_width = "64") {
+        let capacity = if cfg!(target_pointer_width = "64") {
             LAYOUT_ROW_LIMIT as usize
         } else {
             1 << 16
         };
-        loop {
-            let base = unsafe { reserve(capacity * RECORD) };
-            if !base.is_null() {
-                return Self {
-                    base: base.cast(),
-                    capacity,
-                    page: os_page(),
-                    shift: os_page().trailing_zeros(),
-                    live: Vec::new(),
-                    static_pages: 0,
-                };
-            }
-            assert!(capacity > MIN_CAPACITY, "cannot reserve shape Region");
-            capacity /= 2;
+        let (base, capacity) = reserve_with(capacity, |bytes| unsafe { reserve(bytes) });
+        Self {
+            base,
+            capacity,
+            page: os_page(),
+            shift: os_page().trailing_zeros(),
+            live: Vec::new(),
+            static_pages: 0,
         }
     }
     pub(super) fn base(&self) -> *mut ShapeRecord {
@@ -312,5 +347,46 @@ pub(super) unsafe fn committed_in(tops: *const (), len: usize, shift: u32, row: 
     match &*(tops as *const Option<Box<Leaf>>).add(leaf) {
         Some(l) => l.counts[page % LEAF_PAGES] != 0,
         None => false,
+    }
+}
+
+#[cfg(test)]
+mod reservation_floor_tests {
+    use super::*;
+
+    /// Under an address-space limit the Region halves its reservation, and the
+    /// smallest one it may accept is the page holding the native birth layouts
+    /// — not the chunk space that ends well before them.
+    #[test]
+    fn limited_address_space_still_contains_the_native_birth_page() {
+        let native_page_end = FIRST_NATIVE_END.div_ceil(PAGE_ROWS) * PAGE_ROWS;
+        let available = native_page_end * RECORD;
+        let mut attempts = Vec::new();
+        let (_, capacity) = reserve_with(LAYOUT_ROW_LIMIT as usize, |bytes| {
+            attempts.push(bytes);
+            if bytes <= available {
+                // No Region is constructed and this token is never dereferenced.
+                std::ptr::NonNull::<ShapeRecord>::dangling().as_ptr().cast()
+            } else {
+                std::ptr::null_mut()
+            }
+        });
+        assert_eq!(capacity, native_page_end);
+        assert_eq!(attempts.last(), Some(&available));
+        assert!(
+            attempts[..attempts.len() - 1]
+                .iter()
+                .all(|bytes| *bytes > available),
+            "every rejected attempt must have been larger than the floor"
+        );
+    }
+
+    /// The floor is REQUIRED to hold the native birth page: a world where no
+    /// reservation that small succeeds must fail loudly rather than run with a
+    /// Region that cannot hold the layouts agent creation seeds.
+    #[test]
+    #[should_panic(expected = "no address space left for the native birth page")]
+    fn an_unusable_smaller_reservation_is_never_accepted() {
+        reserve_with(LAYOUT_ROW_LIMIT as usize, |_| std::ptr::null_mut());
     }
 }

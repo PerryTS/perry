@@ -131,6 +131,13 @@ pub(crate) fn run(
         jobs: perry_codegen::workers::unit_workers(),
         unit_io: dump.is_some(),
         report: std::env::var("PERRY_FACTS_REPORT").is_ok_and(|v| v == "1"),
+        // The per-unit diagnostic records stream to a file beside the dump
+        // as each unit is captured (appended to the dump below).
+        diag_sidecar: dump.as_ref().map(|p| {
+            let mut d = p.clone().into_os_string();
+            d.push(".diag");
+            PathBuf::from(d)
+        }),
     };
     // Entry outlining moves module bindings into compiler-owned functions.
     // Facts need the same logical module scope that codegen's globals and
@@ -167,7 +174,13 @@ pub(crate) fn run(
                 }
             }
         }
-        if let Err(e) = std::fs::write(path, text) {
+        let written = std::fs::write(path, text).and_then(|()| {
+            let mut f = std::fs::OpenOptions::new().append(true).open(path)?;
+            let mut w = std::io::BufWriter::new(&mut f);
+            pf.append_streamed(&mut w)?;
+            std::io::Write::flush(&mut w)
+        });
+        if let Err(e) = written {
             eprintln!("perry: wpfacts: cannot write {}: {e}", path.display());
         }
         if let Some(rel) = pf.relations_text() {

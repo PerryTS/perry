@@ -840,7 +840,11 @@ pub(super) unsafe fn promote_young_large<T>(p: *mut T) -> *mut T {
     register_global_root(root);
     let _ = collect_minor_trace(GcTriggerKind::Direct);
     GLOBAL_ROOTS.with(|roots| roots.borrow_mut().retain(|&r| r != root));
-    assert_eq!((*slot & POINTER_MASK) as usize, addr, "promoted at its address");
+    assert_eq!(
+        (*slot & POINTER_MASK) as usize,
+        addr,
+        "promoted at its address"
+    );
     assert!(crate::arena::pointer_in_old_gen(addr));
     p
 }
@@ -881,9 +885,15 @@ pub(super) extern "C" fn test_captured_singleton_func(
     0.0
 }
 
+/// The body record fixture closures carry: every closure user code can reach
+/// has one, and the runtime reads it without a null test.
+pub(super) fn test_closure_info() -> *const crate::closure::JsFunctionInfo {
+    crate::fn_info!(crate::closure::body_call::native_noop0, 0)
+}
+
 pub(super) unsafe fn init_test_closure(ptr: *mut u8) {
     let closure = ptr as *mut crate::closure::ClosureHeader;
-    (*closure).info = std::ptr::null();
+    (*closure).info = test_closure_info();
     (*closure).capture_count = 0;
     (*closure).shape_id = crate::closure::shape::function_base_shape(
         crate::closure::shape::FunctionProtoKind::Function,
@@ -896,7 +906,7 @@ pub(super) unsafe fn init_test_closure_with_one_capture(
     capture_bits: u64,
 ) -> *mut u64 {
     let closure = ptr as *mut crate::closure::ClosureHeader;
-    (*closure).info = std::ptr::null();
+    (*closure).info = test_closure_info();
     (*closure).capture_count = 1;
     (*closure).shape_id = crate::closure::shape::function_base_shape(
         crate::closure::shape::FunctionProtoKind::Function,

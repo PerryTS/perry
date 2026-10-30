@@ -195,6 +195,7 @@ fn safe_expr(expr: &Expr, selected: &[u32], entity_array_id: u32, counter_id: u3
             object,
             index,
             value,
+            ..
         } => {
             matches!(object.as_ref(), Expr::LocalGet(id) if selected.contains(id))
                 && exact_entity_read(index, entity_array_id, counter_id)

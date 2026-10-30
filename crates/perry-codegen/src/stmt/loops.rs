@@ -54,6 +54,7 @@ fn match_indexed_store_shape(
             object,
             index,
             value,
+            ..
         } => Some((object.as_ref(), index.as_ref(), value.as_ref())),
         Expr::PutValueSet {
             target,
@@ -261,6 +262,7 @@ fn match_numeric_bulk_fill_loop(
             object,
             index,
             value,
+            ..
         })] => (object, index, value),
         [Stmt::Expr(perry_hir::Expr::PutValueSet {
             target,
@@ -708,6 +710,7 @@ fn match_strided_tagged_fill_loop(
             object,
             index,
             value,
+            ..
         } => (object.as_ref(), index.as_ref(), value.as_ref()),
         Expr::PutValueSet {
             target,
@@ -2569,6 +2572,7 @@ pub(super) fn packed_f64_range_loop_body_collect(
             object,
             index,
             value,
+            ..
         } => packed_f64_range_loop_store_collect(object, index, value, counter_id, accesses),
         Expr::PutValueSet {
             target,
@@ -9156,6 +9160,7 @@ fn expr_array_length_effect(
             object,
             index,
             value,
+            ..
         } => {
             if let Expr::LocalGet(id) = object.as_ref() {
                 if local_may_alias_guarded_array(ctx, arr_id, *id, aliases) {
@@ -9606,6 +9611,7 @@ pub(crate) fn expr_preserves_array_length(
             object,
             index,
             value,
+            ..
         } => {
             // `arr[bounded_i] = expr` is the only IndexSet on `arr`
             // we accept, and only under a strict `i < arr.length`

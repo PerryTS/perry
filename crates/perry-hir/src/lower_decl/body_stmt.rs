@@ -187,6 +187,8 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                                                 object: Box::new(Expr::This),
                                                 property: field_name,
                                                 value: Box::new(Expr::LocalGet(temp_id)),
+                                                byte_offset: 0,
+                                                byte_end: 0,
                                             }));
 
                                             return Ok(result);

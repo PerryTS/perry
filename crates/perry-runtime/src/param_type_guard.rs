@@ -491,8 +491,9 @@ impl GuardState<'_> {
                 // which owns that path.
                 if index < live_slots {
                     // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
-                    let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(object as *mut _))
-                        as *const u64;
+                    let fields =
+                        crate::meta_slots_of!(crate::meta_obj_runtime_born!(object as *mut _))
+                            as *const u64;
                     let bits = std::ptr::read(fields.add(index));
                     // Mirror `js_object_get_field`: a null POINTER_TAG payload
                     // is never a legitimate value and reads as `undefined`.

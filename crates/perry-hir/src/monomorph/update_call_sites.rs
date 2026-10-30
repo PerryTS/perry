@@ -238,6 +238,7 @@ fn update_call_sites_in_expr(
             object,
             index,
             value,
+            ..
         } => {
             update_call_sites_in_expr(object, ctx, lookup);
             update_call_sites_in_expr(index, ctx, lookup);

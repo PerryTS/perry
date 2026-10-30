@@ -118,7 +118,15 @@ function catchRethrow(): Error {
   return new Error("unreachable");
 }
 
+// Recursion keeps every level a real frame; each level passes through the
+// runtime's Array.prototype.map, so runtime frames sit between JS frames.
+function dive(n: number): Error {
+  if (n === 0) return new Error("deep");
+  return [n].map(function step(k: number): Error { return dive(k - 1); })[0];
+}
+
 report("CHAIN", chainA().stack as string);
+report("DEEP", dive(12).stack as string);
 report("RETHROW", catchRethrow().stack as string);
 "#;
 
@@ -194,6 +202,25 @@ fn a_call_chain_reports_named_frames_in_call_order() {
         !frames.iter().any(|f| f == "<anonymous>"),
         "no frame should fall back to the placeholder here; got {joined}"
     );
+}
+
+/// A deep stack whose JS frames are separated by runtime frames (each level
+/// calls through `Array.prototype.map`) still reports node's default ten JS
+/// frames, all named: the capture keeps JS frames only and counts only them
+/// against `Error.stackTraceLimit`. On x86_64 Linux a frame is JS by where
+/// its code lives (the JS text section), so a capture that kept runtime
+/// frames, or dropped JS ones, fails here.
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+#[test]
+fn a_deep_stack_through_runtime_frames_keeps_ten_named_js_frames() {
+    let stdout = compile_and_run(&[]);
+    let frames = names(&stdout, "DEEP");
+    assert_eq!(frames.len(), 10, "{frames:?}\n{stdout}");
+    assert!(
+        frames.iter().all(|f| f.contains("dive") || f.contains("step")),
+        "only the recursion's own frames: {frames:?}"
+    );
+    assert!(frames.iter().any(|f| f.contains("step")), "{frames:?}");
 }
 
 /// `throw e` inside a `catch` re-throws the SAME error object. Node keeps the

@@ -101,6 +101,11 @@ pub struct LlFunction {
     /// since #7354 — windows-msvc used to name `__C_specific_handler` here,
     /// which forced funclet EH and locked Windows out of statepoints.
     pub personality: Option<&'static str>,
+    /// The module publishes a named `JsFunctionInfo` for this body (its
+    /// function-metadata owner lists it): on x86_64 Linux it is placed in the
+    /// JS text section, the range the `Error` capture keeps frames of
+    /// (`helpers::js_text_section`). Set by `emit_fn_infos`.
+    pub js_text: bool,
     blocks: Vec<LlBlock>,
     block_counter: u32,
     reg_counter: Rc<RegCounter>,
@@ -320,6 +325,7 @@ impl LlFunction {
             private_resume_entry: false,
             alloc_hot: false,
             personality: None,
+            js_text: false,
             blocks: Vec::new(),
             block_counter: 0,
             reg_counter: Rc::new(RegCounter::new()),
@@ -1165,8 +1171,16 @@ impl LlFunction {
         } else {
             ""
         };
+        // On x86_64 Linux every named JS body lives in the JS text section
+        // (`helpers::js_text_section`): the `Error` capture tells a JS frame
+        // from a runtime one by that range. LLVM's grammar puts the
+        // section after the fn attributes and before the GC strategy.
+        let section = match crate::codegen::helpers::js_text_section() {
+            Some(s) if self.js_text => format!(" section \"{s}\""),
+            _ => String::new(),
+        };
         format!(
-            "define {}{}{} @{}({}){}{}{}{}{}{}{} {{",
+            "define {}{}{} @{}({}){}{}{}{}{}{}{}{} {{",
             linkage,
             cconv,
             self.return_type,
@@ -1177,6 +1191,7 @@ impl LlFunction {
             frame_pointer,
             tail_calls,
             nanbox_operands,
+            section,
             gc_strategy,
             personality
         )
@@ -1508,6 +1523,37 @@ mod define_header_tests {
     /// A natively-constructed module without that strategy gets no RS4GC pass
     /// and therefore no precise roots, and it looks entirely correct until a
     /// collection frees something live.
+    /// x86_64 Linux places a named JS body in the JS text section, the
+    /// range the runtime's `Error` capture keeps frames of; a body without a
+    /// published name, and every body on other targets, names no section.
+    /// The native reader takes the clause off the define line and keeps the
+    /// attributes it follows.
+    #[test]
+    fn a_named_js_body_lives_in_the_js_text_section_on_x86_64_linux() {
+        let cases = [
+            ("x86_64-unknown-linux-gnu", true, true),
+            ("x86_64-unknown-linux-gnu", false, false),
+            ("aarch64-unknown-linux-gnu", true, false),
+            ("arm64-apple-macosx15.0.0", true, false),
+            ("x86_64-pc-windows-msvc", true, false),
+        ];
+        for (triple, named, placed) in cases {
+            crate::codegen::helpers::set_js_text_section_for_target(triple);
+            let mut f = probe();
+            f.js_text = named;
+            let header = f.define_header(false);
+            assert_eq!(
+                header.contains("section \"perry_js_text\""),
+                placed,
+                "{triple} named={named}: {header}"
+            );
+            let parsed = crate::dialect::parse_header_for_tests(&header).expect("parses");
+            assert_eq!(parsed.0.as_deref(), placed.then_some("perry_js_text"), "{header}");
+            assert!(!parsed.1.contains("section"), "{}", parsed.1);
+        }
+        crate::codegen::helpers::set_js_text_section_for_target("arm64-apple-macosx15.0.0");
+    }
+
     #[test]
     fn to_ir_opens_with_exactly_the_shared_define_header() {
         for force_inline in [false, true] {

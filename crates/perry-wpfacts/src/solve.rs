@@ -325,7 +325,8 @@ impl Model {
 
     /// A node holding only ⊤ (all kinds) for one named unmodeled origin.
     pub fn top_val(&mut self, why: &str) -> NodeId {
-        if !self.explain {
+        // Explain and the dump name each origin: its own node.
+        if !self.explain && self.diagnostic.is_none() {
             return self.top_tok_node;
         }
         if let Some(&n) = self.top_vals.get(why) {
@@ -406,6 +407,13 @@ impl Model {
         self.with_s(|m| m.apply(n, &c, &toks, prim));
         (self.cur_src, self.cur_why) = saved;
         self.bufs.push(toks);
+    }
+
+    /// Work no solve has run yet: what was added since the last one (a
+    /// contract check's escapes and the instances they make) is part of
+    /// the unit's facts only once solved.
+    pub(crate) fn unsolved(&self) -> bool {
+        !self.wl.is_empty() || !self.sum.pending.is_empty() || !self.marker_links.is_empty()
     }
 
     pub fn solve(&mut self) {
