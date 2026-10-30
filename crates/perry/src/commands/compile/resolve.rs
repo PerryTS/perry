@@ -180,6 +180,8 @@ mod package_enumeration_tests;
 #[cfg(test)]
 mod package_instance_tests;
 #[cfg(test)]
+mod source_closure_tests;
+#[cfg(test)]
 mod tests;
 
 /// Packages that Perry provides built-in native extensions for.
@@ -362,6 +364,7 @@ pub(super) fn enumerate_installed_package_roots(
     for nm in ancestor_node_modules_dirs(project_root) {
         collect_packages_in_node_modules(&nm, &mut out, &mut visited);
         collect_packages_in_bun_store(&nm, &mut out, &mut visited);
+        collect_packages_in_pnpm_store(&nm, &mut out, &mut visited);
     }
     // Symlinks and recursively discovered nested packages can expose the same
     // physical root more than once. Keep its first occurrence, preserving the
@@ -391,6 +394,33 @@ fn collect_packages_in_bun_store(
         Ok(e) => e,
         Err(_) => return,
     };
+    for entry in entries.flatten() {
+        let nested = entry.path().join("node_modules");
+        if nested.is_dir() {
+            collect_packages_in_node_modules(&nested, out, visited);
+        }
+    }
+}
+
+/// pnpm's isolated layout links only a workspace package's direct
+/// dependencies into its `node_modules`; transitive ones are reachable through
+/// `node_modules/.pnpm`, either its hidden-hoist `node_modules` (the only
+/// entry when pnpm links packages from a global virtual store) or
+/// `.pnpm/<pkg>@<version>/node_modules`. Without them the
+/// wildcard compiles a package from TypeScript source while its transitive
+/// dependency stays on published JavaScript, which lacks source-only exports
+/// such as a `const enum` (`tldts` importing `FLAG` from `tldts-core`).
+fn collect_packages_in_pnpm_store(
+    node_modules: &Path,
+    out: &mut HashMap<String, Vec<PathBuf>>,
+    visited: &mut HashSet<PathBuf>,
+) {
+    let pnpm_dir = node_modules.join(".pnpm");
+    let entries = match fs::read_dir(&pnpm_dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    collect_packages_in_node_modules(&pnpm_dir.join("node_modules"), out, visited);
     for entry in entries.flatten() {
         let nested = entry.path().join("node_modules");
         if nested.is_dir() {
@@ -958,13 +988,158 @@ fn package_entry_requires_cjs_emit(package_dir: &Path) -> bool {
         .is_some_and(|src| !is_js_file(&src) && is_hybrid_cjs_emit_input(&src))
 }
 
+/// A package's TypeScript sources stand in for its published JavaScript
+/// only when they are self-contained: every import of every source reachable
+/// (by relative imports) from the sources its manifest's JavaScript targets
+/// map to resolves, relatively, to a package installed beside it, or to a
+/// built-in. Sources written against their monorepo do not run as shipped:
+/// `tsconfig` path aliases (`@posthog/core`'s `@/utils`) and unpublished
+/// workspace packages the published build bundles (`@supabase/supabase-js`'s
+/// `@supabase/tracing`) left those imports unbound and the link failed on
+/// symbols named after their bindings. Node runs the JavaScript; so does
+/// Perry then, for the whole package (one identity per module, #6585).
+/// Type-only statements are erased and not counted.
+fn package_sources_self_contained(package_dir: &Path) -> bool {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, bool>>> = OnceLock::new();
+    let Ok(dir) = fs::canonicalize(package_dir) else {
+        return true;
+    };
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(cached) = cache.lock().expect("source closure cache").get(&dir) {
+        return *cached;
+    }
+    let verdict = sources_resolve(&dir);
+    cache
+        .lock()
+        .expect("source closure cache")
+        .insert(dir, verdict);
+    verdict
+}
+
+fn sources_resolve(package_dir: &Path) -> bool {
+    let Some(manifest) = fs::read_to_string(package_dir.join("package.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+    else {
+        return true;
+    };
+    let mut targets = Vec::new();
+    for field in ["main", "module"] {
+        if let Some(t) = manifest.get(field).and_then(|v| v.as_str()) {
+            targets.push(t.to_string());
+        }
+    }
+    fn leaves(v: &serde_json::Value, out: &mut Vec<String>) {
+        match v {
+            serde_json::Value::String(s) => out.push(s.clone()),
+            serde_json::Value::Array(a) => a.iter().for_each(|x| leaves(x, out)),
+            serde_json::Value::Object(o) => o.values().for_each(|x| leaves(x, out)),
+            _ => {}
+        }
+    }
+    if let Some(exports) = manifest.get("exports") {
+        leaves(exports, &mut targets);
+    }
+    let mut queue: Vec<PathBuf> = targets
+        .iter()
+        .filter(|t| !t.contains('*'))
+        .filter_map(|t| resolve_with_extensions(&package_dir.join(t.trim_start_matches("./"))))
+        .filter(|entry| is_js_file(entry))
+        .filter_map(|entry| original_source_via_map(&entry))
+        .collect();
+    queue.extend(resolve_with_extensions(
+        &package_dir.join("src").join("index"),
+    ));
+    queue.retain(|source| !is_js_file(source) && !is_declaration_file(source));
+    let mut seen: HashSet<PathBuf> = queue.iter().cloned().collect();
+    while let Some(file) = queue.pop() {
+        let Ok(text) = fs::read_to_string(&file) else {
+            continue;
+        };
+        for specifier in value_import_specifiers(&text) {
+            if is_relative_specifier(&specifier) {
+                match resolve_relative_import_path(&specifier, &file) {
+                    Some(next) => {
+                        if !is_js_file(&next)
+                            && !is_declaration_file(&next)
+                            && seen.insert(next.clone())
+                        {
+                            queue.push(next);
+                        }
+                    }
+                    None => return false,
+                }
+                continue;
+            }
+            let bare = specifier.strip_prefix("node:").unwrap_or(&specifier);
+            if specifier.starts_with("node:")
+                || perry_hir::is_node_builtin_module(bare)
+                || perry_hir::is_bare_prefix_only_builtin(&specifier)
+                || specifier == "bun"
+                || specifier.starts_with("bun:")
+                || specifier.starts_with("perry/")
+            {
+                continue;
+            }
+            let (package, _) = parse_package_specifier(&specifier);
+            let installed = file.ancestors().any(|dir| {
+                package
+                    .split('/')
+                    .fold(dir.join("node_modules"), |path, part| path.join(part))
+                    .join("package.json")
+                    .is_file()
+            });
+            if !installed {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// The specifiers of a module's value imports and re-exports (`import ..
+/// from`, `export .. from`, `import "x"`, `import("x")`), not its `import
+/// type` / `export type` statements.
+fn value_import_specifiers(text: &str) -> Vec<String> {
+    static FROM: OnceLock<Option<perry_perex::tooling::Regex>> = OnceLock::new();
+    static BARE: OnceLock<Option<perry_perex::tooling::Regex>> = OnceLock::new();
+    let from = FROM.get_or_init(|| {
+        perry_perex::tooling::Regex::new(
+            r#"\b(?:import|export)(\s+type\b)?[^'";]*?\bfrom\s*['"]([^'"\n]+)['"]"#,
+        )
+        .ok()
+    });
+    let bare = BARE.get_or_init(|| {
+        perry_perex::tooling::Regex::new(r#"\bimport\s*\(?\s*['"]([^'"\n]+)['"]"#).ok()
+    });
+    let mut out = Vec::new();
+    if let Some(re) = from {
+        for cap in re.captures_iter(text) {
+            if cap.get(1).is_none() {
+                if let Some(m) = cap.get(2) {
+                    out.push(m.as_str().to_string());
+                }
+            }
+        }
+    }
+    if let Some(re) = bare {
+        for cap in re.captures_iter(text) {
+            if let Some(m) = cap.get(1) {
+                out.push(m.as_str().to_string());
+            }
+        }
+    }
+    out
+}
+
 /// Resolve package entry preferring TypeScript source over compiled JS output.
 /// Used for compile_packages where we want to compile from TS source, not bundled JS.
 pub(super) fn resolve_package_source_entry(
     package_dir: &Path,
     subpath: Option<&str>,
 ) -> Option<PathBuf> {
-    if package_entry_requires_cjs_emit(package_dir) {
+    if package_entry_requires_cjs_emit(package_dir) || !package_sources_self_contained(package_dir)
+    {
         return None;
     }
 

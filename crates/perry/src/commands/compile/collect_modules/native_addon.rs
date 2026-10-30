@@ -65,6 +65,13 @@ fn package_path(node_modules: &std::path::Path, name: &str) -> PathBuf {
 /// platform payload dependency. This covers napi-rs layouts such as
 /// `@napi-rs/foo` -> `@napi-rs/foo-win32-x64-msvc` without letting an
 /// unrelated transitive package inherit the permission.
+///
+/// The wrapper is looked up from the payload's enclosing `node_modules`
+/// (npm/yarn layouts) and, failing that, among the wrapper copies the walk
+/// entered, resolving the declared dependency from the wrapper's side. An
+/// isolated store (the pnpm global virtual store) keeps the wrapper outside
+/// every directory above the payload; only the wrapper's own `node_modules`
+/// links it.
 fn approved_owner_package(
     ctx: &CompilationContext,
     package_root: &std::path::Path,
@@ -98,7 +105,60 @@ fn approved_owner_package(
             }
         }
     }
-    None
+    let payload = package_root.canonicalize().ok()?;
+    ctx.native_addon_wrapper_roots.iter().find_map(|wrapper| {
+        declared_dependencies(wrapper)
+            .iter()
+            .any(|dependency| {
+                dependency == actual_name
+                    && resolve_package_from(wrapper, dependency).as_deref()
+                        == Some(payload.as_path())
+            })
+            .then(|| package_name_from_package_json(wrapper))
+            .flatten()
+    })
+}
+
+/// Record the package root of a walked module when it is an allowlisted
+/// Node-API wrapper, so its platform payloads can be approved through it.
+pub(super) fn note_native_addon_wrapper(ctx: &mut CompilationContext, module: &std::path::Path) {
+    if ctx.native_addon_packages.is_empty() {
+        return;
+    }
+    let Some(root) = nearest_package_root(module) else {
+        return;
+    };
+    if ctx.native_addon_wrapper_roots.contains(&root) {
+        return;
+    }
+    if package_name_from_package_json(&root)
+        .is_some_and(|name| ctx.native_addon_packages.contains(&name))
+    {
+        ctx.native_addon_wrapper_roots.insert(root);
+    }
+}
+
+/// The canonical root of package `name` as Node resolves it from package
+/// root `from`: the nearest `node_modules/<name>` at or above it.
+fn resolve_package_from(from: &std::path::Path, name: &str) -> Option<PathBuf> {
+    from.ancestors()
+        .map(|ancestor| package_path(&ancestor.join("node_modules"), name))
+        .find(|candidate| candidate.join("package.json").is_file())
+        .and_then(|candidate| candidate.canonicalize().ok())
+}
+
+fn declared_dependencies(package_root: &std::path::Path) -> Vec<String> {
+    let Some(manifest) = fs::read_to_string(package_root.join("package.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+    else {
+        return Vec::new();
+    };
+    ["dependencies", "optionalDependencies"]
+        .iter()
+        .filter_map(|section| manifest.get(section).and_then(|value| value.as_object()))
+        .flat_map(|dependencies| dependencies.keys().cloned())
+        .collect()
 }
 
 fn normalized_relative(path: &std::path::Path) -> String {
@@ -240,15 +300,38 @@ pub(super) fn collect_node_addon_request(
 pub(super) fn collect_or_refuse_node_addon(
     ctx: &mut CompilationContext,
     canonical: &std::path::Path,
+    target: Option<&str>,
 ) -> Result<bool> {
     if canonical.extension().and_then(|ext| ext.to_str()) == Some("node")
-        && nearest_package_root(canonical)
+        && (nearest_package_root(canonical)
             .as_deref()
             .is_some_and(|root| parcel_facade_without_approval(ctx, root))
+            || is_other_target_package_addon(ctx, canonical, target))
     {
         return Ok(true);
     }
     collect_node_addon_request(ctx, canonical).map(|request| request.is_some())
+}
+
+/// A package's prebuilt binary for another platform is not part of this
+/// target's graph. napi-rs and prebuild loaders name every platform's binary
+/// in literal `require` calls and try each in turn; under Node the
+/// wrong-platform load throws at runtime and the loader catches it. Such an
+/// edge is left unresolved, so its `require` throws the same way. Exact
+/// project paths (`perry.nativeAddonPaths`) keep their target check.
+pub(super) fn is_other_target_package_addon(
+    ctx: &CompilationContext,
+    canonical: &std::path::Path,
+    target: Option<&str>,
+) -> bool {
+    if ctx.native_addon_paths.contains_key(canonical)
+        || !nearest_package_root(canonical)
+            .as_deref()
+            .is_some_and(path_is_inside_node_modules)
+    {
+        return false;
+    }
+    discovery::is_other_target_addon(canonical, target)
 }
 
 fn parcel_facade_without_approval(ctx: &CompilationContext, root: &std::path::Path) -> bool {

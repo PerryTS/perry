@@ -1003,3 +1003,54 @@ fn birth_tables_and_frame_shape_tables_round_trip_through_the_reader() {
     );
     assert!(roundtrip_ir(&worker, "frame_shapes_roundtrip") > 0);
 }
+
+/// The indexed-owner loop (`stmt/indexed_owner_loop.rs`) declares its alias
+/// scopes inline: a `noalias.scope.decl` call whose operand is a nested
+/// scope list, and `!alias.scope`/`!noalias` on its loads and stores. The
+/// reader took only `!{!"NAME"}` operands and failed the whole unit
+/// ("unsupported metadata operand"), oxfmt's yaml bundle in the Supabase
+/// CLI. The domain string here carries `,`, `}` and an escaped quote.
+#[test]
+fn inline_alias_scope_metadata_round_trips_through_the_reader() {
+    let domain = r#"indexed.owner.f, {x}\22q.3"#;
+    let scope = |id: u32| format!("!{{!\"owner.{id}\", !{{!\"{domain}\"}}}}");
+    let ir = format!(
+        r#"
+declare void @llvm.experimental.noalias.scope.decl(metadata)
+
+define double @scoped(ptr %a, ptr %b) {{
+entry:
+  call void @llvm.experimental.noalias.scope.decl(metadata !{{{s1}}})
+  call void @llvm.experimental.noalias.scope.decl(metadata !{{{s2}}})
+  %v = load double, ptr %a, align 8, !alias.scope !{{{s1}}}, !noalias !{{{s2}}}
+  store double %v, ptr %b, align 8, !alias.scope !{{{s2}}}, !noalias !{{{s1}}}
+  ret double %v
+}}
+"#,
+        s1 = scope(1),
+        s2 = scope(2)
+    );
+    let (skeleton, fns) = split_corpus(&ir);
+    let ctx = Context::create();
+    let module = crate::inprocess::parse_ir_text(&ctx, &skeleton, "scopes").expect("skeleton");
+    for f in &fns {
+        predeclare_function_from_text(&ctx, &module, f).unwrap_or_else(|e| panic!("{e:#}"));
+    }
+    for f in &fns {
+        add_function_from_text(&ctx, &module, f).unwrap_or_else(|e| panic!("{e:#}"));
+    }
+    module
+        .verify()
+        .unwrap_or_else(|e| panic!("verifier: {}", e.to_string()));
+    let text = module.print_to_string().to_string();
+    assert_eq!(
+        text.matches("call void @llvm.experimental.noalias.scope.decl(metadata !")
+            .count(),
+        2,
+        "{text}"
+    );
+    assert_eq!(text.matches("!alias.scope").count(), 2, "{text}");
+    assert_eq!(text.matches("!noalias").count(), 2, "{text}");
+    assert!(text.contains(r#"!"owner.1""#), "{text}");
+    assert!(text.contains(r#"indexed.owner.f, {x}\22q.3"#), "{text}");
+}
