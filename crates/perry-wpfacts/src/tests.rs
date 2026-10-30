@@ -44,6 +44,7 @@ mod protocol_calls;
 mod protocol_keys;
 mod receiver_slots;
 mod receiver_this;
+mod relinked_parent;
 mod rest_element;
 mod run_once_closed;
 mod runtime_helpers;
