@@ -696,6 +696,11 @@ pub(super) fn compile_module_entry(
                 }
                 blk.call_void(&format!("{}__init", prefix), &[]);
             }
+            // SNAP census, instrumented compiles only (`PERRY_SNAP_CENSUS`
+            // set while compiling): the entry's own body starts here.
+            if std::env::var_os("PERRY_SNAP_CENSUS").is_some_and(|v| !v.is_empty()) {
+                blk.call_void("js_snap_entry_body", &[]);
+            }
         }
         // Mark the boundary between init prelude and user code so
         // hoisted post-init setup (cached `@perry_class_keys_*` loads

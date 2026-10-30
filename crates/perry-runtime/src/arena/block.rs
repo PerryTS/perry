@@ -580,6 +580,7 @@ impl ArenaBlock {
         let ptr = unsafe { self.data.add(aligned_offset) };
         let next = bumped.checked_add(pad - 1)? & !(pad - 1);
         self.offset = next;
+        crate::snap_census::birth(ptr, size);
         Some(ptr)
     }
 

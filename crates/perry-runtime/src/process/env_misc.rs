@@ -88,6 +88,7 @@ pub extern "C" fn js_process_add_uncaught_exception_capture_callback(callback: f
 /// during async event loop drain and V8 isolate destruction.
 #[no_mangle]
 pub extern "C" fn js_process_exit(code: f64) {
+    crate::effect!(host_write, exit);
     // #3041 — match Node's `parseAndValidateExitCode`:
     //   * `undefined` / `null`  → exit with the stored `process.exitCode`
     //     (0 when it was never set / was reset to nullish — #6666).
@@ -850,6 +851,7 @@ pub extern "C" fn js_process_constrained_memory() -> f64 {
 /// Returns a string pointer, or null (0) if not found
 #[no_mangle]
 pub extern "C" fn js_getenv(name_ptr: *const StringHeader) -> *mut StringHeader {
+    crate::effect!(host_read, env);
     unsafe {
         let name = match env_name_from_header(name_ptr) {
             Some(name) => name,
@@ -883,6 +885,7 @@ pub extern "C" fn js_getenv(name_ptr: *const StringHeader) -> *mut StringHeader 
 /// Node, so `??` won't clobber a legitimately empty value.
 #[no_mangle]
 pub extern "C" fn js_getenv_value(name_ptr: *const StringHeader) -> f64 {
+    crate::effect!(host_read, env);
     let ptr = js_getenv(name_ptr);
     let val = if ptr.is_null() {
         JSValue::undefined()
@@ -986,6 +989,7 @@ static KEEP_PROCESS_PENDING_EXIT_CODE: extern "C" fn() -> i32 = js_process_pendi
 /// `js_removeenv` below, which the delete path can call directly).
 #[no_mangle]
 pub extern "C" fn js_setenv(name_ptr: *const StringHeader, value: f64) {
+    crate::effect!(host_write, env);
     use crate::value::js_jsvalue_to_string;
     unsafe {
         let name = match env_name_from_header(name_ptr) {
@@ -1127,6 +1131,7 @@ static KEEP_JS_MODULE_RESOLVE_LOOKUP_PATHS: extern "C" fn(f64, f64) -> f64 =
 /// Unset an environment variable. Backs `delete process.env.X` (#1344).
 #[no_mangle]
 pub extern "C" fn js_removeenv(name_ptr: *const StringHeader) {
+    crate::effect!(host_write, env);
     unsafe {
         let name = match env_name_from_header(name_ptr) {
             Some(name) => name,
@@ -1420,6 +1425,7 @@ fn env_name_is_settable(name: &str) -> bool {
 }
 
 fn js_process_env_impl() -> f64 {
+    crate::effect!(host_read, env);
     super::ipc_hooks::ensure_initialized();
     let cached = CACHED_ENV.with(|c| c.get());
     if cached != 0.0 {

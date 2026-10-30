@@ -184,6 +184,8 @@ pub fn declare_phase2_1(module: &mut LlModule) {
 /// which the mark phase scans alongside the stack.
 pub fn declare_phase_a_strings(module: &mut LlModule) {
     module.declare_function("js_gc_register_global_root", VOID, &[I64]);
+    // SNAP census: the entry body's start (instrumented compiles only).
+    module.declare_function("js_snap_entry_body", VOID, &[]);
 
     // Phase B (core types) additions live here too — split into a separate
     // function once they grow.

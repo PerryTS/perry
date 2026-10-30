@@ -449,6 +449,7 @@ impl Census {
             }
         }
         self.space_live[space].add(size);
+        crate::snap_census::census_live(header.cast(), obj_type, size);
         if t > GC_TYPE_MAX as usize {
             return;
         }

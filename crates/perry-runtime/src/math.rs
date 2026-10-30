@@ -285,6 +285,7 @@ pub extern "C" fn js_math_hypot(a: f64, b: f64) -> f64 {
 /// Math.random() -> number (0 <= x < 1)
 #[no_mangle]
 pub extern "C" fn js_math_random() -> f64 {
+    crate::effect!(host_read, random);
     let mut rng = rand::rng();
     rng.random::<f64>()
 }

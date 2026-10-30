@@ -573,6 +573,7 @@ pub(crate) const INSTRUMENT_KNOBS: &[&str] = &[
     "PERRY_GC_VERIFY_CLASSIFIER",
     "PERRY_STACK_SYMBOLS",
     "PERRY_FIELD_REPR_VERIFY",
+    "PERRY_SNAP_CENSUS",
 ];
 
 /// The first instrument knob set (non-empty) in the environment, if any.

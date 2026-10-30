@@ -17,6 +17,10 @@ pub use job_domain::JobDomainToken;
 pub struct AsyncContextSnapshot {
     entries: Vec<AsyncContextEntry>,
     job_domain: Option<JobDomainToken>,
+    /// SNAP census: the init that enqueued the job this snapshot belongs to
+    /// (stamped at enqueue; a job runs as that init).
+    #[cfg(perry_gc_instruments)]
+    pub(crate) snap_init: u32,
 }
 
 /// A native context vector in an ordinary young, movable GC holder. The
@@ -169,7 +173,7 @@ pub fn token_from_storage_value(value: f64) -> Option<i64> {
 // as reaching JS. `HotKey::with` is `#[inline(always)]`, and its only indirect
 // call is the audited cold `resolve`.
 crate::perry_thread_local! {
-    static ACTIVE_CONTEXT: RefCell<AsyncContextSnapshot> = const { RefCell::new(AsyncContextSnapshot { entries: Vec::new(), job_domain: None }) };
+    static ACTIVE_CONTEXT: RefCell<AsyncContextSnapshot> = const { RefCell::new(AsyncContextSnapshot { entries: Vec::new(), job_domain: None, #[cfg(perry_gc_instruments)] snap_init: 0 }) };
 }
 
 unsafe fn token_ref(token: i64) -> &'static AsyncLocalStorageTokenInner {

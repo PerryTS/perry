@@ -394,6 +394,7 @@ pub(crate) fn emit_process_event(event: &str, args: &[f64]) -> bool {
 /// (#3047), matching Node's EventEmitter argument handling.
 #[no_mangle]
 pub extern "C" fn js_process_on(event_bits: i64, listener_bits: i64) -> f64 {
+    crate::effect!(host_write, listener);
     register_process_listener(event_bits, listener_bits, false, false)
 }
 
@@ -406,6 +407,7 @@ pub extern "C" fn js_process_add_listener(event_bits: i64, listener_bits: i64) -
 /// process.once(event, listener) — one-shot listener (Node parity).
 #[no_mangle]
 pub extern "C" fn js_process_once(event_bits: i64, listener_bits: i64) -> f64 {
+    crate::effect!(host_write, listener);
     register_process_listener(event_bits, listener_bits, true, false)
 }
 

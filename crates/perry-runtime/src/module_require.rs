@@ -1233,6 +1233,7 @@ pub extern "C" fn js_register_path_module(path_value: f64, exports: f64) {
 /// `init_addr` is codegen's `ptrtoint` of an `extern "C" fn()` module body.
 #[no_mangle]
 pub unsafe extern "C" fn js_run_module_init_catching(init_addr: i64) {
+    crate::snap_census::init_part();
     let init_fn: extern "C" fn() = std::mem::transmute::<usize, _>(init_addr as usize);
     let boundary = MODULE_PATH_REGISTRY.with(|r| r.begin_module_boundary());
     let outcome = crate::exception::js_call_catching(|| {
@@ -1313,12 +1314,15 @@ fn run_path_initializer(addr: usize) -> Result<(), u64> {
     // SAFETY: `addr` came from codegen's `ptrtoint` of an `extern "C" fn()`
     // module initializer and was accepted once for this canonical path.
     let init_fn: extern "C" fn() = unsafe { std::mem::transmute::<usize, _>(addr) };
-    crate::exception::js_call_catching(|| {
+    crate::snap_census::init_enter(addr);
+    let outcome = crate::exception::js_call_catching(|| {
         init_fn();
         undefined()
     })
     .map(|_| ())
-    .map_err(f64::to_bits)
+    .map_err(f64::to_bits);
+    crate::snap_census::init_exit(outcome.is_err());
+    outcome
 }
 
 fn require_path_key(key: &str) -> Result<Option<u64>, PathModuleRequireError> {
@@ -1331,6 +1335,7 @@ fn require_path_key(key: &str) -> Result<Option<u64>, PathModuleRequireError> {
 /// partial exports, while unrelated waiters receive only the final namespace.
 #[no_mangle]
 pub extern "C" fn js_require_path_module(path_value: f64) -> f64 {
+    let _require = crate::snap_census::require_scope();
     let path = value_to_string(path_value, "id");
     let key = module_lookup_key(&path);
     match require_path_key(&key) {

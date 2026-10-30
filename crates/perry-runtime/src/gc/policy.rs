@@ -5104,6 +5104,7 @@ pub(super) static GC_UNSAFE_WARNED: std::sync::atomic::AtomicBool =
 /// worker threads are active (see GC_UNSAFE_ZONES).
 #[no_mangle]
 pub extern "C" fn js_gc_collect() {
+    crate::snap_census::explicit_gc();
     if manual_gc_blocked_by_unsafe_zone() {
         return;
     }
@@ -5116,6 +5117,7 @@ pub extern "C" fn js_gc_collect() {
     let start = std::time::Instant::now();
     manual_gc_collect_now();
     super::instruments::note_full_collect_us(start.elapsed().as_micros() as u64);
+    crate::snap_census::explicit_gc_done();
 }
 
 /// Run an explicit (`gc()`) full collection, with **precise roots** — the same

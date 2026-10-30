@@ -196,6 +196,7 @@ pub mod native_payload_stream_abi;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 mod native_stack;
 pub mod native_value_profile;
+pub mod snap_census;
 pub mod navigator;
 pub mod net_validate;
 pub mod node_api_host;
