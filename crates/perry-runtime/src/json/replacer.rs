@@ -448,7 +448,9 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
         )
         .0;
         // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
-        let fields_ptr = crate::meta_slots_of!(crate::meta_obj_runtime_born!((obj_root.get_raw_const_ptr::<u8>()) as *mut _)) as *const f64;
+        let fields_ptr = crate::meta_slots_of!(crate::meta_obj_runtime_born!(
+            (obj_root.get_raw_const_ptr::<u8>()) as *mut _
+        )) as *const f64;
         let replacer = replacer_root.get_raw_const_ptr::<crate::ClosureHeader>();
         // #9398: tombstoned slot from an O(1) delete — not a key, not
         // serialized. See `tombstoned_key_slot`.
@@ -1005,7 +1007,10 @@ pub(crate) unsafe fn stringify_object_pretty(
     // in-range-but-unmapped garbage address (a denormal double that survived the
     // tag probes) SIGSEGVs here. Require a genuinely GC-tracked allocation first
     // and emit `null` otherwise, rather than faulting inside JSON.stringify.
-    if crate::value::addr_class::try_read_tracked_gc_header_of_object(ptr as usize)
+    if crate::value::addr_class::try_read_tracked_gc_header_of_type(
+        ptr as usize,
+        crate::gc::GC_TYPE_OBJECT,
+    )
     .is_none()
     {
         buf.push_str("null");

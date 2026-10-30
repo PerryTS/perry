@@ -501,15 +501,12 @@ pub(crate) unsafe fn try_read_tracked_gc_header_of_type(
     kind: u8,
 ) -> Option<std::ptr::NonNull<GcHeader>> {
     debug_assert!(crate::gc::gc_type_is_known(kind));
-    tracked_gc_header_admitting(addr, |obj_type| obj_type == kind)
-}
-
-/// [`try_read_tracked_gc_header_of_type`] for an ordinary object (either header form).
-#[inline(never)]
-pub(crate) unsafe fn try_read_tracked_gc_header_of_object(
-    addr: usize,
-) -> Option<std::ptr::NonNull<GcHeader>> {
-    tracked_gc_header_admitting(addr, |obj_type| crate::gc_type_is_object!(obj_type))
+    // `GC_TYPE_OBJECT` names an ordinary object in either header form (the one
+    // out-of-line body serves it; no second helper).
+    tracked_gc_header_admitting(addr, |obj_type| {
+        obj_type == kind
+            || (kind == crate::gc::GC_TYPE_OBJECT && crate::gc_type_is_object!(obj_type))
+    })
 }
 
 /// Distinguish an owned cell of another kind from an address outside the
