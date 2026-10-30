@@ -598,7 +598,7 @@ unsafe fn arena_alloc_gc_slow_offering(
     total: usize,
     origin: crate::gc::WalkOrigin,
 ) -> *mut u8 {
-    let _offer = crate::gc::EntryWalkOrigin::enter(origin);
+    let _offer = crate::gc::EntryWalkOrigin::enter(&origin);
     arena_alloc_gc_slow(size, 8, crate::gc::GC_TYPE_OBJECT, total)
 }
 

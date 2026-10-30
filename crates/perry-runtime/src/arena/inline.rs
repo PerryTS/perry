@@ -120,7 +120,8 @@ extern "C" fn js_inline_arena_slow_alloc_from(
     sp: usize,
     fp: usize,
 ) -> *mut u8 {
-    let _origin = crate::gc::EntryWalkOrigin::enter(crate::gc::WalkOrigin { pc, sp, fp });
+    let origin = crate::gc::WalkOrigin { pc, sp, fp };
+    let _origin = crate::gc::EntryWalkOrigin::enter(&origin);
     js_inline_arena_slow_alloc_body(state, size, align)
 }
 

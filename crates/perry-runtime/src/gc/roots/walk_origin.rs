@@ -36,26 +36,30 @@ pub(crate) struct WalkOrigin {
 
 // `#[thread_local]`, not `thread_local!`: const, drop-free and all-zero (so
 // in `.tbss`), it needs no accessor and no claimed slot. One
-// thread-pointer-relative load or store.
+// thread-pointer-relative load or store. It holds a pointer to the origin in
+// the offering entry's own frame, one word of TLS rather than four, so the
+// thread's TLS block (and the loader's offset arithmetic over it) does not
+// change size; null when nothing is offered.
 #[thread_local]
-static OFFERED: Cell<Option<WalkOrigin>> = Cell::new(None);
+static OFFERED: Cell<*const WalkOrigin> = Cell::new(core::ptr::null());
 
 /// Offers the entry's caller frame to the collection requests of its body.
 #[cfg_attr(
     not(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu")),
     allow(dead_code)
 )]
-pub(crate) struct EntryOrigin(());
+pub(crate) struct EntryOrigin<'a>(core::marker::PhantomData<&'a WalkOrigin>);
 
 #[cfg_attr(
     not(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu")),
     allow(dead_code)
 )]
-impl EntryOrigin {
+impl<'a> EntryOrigin<'a> {
+    /// `origin` lives in the entry's frame for as long as the guard does.
     #[inline]
-    pub(crate) fn enter(origin: WalkOrigin) -> Self {
-        OFFERED.set(Some(origin));
-        Self(())
+    pub(crate) fn enter(origin: &'a WalkOrigin) -> Self {
+        OFFERED.set(origin);
+        Self(core::marker::PhantomData)
     }
 }
 
@@ -63,10 +67,10 @@ impl EntryOrigin {
 /// an offering entry) ends the outer offer too, and the outer body's later
 /// requests then walk from the scan. Never wrong, only slower, and it spares
 /// every entry a load.
-impl Drop for EntryOrigin {
+impl Drop for EntryOrigin<'_> {
     #[inline]
     fn drop(&mut self) {
-        OFFERED.set(None);
+        OFFERED.set(core::ptr::null());
     }
 }
 
@@ -78,7 +82,9 @@ impl Drop for EntryOrigin {
 )]
 #[inline]
 pub(crate) fn offered() -> Option<WalkOrigin> {
-    OFFERED.get()
+    // SAFETY: non-null only while the guard that set it is alive, and the
+    // guard borrows the origin it points at.
+    unsafe { OFFERED.get().as_ref().copied() }
 }
 
 /// The body of an x86-64 Linux naked entry that offers its caller's frame: it
@@ -132,10 +138,11 @@ mod tests {
     #[test]
     fn an_offer_never_outlives_its_entry() {
         {
-            let _entry = EntryOrigin::enter(A);
+            let _entry = EntryOrigin::enter(&A);
             assert_eq!(offered(), Some(A));
             {
-                let _nested = EntryOrigin::enter(WalkOrigin { pc: 4, ..A });
+                let nested = WalkOrigin { pc: 4, ..A };
+                let _nested = EntryOrigin::enter(&nested);
                 assert_eq!(offered().map(|o| o.pc), Some(4));
             }
             assert_eq!(offered(), None, "a nested entry ends the outer offer");

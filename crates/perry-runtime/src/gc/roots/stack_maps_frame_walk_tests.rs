@@ -235,7 +235,7 @@ extern "C" fn walk_here(body_sp: usize, return_address: usize, rbp: usize) {
     });
     let mut fast = Vec::new();
     let fast_stats = {
-        let _origin = origin.map(super::super::EntryWalkOrigin::enter);
+        let _origin = origin.as_ref().map(super::super::EntryWalkOrigin::enter);
         frame_walk::visit(&index, &mut |root: ResolvedRoot| {
             fast.push(sample(root.address))
         })

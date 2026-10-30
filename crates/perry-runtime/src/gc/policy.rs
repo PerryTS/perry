@@ -4205,8 +4205,8 @@ pub extern "C" fn js_gc_loop_safepoint() {
 /// start: most armed polls return before it.
 #[inline(always)]
 fn gc_safepoint_moving_minor_from(pc: usize, sp: usize, fp: usize) -> bool {
-    let _origin =
-        (pc != 0).then(|| super::EntryWalkOrigin::enter(super::WalkOrigin { pc, sp, fp }));
+    let origin = super::WalkOrigin { pc, sp, fp };
+    let _origin = (pc != 0).then(|| super::EntryWalkOrigin::enter(&origin));
     gc_safepoint_moving_minor()
 }
 
@@ -5158,7 +5158,8 @@ pub extern "C" fn js_gc_collect() {
 
 #[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
 extern "C" fn js_gc_collect_from(pc: usize, sp: usize, fp: usize) {
-    let _origin = super::EntryWalkOrigin::enter(super::WalkOrigin { pc, sp, fp });
+    let origin = super::WalkOrigin { pc, sp, fp };
+    let _origin = super::EntryWalkOrigin::enter(&origin);
     js_gc_collect_body();
 }
 
