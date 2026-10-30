@@ -74,6 +74,8 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
     if singleton_at_entry.is_null() {
         return;
     }
+    // The realm is the runtime's, whichever init first asks for it.
+    let _realm = crate::snap_census::runtime_scope();
     // #6982: this function installs several hundred builtins, and nearly every
     // step allocates (name strings, constructor closures, prototype objects).
     // Any of those allocations can trigger a collection, and an *evacuating*

@@ -300,6 +300,12 @@ struct State {
     /// Registered module-global root slots (the handler cannot borrow
     /// `GLOBAL_ROOTS`: the interrupted code may hold it).
     globals: WordSet,
+    /// One bit per 8-byte word of the reservation: a birth starts there.
+    starts: *mut u64,
+    /// Host touches while the runtime (init 0) works for an init: the realm
+    /// populating itself on first use. (what, call chain), first per what.
+    realm_hosts: Vec<(&'static str, [usize; 6])>,
+    excluded: u64,
     births: Log<Birth>,
     listed: Log<usize>,
     regions: Vec<(usize, usize)>,
@@ -319,12 +325,21 @@ struct State {
     boundary_seq: u32,
     boundary_at: &'static str,
     // census at the boundary collection
-    live_by: Vec<[u64; 4]>,
+    live_by: std::collections::HashMap<(u32, u8), [u64; 2]>,
     live_unattributed: [u64; 2],
     boundary_done: bool,
     /// Ground truth: every `getenv` by any code while an init runs.
     env_reads: Vec<(u32, String)>,
     mark: bool,
+    /// R5 (`PERRY_SNAP_RSET=1`): after the boundary, the imaged cells stay
+    /// write-protected and their writes are counted until exit.
+    rset: bool,
+    rset_active: bool,
+    /// Imaged births, sorted by address: (start, end).
+    cand: Vec<(usize, usize)>,
+    cand_writes: Vec<u32>,
+    cand_ptr_writes: Vec<u32>,
+    rset_faults: u64,
     t0: std::time::Instant,
 }
 
@@ -332,7 +347,7 @@ struct State {
 // Start
 // ---------------------------------------------------------------------------
 
-fn start_if_requested() -> bool {
+pub(super) fn start_if_requested() -> bool {
     match ANCHOR.started.load(Relaxed) {
         1 => return false,
         2 => return true,
@@ -378,6 +393,9 @@ unsafe fn start(out: String) {
         w: WordSet::new(28),
         r: WordSet::new(28),
         globals: WordSet::new(22),
+        starts: map_zeroed::<u64>(((res_hi - res_lo) / 8).div_ceil(64).max(1)),
+        realm_hosts: Vec::new(),
+        excluded: 0,
         births: Log::new(1 << 28),
         listed: Log::new(1 << 26),
         regions: Vec::new(),
@@ -395,11 +413,17 @@ unsafe fn start(out: String) {
         faults_ignored: 0,
         boundary_seq: 0,
         boundary_at: "",
-        live_by: Vec::new(),
+        live_by: std::collections::HashMap::new(),
         live_unattributed: [0; 2],
         boundary_done: false,
         env_reads: Vec::new(),
         mark: std::env::var("PERRY_SNAP_MARK").is_ok_and(|v| v == "1"),
+        rset: std::env::var("PERRY_SNAP_RSET").is_ok_and(|v| v == "1"),
+        rset_active: false,
+        cand: Vec::new(),
+        cand_writes: Vec::new(),
+        cand_ptr_writes: Vec::new(),
+        rset_faults: 0,
         t0: std::time::Instant::now(),
     });
     // Init 0: the runtime's own start and the entry's body.
@@ -413,6 +437,7 @@ unsafe fn start(out: String) {
     // The objects that exist now are the runtime's (init 0).
     crate::arena::arena_walk_objects_with_block_index(|header, _| {
         let size = (*(header as *const crate::gc::GcHeader)).size as usize;
+        set_start(st, header as usize);
         st.births.push(Birth {
             addr: header as usize,
             size: size as u32,
@@ -668,6 +693,15 @@ pub(super) fn host(class: Effect, what: &'static str) {
     let top = st.frames.last().map_or(0, |f| f.init);
     if top == 0 {
         st.host_outside += 1;
+        if class != Effect::TargetFact && !st.realm_hosts.iter().any(|(w, _)| *w == what) {
+            let mut pcs = [0usize; crate::error::MAX_CAPTURED_FRAMES];
+            let n = crate::error::capture_ips(&mut pcs);
+            let mut six = [0usize; 6];
+            for (d, s) in six.iter_mut().zip(pcs[..n].iter().skip(1)) {
+                *d = *s;
+            }
+            st.realm_hosts.push((what, six));
+        }
         return;
     }
     let i = &mut st.inits[top as usize];
@@ -693,8 +727,37 @@ pub(super) fn host(class: Effect, what: &'static str) {
     }
 }
 
+fn set_start(st: &mut State, addr: usize) {
+    if let Some(i) = start_bit(st, addr) {
+        unsafe { *st.starts.add(i / 64) |= 1 << (i % 64) };
+    }
+}
+
+fn start_bit(st: &State, addr: usize) -> Option<usize> {
+    let lo = st.heap.lo;
+    (addr >= lo && addr < lo + st.heap.pages * PAGE).then(|| (addr - lo) / 8)
+}
+
+/// The birth that holds `word` (its header address), from the start bitmap.
+fn object_start(st: &State, word: usize) -> Option<usize> {
+    let mut i = start_bit(st, word)?;
+    let floor = i.saturating_sub(1 << 22);
+    loop {
+        let w = unsafe { *st.starts.add(i / 64) } & (u64::MAX >> (63 - (i % 64)));
+        if w != 0 {
+            let bit = 63 - w.leading_zeros() as usize;
+            return Some(st.heap.lo + ((i / 64) * 64 + bit) * 8);
+        }
+        if i < 64 || i - (i % 64) <= floor {
+            return None;
+        }
+        i = i - (i % 64) - 1;
+    }
+}
+
 pub(super) fn birth(addr: usize, size: usize) {
     let st = state();
+    set_start(st, addr);
     let top = st.frames.last().map_or(0, |f| f.init);
     st.births.push(Birth {
         addr,
@@ -719,6 +782,12 @@ pub(super) fn global_root(slot: usize) {
     let st = state();
     st.globals.insert(slot as u64);
     mark_tracked(slot, slot + 8);
+    // Rule 2 names every binding a member of D initializes, written or not.
+    let top = st.frames.last().map_or(0, |f| f.init) as usize;
+    if top != 0 && st.inits[top].in_d {
+        st.w.insert(slot as u64);
+        flag_page(st, slot & !(PAGE - 1), PF_W);
+    }
     if st.d_mode {
         let page = slot & !(PAGE - 1);
         unsafe { libc::mprotect(page as *mut _, PAGE, libc::PROT_NONE) };
@@ -870,6 +939,7 @@ static mut PREV_TRAP: std::mem::MaybeUninit<libc::sigaction> = std::mem::MaybeUn
 
 std::thread_local! {
     static PENDING: std::cell::Cell<[usize; 8]> = const { std::cell::Cell::new([0; 8]) };
+    static RSET_WORD: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 unsafe fn install_handlers() {
@@ -902,6 +972,29 @@ extern "C" fn on_segv(sig: libc::c_int, info: *mut libc::siginfo_t, ctx: *mut li
         }
         let st = &mut *st_ptr;
         let page = addr & !(PAGE - 1);
+        if st.rset_active {
+            let uc = ctx as *mut libc::ucontext_t;
+            let gregs = &mut (*uc).uc_mcontext.gregs;
+            if gregs[libc::REG_ERR as usize] & 2 == 0 || st.heap.slot(addr).is_none() {
+                return chain(std::ptr::addr_of!(PREV_SEGV).cast(), sig);
+            }
+            st.rset_faults += 1;
+            let word = addr & !7;
+            if let Some(i) = cand_index(st, word) {
+                st.cand_writes[i] = st.cand_writes[i].saturating_add(1);
+                RSET_WORD.with(|w| w.set(word | 1));
+            }
+            PENDING.with(|p| {
+                let mut v = p.get();
+                if let Some(slot) = v.iter_mut().find(|s| **s == 0) {
+                    *slot = page;
+                }
+                p.set(v)
+            });
+            libc::mprotect(page as *mut _, PAGE, libc::PROT_READ | libc::PROT_WRITE);
+            gregs[libc::REG_EFL as usize] |= EFLAGS_TF;
+            return;
+        }
         let tracked = page_flags(st, page).is_some_and(|f| *f & PF_TRACKED != 0);
         if !tracked || policy(st, page) == libc::PROT_READ | libc::PROT_WRITE {
             return chain(std::ptr::addr_of!(PREV_SEGV).cast(), sig);
@@ -911,8 +1004,8 @@ extern "C" fn on_segv(sig: libc::c_int, info: *mut libc::siginfo_t, ctx: *mut li
         let write = gregs[libc::REG_ERR as usize] & 2 != 0;
         let pc = gregs[libc::REG_RIP as usize] as usize;
         st.faults_total += 1;
-        note_access(st, addr & !7, write, pc);
-        // Open the page for one instruction.
+        // Open the page for one instruction (before recording: the record
+        // may read an object header on it).
         let pending = PENDING.with(|p| p.get());
         let mut pend = pending;
         if let Some(slot) = pend.iter_mut().find(|s| **s == 0) {
@@ -920,6 +1013,7 @@ extern "C" fn on_segv(sig: libc::c_int, info: *mut libc::siginfo_t, ctx: *mut li
         }
         PENDING.with(|p| p.set(pend));
         libc::mprotect(page as *mut _, PAGE, libc::PROT_READ | libc::PROT_WRITE);
+        note_access(st, addr & !7, write, pc);
         gregs[libc::REG_EFL as usize] |= EFLAGS_TF;
     }
 }
@@ -931,8 +1025,23 @@ extern "C" fn on_trap(sig: libc::c_int, _info: *mut libc::siginfo_t, ctx: *mut l
             return chain(std::ptr::addr_of!(PREV_TRAP).cast(), sig);
         }
         let st = &mut *ANCHOR.state.load(Relaxed);
-        for &page in pending.iter().take_while(|p| **p != 0) {
-            libc::mprotect(page as *mut _, PAGE, policy(st, page));
+        if st.rset_active {
+            let w = RSET_WORD.with(|w| w.replace(0));
+            if w != 0 {
+                let word = w & !1;
+                if heap_pointer(st, *(word as *const u64)) {
+                    if let Some(i) = cand_index(st, word) {
+                        st.cand_ptr_writes[i] = st.cand_ptr_writes[i].saturating_add(1);
+                    }
+                }
+            }
+            for &page in pending.iter().take_while(|p| **p != 0) {
+                libc::mprotect(page as *mut _, PAGE, libc::PROT_READ);
+            }
+        } else {
+            for &page in pending.iter().take_while(|p| **p != 0) {
+                libc::mprotect(page as *mut _, PAGE, policy(st, page));
+            }
         }
         PENDING.with(|p| p.set([0; 8]));
         let uc = ctx as *mut libc::ucontext_t;
@@ -953,6 +1062,31 @@ fn note_access(st: &mut State, word: usize, write: bool, pc: usize) {
     {
         st.faults_ignored += 1;
         return;
+    }
+    // Immutable value-identity cells are not locations: a string never
+    // changes after its birth (its cached hash is no observation), and a
+    // shared canonical key list is an interned trie node. Reaching one
+    // through a location a member of D wrote is caught at that location.
+    if st.heap.slot(word).is_some() {
+        if let Some(h) = object_start(st, word) {
+            let hp = h & !(PAGE - 1);
+            let fp = word & !(PAGE - 1);
+            let (ty, flags) = unsafe {
+                if hp != fp {
+                    libc::mprotect(hp as *mut _, PAGE, libc::PROT_READ);
+                }
+                let g = &*(h as *const crate::gc::GcHeader);
+                let r = (g.obj_type, g.gc_flags);
+                if hp != fp {
+                    libc::mprotect(hp as *mut _, PAGE, policy(st, hp));
+                }
+                r
+            };
+            if ty == crate::gc::GC_TYPE_STRING || flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0 {
+                st.excluded += 1;
+                return;
+            }
+        }
     }
     let top = st.frames.last().map_or(0, |f| f.init) as usize;
     st.inits[top].faults += 1;
@@ -1050,6 +1184,12 @@ pub unsafe extern "C" fn getenv(name: *const libc::c_char) -> *mut libc::c_char 
 // Boundary and report
 // ---------------------------------------------------------------------------
 
+/// True when the collection must not run (R5 keeps the heap in place).
+pub(super) fn skip_collection() -> bool {
+    let p = ANCHOR.state.load(Relaxed);
+    !p.is_null() && unsafe { (*p).rset_active }
+}
+
 pub(super) fn boundary(at: &'static str) {
     let st = state();
     if st.boundary_seq != 0 {
@@ -1067,15 +1207,116 @@ pub(super) fn boundary(at: &'static str) {
         });
     }
     crate::arena::refresh_inline_allocation_limit();
+    write_report(st);
+    if st.rset {
+        unsafe { arm_rset(st) };
+        return;
+    }
     crate::gc::gc_unsuppress();
     // Births sorted by address for the census attribution.
     st.births.as_mut_slice().sort_unstable_by_key(|b| b.addr);
-    st.live_by = vec![[0u64; 4]; st.inits.len()];
-    write_report(st);
+}
+
+/// R5: the imaged cells (births of inits outside D, the runtime's included)
+/// are write-protected for the rest of the run; collection stays off so they
+/// keep their addresses; new births go to fresh blocks.
+unsafe fn arm_rset(st: &mut State) {
+    let mut cand: Vec<(usize, usize)> = st
+        .births
+        .as_slice()
+        .iter()
+        .filter(|b| b.init == 0 || !st.inits[b.init as usize].in_d)
+        .map(|b| (b.addr, b.addr + b.size as usize))
+        .collect();
+    cand.sort_unstable();
+    st.cand_writes = vec![0; cand.len()];
+    st.cand_ptr_writes = vec![0; cand.len()];
+    st.cand = cand;
+    crate::arena::arena_start_fresh_general_block();
+    let mut last = 0usize;
+    for i in 0..st.cand.len() {
+        let (a, e) = st.cand[i];
+        let mut p = a & !(PAGE - 1);
+        while p < e {
+            if p != last {
+                libc::mprotect(p as *mut _, PAGE, libc::PROT_READ);
+                last = p;
+            }
+            p += PAGE;
+        }
+    }
+    st.rset_active = true;
+    libc::atexit(rset_report);
+}
+
+fn cand_index(st: &State, word: usize) -> Option<usize> {
+    let i = st.cand.partition_point(|&(a, _)| a <= word);
+    (i > 0 && word < st.cand[i - 1].1).then(|| i - 1)
+}
+
+fn heap_pointer(st: &State, v: u64) -> bool {
+    let hi = v >> 48;
+    if hi != 0 && hi < 0x7FF9 {
+        return false;
+    }
+    let a = (v & 0xFFFF_FFFF_FFFF) as usize;
+    st.heap.slot(a).is_some()
+}
+
+extern "C" fn rset_report() {
+    let st = state();
+    if !st.rset_active {
+        return;
+    }
+    st.rset_active = false;
+    use std::io::Write;
+    let Ok(mut f) = std::fs::File::create(format!("{}.rset.tsv", st.out)) else {
+        return;
+    };
+    let cells = st.cand_writes.iter().filter(|&&n| n > 0).count();
+    let ptr_cells = st.cand_ptr_writes.iter().filter(|&&n| n > 0).count();
+    let writes: u64 = st.cand_writes.iter().map(|&n| n as u64).sum();
+    let ptr_writes: u64 = st.cand_ptr_writes.iter().map(|&n| n as u64).sum();
+    let _ = writeln!(
+        f,
+        "#rset\tcandidates={}\tcells_written={cells}\twrites={writes}\tptr_cells={ptr_cells}\tptr_writes={ptr_writes}\tfaults={}",
+        st.cand.len(),
+        st.rset_faults
+    );
+    // Writes per cell (histogram) and the most written cells, by birth.
+    let mut hist = [0u64; 24];
+    for &n in &st.cand_writes {
+        if n > 0 {
+            hist[(32 - n.leading_zeros()) as usize] += 1;
+        }
+    }
+    for (b, n) in hist.iter().enumerate() {
+        if *n > 0 {
+            let _ = writeln!(f, "#hist\t<{}\t{n}", 1u64 << b);
+        }
+    }
+    let mut top: Vec<usize> = (0..st.cand.len()).filter(|&i| st.cand_writes[i] > 0).collect();
+    top.sort_unstable_by_key(|&i| std::cmp::Reverse(st.cand_writes[i]));
+    let births = st.births.as_slice();
+    for &i in top.iter().take(200) {
+        let (a, e) = st.cand[i];
+        let init = births.iter().find(|b| b.addr == a).map_or(0, |b| b.init);
+        let ty = unsafe { (*(a as *const crate::gc::GcHeader)).obj_type };
+        let _ = writeln!(
+            f,
+            "{a:x}\t{}\t{:x}\t{}\t{}\t{}\t{}",
+            init,
+            st.inits[init as usize].addr,
+            crate::gc::gc_type_info(ty).map_or("?", |i| i.name),
+            e - a,
+            st.cand_writes[i],
+            st.cand_ptr_writes[i]
+        );
+    }
 }
 
 /// The boundary collection's census visits a live object.
-pub(super) fn census_live(header: *const u8, _obj_type: u8, size: usize) {
+pub(super) fn census_live(header: *const u8, obj_type: u8, size: usize) {
     let p = ANCHOR.state.load(Relaxed);
     if p.is_null() {
         return;
@@ -1092,8 +1333,8 @@ pub(super) fn census_live(header: *const u8, _obj_type: u8, size: usize) {
         st.live_unattributed[1] += size as u64;
         return;
     }
-    let init = b[i - 1].init as usize;
-    let row = &mut st.live_by[init];
+    let init = b[i - 1].init;
+    let row = st.live_by.entry((init, obj_type)).or_insert([0; 2]);
     row[0] += 1;
     row[1] += size as u64;
 }
@@ -1112,10 +1353,11 @@ pub(super) fn after_boundary_collection() {
     let path = format!("{}.live.tsv", st.out);
     if let Ok(mut f) = std::fs::File::create(&path) {
         let _ = writeln!(f, "#unattributed\t{}\t{}", st.live_unattributed[0], st.live_unattributed[1]);
-        for (id, row) in st.live_by.iter().enumerate() {
-            if row[0] != 0 {
-                let _ = writeln!(f, "{id}\t{}\t{}", row[0], row[1]);
-            }
+        let mut rows: Vec<_> = st.live_by.iter().collect();
+        rows.sort();
+        for ((id, t), row) in rows {
+            let name = crate::gc::gc_type_info(*t).map_or("?", |i| i.name);
+            let _ = writeln!(f, "{id}\t{name}\t{}\t{}", row[0], row[1]);
         }
     }
 }
@@ -1206,6 +1448,73 @@ fn write_report(st: &mut State) {
             i.faults,
             i.host_count,
         );
+    }
+    // Step 6: a digest of the imaged heap per init. A birth is named by its
+    // init's evaluation address and its rank among that init's births; a
+    // word that holds a pointer into the reservation hashes as the name of
+    // the object it points into (plus the offset), a word a member of D
+    // wrote is left out (the image holds it as it was before), any other
+    // word hashes as itself.
+    {
+        let log = st.births.as_slice();
+        let mut rank: std::collections::HashMap<u32, u64> = std::collections::HashMap::new();
+        let mut names: Vec<(usize, usize, u64)> = Vec::with_capacity(log.len());
+        for b in log {
+            let k = rank.entry(b.init).or_insert(0);
+            let a = st.inits[b.init as usize].addr as u64;
+            names.push((b.addr, b.addr + b.size as usize, a.wrapping_mul(0x100000001B3) ^ *k));
+            *k += 1;
+        }
+        names.sort_unstable();
+        let name_of = |v: usize| -> Option<(u64, usize)> {
+            let i = names.partition_point(|&(a, _, _)| a <= v);
+            (i > 0 && v < names[i - 1].1).then(|| (names[i - 1].2, v - names[i - 1].0))
+        };
+        let mut per: std::collections::BTreeMap<usize, (u64, u64, u64)> = Default::default();
+        let mix = |h: &mut u64, x: u64| {
+            *h ^= x;
+            *h = h.wrapping_mul(0x100000001B3);
+        };
+        for b in log {
+            if b.init != 0 && st.inits[b.init as usize].in_d {
+                continue;
+            }
+            let e = per
+                .entry(st.inits[b.init as usize].addr)
+                .or_insert((0xcbf29ce484222325, 0, 0));
+            e.1 += 1;
+            let mut off = 0;
+            while off + 8 <= b.size as usize {
+                let word = b.addr + off;
+                off += 8;
+                if st.w.contains(word as u64) {
+                    continue;
+                }
+                let v = unsafe { *(word as *const u64) };
+                e.2 += 1;
+                let hi = v >> 48;
+                if hi == 0 || hi >= 0x7FF9 {
+                    if let Some((n, o)) = name_of((v & 0xFFFF_FFFF_FFFF) as usize) {
+                        mix(&mut e.0, hi ^ 0xA5A5);
+                        mix(&mut e.0, n);
+                        mix(&mut e.0, o as u64);
+                        continue;
+                    }
+                }
+                mix(&mut e.0, v);
+            }
+        }
+        let mut total = 0xcbf29ce484222325u64;
+        for (addr, (h, objs, words)) in &per {
+            mix(&mut total, *h);
+            let _ = writeln!(f, "#digest\t{addr:x}\t{h:016x}\t{objs}\t{words}");
+        }
+        let _ = writeln!(f, "#digest_total\t{total:016x}\t{}", per.len());
+    }
+    let _ = writeln!(f, "#excluded\t{}", st.excluded);
+    for (what, pcs) in &st.realm_hosts {
+        let pcs: Vec<String> = pcs.iter().map(|p| format!("{p:x}")).collect();
+        let _ = writeln!(f, "#realm_host\t{what}\t{}", pcs.join(","));
     }
     for (init, name) in &st.env_reads {
         let _ = writeln!(f, "#getenv\t{init}\t{name}");

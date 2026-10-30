@@ -175,13 +175,19 @@ pub(crate) fn job_exit() {
     }
 }
 
-/// An explicit `gc()`: the boundary marker of a census run.
+/// An explicit `gc()`: the boundary marker of a census run. True when the
+/// collection must not run (`PERRY_SNAP_RSET` keeps the heap in place).
 #[inline(always)]
-pub(crate) fn explicit_gc() {
+pub(crate) fn explicit_gc() -> bool {
     #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
-    if runner::on() {
-        runner::boundary("gc");
+    {
+        if runner::on() || runner::start_if_requested() {
+            runner::boundary("gc");
+        }
+        return runner::skip_collection();
     }
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    false
 }
 
 /// The census of the collection the boundary's `gc()` runs has finished.
@@ -272,6 +278,35 @@ impl Drop for Bookkeeping {
     }
 }
 
+/// Runtime work that an init triggers but does not own (populating the
+/// realm on first use): its births, accesses and host touches are the
+/// runtime's (init 0), reported apart.
+#[inline(always)]
+pub(crate) fn runtime_scope() -> RuntimeScope {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    if runner::on() {
+        runner::job_enter(0);
+        return RuntimeScope { active: true };
+    }
+    RuntimeScope { active: false }
+}
+
+pub(crate) struct RuntimeScope {
+    active: bool,
+}
+
+impl Drop for RuntimeScope {
+    #[inline(always)]
+    fn drop(&mut self) {
+        #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+        if self.active {
+            runner::job_exit();
+        }
+        #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+        let _ = self.active;
+    }
+}
+
 /// Codegen calls this where the entry module's own body starts (after its
 /// eager imports), in instrumented compiles only (`PERRY_SNAP_CENSUS` set
 /// while compiling). The census boundary of an ESM entry.
@@ -279,7 +314,7 @@ impl Drop for Bookkeeping {
 pub extern "C" fn js_snap_entry_body() {
     crate::effect!(pure);
     #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
-    if runner::on() {
+    if runner::on() || runner::start_if_requested() {
         runner::entry_body();
     }
 }

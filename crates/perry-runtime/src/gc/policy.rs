@@ -5104,7 +5104,9 @@ pub(super) static GC_UNSAFE_WARNED: std::sync::atomic::AtomicBool =
 /// worker threads are active (see GC_UNSAFE_ZONES).
 #[no_mangle]
 pub extern "C" fn js_gc_collect() {
-    crate::snap_census::explicit_gc();
+    if crate::snap_census::explicit_gc() {
+        return;
+    }
     if manual_gc_blocked_by_unsafe_zone() {
         return;
     }
