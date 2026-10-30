@@ -90,6 +90,76 @@ pub(crate) fn pop_shared_super_called_slot(ctx: &mut FnCtx<'_>) {
     pop_super_called_slot(ctx);
 }
 
+fn current_body_is_derived(ctx: &FnCtx<'_>) -> bool {
+    ctx.class_stack
+        .last()
+        .and_then(|name| ctx.classes.get(name).copied())
+        .is_some_and(|class| {
+            class.extends.is_some()
+                || class.extends_name.is_some()
+                || class.native_extends.is_some()
+                || class.extends_expr.is_some()
+        })
+}
+
+/// Record an arrow just created in a derived constructor (directly or through
+/// enclosing arrows) so `super()` can rebind the `this` it captured when a base
+/// constructor returns another object.
+pub(crate) fn register_derived_ctor_arrow(
+    ctx: &mut FnCtx<'_>,
+    closure_handle: &str,
+    this_idx: &str,
+    this_value: &str,
+) {
+    let class_id = if !ctx.super_called_stack.is_empty() {
+        if !current_body_is_derived(ctx) {
+            return;
+        }
+        current_class_id(ctx)
+    } else if let Some(class_id) = ctx.lexical_this_uses_derived_binding {
+        class_id
+    } else {
+        return;
+    };
+    ctx.block().call_void(
+        "js_derived_this_register_arrow",
+        &[
+            (I64, closure_handle),
+            (I32, this_idx),
+            (DOUBLE, this_value),
+            (I32, &class_id.to_string()),
+        ],
+    );
+}
+
+/// Store the `this` a base constructor's return value bound to a derived
+/// constructor's slot, and move the arrows that captured the receiver `super()`
+/// was handed onto it.
+pub(crate) fn store_returned_this(
+    ctx: &mut FnCtx<'_>,
+    this_slot: &str,
+    old_this: &str,
+    new_this: &str,
+) {
+    ctx.block().store(DOUBLE, new_this, this_slot);
+    let rebind_idx = ctx.new_block("super.this.rebind");
+    let done_idx = ctx.new_block("super.this.rebound");
+    let rebind_label = ctx.block_label(rebind_idx);
+    let done_label = ctx.block_label(done_idx);
+    let blk = ctx.block();
+    let old_bits = blk.bitcast_double_to_i64(old_this);
+    let new_bits = blk.bitcast_double_to_i64(new_this);
+    let changed = blk.icmp_ne(I64, &old_bits, &new_bits);
+    blk.cond_br(&changed, &rebind_label, &done_label);
+    ctx.current_block = rebind_idx;
+    ctx.block().call_void(
+        "js_derived_this_rebind",
+        &[(DOUBLE, old_this), (DOUBLE, new_this)],
+    );
+    ctx.block().br(&done_label);
+    ctx.current_block = done_idx;
+}
+
 /// Enforce the derived-constructor `this` TDZ before materializing a lexical
 /// `this` value.  The allocation used while running `super()` already exists,
 /// but ECMAScript does not initialize the constructor's `this` binding until
@@ -100,17 +170,7 @@ pub(crate) fn check_derived_this_initialized(ctx: &mut FnCtx<'_>) {
         // is initialized even though the outer derived constructor's binding
         // is not. `class_stack` follows the body currently being lowered, so
         // only apply the local cell to a derived body.
-        let current_body_is_derived = ctx
-            .class_stack
-            .last()
-            .and_then(|name| ctx.classes.get(name).copied())
-            .is_some_and(|class| {
-                class.extends.is_some()
-                    || class.extends_name.is_some()
-                    || class.native_extends.is_some()
-                    || class.extends_expr.is_some()
-            });
-        if !current_body_is_derived {
+        if !current_body_is_derived(ctx) {
             return;
         }
         let initialized_idx = ctx.new_block("derived.this.initialized");
@@ -880,7 +940,12 @@ fn lower_impl(ctx: &mut FnCtx<'_>, expr: &Expr, heritage_checked: bool) -> Resul
                                     &parent_result,
                                     false,
                                 );
-                                ctx.block().store(DOUBLE, &effective_this, &this_slot);
+                                store_returned_this(
+                                    ctx,
+                                    &this_slot,
+                                    &current_this,
+                                    &effective_this,
+                                );
                             }
 
                             // Per JS spec: subclass field initializers run AFTER
@@ -1385,7 +1450,8 @@ fn lower_impl(ctx: &mut FnCtx<'_>, expr: &Expr, heritage_checked: bool) -> Resul
                         }
                         bind_derived_this_after_super(ctx);
                         if let Some(this_slot) = ctx.this_stack.last().cloned() {
-                            ctx.block().store(DOUBLE, &constructed, &this_slot);
+                            let inherited_this = ctx.block().load(DOUBLE, &this_slot);
+                            store_returned_this(ctx, &this_slot, &inherited_this, &constructed);
                         }
                         crate::lower_call::apply_field_initializers_recursive(
                             ctx,
@@ -1726,7 +1792,7 @@ fn lower_impl(ctx: &mut FnCtx<'_>, expr: &Expr, heritage_checked: bool) -> Resul
                     );
                     bind_derived_this_after_super(ctx);
                     super_binding_done = true;
-                    ctx.block().store(DOUBLE, &effective_this, &this_slot);
+                    store_returned_this(ctx, &this_slot, &inherited_this, &effective_this);
                 }
 
                 restore_inline_constructor_scope(ctx, saved_scope);

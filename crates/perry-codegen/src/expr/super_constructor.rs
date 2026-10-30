@@ -202,7 +202,7 @@ pub(crate) fn bind(ctx: &mut FnCtx<'_>, result: &str) {
     if let Some(slot) = ctx.this_stack.last().cloned() {
         let this = ctx.block().load(DOUBLE, &slot);
         let value = crate::lower_call::emit_ctor_return_override(ctx, &this, result, false);
-        ctx.block().store(DOUBLE, &value, &slot);
+        super::this_super_call::store_returned_this(ctx, &slot, &this, &value);
     }
 }
 
