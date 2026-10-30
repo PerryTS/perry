@@ -4196,6 +4196,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 tests/test_test262_ratchet.py
+          python3 tests/test_test262_subset_full_corpus.py
           python3 scripts/test262_ratchet.py --expect "$EXPECT" test262-shards/*/test262-shard.json
 
   # ---------------------------------------------------------------------------
