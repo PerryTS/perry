@@ -412,7 +412,8 @@ unsafe fn start(out: String) {
     // writes the thread's rseq area (in the TCB, right above it) on every
     // return to user space, and a protected page there kills the thread.
     let (tls_lo, tls_hi) = if fs != 0 && tls_size != 0 {
-        (fs - tls_size, fs & !(PAGE - 1))
+        // Whole pages only: the page below the block holds libc static TLS.
+        ((fs - tls_size + PAGE - 1) & !(PAGE - 1), fs & !(PAGE - 1))
     } else {
         (fs, fs)
     };
