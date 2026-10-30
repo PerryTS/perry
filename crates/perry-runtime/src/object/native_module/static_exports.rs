@@ -244,6 +244,7 @@ pub(crate) fn selected_value(
 /// A real body is entered directly, including shared global intrinsics.
 /// Legacy bound-method sentinels still need their installed dispatch bucket;
 /// entering one here would recurse through this namespace dispatcher.
+#[inline(never)]
 pub(crate) unsafe fn call_minted(
     module: &str,
     property: &str,
