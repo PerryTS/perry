@@ -434,13 +434,13 @@ unsafe fn prop_fetch(handle: i64, property_name: &str) -> Option<f64> {
 
 #[cfg(feature = "crypto")]
 unsafe fn prop_crypto(handle: i64, property_name: &str) -> Option<f64> {
-    if matches!(property_name, "update" | "sign")
+    if matches!(property_name, "update" | "write" | "end" | "sign")
         && with_handle::<crate::crypto::SignHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
         return Some(crate::crypto::dispatch_sign_property(handle, property_name));
     }
 
-    if matches!(property_name, "update" | "verify")
+    if matches!(property_name, "update" | "write" | "end" | "verify")
         && with_handle::<crate::crypto::VerifyHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
         return Some(crate::crypto::dispatch_verify_property(
