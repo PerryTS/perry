@@ -87,14 +87,18 @@ pub(super) fn tower_pshape_route(
 /// interpreted code present (`interp_guard`), and for every class the facts
 /// do not list as fixed.
 pub(super) fn tower_layout_proven(ctx: &FnCtx<'_>, cid: u32) -> bool {
-    !ctx.wpfacts_off
+    let proved = !ctx.wpfacts_off
         && !ctx.wpfacts.interp_guard
         && !crate::codegen::helpers::check_contracts()
         && ctx
             .wpfacts
             .classes
             .get(&cid)
-            .is_some_and(|class| class.fixed_layout)
+            .is_some_and(|class| class.fixed_layout);
+    if proved {
+        crate::facts_consumed::used();
+    }
+    proved
 }
 
 /// Emit the keys-guarded diamond for one dispatch-tower case: inline shape

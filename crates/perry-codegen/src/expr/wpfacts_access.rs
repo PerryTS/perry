@@ -184,13 +184,17 @@ pub(crate) fn proven_receiver_classes(ctx: &FnCtx<'_>, object: &Expr) -> Option<
 /// definition for the program's life (no write, no escape of the class
 /// object, no interpreted code).
 pub(crate) fn proves_static(ctx: &FnCtx<'_>, cid: u32, key: &str) -> bool {
-    !ctx.wpfacts_off
+    let proved = !ctx.wpfacts_off
         && !ctx.wpfacts.interp_guard
         && ctx
             .wpfacts
             .class_statics
             .get(&cid)
-            .is_some_and(|ks| ks.iter().any(|k| k == key))
+            .is_some_and(|ks| ks.iter().any(|k| k == key));
+    if proved {
+        crate::facts_consumed::used();
+    }
+    proved
 }
 
 /// The class id of a receiver the facts prove one of their classes: one
