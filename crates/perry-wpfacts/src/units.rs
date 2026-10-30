@@ -86,6 +86,10 @@ pub(crate) struct ClassContract {
     pub birth_keys: Vec<String>,
     pub definite: Vec<String>,
     pub ctor_leaks: bool,
+    /// Its constructor, or one up its chain, may return an object other than
+    /// `this` (`return expr`): a reader's `new` then yields that value, not
+    /// the class's instance, which its own unit alone cannot name.
+    pub ctor_returns: bool,
     /// The primitive kinds the published binding may hold beside the
     /// class (DECISIONS 115): a nested class whose members name it binds
     /// itself through a one-element cell that holds `undefined` until the
@@ -675,6 +679,7 @@ impl ClassContract {
         common_prefix(&mut self.birth_keys, &o.birth_keys);
         self.definite.retain(|k| o.definite.contains(k));
         self.ctor_leaks |= o.ctor_leaks;
+        self.ctor_returns |= o.ctor_returns;
         self.binding_prim |= o.binding_prim;
         self.field_values = field_values;
         self.field_tas = field_tas;
