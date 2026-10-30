@@ -362,6 +362,7 @@ impl Model {
         {
             self.super_relink.insert(t);
             if let TokKind::ClassObj(tm) = self.toks[t as usize] {
+                self.cons(src, Cons::ParentGiven { of: t });
                 let parent = self.proto_node(t);
                 self.edge(src, parent);
                 let instance = self.tok(TokKind::Obj(tm, NO_CTX));
