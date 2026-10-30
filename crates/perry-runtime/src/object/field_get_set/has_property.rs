@@ -378,6 +378,16 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
                     }
                 }
             }
+        } else if crate::value::addr_class::is_small_handle(addr as usize)
+            && unsafe { crate::symbol::js_is_symbol(key) } != 0
+        {
+            // A symbol-keyed member of a native handle (`Symbol.iterator` on
+            // Headers, `Symbol.toStringTag` on a Response) is resolved by the
+            // symbol reader, which answers handle ids without dereferencing them.
+            let v = unsafe { crate::symbol::js_object_get_symbol_property(obj, key) };
+            if v.to_bits() != crate::value::TAG_UNDEFINED {
+                return nanbox_true;
+            }
         }
         return nanbox_false;
     }

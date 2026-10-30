@@ -325,6 +325,9 @@ pub(crate) fn get_field_miss(obj: *const ObjectHeader, key: *const crate::String
                         return bits;
                     }
                 }
+                if let Some(ctor) = crate::object::fetch_handle_constructor_value(obj as usize) {
+                    return f64::from_bits(ctor.bits());
+                }
                 return crate::object::null_stub_value();
             }
         }

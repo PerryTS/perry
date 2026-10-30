@@ -1519,6 +1519,9 @@ fn get_field_by_name_past_data_probe(
                     let key_len = (*key).byte_len as usize;
                     let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
                     if key_bytes == b"constructor" {
+                        if let Some(ctor) = crate::object::fetch_handle_constructor_value(raw) {
+                            return ctor;
+                        }
                         return JSValue::from_bits(crate::object::null_stub_value().to_bits());
                     }
                     if let Some(dispatch) = handle_property_dispatch() {
