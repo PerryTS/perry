@@ -40,6 +40,7 @@ mod compressed_libs;
 mod embed;
 mod env_fold;
 mod export_analysis;
+mod export_demand;
 mod fallback_diag;
 mod fn_infer;
 mod gc_effects_sidecar;

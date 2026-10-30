@@ -502,7 +502,7 @@ fn rewrite_pruned_edges(ctx: &mut CompilationContext, pruned: &HashSet<PathBuf>)
 /// Resolve an import/export edge to its canonical `native_modules` key, if the
 /// target is a compiled module present in the graph. Prefers the precomputed
 /// `resolved_path` (set during collection), falling back to the resolver.
-fn resolve_edge(
+pub(super) fn resolve_edge(
     ctx: &mut CompilationContext,
     importer: &Path,
     resolved_path: Option<&str>,

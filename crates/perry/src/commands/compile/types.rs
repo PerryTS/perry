@@ -1267,6 +1267,8 @@ pub struct CompilationContext {
     /// Sources (any enables): `PERRY_TREE_SHAKE=1` env, or
     /// `perry.experiments.treeShake: true` in the host `package.json`.
     pub tree_shake: bool,
+    /// Layer-1 dead-code elimination state across the two collection walks.
+    pub export_demand: super::export_demand::ExportDemand,
     /// #2309: refusals (`new Function` RuntimeUnknown, #463 unimplemented APIs)
     /// recorded while lowering `node_modules` modules under tree-shaking,
     /// instead of hard-erroring. After reachability is computed, any whose
@@ -1509,6 +1511,7 @@ impl CompilationContext {
             allow_native_library: Vec::new(),
             allow_compile_packages: Vec::new(),
             tree_shake: false,
+            export_demand: Default::default(),
             deferred_refusals: Vec::new(),
             side_effects_cache: HashMap::new(),
             define: HashMap::new(),
