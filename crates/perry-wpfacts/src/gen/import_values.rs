@@ -784,6 +784,9 @@ impl<'a> Gen<'a> {
             let u = c.params[i];
             let ru = c.reach[i];
             if u & MARK_ESCAPE != 0 {
+                if let Some(d) = self.m.diagnostic.as_mut() {
+                    d.stand_in_params.push((p, c.name.clone(), i as u32, None));
+                }
                 self.m.sink_node(p, r);
                 continue;
             }
@@ -880,6 +883,14 @@ impl<'a> Gen<'a> {
             }
             for (key, ru) in buckets {
                 if ru & MARK_ESCAPE != 0 {
+                    if let Some(d) = self.m.diagnostic.as_mut() {
+                        let k = match key {
+                            crate::model::Key::Named(a) => self.m.atoms[a as usize].clone(),
+                            crate::model::Key::Any => String::new(),
+                        };
+                        d.stand_in_params
+                            .push((p, c.name.clone(), i as u32, Some(k)));
+                    }
                     let q = match self.reach_escape {
                         Some(q) => q,
                         None => {

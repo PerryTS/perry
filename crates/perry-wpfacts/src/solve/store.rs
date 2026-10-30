@@ -418,7 +418,7 @@ impl Model {
                 return;
             }
             if key == Key::Any {
-                self.mark_use(t, crate::model::MARK_ESCAPE);
+                self.mark_escape_why(t, &|_| "store: under a computed key".into());
             }
             if self.arg_store_done.insert((t, key, src)) {
                 // DECISIONS 187/193: kept on `t` alone, where it was made,
@@ -513,7 +513,7 @@ impl Model {
                 return;
             }
         }
-        self.mark_use(t, crate::model::MARK_ESCAPE);
+        self.mark_escape_why(t, &|_| "store: into a marker".into());
         // A parameter marker stands for another unit's value (design §11.2):
         // it has no fields in this unit. The store is its contract's escape
         // (above), and the stored value goes where the receiver's other

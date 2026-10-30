@@ -35,6 +35,13 @@ pub(crate) struct Trace {
     /// that slot: what an instance holds without a recorded predecessor it
     /// holds as its summary does.
     pub inst_orig: BTreeMap<NodeId, NodeId>,
+    /// UEB census: the operation each parameter marker first escaped by
+    /// (`Model::mark_escape_why`), and the stack of those running.
+    pub esc_why: BTreeMap<Tok, String>,
+    pub esc_ctx: Vec<String>,
+    /// UEB census: a stand-in function's parameter node its contract sinks
+    /// (node, callee, index, reach key: `Some("")` the whole reach).
+    pub stand_in_params: Vec<(NodeId, String, u32, Option<String>)>,
     /// `Model::top_predecessors`, built when a chain needs it.
     pub top_in: std::cell::OnceCell<FxHashMap<NodeId, Vec<NodeId>>>,
 }
@@ -59,6 +66,7 @@ pub(crate) struct EscFirst {
     pub reason: u32,
     pub cause: Cause,
     pub call: Option<CallId>,
+    pub node: Option<NodeId>,
 }
 
 #[derive(Default)]
@@ -323,6 +331,7 @@ impl Model {
             reason,
             cause,
             call: d.cur_call,
+            node: d.cause_node,
         });
         d.escaping.push(t);
         cand
@@ -336,6 +345,17 @@ impl Model {
         if let Some(c) = cand.filter(|_| now) {
             d.esc_first.entry(t).or_insert(c);
         }
+    }
+    /// Marks `t` escaped (`mark_use`) by operation `why`; the dump names
+    /// the first one per parameter marker (UEB census, dump only).
+    pub(crate) fn mark_escape_why(&mut self, t: Tok, why: &dyn Fn(&Self) -> String) {
+        if self.diagnostic.is_none() {
+            return self.mark_use(t, crate::model::MARK_ESCAPE);
+        }
+        let w = why(self);
+        self.diagnostic.as_mut().unwrap().esc_ctx.push(w);
+        self.mark_use(t, crate::model::MARK_ESCAPE);
+        self.diagnostic.as_mut().unwrap().esc_ctx.pop();
     }
     pub(crate) fn diagnostic_sink(&mut self, n: NodeId) {
         let gen_fn = self.cur_fn;
@@ -873,8 +893,18 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
     let src_call = |c: Option<CallId>| c.map(|c| m.diagnostic_source_call(c).unwrap_or(c));
     if let Some(d) = m.diagnostic.as_ref() {
         for (t, e) in &d.esc_first {
-            out.push(format!("{{\"record\":\"escape-first\",\"token\":{t},\"reason\":{},\"cause\":{},\"call\":{}}}",
-                quote(m.reasons.get(e.reason as usize).map_or("", |s| s)), cause(&e.cause), opt(src_call(e.call))));
+            out.push(format!("{{\"record\":\"escape-first\",\"token\":{t},\"reason\":{},\"cause\":{},\"call\":{},\"node\":{}}}",
+                quote(m.reasons.get(e.reason as usize).map_or("", |s| s)), cause(&e.cause), opt(src_call(e.call)), opt(e.node)));
+        }
+        for (t, w) in &d.esc_why {
+            if let Some(&(f, i)) = m.param_marker.get(t) {
+                out.push(format!("{{\"record\":\"param-escape\",\"token\":{t},\"function\":{f},\"index\":{i},\"marker\":{},\"why\":{}}}",
+                    quote(&m.tok_name(*t)), quote(w)));
+            }
+        }
+        for (n, name, i, k) in &d.stand_in_params {
+            out.push(format!("{{\"record\":\"stand-in-param\",\"node\":{n},\"callee\":{},\"index\":{i},\"key\":{}}}",
+                quote(name), k.as_deref().map_or("null".into(), quote)));
         }
         for (t, c) in &d.esc_causes {
             out.push(format!(

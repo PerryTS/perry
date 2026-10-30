@@ -201,7 +201,9 @@ impl Model {
                         // put into another function's marker or ⊤ goes there
                         // as before: ⊤ to the reader, and it escapes (below).
                         _ if dst == u32::MAX && reach && to == at => {
-                            self.mark_use(at, crate::model::MARK_ESCAPE);
+                            self.mark_escape_why(at, &|_| {
+                                "store: into the receiver's reach".into()
+                            });
                         }
                         // Another function's marker: another unit's value
                         // the reader cannot follow (DECISIONS 149b).
