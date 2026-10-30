@@ -767,6 +767,33 @@ pub(crate) fn ctor_chain_can_replace_this(
     true
 }
 
+/// Does a constructor on the visible heritage chain of `leaf` carry a
+/// value-bearing `return`? Then `new <leaf>(..)` may produce an object of any
+/// layout, and no class-specific slot knowledge applies to its result.
+pub(crate) fn ctor_chain_has_value_return(
+    classes: &std::collections::HashMap<String, &perry_hir::Class>,
+    leaf: &str,
+) -> bool {
+    let mut name = leaf.to_string();
+    for _ in 0..32 {
+        let Some(class) = classes.get(&name).copied() else {
+            return false;
+        };
+        if class
+            .constructor
+            .as_ref()
+            .is_some_and(|ctor| ctor_body_has_value_return(&ctor.body))
+        {
+            return true;
+        }
+        match class.extends_name.as_ref() {
+            Some(parent) => name = parent.clone(),
+            None => return false,
+        }
+    }
+    false
+}
+
 pub(super) fn node_stream_parent_kind(
     ctx: &FnCtx<'_>,
     class: &perry_hir::Class,
