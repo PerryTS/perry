@@ -2019,6 +2019,17 @@ fn collect_module_one(
     ctx.uses_dns |= hir_module.imports.iter().any(|i| is_dns(&i.source));
     ctx.reexport_pruner.imports(&hir_module.imports);
 
+    for export in hir_module.exports.iter_mut() {
+        if let perry_hir::Export::ReExport { source, .. }
+        | perry_hir::Export::ExportAll { source }
+        | perry_hir::Export::NamespaceReExport { source, .. } = export
+        {
+            if let Some(alias) = ctx.package_aliases.get(source.as_str()) {
+                *source = alias.clone();
+            }
+        }
+    }
+
     // Process re-exports
     for (export_index, export) in hir_module.exports.iter().enumerate() {
         let source = match export {
