@@ -212,10 +212,13 @@ scripts/test262_subset.py --root vendor/test262 --max 500             # cap for 
 `test/` (including `intl402`, `staging` and `annexB`), with no feature
 allow-list, judged by Perry alone. A positive case passes when it exits 0 (and,
 for `async` cases, prints `Test262:AsyncTestComplete`); a negative case passes
-when Perry rejects it at compile time or it throws. Cases that cannot run as a
-plain script here (`module` / `CanBlock*` flags, `$262` host APIs,
-runtime-string `eval`) are `skip` and count as failed. The error type of a
-negative case is not checked.
+when Perry rejects it at compile time or it throws. `module` cases compile as
+ES modules (the harness's top-level bindings are published on `globalThis`, as
+a host's global harness script would be), and a minimal `$262` shim provides
+`global`, `gc` and `detachArrayBuffer`. Cases that still cannot run here
+(`CanBlock*` flags, the `agent` / `createRealm` / `evalScript` / `IsHTMLDDA`
+host hooks, runtime-string `eval`) are `skip` and count as failed. The error
+type of a negative case is not checked.
 
 The full-tier `test262` job runs it in 16 shards at `pinned-sha.txt`.
 `test262-aggregate` merges the shard reports with `scripts/test262_ratchet.py`,
