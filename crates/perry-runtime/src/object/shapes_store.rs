@@ -964,7 +964,10 @@ fn fold_constfn_infos(mut h: u64, infos: &[ConstFnSlotInfo]) -> u64 {
     h = fold(h, 0x7_4346_4e);
     for entry in infos {
         h = fold(h, u64::from(entry.slot));
-        h = fold(h, crate::builtins::fn_metadata_owner::info_identity_word(entry.info));
+        h = fold(
+            h,
+            crate::builtins::fn_metadata_owner::info_identity_word(entry.info),
+        );
     }
     h
 }

@@ -25,8 +25,7 @@ pub(super) fn field_is_primitive(bits: u64) -> bool {
 #[cfg(test)]
 pub(super) unsafe fn fields_are_primitive(obj: *const crate::ObjectHeader, count: u32) -> bool {
     // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
-    let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _))
-        .cast::<u64>();
+    let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)).cast::<u64>();
     std::slice::from_raw_parts(fields, count as usize)
         .iter()
         .all(|&bits| field_is_primitive(bits))
@@ -81,8 +80,7 @@ unsafe fn emit<const VALIDATE: bool>(
     crate::object::key_attrs::debug_assert_positional(keys, keys_view.count());
     let saved_len = buf.len();
     // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
-    let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _))
-        .cast::<u64>();
+    let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)).cast::<u64>();
     let key_slots =
         crate::array::array_elements_ptr(keys as *const crate::ArrayHeader).cast::<u64>();
     buf.push('{');

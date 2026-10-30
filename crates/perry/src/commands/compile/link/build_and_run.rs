@@ -199,6 +199,14 @@ pub(crate) fn build_and_run_link(
     if !is_windows {
         if is_android || is_linux || is_harmonyos {
             cmd.arg("-Wl,--gc-sections");
+            // The runtime reads `__start_`/`__stop_perry_js_text` (the JS
+            // text section's bounds, `error_stack_frames.rs`). By default a
+            // reference to them retains every input section of that name,
+            // which would keep every compiled JS function alive; with
+            // start-stop-gc they retain nothing and unreferenced functions
+            // are collected as before. GNU ld >= 2.37 and lld >= 13 accept
+            // it; older linkers warn and ignore it.
+            cmd.arg("-Wl,-z,start-stop-gc");
             // Native glibc Linux executables link at a fixed base (ET_EXEC),
             // as bun does. Every pointer in perry's static data (class method
             // slots, shape/key tables, string and closure headers, stack-map

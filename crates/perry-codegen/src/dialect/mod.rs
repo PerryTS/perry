@@ -181,6 +181,8 @@ struct ParsedHeader {
     /// (type token, `%name`) per parameter.
     params: Vec<(String, String)>,
     attr_str: String,
+    /// `section "NAME"`: the JS text section on x86_64 Linux.
+    section: Option<String>,
     /// `personality ptr @NAME` clause, if the define carries one (#7302:
     /// every function containing try/catch does).
     personality: Option<String>,
@@ -194,6 +196,14 @@ struct ParsedHeader {
     /// the function's calling convention; every call site carries it too.
     preserve_none: bool,
     preserve_most: bool,
+}
+
+/// The section clause and the remaining attribute text of a define line
+/// (unit tests of the header renderer).
+#[cfg(test)]
+pub(crate) fn parse_header_for_tests(header: &str) -> Result<(Option<String>, String)> {
+    let h = parse_header(header)?;
+    Ok((h.section, h.attr_str))
 }
 
 fn parse_header(header: &str) -> Result<ParsedHeader> {
@@ -294,6 +304,20 @@ fn parse_header(header: &str) -> Result<ParsedHeader> {
         gc_strategy = Some(name);
     }
 
+    // `section "NAME"` precedes `gc` on the define line (x86_64 Linux puts
+    // every generated function in the JS text section): lifted out as the
+    // clauses above are, since the attribute loop would read it as junk.
+    let mut section = None;
+    if let Some(pos) = attr_str.find("section \"") {
+        let tail = attr_str[pos..].to_string();
+        attr_str = attr_str[..pos].trim_end().to_string();
+        let name = tail.trim_start_matches("section ").trim().trim_matches('"').to_string();
+        if name.is_empty() {
+            bail!("malformed section clause: {tail}");
+        }
+        section = Some(name);
+    }
+
     let mut params = Vec::new();
     for p in split_top_level(params_str) {
         let p = p.trim();
@@ -311,6 +335,7 @@ fn parse_header(header: &str) -> Result<ParsedHeader> {
         name,
         params,
         attr_str,
+        section,
         personality,
         gc_strategy,
         preserve_none,
@@ -369,6 +394,9 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
         // would verify, run, and quietly have no precise roots (#7982).
         if let Some(strategy) = &h.gc_strategy {
             func.set_gc(strategy);
+        }
+        if let Some(section) = &h.section {
+            func.set_section(Some(section));
         }
         let attr_str = h.attr_str;
         for a in attr_str.split_whitespace() {

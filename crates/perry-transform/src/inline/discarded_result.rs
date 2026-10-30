@@ -445,6 +445,8 @@ mod tests {
             object: Box::new(Expr::This),
             property: "x".into(),
             value: Box::new(Expr::Integer(1)),
+            byte_offset: 0,
+            byte_end: 0,
         });
         let candidate = |body: Vec<Stmt>| {
             let mut methods = HashMap::new();

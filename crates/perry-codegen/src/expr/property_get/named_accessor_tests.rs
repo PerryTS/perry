@@ -89,6 +89,8 @@ fn probe_module(field_ty: Type) -> Module {
         object: Box::new(Expr::This),
         property: "x".into(),
         value: Box::new(Expr::LocalGet(4)),
+        byte_offset: 0,
+        byte_end: 0,
     })];
     class.setters.push(("value".into(), getter));
     m.classes = vec![class];
@@ -111,6 +113,8 @@ fn probe_module(field_ty: Type) -> Module {
                 object: Box::new(Expr::LocalGet(PARAM_ID)),
                 property: "value".into(),
                 value: Box::new(Expr::Number(7.0)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(Expr::PropertyGet {
                 byte_end: 0,

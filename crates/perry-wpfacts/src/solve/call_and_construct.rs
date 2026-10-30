@@ -181,7 +181,11 @@ impl Model {
         };
         self.activate(f, "call");
         if self.diagnostic.is_some() {
-            let kind = if self.ctor_calls.contains(&call) { "new" } else { "call" };
+            let kind = if self.ctor_calls.contains(&call) {
+                "new"
+            } else {
+                "call"
+            };
             self.diagnostic_reach(f, kind, call);
         }
         if !self.ctor_calls.contains(&call) {
@@ -460,6 +464,17 @@ impl Model {
         }
     }
 
+    fn chain_has_foreign_returning_ctor(&self, tm: TmplId) -> bool {
+        let mut cur = Some(tm);
+        while let Some(c) = cur {
+            if self.foreign_ctor_returns.contains(&c) {
+                return true;
+            }
+            cur = self.tmpls[c as usize].parent;
+        }
+        false
+    }
+
     pub fn construct(&mut self, call: CallId, t: Tok) {
         self.diagnostic_callee(call, t);
         if !self.sum.ready {
@@ -483,6 +498,14 @@ impl Model {
                 let inst = self.site_tok(tm, ctx);
                 self.add_tok(c.ret, inst);
                 self.run_ctor_chain(call, tm, inst);
+                // Another unit's constructor up the chain returns an object:
+                // `new` yields that value, which this unit cannot name.
+                if self.chain_has_foreign_returning_ctor(tm) {
+                    self.add_top(c.ret, |_| {
+                        "`new` of a class whose constructor (another unit's) returns an object"
+                            .into()
+                    });
+                }
             }
             // DECISIONS 210: another unit's contract function: its instances
             // are its owner's `new <f>` layout, which the owner constructs
@@ -495,7 +518,17 @@ impl Model {
                 self.constructed.insert(f);
                 self.ctor_calls.insert(call);
                 match self.foreign_ctor[&f] {
-                    Some((n, _)) => self.edge(n, c.ret),
+                    Some((n, tm)) => {
+                        self.edge(n, c.ret);
+                        // Its owner's function may return an object: `new`
+                        // yields that value, which this unit cannot name.
+                        if self.foreign_ctor_returns.contains(&tm) {
+                            self.add_top(c.ret, |_| {
+                                "`new` of another unit's constructor function that returns an object"
+                                    .into()
+                            });
+                        }
+                    }
                     None => self.add_top(c.ret, |_| {
                         "instance of another unit's constructor function (layout not published)"
                             .into()
@@ -607,6 +640,22 @@ impl Model {
         }
     }
 
+    /// Whether constructor `f` may return a value `new` keeps instead of its
+    /// `this`: an object (or ⊤) other than the receiver itself. A primitive
+    /// return is ignored by `new`.
+    pub(crate) fn ctor_returns_object(&self, f: FnIdx) -> bool {
+        let fi = &self.funcs[f as usize];
+        if fi.ret == NO_NODE {
+            return false;
+        }
+        let this = (fi.this != NO_NODE).then(|| self.nodes[fi.this as usize].pts.to_sorted());
+        self.nodes[fi.ret as usize]
+            .pts
+            .to_sorted()
+            .iter()
+            .any(|t| !this.as_ref().is_some_and(|ts| ts.contains(t)))
+    }
+
     /// The objects constructor `f` returns for `call` (its instance's
     /// result when summarized, so known once bindings run).
     pub(crate) fn ctor_ret_objects(&mut self, call: CallId, f: Tok, dst: NodeId) {
@@ -700,6 +749,26 @@ impl Model {
                 }
                 return;
             }
+        }
+        // A marker with its callers' values beside it (decision 13,
+        // DECISIONS 107, 148): the call is made on those values (below),
+        // whose contracts carry what it does to them to their units
+        // (DECISIONS 143). Its own use is a read of the method under the key,
+        // as for a parameter's own marker (DECISIONS 144), not an escape:
+        // nothing of the receiver reaches code the solve does not see. A
+        // reach marker is its own reach under every key (`marker_load`).
+        if bits == crate::model::MARK_ESCAPE
+            && t != TOP
+            && self.is_marker(t)
+            && self.beside_values(t)
+        {
+            self.mark_use(t, crate::model::MARK_READ);
+            let r = match key {
+                Key::Named(a) => self.marker_load(t, Some(a)),
+                Key::Any => self.reach_of(t),
+            };
+            self.mark_use(r, crate::model::MARK_READ);
+            return;
         }
         self.mark_use(t, bits);
         if t == TOP {

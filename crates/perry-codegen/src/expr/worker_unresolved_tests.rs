@@ -56,7 +56,7 @@ fn assert_valid_ir(case: &str, body: Vec<Stmt>) {
     )
     .unwrap();
     assert!(
-        ir.contains("@js_worker_threads_worker_new_by_spec("),
+        ir.contains("@js_worker_threads_worker_new_with_source("),
         "{case}: the unresolved Worker did not fall back to the entry table"
     );
     let llvm = inkwell::context::Context::create();
@@ -91,6 +91,8 @@ fn unresolved_worker_consumers_emit_valid_ir() {
                     object: Box::new(Expr::LocalGet(3)),
                     property: "w".into(),
                     value: Box::new(unresolved_worker()),
+                    byte_offset: 0,
+                    byte_end: 0,
                 }),
                 Stmt::Return(Some(Expr::LocalGet(3))),
             ],
@@ -113,6 +115,8 @@ fn unresolved_worker_consumers_emit_valid_ir() {
                 object: Box::new(Expr::LocalGet(1)),
                 index: Box::new(Expr::Integer(0)),
                 value: Box::new(unresolved_worker()),
+                byte_offset: 0,
+                byte_end: 0,
             })],
         ),
         (
@@ -123,6 +127,8 @@ fn unresolved_worker_consumers_emit_valid_ir() {
                     object: Box::new(Expr::LocalGet(3)),
                     index: Box::new(Expr::Integer(0)),
                     value: Box::new(unresolved_worker()),
+                    byte_offset: 0,
+                    byte_end: 0,
                 }),
                 Stmt::Return(Some(Expr::LocalGet(3))),
             ],

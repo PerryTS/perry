@@ -1167,6 +1167,7 @@ pub fn inline_calls_in_expr(
             object,
             index,
             value,
+            ..
         } => {
             let mut earlier = EarlierOperands::default();
             hoisted.extend(ordered!(object, &mut earlier));

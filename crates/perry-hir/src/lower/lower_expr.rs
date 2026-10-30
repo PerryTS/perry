@@ -31,6 +31,7 @@ mod assignment;
 mod helpers;
 mod json_literal;
 mod reactive_text;
+mod site_census;
 #[cfg(test)]
 mod stream_module_value_tests;
 
@@ -127,6 +128,40 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     *byte_offset = span.lo.0;
                     *byte_end = span.hi.0;
                 }
+                (
+                    ast::Expr::Assign(_),
+                    Expr::PropertySet {
+                        byte_offset,
+                        byte_end,
+                        ..
+                    }
+                    | Expr::IndexSet {
+                        byte_offset,
+                        byte_end,
+                        ..
+                    }
+                    | Expr::PutValueSet {
+                        byte_offset,
+                        byte_end,
+                        ..
+                    },
+                )
+                | (
+                    ast::Expr::Update(_),
+                    Expr::PropertyUpdate {
+                        byte_offset,
+                        byte_end,
+                        ..
+                    }
+                    | Expr::IndexUpdate {
+                        byte_offset,
+                        byte_end,
+                        ..
+                    },
+                ) => {
+                    *byte_offset = span.lo.0;
+                    *byte_end = span.hi.0;
+                }
                 (ast::Expr::Member(_), Expr::PropertyGet { byte_end, .. })
                 | (ast::Expr::Call(_), Expr::Call { byte_end, .. })
                 | (ast::Expr::New(_), Expr::New { byte_end, .. })
@@ -137,6 +172,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                 _ => {}
             }
         }
+        site_census::record(ctx, expr, &result);
     }
     result
 }

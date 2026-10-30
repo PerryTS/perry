@@ -13,6 +13,7 @@ use perry_hir::{Expr, Stmt};
 
 #[path = "gen/accessor_descriptor.rs"]
 mod accessor_descriptor;
+mod nodes;
 
 fn kids(e: &Expr) -> Vec<&Expr> {
     let mut v = Vec::new();
@@ -53,6 +54,7 @@ impl<'a> Gen<'a> {
                     object,
                     property,
                     value,
+                    ..
                 }) if matches!(object.as_ref(), Expr::This) && property == key => {
                     match value.as_ref() {
                         Expr::LocalGet(p) => ctor.params.iter().position(|q| q.id == *p),
@@ -65,72 +67,6 @@ impl<'a> Gen<'a> {
         Some((class_name, args, arg("get"), arg("set")))
     }
 
-    fn prim_kids(&mut self, fx: &Fx, e: &Expr, result: u16, why: &str, proto: Protocol) -> NodeId {
-        let ks = kids(e);
-        self.prim_op(fx, &ks, result, why, proto)
-    }
-
-    fn primbox_kids(&mut self, fx: &Fx, e: &Expr, why: &str, proto: Protocol) -> NodeId {
-        let ks = kids(e);
-        self.prim_box_op(fx, &ks, why, proto)
-    }
-
-    pub(crate) fn bobj(&mut self, mi: u32, what: &'static str) -> (Tok, NodeId) {
-        let tm = self.new_bobj_template(mi, what);
-        let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
-        let n = self.tok_node(t);
-        (t, n)
-    }
-
-    pub(crate) fn new_arr_from(&mut self, mi: u32, what: &str, elems: &[NodeId]) -> NodeId {
-        let tm = self.new_arr_template(mi, what);
-        let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
-        let fa = self.m.field_any(t);
-        for &e in elems {
-            self.m.edge(e, fa);
-        }
-        self.tok_node(t)
-    }
-
-    /// A builtin iterator object (`arr.values()`, `entries()`, `keys()`)
-    /// yielding `vals` through `next().value` (`builtins::iterator_method`).
-    pub(crate) fn new_iter_from(&mut self, mi: u32, vals: &[NodeId]) -> NodeId {
-        let (t, n) = self.bobj(mi, "Iterator");
-        let a = self.m.atom("#elems");
-        let e = self.m.field(t, a);
-        for &v in vals {
-            self.m.edge(v, e);
-        }
-        n
-    }
-
-    /// Store `v` into every element/entry of what `recv` holds.
-    fn elem_store(&mut self, fx: &Fx, recv: NodeId, v: NodeId, what: &str) {
-        let ek = self.m.elem_key();
-        self.store(fx, recv, ek, v, what.to_string(), None, false);
-    }
-
-    /// Call `cb` with `args` (this = undefined); returns the result node.
-    fn callback(&mut self, cb: NodeId, args: Vec<NodeId>) -> NodeId {
-        self.call_value(cb, ThisArg::Undef, args, vec![])
-    }
-
-    /// These operations read numeric elements. The solved receiver decides
-    /// whether this is an array-like; other receivers retain full lookup.
-    fn elem_load(&mut self, recv: NodeId) -> NodeId {
-        let key = self.m.elem_key();
-        self.load(recv, key)
-    }
-
-    fn array_cb(&mut self, fx: &Fx, array: &Expr, callback: &Expr) -> (NodeId, NodeId, NodeId) {
-        let a = self.expr(fx, array);
-        let cb = self.expr(fx, callback);
-        let ek = self.m.elem_key();
-        let elems = self.load(a, ek);
-        let num = self.prim_node(prim::NUM);
-        let ret = self.callback(cb, vec![elems, num, a]);
-        (a, elems, ret)
-    }
 
     /// The class whose method home `home` reads, when it is that home.
     fn class_home_of(&self, fx: &Fx, home: &Expr) -> Option<TmplId> {

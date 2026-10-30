@@ -22,7 +22,10 @@ pub extern "C" fn js_get_global_this_builtin_value(name_ptr: *const u8, name_len
     // Invariant: callers pass the bytes of a Rust `&str` (codegen's interned
     // builtin name with its `len()`, or a runtime literal/static name), so
     // they are UTF-8 by construction.
-    debug_assert!(std::str::from_utf8(name_bytes).is_ok(), "builtin name is not UTF-8");
+    debug_assert!(
+        std::str::from_utf8(name_bytes).is_ok(),
+        "builtin name is not UTF-8"
+    );
     let name = unsafe { std::str::from_utf8_unchecked(name_bytes) };
     // The singleton's shape owns the installed key. Borrow its spelling for
     // an ordinary data read instead of rematerializing a weak intern after

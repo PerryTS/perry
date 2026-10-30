@@ -606,13 +606,15 @@ fn a_receiver_reach_handed_to_an_in_unit_call_and_stored_back_stays_the_callers(
 
 #[test]
 fn a_layout_whose_link_holds_it_beside_another_units_instance_is_described_once() {
-    // Merged head: nothing breaks; `h.next` reads ⊤ per unit where the whole
-    // program has its layout (no proof either way): DECISIONS 190.
+    // Merged head: nothing breaks (DECISIONS 190). `h.next` reads the
+    // layout per unit as the whole program does: two descriptions of it
+    // joined keep what each says of `next` (`ClassContract::join`), where
+    // the join made it ⊤.
     let (pf, wf) = (units(LOOP_LIST), facts(LOOP_LIST));
     assert_merged(&pf, &wf, &[]);
     assert_eq!(
         verdicts(&pf, "next"),
-        ["No(\"receiver from unmodeled code (TOP)\")"]
+        ["No(\"key not a definite birth field\")"]
     );
     assert_eq!(
         verdicts(&wf, "next"),

@@ -235,7 +235,11 @@ fn try_join_well_formed(
                 let string = (bits & POINTER_MASK) as *const StringHeader;
                 let len = (*string).byte_len as usize;
                 // A piece is usually a handful of bytes: keep it out of libc.
-                crate::string::concat::copy_bytes_small(crate::string::string_data(string), cursor, len);
+                crate::string::concat::copy_bytes_small(
+                    crate::string::string_data(string),
+                    cursor,
+                    len,
+                );
                 cursor = cursor.add(len);
                 continue;
             }

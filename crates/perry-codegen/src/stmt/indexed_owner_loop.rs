@@ -246,6 +246,8 @@ impl Plan {
                         object: target.clone(),
                         index: key.clone(),
                         value: value.clone(),
+                        byte_offset: 0,
+                        byte_end: 0,
                     },
                 )
             }
@@ -259,12 +261,15 @@ impl Plan {
                     object: array.clone(),
                     index: index.clone(),
                     value: value.clone(),
+                    byte_offset: 0,
+                    byte_end: 0,
                 },
             ),
             Expr::IndexSet {
                 object,
                 index,
                 value,
+                ..
             } => {
                 let Some(root) = self.receiver(ctx, object) else {
                     return false;
@@ -472,7 +477,11 @@ fn numeric_function<'a>(
         }
         _ => return None,
     };
-    ctx.wpfacts.numeric_functions.get(&id)
+    let f = ctx.wpfacts.numeric_functions.get(&id);
+    if f.is_some() {
+        crate::facts_consumed::used();
+    }
+    f
 }
 
 fn owner_proof<'a>(
@@ -483,10 +492,15 @@ fn owner_proof<'a>(
     if ctx.wpfacts_off || ctx.wpfacts.interp_guard {
         return None;
     }
-    ctx.wpfacts
+    let p = ctx
+        .wpfacts
         .indexed_owners
         .get(&id)
-        .filter(|p| p.kind == kind)
+        .filter(|p| p.kind == kind);
+    if p.is_some() {
+        crate::facts_consumed::used();
+    }
+    p
 }
 
 fn static_interval(ctx: &FnCtx<'_>, p: &Plan, e: &Expr, bound: i64) -> Option<(i64, i64)> {
@@ -1148,6 +1162,8 @@ fn expression(
                 object: target.clone(),
                 index: key.clone(),
                 value: value.clone(),
+                byte_offset: 0,
+                byte_end: 0,
             },
             values,
             storage,
@@ -1163,6 +1179,8 @@ fn expression(
                 object: array.clone(),
                 index: index.clone(),
                 value: value.clone(),
+                byte_offset: 0,
+                byte_end: 0,
             },
             values,
             storage,
@@ -1171,6 +1189,7 @@ fn expression(
             object,
             index,
             value,
+            ..
         } => {
             let Expr::LocalGet(id) = object.as_ref() else {
                 unreachable!()
@@ -1513,6 +1532,8 @@ pub(super) fn lower(
         ) || ctx.numeric_accumulator_f64_slots.contains_key(id);
         if !native_number && (ctx.wpfacts_off || !ctx.wpfacts.number_inputs.contains(id)) {
             branch_guard(ctx, &number, &slow_l);
+        } else if !native_number {
+            crate::facts_consumed::used();
         }
         values.insert(*id, Number::F(v));
     }

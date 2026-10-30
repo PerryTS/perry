@@ -30,6 +30,7 @@ mod gen_cjs;
 mod gen_const;
 mod gen_expr;
 mod gen_rest;
+mod ledger;
 pub mod model;
 pub mod pts;
 mod rooted;
@@ -91,6 +92,10 @@ pub struct FactsConfig {
     /// The per-unit driver prints a census line per dependency level and
     /// per round (`PERRY_FACTS_REPORT=1`): what each holds, and the RSS.
     pub report: bool,
+    /// Dump only (per-unit driver): the file the units' diagnostic records are
+    /// written to as each unit is captured at the fixpoint, instead of being
+    /// held for the dump (`ProgramFacts::diag_stream`).
+    pub diag_sidecar: Option<std::path::PathBuf>,
 }
 
 /// Module path → `export … from` source → the module path it resolves to.
@@ -135,6 +140,13 @@ pub struct Stats {
 pub struct ProgramFacts {
     /// Dump-only JSON records, scoped by emitting analysis-unit identity.
     pub diagnostics: Vec<(String, Vec<String>)>,
+    /// Dump-only: where the per-unit diagnostic records went when they were
+    /// streamed (`FactsConfig::diag_sidecar`): the file and, in unit order,
+    /// each unit's (offset, length).
+    pub diag_stream: Option<(std::path::PathBuf, Vec<(u64, u64)>)>,
+    /// Dump-only: the addresses of the HIR sites the analyses recorded
+    /// (`ledger::census` compares them with the HIR).
+    pub(crate) diagnostic_sites: Vec<(usize, &'static str, u32)>,
     /// DECISIONS 225: the activation pass's count (the whole program).
     pub activation: Option<String>,
     /// DECISIONS 225: the bodies the whole program walked, the ones that
@@ -247,7 +259,17 @@ pub struct ProgramFacts {
 /// Run the analysis over every module (paths must be the keys the caller
 /// uses for `digest_for` / `contract_section`).
 pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts {
-    compute_act(modules, cfg, None, None, true)
+    let mut pf = compute_act(modules, cfg, None, None, true);
+    if cfg.diagnostics {
+        let mut sorted: Vec<(&str, &Module)> =
+            modules.iter().map(|(p, m)| (p.as_str(), *m)).collect();
+        sorted.sort_by(|a, b| a.0.cmp(b.0));
+        pf.diagnostics.push((
+            "<census>".into(),
+            ledger::census(&sorted, &pf.diagnostic_sites),
+        ));
+    }
+    pf
 }
 
 #[path = "lib/contracts.rs"]
@@ -434,7 +456,11 @@ fn compute_act<'a>(
     // DECISIONS 225 (the whole program): the facts are over the bodies that
     // can run. Per unit every body runs (its published functions are called
     // by units it cannot see).
-    let act = if gate { activation(&sorted, cfg, t0) } else { None };
+    let act = if gate {
+        activation(&sorted, cfg, t0)
+    } else {
+        None
+    };
     let activation = act.as_ref().map(|a| a.on.len());
     let (mut g, gen_ms, t1) = generate(&sorted, cfg, published, view, act, t0);
     let activation = activation.map(|n| format!("active={n} functions={}", g.m.funcs.len()));
@@ -447,7 +473,9 @@ fn compute_act<'a>(
         checks += 1;
         // DECISIONS 171: a cell its solve came to consume is seeded first.
         let woke = g.wake_cells();
-        g.contract_check() | woke
+        // What the check added is solved before its results are read
+        // again, whether or not the check counted it as a change.
+        g.contract_check() | woke | g.m.unsolved()
     } {
         g.m.solve();
     }
@@ -864,6 +892,7 @@ fn compute_act<'a>(
                         birth_keys: atoms_of(&g, &g.m.tmpls[tm as usize].birth_keys),
                         definite: atoms_of(&g, &g.m.tmpls[tm as usize].definite),
                         ctor_leaks: g.chain_leaks(tm),
+                        ctor_returns: g.chain_returns(tm),
                         binding_prim: match e {
                             Some(_) => g.m.nodes[en as usize].prim,
                             None => 0,
@@ -963,7 +992,8 @@ fn compute_act<'a>(
     };
     // Its value contracts (design §12): per published value binding, the
     // contracts of what it may hold (`Gen::contract_check` accepted them).
-    let values_out: Vec<((String, String), units::ValueContract)> = if cfg.unit && !g.m.aborted {
+    let mut values_out: Vec<((String, String), units::ValueContract)> = if cfg.unit && !g.m.aborted
+    {
         let mut out = Vec::new();
         for &((mi, a), n) in &g.value_contracts {
             let vc = value_contract_of(
@@ -987,13 +1017,17 @@ fn compute_act<'a>(
     // Its store effects with their value contracts (design §17.16 (c)): an
     // undescribed value (`Gen::effect_bad`) or a solve over the bound is
     // unknown, of any kind.
-    let stores_out: Vec<(String, String, units::ValueContract)> = store_nodes
+    let mut stores_out: Vec<(String, String, units::ValueContract)> = store_nodes
         .into_iter()
         .map(|(d, k, nodes)| {
             let mut vc = units::ValueContract::default();
             for n in nodes {
                 if g.m.aborted || g.effect_bad.contains(&n) {
-                    vc.unknown = true;
+                    vc.unknown_because(if g.m.aborted {
+                        "unit-aborted"
+                    } else {
+                        "undescribed-store-value"
+                    });
                     vc.prim = model::prim::ALL;
                 } else {
                     vc.join(&value_contract_of(
@@ -1023,12 +1057,12 @@ fn compute_act<'a>(
         .filter_map(|(k, n)| {
             let node = &g.m.nodes[*n as usize];
             if g.m.aborted || g.cell_bad.contains(n) {
-                let vc = units::ValueContract {
-                    unknown: true,
-                    prim: model::prim::ALL,
-                    ..Default::default()
+                let because = if g.m.aborted {
+                    "unit-aborted"
+                } else {
+                    "undescribed-cell-write"
                 };
-                return Some((k.clone(), vc));
+                return Some((k.clone(), units::ValueContract::unknown_for(because)));
             }
             // DECISIONS 162: an own parameter's marker in it is the callers'
             // argument, which their units store there themselves.
@@ -1063,22 +1097,26 @@ fn compute_act<'a>(
     // cell write is (`Model::global_written_own`): a replayed write of
     // another unit's is that unit's `global:*` write.
     if g.m.global_cells && (g.m.aborted || g.m.global_written_own) {
-        let vc = units::ValueContract {
-            unknown: true,
-            prim: model::prim::ALL,
-            ..Default::default()
+        let because = if g.m.aborted {
+            "unit-aborted"
+        } else {
+            "global-written-by-unmodeled-code"
         };
-        cells_out.push(("global:*".to_string(), vc));
+        cells_out.push((
+            "global:*".to_string(),
+            units::ValueContract::unknown_for(because),
+        ));
     }
     // DECISIONS 94: an array unmodeled code may write (it escaped): every
     // unit's elements of it read ⊤.
     // A named key stored into one: every unit's named fields of it read ⊤.
     for (key, t) in &g.arr_cells {
-        let vc = units::ValueContract {
-            unknown: true,
-            prim: model::prim::ALL,
-            ..Default::default()
+        let because = if g.m.aborted {
+            "unit-aborted"
+        } else {
+            "array-escaped"
         };
+        let vc = units::ValueContract::unknown_for(because);
         if g.m.aborted || g.m.is_escaped(*t) {
             cells_out.retain(|(k, _)| k != key);
             cells_out.push((key.clone(), vc.clone()));
@@ -1091,17 +1129,17 @@ fn compute_act<'a>(
     // per binding (its unit's path, its name) a value contract, as of a
     // published binding; ⊤ for one no contract describes, and for every
     // binding it writes when the solve stopped at the bound.
-    let writes_out: Vec<((String, String), units::ValueContract)> = if cfg.unit {
-        let unknown = units::ValueContract {
-            unknown: true,
-            prim: model::prim::ALL,
-            ..Default::default()
-        };
+    let mut writes_out: Vec<((String, String), units::ValueContract)> = if cfg.unit {
         g.written_keys()
             .into_iter()
             .filter_map(|(id, key)| {
                 if g.m.aborted || g.write_top.contains(&id) {
-                    return Some((key, unknown.clone()));
+                    let because = if g.m.aborted {
+                        "unit-aborted"
+                    } else {
+                        "binding-write-over-the-bound"
+                    };
+                    return Some((key, units::ValueContract::unknown_for(because)));
                 }
                 let &n = g.binding_writes.get(&id)?;
                 let vc = value_contract_of(
@@ -1119,7 +1157,7 @@ fn compute_act<'a>(
         Vec::new()
     };
     // What its calls pass to the other units' closed functions (decision 13).
-    let args_out: Vec<(String, units::ArgContract)> = match g.view {
+    let mut args_out: Vec<(String, units::ArgContract)> = match g.view {
         Some(v) if cfg.unit && !g.m.aborted => {
             let mut out: Vec<(String, units::ArgContract)> = Vec::new();
             for nm in &v.closed_refs {
@@ -1206,7 +1244,7 @@ fn compute_act<'a>(
     // runs it on (`Model::this_admitted`), published to the method's unit.
     // A receiver marker or a published receiver token stands for instances
     // of classes further units may extend: unknown.
-    let this_args_out: Vec<(String, units::ValueContract)> = match g.view {
+    let mut this_args_out: Vec<(String, units::ValueContract)> = match g.view {
         Some(_) if cfg.unit && !g.m.aborted => {
             let mut by: Vec<(String, Vec<model::Tok>)> = Vec::new();
             for &(this, t) in &g.m.this_admitted {
@@ -1240,7 +1278,9 @@ fn compute_act<'a>(
                         &mut layouts_out,
                         &open_tm,
                     );
-                    vc.unknown |= opaque;
+                    if opaque {
+                        vc.unknown_because("opaque-receiver");
+                    }
                     (nm, vc)
                 })
                 .collect()
@@ -1284,7 +1324,7 @@ fn compute_act<'a>(
     // under no name (through ⊤) passes what no contract describes: `top`.
     // DECISIONS 224: the same for a function its owner published to a known
     // closed callee (`FnContract::callable`).
-    let method_args_out: Vec<(String, units::ArgContract)> = match g.view {
+    let mut method_args_out: Vec<(String, units::ArgContract)> = match g.view {
         Some(_) if cfg.unit && !g.m.aborted => {
             let mut by: Vec<(String, Vec<model::Tok>)> = Vec::new();
             for (&t, fc) in &g.stand_in_fc {
@@ -1496,6 +1536,29 @@ fn compute_act<'a>(
     } else {
         std::mem::take(&mut g.m.shared_out).into_iter().collect()
     };
+    // The unit that published each unknown value's reason (only the dump reads
+    // it; it takes no part in equality or hashing).
+    if cfg.unit {
+        let unit: std::sync::Arc<str> = view.map_or("<whole>", |v| v.key.as_str()).into();
+        for (_, vc) in &mut values_out {
+            vc.stamp(&unit);
+        }
+        for (_, _, vc) in &mut stores_out {
+            vc.stamp(&unit);
+        }
+        for (_, vc) in &mut cells_out {
+            vc.stamp(&unit);
+        }
+        for (_, vc) in &mut writes_out {
+            vc.stamp(&unit);
+        }
+        for (_, vc) in &mut this_args_out {
+            vc.stamp(&unit);
+        }
+        for (_, ac) in args_out.iter_mut().chain(method_args_out.iter_mut()) {
+            ac.params.iter_mut().for_each(|vc| vc.stamp(&unit));
+        }
+    }
     let diagnostics = if cfg.diagnostics {
         vec![(view.map_or("<whole>", |v| v.key.as_str()).to_owned(), {
             let mut rows = diagnostics::collect(&g);
@@ -1523,6 +1586,11 @@ fn compute_act<'a>(
     } else {
         Vec::new()
     };
+    let diagnostic_sites = if cfg.diagnostics {
+        diagnostics::recorded(&g)
+    } else {
+        Vec::new()
+    };
     // Every body the analysis walked, and every body holding a site (a
     // context generation enters without a walk of its own).
     let active_bodies = g.m.act.as_ref().map(|a| {
@@ -1535,7 +1603,9 @@ fn compute_act<'a>(
             .collect()
     });
     let mut pf = ProgramFacts {
+        diag_stream: None,
         diagnostics,
+        diagnostic_sites,
         activation,
         active_bodies,
         super_unrelinked,
@@ -1679,6 +1749,12 @@ impl ProgramFacts {
     /// The human/oracle-readable facts dump.
     pub fn dump_text(&self) -> String {
         dump::dump_text(self)
+    }
+
+    /// Dump only: writes the diagnostic records streamed to the sidecar,
+    /// after `dump_text`.
+    pub fn append_streamed(&self, out: &mut impl std::io::Write) -> std::io::Result<()> {
+        dump::append_streamed(self, out)
     }
 
     /// The constraint relations for `scripts/wpfacts_recompute.py`.

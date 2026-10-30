@@ -116,7 +116,8 @@ fn violate(site: u64, what: &str, detail: String) -> ! {
 }
 
 /// One elided field access. `cids01`/`cids23` carry up to four class ids
-/// (low half first; `u32::MAX` = none). Returns 0.
+/// (low half first; `u32::MAX` = none); `slot` names the key, `off` is the
+/// byte offset from the object the access used. Returns 0.
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn perry_wpfacts_check_field(
@@ -126,11 +127,18 @@ pub extern "C" fn perry_wpfacts_check_field(
     cids01: i64,
     cids23: i64,
     slot: i32,
+    off: i32,
     kind_mask: i32,
     flags: i32,
     site: i64,
 ) -> i32 {
-    let (site, flags, slot, kind_mask) = (site as u64, flags as u32, slot as u32, kind_mask as u32);
+    let (site, flags, slot, off, kind_mask) = (
+        site as u64,
+        flags as u32,
+        slot as u32,
+        off as u32,
+        kind_mask as u32,
+    );
     if CHECKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
         REPORT.call_once(|| {
             if std::env::var_os("PERRY_CONTRACTS_REPORT").is_some() {
@@ -211,8 +219,7 @@ pub extern "C" fn perry_wpfacts_check_field(
     }
     // F2: the value read or written is inside the claimed kind; the value in
     // the slot is the one the site saw.
-    let header = std::mem::size_of::<ObjectHeader>();
-    let in_slot = unsafe { *((addr + header + slot as usize * 8) as *const u64) };
+    let in_slot = unsafe { *crate::object::header::object_slot_at(addr as *mut ObjectHeader, off) };
     let vbits = value.to_bits();
     if flags & WPF_RAW_F64 != 0 {
         // A raw-f64 read: the slot must hold a plain double.

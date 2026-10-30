@@ -23,6 +23,7 @@ mod flat_clone;
 mod forwarding;
 mod from_concat;
 mod generic;
+pub(crate) use generic::{al_get as arraylike_get, al_length as arraylike_length};
 mod generic_copy;
 pub use self::generic_copy::{js_arraylike_toReversed, js_arraylike_toSorted, js_arraylike_with};
 #[cfg(test)]

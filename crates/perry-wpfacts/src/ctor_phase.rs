@@ -280,6 +280,7 @@ impl W {
                 object,
                 property,
                 value,
+                ..
             } if matches!(object.as_ref(), Expr::This) => {
                 self.expr(st, value);
                 self.store(st, e, property);

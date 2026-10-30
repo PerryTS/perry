@@ -593,5 +593,10 @@ mod escaped_results;
 #[path = "unit_mode/return_transfers.rs"]
 mod return_transfers;
 
+#[path = "unit_mode/commonjs_helper.rs"]
+mod commonjs_helper;
 #[path = "unit_mode/pub_callable.rs"]
 mod pub_callable;
+
+#[path = "unit_mode/method_on_read.rs"]
+mod method_on_read;

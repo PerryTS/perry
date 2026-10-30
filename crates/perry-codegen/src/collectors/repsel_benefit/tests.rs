@@ -206,6 +206,8 @@ fn index_used_counter_survives() {
                 object: Box::new(get(1)),
                 index: Box::new(get(2)),
                 value: Box::new(Expr::Bool(false)),
+                byte_offset: 0,
+                byte_end: 0,
             })],
         ),
     ];
@@ -693,6 +695,8 @@ fn tower_route_counts_writes() {
             object: Box::new(Expr::This),
             property: "a".to_string(),
             value: Box::new(Expr::Number(1.0)),
+            byte_offset: 0,
+            byte_end: 0,
         }),
         Stmt::Expr(Expr::PropertyUpdate {
             object: Box::new(Expr::This),
@@ -700,6 +704,8 @@ fn tower_route_counts_writes() {
             op: BinaryOp::Add,
             prefix: false,
             strict: true,
+            byte_offset: 0,
+            byte_end: 0,
         }),
     ]);
     assert_eq!(

@@ -292,7 +292,8 @@ pub(super) fn evacuation_policy_snapshot_after_mark(
         unsafe {
             let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
             if !crate::arena::pointer_in_nursery(user_ptr as usize)
-                || crate::arena::is_large_storage(user_ptr as usize) {
+                || crate::arena::is_large_storage(user_ptr as usize)
+            {
                 return;
             }
             let flags = (*header).gc_flags;
@@ -1075,8 +1076,10 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
             eprintln!("[gc-old-free] reusable_bytes={}", old_free_bytes());
         }
     }
-    let old_reset = add_reset_stats(old_reset,
-        crate::arena::finish_swept_young_large(&large_snapshots, &block_has_live));
+    let old_reset = add_reset_stats(
+        old_reset,
+        crate::arena::finish_swept_young_large(&large_snapshots, &block_has_live),
+    );
     let reset = crate::arena::ArenaResetStats {
         reset_blocks: nursery_reset
             .reset_blocks
@@ -1285,7 +1288,9 @@ impl IncrementalSweepState {
                 let cleanup = self.cleanup.as_mut().expect("sweep cleanup state exists");
                 if cleanup.step(budget) {
                     let large_reset = crate::arena::finish_swept_young_large(
-                        self.arena.block_snapshots(), self.arena.block_has_live());
+                        self.arena.block_snapshots(),
+                        self.arena.block_has_live(),
+                    );
                     let reset = add_reset_stats(cleanup.stats(), large_reset);
                     let freed_bytes = self
                         .malloc

@@ -365,6 +365,8 @@ mod tests {
                 object: Box::new(Expr::LocalGet(1)),
                 index: Box::new(Expr::Integer(4)),
                 value: Box::new(object_literal()),
+                byte_offset: 0,
+                byte_end: 0,
             }),
         ];
         assert!(!collect(&stmts).contains(&1));
@@ -384,6 +386,8 @@ mod tests {
                 value: Box::new(object_literal()),
                 receiver: Box::new(Expr::LocalGet(1)),
                 strict: false,
+                byte_offset: 0,
+                byte_end: 0,
             }),
         ];
         assert!(!collect(&stmts).contains(&1));
@@ -398,6 +402,8 @@ mod tests {
                 object: Box::new(Expr::LocalGet(1)),
                 property: "length".to_string(),
                 value: Box::new(Expr::Integer(0)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
         ];
         assert!(!collect(&stmts).contains(&1));

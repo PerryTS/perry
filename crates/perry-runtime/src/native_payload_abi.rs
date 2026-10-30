@@ -172,7 +172,9 @@ pub unsafe extern "C" fn js_perry_payload_attach(
     };
     // A1_UNPROVEN: record-first: payload family class layout word (kind-A/B question for S0f).
     if !crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)).is_null()
-        && crate::native_payload::is_payload_state_word((*crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _))).native_state)
+        && crate::native_payload::is_payload_state_word(
+            (*crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _))).native_state,
+        )
     {
         return -1;
     }

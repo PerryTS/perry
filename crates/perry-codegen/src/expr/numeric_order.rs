@@ -16,6 +16,7 @@ pub(super) fn numeric_order(ctx: &FnCtx<'_>, comparator: &Expr) -> Option<Numeri
                 let [body] = ctx.wpfacts.local_bodies.get(local)?.as_slice() else {
                     return None;
                 };
+                crate::facts_consumed::used();
                 // FVA closes the values, not the temporal dead zone. A direct
                 // enclosing statement must also have initialized this binding.
                 if !ctx.numeric_order_ready.is_ready(*local) {

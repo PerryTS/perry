@@ -3245,6 +3245,7 @@ js_process_active_resources_info	f64
 js_process_add_listener	f64	i64,i64
 js_process_add_uncaught_exception_capture_callback	f64	f64
 js_process_argv	ptr	
+js_process_argv_value	f64	
 js_process_available_memory	f64	
 js_process_binding	f64	f64
 js_process_chdir	void	ptr
@@ -4792,6 +4793,7 @@ js_worker_threads_worker_get_heap_snapshot	f64	i64,f64
 js_worker_threads_worker_get_heap_statistics	f64	i64
 js_worker_threads_worker_new	f64	i64,f64
 js_worker_threads_worker_new_by_spec	f64	f64,f64
+js_worker_threads_worker_new_with_source	f64	f64,f64,i64
 js_worker_threads_worker_off	f64	i64,f64,i64
 js_worker_threads_worker_on	f64	i64,f64,i64
 js_worker_threads_worker_once	f64	i64,f64,i64
@@ -4803,6 +4805,7 @@ js_worker_threads_worker_start_cpu_profile	f64	i64
 js_worker_threads_worker_start_heap_profile	f64	i64
 js_worker_threads_worker_terminate	f64	i64
 js_worker_threads_worker_unref	f64	i64
+js_worker_transfer_sequence	f64	f64
 js_workload_api_inspectGraph	ptr	f64
 js_workload_graph	ptr	ptr,ptr
 js_workload_handle_down	ptr	i64,i32s

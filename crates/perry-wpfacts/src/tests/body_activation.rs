@@ -27,13 +27,41 @@ console.log(f(1).k, p.r);
 /// Each way `Host::enable` can run, and the activation path that sees it.
 const ARMS: &[(&str, &str, &str)] = &[
     ("direct", "console.log(new Host().enable());", "call"),
-    ("closure", "function mkc() { return () => new Host().enable(); } const c = mkc(); console.log(c());", "call"),
-    ("getter", "class G { get x() { return new Host().enable(); } } console.log(new G().x);", "accessor"),
-    ("fieldinit", "class FI { x = new Host().enable(); } console.log(new FI().x);", "this"),
-    ("property", "(globalThis as any).box = { k: Host }; console.log(0);", "escape"),
-    ("unknownfn", "const g = (globalThis as any)[\"x\" + \"y\"]; if (g) g(Host); console.log(0);", "escape"),
-    ("eval", "function ev() { return eval(\"new Host().enable()\"); } console.log(ev());", "call"),
-    ("function", "const fn = new Function(\"H\", \"return new H().enable()\"); console.log(fn(Host));", "call"),
+    (
+        "closure",
+        "function mkc() { return () => new Host().enable(); } const c = mkc(); console.log(c());",
+        "call",
+    ),
+    (
+        "getter",
+        "class G { get x() { return new Host().enable(); } } console.log(new G().x);",
+        "accessor",
+    ),
+    (
+        "fieldinit",
+        "class FI { x = new Host().enable(); } console.log(new FI().x);",
+        "this",
+    ),
+    (
+        "property",
+        "(globalThis as any).box = { k: Host }; console.log(0);",
+        "escape",
+    ),
+    (
+        "unknownfn",
+        "const g = (globalThis as any)[\"x\" + \"y\"]; if (g) g(Host); console.log(0);",
+        "escape",
+    ),
+    (
+        "eval",
+        "function ev() { return eval(\"new Host().enable()\"); } console.log(ev());",
+        "call",
+    ),
+    (
+        "function",
+        "const fn = new Function(\"H\", \"return new H().enable()\"); console.log(fn(Host));",
+        "call",
+    ),
 ];
 
 fn proven(s: &SiteFacts) -> bool {
@@ -41,7 +69,10 @@ fn proven(s: &SiteFacts) -> bool {
 }
 
 fn mk(pf: &ProgramFacts) -> Vec<&SiteFacts> {
-    pf.sites.iter().filter(|s| s.key == "mk" && s.is_call).collect()
+    pf.sites
+        .iter()
+        .filter(|s| s.key == "mk" && s.is_call)
+        .collect()
 }
 
 fn per_unit(src: &str) -> ProgramFacts {
@@ -68,7 +99,10 @@ pub(super) fn stronger_sites(u: &ProgramFacts, w: &ProgramFacts) -> Vec<String> 
                 && proven(x)
         });
         if !whole_proves && !w.dead_site(path, s) {
-            out.push(format!("{path}@{} .{} {:?}", s.byte_offset, s.key, s.verdict));
+            out.push(format!(
+                "{path}@{} .{} {:?}",
+                s.byte_offset, s.key, s.verdict
+            ));
         }
     }
     out
@@ -107,7 +141,11 @@ fn an_uncalled_body_does_not_escape_what_it_names() {
     // Main-red: on main `enable`'s body escapes `make`, its parameter is ⊤.
     let pf = facts(BASE);
     let s = mk(&pf);
-    assert!(!s.is_empty() && s.iter().all(|s| proven(s)), "{s:?}\n{}", pf.dump_text());
+    assert!(
+        !s.is_empty() && s.iter().all(|s| proven(s)),
+        "{s:?}\n{}",
+        pf.dump_text()
+    );
     // The dead body's own site has no verdict (generic code).
     assert!(pf.sites.iter().all(|s| s.key != "q"), "{}", pf.dump_text());
 }
@@ -129,13 +167,20 @@ fn every_way_the_body_can_run_keeps_it_refused() {
 fn sabotage_each_activation_path_proves_its_arm_wrongly() {
     // Each arm's path left out: the body that runs is not walked, so the
     // `mk` site is proven (or dropped as dead) although `make` escapes.
-    for (arm, tail, path) in ARMS.iter().filter(|a| ["direct", "getter", "fieldinit", "property"].contains(&a.0)) {
+    for (arm, tail, path) in ARMS
+        .iter()
+        .filter(|a| ["direct", "getter", "fieldinit", "property"].contains(&a.0))
+    {
         let cfg = FactsConfig {
             sabotage: Some(format!("activation:{path}")),
             ..FactsConfig::default()
         };
         let pf = facts_with(&format!("{BASE}{tail}\n"), cfg);
-        assert!(mk(&pf).iter().all(|s| proven(s)), "arm {arm} sabotage {path}\n{}", pf.dump_text());
+        assert!(
+            mk(&pf).iter().all(|s| proven(s)),
+            "arm {arm} sabotage {path}\n{}",
+            pf.dump_text()
+        );
     }
 }
 
@@ -144,7 +189,11 @@ fn a_per_unit_proof_in_a_dead_body_is_not_stronger() {
     // Per unit every body is walked: `o.q` in `enable` is proven there, and
     // the whole program has no view of it (the body cannot run).
     let (u, w) = (per_unit(BASE), facts(BASE));
-    let q: Vec<_> = u.sites.iter().filter(|s| s.key == "q" && proven(s)).collect();
+    let q: Vec<_> = u
+        .sites
+        .iter()
+        .filter(|s| s.key == "q" && proven(s))
+        .collect();
     assert!(!q.is_empty(), "{}", u.dump_text());
     assert!(q.iter().all(|s| w.dead_site("t.ts", s)));
     let s = stronger_sites(&u, &w);
@@ -156,7 +205,11 @@ fn a_per_unit_proof_in_an_active_body_stronger_than_whole_is_red() {
     // `p.r` is in the module body (active). A whole run that does not prove
     // it, or has no view of it, makes the per-unit proof stronger: red.
     let (u, mut w) = (per_unit(BASE), facts(BASE));
-    assert!(u.sites.iter().any(|s| s.key == "r" && proven(s)), "{}", u.dump_text());
+    assert!(
+        u.sites.iter().any(|s| s.key == "r" && proven(s)),
+        "{}",
+        u.dump_text()
+    );
     assert!(stronger_sites(&u, &w).is_empty());
     for s in w.sites.iter_mut().filter(|s| s.key == "r") {
         s.verdict = Verdict::No("planted".into());

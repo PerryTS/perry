@@ -444,7 +444,10 @@ pub(super) fn start_core(c: &mut H2Conn) -> bool {
 /// The SETTINGS this connection's core actually advertises, after `Limits`
 /// clamping — what `session.localSettings` must report, rather than the
 /// unclamped option object JS passed in.
-pub(crate) fn advertised_settings(requested: &Http2SettingsState, role: Role) -> Http2SettingsState {
+pub(crate) fn advertised_settings(
+    requested: &Http2SettingsState,
+    role: Role,
+) -> Http2SettingsState {
     let mut out = requested.clone();
     out.max_concurrent_streams = clamp_streams(requested.max_concurrent_streams) as u32;
     out.max_frame_size = requested.max_frame_size.clamp(16_384, 0xff_ffff);

@@ -93,6 +93,7 @@ fn prologue_assigned_field<'a>(
             object,
             property,
             value,
+            ..
         }) if matches!(object.as_ref(), Expr::This) && admissible(value.as_ref()) => {
             Some(property.as_str())
         }
@@ -103,6 +104,7 @@ fn prologue_assigned_field<'a>(
             value,
             receiver,
             strict: _,
+            ..
         }) if matches!(target.as_ref(), Expr::This)
             && matches!(receiver.as_ref(), Expr::This)
             && admissible(value.as_ref()) =>

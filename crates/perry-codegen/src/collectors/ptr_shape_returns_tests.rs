@@ -79,6 +79,8 @@ fn store_x(id: u32) -> Stmt {
         object: Box::new(Expr::LocalGet(id)),
         property: "x".to_string(),
         value: Box::new(Expr::Number(1.0)),
+        byte_offset: 0,
+        byte_end: 0,
     })
 }
 
@@ -1155,6 +1157,8 @@ fn call_seeded_candidate_still_obeys_containment() {
             object: Box::new(Expr::LocalGet(40)),
             property: "nope".to_string(),
             value: Box::new(Expr::Number(1.0)),
+            byte_offset: 0,
+            byte_end: 0,
         }),
     ];
     assert!(
@@ -1789,6 +1793,8 @@ fn named_accessor_locals_reuse_containment_and_vet_accessor_this_flow() {
                 object: Box::new(Expr::This),
                 property: "x".into(),
                 value: Box::new(Expr::Number(3.0)),
+                byte_offset: 0,
+                byte_end: 0,
             })],
         ),
     ));
@@ -1806,6 +1812,8 @@ fn named_accessor_locals_reuse_containment_and_vet_accessor_this_flow() {
             key: Box::new(Expr::String("input".into())),
             value: Box::new(Expr::Number(2.0)),
             strict: true,
+            byte_offset: 0,
+            byte_end: 0,
         }),
     ];
     c.setters[0].1.params.push(Param {

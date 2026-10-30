@@ -98,10 +98,12 @@ pub(crate) fn own_prototype_by_bag(ctor: f64) -> Option<f64> {
         // The shape assigns the slot's canonical storage.
         let slot = (encoded & !SPILL) as usize;
         let bits = if encoded & SPILL == 0 {
-            let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(bag as *mut _)) as *const u64;
+            let fields =
+                crate::meta_slots_of!(crate::meta_obj_runtime_born!(bag as *mut _)) as *const u64;
             *fields.add(slot)
         } else {
-            let spill = (*crate::meta_read!(crate::meta_obj_runtime_born!(bag as *mut _))).spill as *const crate::array::ArrayHeader;
+            let spill = (*crate::meta_read!(crate::meta_obj_runtime_born!(bag as *mut _))).spill
+                as *const crate::array::ArrayHeader;
             *crate::array::array_elements_ptr(spill).add(slot)
         };
         (bits != crate::value::TAG_HOLE).then_some(f64::from_bits(bits))
@@ -144,7 +146,8 @@ fn emitter_birth(
     // order: each fill is the newest key, so in place.
     unsafe {
         let obj = crate::object::layout_desc::perry_alloc_layout(layout);
-        let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)) as *mut u64;
+        let fields =
+            crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)) as *mut u64;
         crate::gc::runtime_store_jsvalue_slot_layout_deferred(
             obj as usize,
             fields.add(emitter_slot::EVENTS as usize) as usize,

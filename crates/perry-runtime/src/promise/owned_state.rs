@@ -13,7 +13,8 @@ pub(super) unsafe fn state_list(
     if promise.is_null() || crate::object::cell_meta::promise_cell_meta(promise).is_null() {
         return ptr::null_mut();
     }
-    let bag = (*crate::object::cell_meta::promise_cell_meta(promise)).owned_state as *const crate::array::ArrayHeader;
+    let bag = (*crate::object::cell_meta::promise_cell_meta(promise)).owned_state
+        as *const crate::array::ArrayHeader;
     if bag.is_null() {
         return ptr::null_mut();
     }
@@ -58,7 +59,8 @@ pub(super) unsafe fn take_list(promise: *mut Promise, slot: u32) -> *mut crate::
     let list = state_list(promise, slot);
     if !list.is_null() {
         crate::array::js_array_set(
-            (*crate::object::cell_meta::promise_cell_meta(promise)).owned_state as *mut crate::array::ArrayHeader,
+            (*crate::object::cell_meta::promise_cell_meta(promise)).owned_state
+                as *mut crate::array::ArrayHeader,
             slot,
             crate::value::JSValue::undefined(),
         );

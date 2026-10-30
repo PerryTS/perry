@@ -156,7 +156,9 @@ pub(crate) fn filehandle_object_fd(value: f64) -> Option<i32> {
             return None;
         }
         let obj = addr as *const crate::object::ObjectHeader;
-        if (*obj).class_id != CLASS_ID_FS_FILEHANDLE || crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)).is_null() {
+        if (*obj).class_id != CLASS_ID_FS_FILEHANDLE
+            || crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)).is_null()
+        {
             return None;
         }
         let word = (*crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _))).native_state;

@@ -65,9 +65,10 @@ pub(crate) fn js_process_emit(event_bits: i64, args: *const ArrayHeader) -> f64 
 }
 static JS_PROCESS_EMIT_EXIT: Hook<extern "C" fn(f64) -> ()> = Hook::empty();
 pub(crate) fn js_process_emit_exit(code: f64) -> () {
-    JS_PROCESS_EMIT_EXIT
-        .get()
-        .map_or_else(|| EXIT_SEQUENCE_RAN.with(|ran| ran.set(true)), |run| run(code))
+    JS_PROCESS_EMIT_EXIT.get().map_or_else(
+        || EXIT_SEQUENCE_RAN.with(|ran| ran.set(true)),
+        |run| run(code),
+    )
 }
 static JS_PROCESS_EVENT_NAMES: Hook<extern "C" fn() -> *mut ArrayHeader> = Hook::empty();
 pub(crate) fn js_process_event_names() -> *mut ArrayHeader {

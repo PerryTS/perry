@@ -99,5 +99,6 @@ impl ShapeRecord {
 const RECORD_ELEMENT_KIND_MASK: u32 = 0xFF;
 const RECORD_KEYS_NODE_SHIFT: u32 = 8;
 const _: () = assert!(
-    crate::object::canonical_keys::NODE_ID_LIMIT as u64 == (1u64 << (32 - RECORD_KEYS_NODE_SHIFT)) - 1
+    crate::object::canonical_keys::NODE_ID_LIMIT as u64
+        == (1u64 << (32 - RECORD_KEYS_NODE_SHIFT)) - 1
 );

@@ -550,7 +550,8 @@ mod tests {
             );
             crate::node_stream::init_transform_in_place(owner.get_nanbox_f64(), bytes_undefined());
             let obj = np::any_object(owner.get_nanbox_f64()).unwrap();
-            let record = (*crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _))).native_state;
+            let record =
+                (*crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _))).native_state;
             assert!(
                 crate::node_stream::is_stream_record_word(record),
                 "subject must have a stream state record"

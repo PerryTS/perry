@@ -487,7 +487,8 @@ unsafe fn prove_no_then(value: f64) -> Outcome {
     let Some(gc) = crate::value::addr_class::try_read_gc_header(addr) else {
         return Outcome::NotArena;
     };
-    if crate::gc_type_is_not_object!(gc.obj_type) || gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
+    if crate::gc_type_is_not_object!(gc.obj_type) || gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+    {
         return Outcome::NotPlainObject;
     }
     let flags = gc._reserved;
