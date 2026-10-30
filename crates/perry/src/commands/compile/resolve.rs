@@ -180,6 +180,8 @@ mod package_enumeration_tests;
 #[cfg(test)]
 mod package_instance_tests;
 #[cfg(test)]
+mod prefer_emit_packages_tests;
+#[cfg(test)]
 mod tests;
 
 /// Packages that Perry provides built-in native extensions for.
@@ -1574,6 +1576,25 @@ pub(super) fn resolve_import(
     )
 }
 
+/// TypeScript source entry for a `compilePackages` package, or `None` when
+/// `prefer_emit_packages` (`PERRY_PREFER_EMIT_PACKAGES`: comma-separated names
+/// or `*`) keeps the package on its emitted entry.
+fn compile_package_source_entry(
+    package_dir: &Path,
+    package_name: &str,
+    subpath: Option<&str>,
+    prefer_emit_packages: Option<&str>,
+) -> Option<PathBuf> {
+    let prefer_emit = prefer_emit_packages.is_some_and(|v| {
+        v.split(',')
+            .any(|p| p.trim() == "*" || p.trim() == package_name)
+    });
+    if prefer_emit {
+        return None;
+    }
+    resolve_package_source_entry(package_dir, subpath)
+}
+
 /// Context-aware resolver entry point used by compile passes that must retain
 /// `--bunfs-root` semantics after the initial module walk (export flattening,
 /// init ordering, and dynamic-import metadata construction).
@@ -1734,9 +1755,12 @@ pub(super) fn resolve_import_with_bunfs(
             // Packages listed in perry.compilePackages are compiled natively
             if compile_packages.contains(&package_name) {
                 // Prefer TypeScript source over compiled JS
-                if let Some(src_entry) =
-                    resolve_package_source_entry(&package_dir, subpath.as_deref())
-                {
+                if let Some(src_entry) = compile_package_source_entry(
+                    &package_dir,
+                    &package_name,
+                    subpath.as_deref(),
+                    std::env::var("PERRY_PREFER_EMIT_PACKAGES").ok().as_deref(),
+                ) {
                     return Some((src_entry.canonicalize().ok()?, ModuleKind::NativeCompiled));
                 }
                 // Fall back to normal resolution but still mark as NativeCompiled
