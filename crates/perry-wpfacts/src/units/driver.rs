@@ -1796,6 +1796,9 @@ fn capture_diagnostics(
             Some((p.to_path_buf(), spans))
         }
         _ => None,
+    }
+}
+
 /// The rounds after which the driver names what keeps it going (the corpus
 /// reaches its fixpoint in at most ~15). A round count that keeps growing is
 /// a unit whose outputs never settle: each report at round 64, 128, 256, ...
