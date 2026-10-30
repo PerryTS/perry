@@ -1057,6 +1057,13 @@ mod tests {
         any(target_vendor = "apple", target_os = "linux"),
         any(target_arch = "aarch64", target_arch = "x86_64")
     ))]
+    // Stands in for a compiled JS body: it publishes a bundle name below and,
+    // on x86_64 Linux, lives in the JS text section as codegen places every
+    // named body, the range the capture keeps frames of.
+    #[cfg_attr(
+        all(target_arch = "x86_64", target_os = "linux"),
+        link_section = "perry_js_text"
+    )]
     #[inline(never)]
     fn unread_error_probe() -> *mut ErrorHeader {
         crate::error::js_error_new()
