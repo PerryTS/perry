@@ -200,21 +200,27 @@ fn every_verdict_reason_has_a_cause() {
             continue;
         };
         let lit = &rest[..close];
-        let reason = [
-            "receiver ",
-            "dead site",
-            "escape: ",
-            "hard: ",
-            "chain: ",
-            "slots ",
-            "key not",
-            "accessor key",
-            "primitive receiver",
-            "callee set holds",
-            "not a constant static",
-        ]
-        .iter()
-        .any(|p| lit.starts_with(p));
+        // Every literal a verdict or a lookup failure is built from.
+        let before = &s[..at];
+        let built = ["Err(", "No(", "Err(format!(", "No(format!("]
+            .iter()
+            .any(|p| before.ends_with(p));
+        let reason = built
+            || [
+                "receiver ",
+                "dead site",
+                "escape: ",
+                "hard: ",
+                "chain: ",
+                "slots ",
+                "key not",
+                "accessor key",
+                "primitive receiver",
+                "callee set holds",
+                "not a constant static",
+            ]
+            .iter()
+            .any(|p| lit.starts_with(p));
         if !reason {
             continue;
         }
