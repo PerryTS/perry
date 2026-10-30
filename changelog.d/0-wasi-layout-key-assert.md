@@ -6,3 +6,8 @@ offset and the key size are now stated per pointer width (14/16 on LP64,
 10/12 on ILP32), matching the descriptor constants beside them, and a codegen
 test checks the emitted `%PerryLayoutKey` LLVM type has the same offset and
 size under both data layouts. Native targets are unchanged.
+
+The release wasip1 step now admits `perry_host.discard_pages` in its import
+check (`--allow-perry-host`, as the test workflow already does): the one
+wasip1 archive has carried the opt-in page-discard member since it landed,
+so the check rejected the archive it was meant to ship.
