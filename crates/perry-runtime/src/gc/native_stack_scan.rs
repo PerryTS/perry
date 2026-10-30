@@ -64,10 +64,16 @@ pub(super) fn run_native_stack_scan() {
     // macOS arm; the Linux arm kept the bare name and turned `warnings`
     // (-D warnings, host-compatible scope) red on main.
     let (_stack_lo, stack_hi) = {
-        // Fallback: use a local variable address and scan 256KB upward.
-        let marker: usize = 0;
-        let sp = std::ptr::addr_of!(marker) as usize;
-        (sp, sp + 256 * 1024)
+        // The thread's real stack top. A fixed 256 KB above this frame ran
+        // off the top of a shallow main-thread stack and faulted on the first
+        // scheduled collection, so a run with the abort knob crashed before
+        // it could report anything.
+        let top = crate::native_stack::stack_top();
+        if top == 0 {
+            eprintln!("[native-stack-scan] skipped: this thread's stack bounds are unknown");
+            return;
+        }
+        (0usize, top)
     };
 
     // Get a reference point on the stack. On x86_64/aarch64 the stack grows

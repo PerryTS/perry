@@ -1482,11 +1482,11 @@ mod unwind {
     #[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
     #[cold]
     fn stopped_short(code: i32, last_ip: usize) -> ! {
-        let module = crate::eh_walker::module_name(last_ip as u64)
-            .unwrap_or_else(|| String::from("<no loaded object>"));
+        // `{module:?}`: `None` when no loaded object holds the pc.
+        let module = crate::eh_walker::module_name(last_ip as u64);
         eprintln!(
             "perry: the GC root scan cannot walk this thread's stack past the frame \
-             returning to {last_ip:#x} in {module} (_Unwind_Backtrace code {code}): that \
+             returning to {last_ip:#x} in {module:?} (_Unwind_Backtrace code {code}): that \
              object has no unwind tables the walk can follow there, so every frame \
              outward of it would go unscanned and its roots be lost."
         );
