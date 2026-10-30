@@ -93,6 +93,32 @@ pub(super) unsafe fn dispatch_string(
                         dispatch_args.len(),
                     ));
                 }
+                "export"
+                    if crate::buffer::asymmetric_key_meta(s_ptr as usize).is_some()
+                        && arg_at(0).is_some_and(|options| {
+                            super::super::buffer_dispatch::buffer_secret_export_format(options)
+                                .as_deref()
+                                == Some("jwk")
+                        }) =>
+                {
+                    // `format: "jwk"` builds a plain JWK object; the PEM-backed
+                    // surrogate cannot express it, so the stdlib encoder owns it.
+                    let ptr = crate::value::JS_NATIVE_WEBCRYPTO_DISPATCH
+                        .load(std::sync::atomic::Ordering::SeqCst);
+                    if ptr.is_null() {
+                        return Some(f64::from_bits(JSValue::undefined().bits()));
+                    }
+                    let dispatch: unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64 =
+                        std::mem::transmute(ptr);
+                    let key_value = f64::from_bits(JSValue::string_ptr(s_ptr as *mut _).bits());
+                    let dispatch_args = [key_value];
+                    return Some(dispatch(
+                        b"keyObjectExportJwk".as_ptr(),
+                        "keyObjectExportJwk".len(),
+                        dispatch_args.as_ptr(),
+                        dispatch_args.len(),
+                    ));
+                }
                 "export" if crate::buffer::asymmetric_key_meta(s_ptr as usize).is_some() => {
                     // Minimal asymmetric KeyObject-surrogate export surface.
                     // The native crypto layer stores PEM-backed RSA/EC keys

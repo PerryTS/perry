@@ -588,7 +588,7 @@ pub(super) fn nanbox_pointer(ptr: *mut ObjectHeader) -> f64 {
     f64::from_bits(JSValue::pointer(ptr as *const u8).bits())
 }
 
-pub(super) unsafe fn rsa_public_jwk_object(public_key: &RsaPublicKey) -> Option<*mut ObjectHeader> {
+pub(crate) unsafe fn rsa_public_jwk_object(public_key: &RsaPublicKey) -> Option<*mut ObjectHeader> {
     let obj = js_object_alloc(0, 3);
     if obj.is_null() {
         return None;
@@ -599,7 +599,7 @@ pub(super) unsafe fn rsa_public_jwk_object(public_key: &RsaPublicKey) -> Option<
     Some(obj)
 }
 
-pub(super) unsafe fn rsa_private_jwk_object(
+pub(crate) unsafe fn rsa_private_jwk_object(
     private_key: &RsaPrivateKey,
 ) -> Option<*mut ObjectHeader> {
     let primes = private_key.primes();
@@ -634,7 +634,7 @@ pub(super) unsafe fn rsa_private_jwk_object(
     Some(obj)
 }
 
-pub(super) unsafe fn ec_p256_public_jwk_object(
+pub(crate) unsafe fn ec_p256_public_jwk_object(
     public_key: &P256PublicKey,
 ) -> Option<*mut ObjectHeader> {
     let point = public_key.to_sec1_point(false);
@@ -647,7 +647,6 @@ pub(super) unsafe fn ec_p256_public_jwk_object(
         return None;
     }
     set_object_string_field(obj, b"kty", "EC");
-    set_object_string_field(obj, b"crv", "P-256");
     set_object_string_field(
         obj,
         b"x",
@@ -658,10 +657,11 @@ pub(super) unsafe fn ec_p256_public_jwk_object(
         b"y",
         &perry_base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&bytes[33..65]),
     );
+    set_object_string_field(obj, b"crv", "P-256");
     Some(obj)
 }
 
-pub(super) unsafe fn ec_p256_private_jwk_object(
+pub(crate) unsafe fn ec_p256_private_jwk_object(
     private_key: &P256SecretKey,
 ) -> Option<*mut ObjectHeader> {
     let public = private_key.public_key();
