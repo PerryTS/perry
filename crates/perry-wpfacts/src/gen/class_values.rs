@@ -533,46 +533,19 @@ impl<'a> Gen<'a> {
             g.m.add_top(n, |_| "field of another unit's class".into());
             g.m.add_prim(n, prim::ALL);
         };
+        // A field whose description the join changed holds what `c`
+        // describes as well (the old description is built already): the
+        // join keeps every description (`ClassContract::join`), so nothing
+        // the owner described becomes ⊤ here. Built once `c` is joined in,
+        // as a nested description may meet this layout again.
+        let mut wire: Vec<(NodeId, String)> = Vec::new();
         for fld in &joined.facts.fields {
             let a = self.m.atom(&fld.key);
             let n = self.m.field(inst, a);
-            let fns = |cc: &crate::units::ClassContract| {
-                cc.field_fns
-                    .iter()
-                    .find(|(k, _)| k == &fld.key)
-                    .map(|(_, f)| f.clone())
-            };
-            let layouts = |cc: &crate::units::ClassContract| {
-                cc.field_layouts
-                    .iter()
-                    .find(|(k, _, _)| k == &fld.key)
-                    .cloned()
-            };
-            let kind = |cc: &crate::units::ClassContract| {
-                cc.facts
-                    .fields
-                    .iter()
-                    .find(|f| f.key == fld.key)
-                    .map(|f| (f.kind.clone(), f.definite))
-            };
-            // The join keeps field functions only where every description
-            // names them: the old ones are wired, the new ones are `c`'s.
-            if fns(&joined).is_some() {
-                if let Some((_, fcs)) = c.field_fns.iter().find(|(k, _)| k == &fld.key) {
-                    for fc in fcs {
-                        let v = self.stand_in_fn_of(mi, fc, Some((tm, false)));
-                        self.m.edge(v, n);
-                    }
-                }
-                continue;
+            let view = |cc| crate::units::field_views(cc, &fld.key);
+            if view(&joined) != view(&old) {
+                wire.push((n, fld.key.clone()));
             }
-            if layouts(&joined).is_some() && layouts(&joined) == layouts(&old) {
-                continue;
-            }
-            if layouts(&joined).is_none() && fns(&old).is_none() && kind(&joined) == kind(&old) {
-                continue;
-            }
-            top(self, n);
         }
         if joined.open_keys && !old.open_keys {
             let n = self.m.field_any(inst);
@@ -614,6 +587,86 @@ impl<'a> Gen<'a> {
             self.m.foreign_ctor_returns.insert(tm);
         }
         self.stand_in_cc.insert(tm, joined);
+        for (n, k) in wire {
+            self.wire_field(mi, tm, n, c, &k);
+        }
+    }
+
+    /// What `c` describes field `k` of stand-in `tm` to hold, into its node
+    /// `n` (`units::field_views`, as `stand_in_class` builds it).
+    fn wire_field(
+        &mut self,
+        mi: u32,
+        tm: TmplId,
+        n: NodeId,
+        c: &'a crate::units::ClassContract,
+        k: &str,
+    ) {
+        use crate::units::FieldView;
+        let inst = self.m.tok(TokKind::Obj(tm, NO_CTX));
+        for v in crate::units::field_views(c, k) {
+            match v {
+                FieldView::Ta(elem, p) => {
+                    let t = self.stand_in_ta(mi, &c.display, k, elem);
+                    self.m.add_tok(n, t);
+                    self.m.add_prim(n, p);
+                }
+                FieldView::Lay(ds, p) => {
+                    for d in &ds {
+                        if *d == c.display {
+                            self.m.add_tok(n, inst);
+                            continue;
+                        }
+                        match self.other_layout(d) {
+                            Some(ic) => {
+                                self.stand_in_class(mi, ic);
+                                let itm = self.stand_ins[&ic.display].1;
+                                let it = self.m.tok(TokKind::Obj(itm, NO_CTX));
+                                self.m.add_tok(n, it);
+                            }
+                            None => self
+                                .m
+                                .add_top(n, |_| "field of another unit's class".into()),
+                        }
+                    }
+                    if p {
+                        self.m.add_prim(n, prim::ALL);
+                    }
+                }
+                FieldView::Val(vc) => {
+                    let v = self.stand_in_value(mi, k, vc);
+                    self.m.edge(v, n);
+                }
+                FieldView::Fns(fcs) => {
+                    for fc in fcs {
+                        let v = self.stand_in_fn_of(mi, fc, Some((tm, false)));
+                        self.m.edge(v, n);
+                    }
+                }
+                FieldView::Plain(f) => {
+                    let kd = &f.kind;
+                    let undef = if f.definite { 0 } else { prim::UNDEF };
+                    let own = !c.literal_shape
+                        && !kd.objs.is_empty()
+                        && kd.objs.iter().all(|d| *d == c.display);
+                    if f.data_field
+                        && !kd.top
+                        && kd.funcs == 0
+                        && kd.builtin_objs == 0
+                        && (kd.objs.is_empty() && kd.prims != 0 || own)
+                    {
+                        if own {
+                            self.m.add_tok(n, inst);
+                        }
+                        self.m.add_prim(n, kd.prims | undef);
+                    } else {
+                        self.m
+                            .add_top(n, |_| "field of another unit's class".into());
+                        self.m.add_prim(n, prim::ALL);
+                    }
+                }
+            }
+        }
     }
 
     /// Another unit's class as this unit sees it through its contract
@@ -870,22 +923,28 @@ impl<'a> Gen<'a> {
             // DECISIONS 126: a field holding only the defining unit's typed
             // arrays: one stand-in typed array per class and key, whose uses
             // here the census reports (`Gen::reports`).
+            // A field two descriptions joined (`ClassContract::join`) may
+            // carry several: it holds what each describes.
+            let mut described = false;
             if let Some((_, elem, p)) = c.field_tas.iter().find(|(k, _, _)| k == &fld.key) {
                 let t = self.stand_in_ta(mi, &c.display, &fld.key, *elem);
                 self.m.add_tok(n, t);
                 self.m.add_prim(n, *p);
-                continue;
+                described = true;
             }
             // A field holding only the defining unit's literal layouts:
             // instances of their stand-ins (§18.7), made below.
             if let Some(fl) = c.field_layouts.iter().find(|(k, _, _)| k == &fld.key) {
                 nested.push((n, fl));
-                continue;
+                described = true;
             }
             // A field forwarding other units' stand-ins: what its value
             // contract describes (DECISIONS 88), made below.
             if let Some(fv) = c.field_values.iter().find(|(k, _)| k == &fld.key) {
                 value_fields.push((n, fv));
+                described = true;
+            }
+            if described {
                 continue;
             }
             // A field holding only contract functions: their stand-ins,
@@ -962,6 +1021,12 @@ impl<'a> Gen<'a> {
         }
         for (fnode, (_, ds, prims)) in nested {
             for d in ds {
+                // This layout's own instances (a class's links, joined in
+                // as a nested layout by `ClassContract::join`).
+                if *d == c.display {
+                    self.m.add_tok(fnode, inst);
+                    continue;
+                }
                 // A broken layout is ⊤ to every reader (§11.3).
                 match self.other_layout(d) {
                     Some(ic) => {
