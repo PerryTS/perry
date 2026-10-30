@@ -241,12 +241,15 @@ pub(super) fn class_declaration_globals(
             )
         };
         // Summary flags (runtime `CLASS_DECL_HAS_ACCESSORS` = 1,
-        // `CLASS_DECL_HAS_COMPUTED` = 2).
+        // `CLASS_DECL_HAS_COMPUTED` = 2). `CLASS_DECL_NAMES_POOLED` = 32: every
+        // literal name above came from `strings`, which holds one global per
+        // distinct name, so equal names share a pointer.
         let flags = if class.name.starts_with("__AnonShape_") {
             8
         } else {
             16
-        } | if default_derived { 4 } else { 0 }
+        } | 32
+            | if default_derived { 4 } else { 0 }
             | u32::from(members.iter().any(|m| m.kind != KIND_METHOD))
             | if members
                 .iter()
