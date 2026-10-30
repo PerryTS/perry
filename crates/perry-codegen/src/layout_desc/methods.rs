@@ -288,9 +288,14 @@ mod tests {
             "i32 700, i32 {}",
             crate::layout_ordinals::static_word(100000)
         )));
+        let off = key_off(
+            "x86_64-unknown-linux-gnu",
+            crate::target_layout::HeaderForm::Meta,
+            1,
+        );
         assert!(
-            ir.contains("i32 2, i32 1"),
-            "inherited m needs both holder words"
+            ir.contains(&format!("i32 2, i32 {off}")),
+            "inherited m needs both holder words and its slot offset"
         );
         assert!(
             !ir.contains("c\"blocked"),
