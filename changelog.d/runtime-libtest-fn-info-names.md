@@ -1,0 +1,1 @@
+Fixed the `perry-runtime` unit-test build, which failed to link after named builtin imports landed: a function-info record declared through a macro from another crate got a differently spaced linker name than the one its importers used. Record names are now spelled from the body path's identifier segments, so they no longer depend on which macro carried the declaration.
