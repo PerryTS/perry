@@ -35,6 +35,8 @@ pub(crate) struct Trace {
     /// that slot: what an instance holds without a recorded predecessor it
     /// holds as its summary does.
     pub inst_orig: BTreeMap<NodeId, NodeId>,
+    /// `Model::top_predecessors`, built when a chain needs it.
+    pub top_in: std::cell::OnceCell<FxHashMap<NodeId, Vec<NodeId>>>,
 }
 
 /// The operation an event belongs to: a function body's (`Fn`), a token's
@@ -106,12 +108,35 @@ impl Model {
         format!("untraced: {what} at {label}")
     }
 
+    /// The ⊤-holding nodes with a copy edge into each node (built once per
+    /// model, only for a chain that has no recorded arrival).
+    fn top_predecessors(&self) -> &FxHashMap<NodeId, Vec<NodeId>> {
+        let d = self.diagnostic.as_ref().expect("a diagnostic model");
+        d.top_in.get_or_init(|| {
+            let mut m: FxHashMap<NodeId, Vec<NodeId>> = FxHashMap::default();
+            for (s, v) in self.nodes.iter().enumerate() {
+                if v.pts.contains_tok(TOP) {
+                    for &b in &v.succ {
+                        m.entry(b).or_default().push(s as NodeId);
+                    }
+                }
+            }
+            for v in m.values_mut() {
+                v.sort_unstable();
+                v.dedup();
+            }
+            m
+        })
+    }
+
     fn diagnostic_root(&self, start: NodeId) -> (NodeId, String) {
         let Some(d) = &self.diagnostic else {
             return (start, String::new());
         };
         let mut n = start;
         let mut seen = BTreeSet::new();
+        // The node that led the walk to `n`.
+        let mut prev: Option<NodeId> = None;
         // An instance slot with no recorded arrival holds what its
         // summary's node holds (a slot without one, `NO_NODE`, ends here).
         let summary = |n: NodeId| {
@@ -123,13 +148,40 @@ impl Model {
                         .is_some_and(|v| v.pts.contains_tok(TOP))
             })
         };
-        while seen.insert(n) {
+        // Where the first arrival is not recorded (a set adopted whole, a
+        // seed copied from a summary, an edge added before the value): the
+        // lowest ⊤-holding node with a copy edge into `at` that the walk has
+        // not been through holds it as well.
+        let other = |at: NodeId, seen: &BTreeSet<NodeId>| {
+            self.top_predecessors()
+                .get(&at)
+                .and_then(|v| v.iter().copied().find(|s| !seen.contains(s)))
+        };
+        loop {
+            if !seen.insert(n) {
+                // A chain that came back to a node: leave through another
+                // predecessor of the node that led here.
+                match prev.and_then(|p| other(p, &seen).map(|o| (p, o))) {
+                    Some((p, o)) => {
+                        n = o;
+                        prev = Some(p);
+                        continue;
+                    }
+                    None => return (n, "cycle".into()),
+                }
+            }
             if let Some(why) = d.seeds.get(&n) {
                 return (n, why.clone());
             }
             let Some((src, why)) = d.pred.get(&n) else {
-                match summary(n) {
+                if let Some(o) = summary(n) {
+                    prev = Some(n);
+                    n = o;
+                    continue;
+                }
+                match other(n, &seen) {
                     Some(o) => {
+                        prev = Some(n);
                         n = o;
                         continue;
                     }
@@ -140,8 +192,14 @@ impl Model {
                 return (n, why.clone());
             }
             if *src == NO_NODE || !self.nodes[*src as usize].pts.contains_tok(TOP) {
-                match summary(n) {
+                if let Some(o) = summary(n) {
+                    prev = Some(n);
+                    n = o;
+                    continue;
+                }
+                match other(n, &seen) {
                     Some(o) => {
+                        prev = Some(n);
                         n = o;
                         continue;
                     }
@@ -155,9 +213,9 @@ impl Model {
                     }
                 }
             }
+            prev = Some(n);
             n = *src;
         }
-        (n, "cycle".into())
     }
 
     /// A summary instance keeps its template call identity. `CallSite::site`
