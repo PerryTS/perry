@@ -330,6 +330,8 @@ struct State {
     /// never in TLS: a TLS page may be protected).
     pending: [usize; 8],
     rset_word: usize,
+    /// Handler depth: a fault inside the handler is reported, not hidden.
+    in_handler: u32,
     realm: (usize, usize),
     d_mode: bool,
     perf_fd: i32,
@@ -438,6 +440,7 @@ unsafe fn start(out: String) {
         tls: PageMap::new(tls_lo, tls_hi),
         pending: [0; 8],
         rset_word: 0,
+        in_handler: 0,
         realm,
         d_mode: false,
         perf_fd: open_instruction_counter(),
@@ -1062,7 +1065,7 @@ static mut PREV_TRAP: Prev = Prev(std::mem::MaybeUninit::uninit());
 unsafe fn install_handlers() {
     let mut a: libc::sigaction = std::mem::zeroed();
     a.sa_sigaction = on_segv as *const () as usize;
-    a.sa_flags = libc::SA_SIGINFO;
+    a.sa_flags = libc::SA_SIGINFO | libc::SA_NODEFER;
     libc::sigemptyset(&mut a.sa_mask);
     libc::sigaction(libc::SIGSEGV, &a, std::ptr::addr_of_mut!(PREV_SEGV.0).cast());
     let mut t: libc::sigaction = std::mem::zeroed();
@@ -1070,6 +1073,26 @@ unsafe fn install_handlers() {
     t.sa_flags = libc::SA_SIGINFO;
     libc::sigemptyset(&mut t.sa_mask);
     libc::sigaction(libc::SIGTRAP, &t, std::ptr::addr_of_mut!(PREV_TRAP.0).cast());
+}
+
+/// One stderr line of hex words, without allocating (signal context).
+unsafe fn diag(words: &[u64]) {
+    let mut buf = [0u8; 256];
+    let mut n = 0;
+    for s in b"snap census: foreign fault" {
+        buf[n] = *s;
+        n += 1;
+    }
+    for &w in words {
+        buf[n] = b' ';
+        n += 1;
+        for i in (0..16).rev() {
+            buf[n] = b"0123456789abcdef"[((w >> (i * 4)) & 15) as usize];
+            n += 1;
+        }
+    }
+    buf[n] = b'\n';
+    libc::write(2, buf.as_ptr().cast(), n + 1);
 }
 
 unsafe fn chain(prev: *const libc::sigaction, sig: i32) {
@@ -1088,6 +1111,27 @@ extern "C" fn on_segv(sig: libc::c_int, info: *mut libc::siginfo_t, ctx: *mut li
             return chain(std::ptr::addr_of!(PREV_SEGV.0).cast(), sig);
         }
         let st = &mut *st_ptr;
+        if st.in_handler > 0 {
+            let uc = ctx as *mut libc::ucontext_t;
+            let pc = (*uc).uc_mcontext.gregs[libc::REG_RIP as usize] as u64;
+            let top = st.frames.last().map_or(0, |f| f.init) as u64;
+            diag(&[0xdead, addr as u64, pc, top]);
+            return chain(std::ptr::addr_of!(PREV_SEGV.0).cast(), sig);
+        }
+        st.in_handler += 1;
+        on_segv_inner(st, sig, info, ctx);
+        st.in_handler -= 1;
+    }
+}
+
+unsafe fn on_segv_inner(
+    st: &mut State,
+    sig: libc::c_int,
+    info: *mut libc::siginfo_t,
+    ctx: *mut libc::c_void,
+) {
+    {
+        let addr = (*info).si_addr() as usize;
         let page = addr & !(PAGE - 1);
         if st.rset_active {
             let uc = ctx as *mut libc::ucontext_t;
@@ -1110,6 +1154,11 @@ extern "C" fn on_segv(sig: libc::c_int, info: *mut libc::siginfo_t, ctx: *mut li
         }
         let tracked = page_flags(st, page).is_some_and(|f| *f & PF_TRACKED != 0);
         if !tracked || policy(st, page) == libc::PROT_READ | libc::PROT_WRITE {
+            let uc = ctx as *mut libc::ucontext_t;
+            let pc = (*uc).uc_mcontext.gregs[libc::REG_RIP as usize] as u64;
+            let flags = page_flags(st, page).map_or(0xff, |f| *f as u64);
+            let range = if st.heap.slot(addr).is_some() { 1 } else if st.bin.slot(addr).is_some() { 2 } else if st.tls.slot(addr).is_some() { 3 } else { 0 };
+            diag(&[addr as u64, pc, flags, range, st.d_mode as u64, st.top_mode as u64]);
             return chain(std::ptr::addr_of!(PREV_SEGV.0).cast(), sig);
         }
         let uc = ctx as *mut libc::ucontext_t;
