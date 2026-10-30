@@ -270,10 +270,39 @@ mod walk {
     #[inline(always)]
     pub(crate) fn origin() -> Origin {}
 
+    /// The JS text section's bounds (x86_64 Linux). Codegen places every
+    /// body it publishes a named `JsFunctionInfo` for in `perry_js_text`
+    /// (`perry_codegen::codegen::helpers::js_text_section`), and the linker
+    /// defines these symbols around that output section. The anchor keeps the
+    /// section, and so the symbols, in every image that links the runtime,
+    /// one without compiled JS included; its own frame never appears (it is
+    /// never called).
+    #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+    #[link_section = "perry_js_text"]
+    #[inline(never)]
+    extern "C" fn js_text_anchor() {}
+
+    #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+    fn js_text_bounds() -> (usize, usize) {
+        unsafe extern "C" {
+            static __start_perry_js_text: u8;
+            static __stop_perry_js_text: u8;
+        }
+        // Referencing the anchor keeps its section live under
+        // `--gc-sections` (the link passes `-z start-stop-gc`, so the bounds
+        // themselves retain nothing).
+        std::hint::black_box(js_text_anchor as extern "C" fn());
+        (
+            std::ptr::addr_of!(__start_perry_js_text) as usize,
+            std::ptr::addr_of!(__stop_perry_js_text) as usize,
+        )
+    }
+
     /// x86_64 Linux: the JS frames above `origin`, innermost first, at most
     /// `out.len()` of them. A frame is JS when its function (the covering
-    /// FDE's start) is one codegen registered a display name for: exactly
-    /// the frames `render_frames` can name, so the walk stops once it holds
+    /// FDE's start) lies in the JS text section: exactly the bodies
+    /// `render_frames` can name, decided by where the code lives (two
+    /// compares, no lookup), so the walk stops once it holds
     /// `Error.stackTraceLimit` of them and stores no runtime frame. A frame
     /// no table covers is kept for the resolver to judge.
     #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
@@ -287,17 +316,10 @@ mod walk {
         if top == 0 || out.is_empty() {
             return 0;
         }
-        crate::builtins::with_bundle_function_names(|names| {
-            crate::eh_walker::capture_js_return_addresses(origin, out, top, |pc, start| {
-                start == 0
-                    || (names.contains_key(&(start as usize))
-                        && (pc as usize)
-                            .saturating_sub(1)
-                            .saturating_sub(start as usize)
-                            <= super::MAX_FUNCTION_SPAN)
-            })
+        let (lo, hi) = js_text_bounds();
+        crate::eh_walker::capture_js_return_addresses(origin, out, top, |_pc, start| {
+            start == 0 || (lo..hi).contains(&(start as usize))
         })
-        .unwrap_or(0)
     }
 
     /// Elsewhere the chain walk is two loads per frame, so it keeps every
