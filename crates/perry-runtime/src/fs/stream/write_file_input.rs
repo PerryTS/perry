@@ -227,7 +227,11 @@ fn settle_write_file_value(value: f64) -> Result<f64, f64> {
         unsafe {
             match (*promise).state {
                 crate::promise::PromiseState::Fulfilled => return Ok((*promise).value),
-                crate::promise::PromiseState::Rejected => return Err((*promise).reason),
+                crate::promise::PromiseState::Rejected => {
+                    // The write consumes this rejection as its own failure.
+                    crate::promise::mark_rejection_handled(promise);
+                    return Err((*promise).reason);
+                }
                 crate::promise::PromiseState::Pending => {}
             }
         }
@@ -328,7 +332,7 @@ where
     loop {
         check_write_file_aborted(signal)?;
         match read_next_chunk(id) {
-            Ok(Some((bytes, _encoding))) => {
+            Ok(Some(bytes)) => {
                 check_write_file_aborted(signal)?;
                 write_chunk(&bytes)?;
             }
