@@ -503,6 +503,18 @@ fn resolve_optional_framework_dir(env_name: &str, args_input: &Path) -> Option<P
     Some(project_root.join(rel))
 }
 
+/// `PERRY_EXTRA_LINK_ARGS`: whitespace-separated arguments appended verbatim,
+/// last, to every final link perry runs: the executable, the dylib, the proven
+/// tiny program and the WASI component. A diagnostic input (e.g.
+/// `-Wl,-why_live,_js_fs_open` to ask ld64 why a symbol survived dead-strip,
+/// or a layout-pad object for startup A/Bs); not part of any documented
+/// stable surface. One reader, so no link path silently drops it.
+pub(super) fn extra_link_args() -> Vec<String> {
+    std::env::var("PERRY_EXTRA_LINK_ARGS")
+        .map(|extra| extra.split_whitespace().map(str::to_string).collect())
+        .unwrap_or_default()
+}
+
 /// Quote one linker argument for a response file. `msvc` selects `link.exe` /
 /// `lld-link` rules (a `"` toggles a quoted run; backslashes are literal Windows
 /// path separators, so they are NOT escaped — only an embedded `"` is escaped as
