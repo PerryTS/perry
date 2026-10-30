@@ -61,11 +61,13 @@ class FullCorpusTests(unittest.TestCase):
         self.assertIn("globalThis.$DONE = $DONE;", program)
         self.assertIn("globalThis.assert = assert;", program)
         self.assertLess(program.index("globalThis.$DONE"), program.index("test();"))
+        self.assertIn("export {};", program)  # parsed as a module under a .js name
 
     def test_script_case_gets_no_global_publication_or_shim(self):
         program = SUBSET.assemble("test();", SUBSET.Meta(), self.harness, "")
         self.assertNotIn("globalThis.", program)
         self.assertNotIn("var $262", program)
+        self.assertNotIn("export {};", program)
 
     def test_host_shim_precedes_includes(self):
         meta = SUBSET.Meta(includes=["detachArrayBuffer.js"], host_shim=True)

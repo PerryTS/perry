@@ -292,6 +292,8 @@ def assemble(src: str, meta: Meta, harness: Path, preamble_text: str) -> str:
         # top-level bindings (`asyncTest` checks `globalThis.$DONE`).
         names = sorted(set(_HARNESS_BINDING.findall("\n".join(parts))))
         parts.append("".join(f"globalThis.{n} = {n};" for n in names))
+        # Staged under its own `.js` name, so mark it a module explicitly.
+        parts.append("export {};")
     parts.append(src)
     return "\n".join(parts)
 
@@ -513,7 +515,8 @@ def main() -> int:
             return (rel, cat, "skip", f"assemble: {e}", False, meta.self_validate)
         workdir = Path(tempfile.mkdtemp(dir=stage))
         is_module = "module" in meta.flags
-        staged = workdir / ("case.mjs" if is_module else "case.js")
+        # A module may import itself by its own file name.
+        staged = workdir / (Path(rel).name if is_module else "case.js")
         try:
             staged.write_text(program)
             # `import('./x_FIXTURE.js')` resolves next to the case.
