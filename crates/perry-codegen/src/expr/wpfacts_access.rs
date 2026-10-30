@@ -150,10 +150,10 @@ fn receiver(ctx: &FnCtx<'_>, object: &Expr) -> Option<(crate::codegen::FactsRecv
             if ctx.scalar_replaced.contains_key(id) || ctx.pod_records.contains_key(id) {
                 return None;
             }
-            ctx.wpfacts
-                .locals
-                .get(id)
-                .map(|r| (r.clone(), format!("local {id}")))
+            ctx.wpfacts.locals.get(id).map(|r| {
+                crate::facts_consumed::used();
+                (r.clone(), format!("local {id}"))
+            })
         }
         Expr::This => {
             if ctx.is_static_class_this(object) {
@@ -161,10 +161,10 @@ fn receiver(ctx: &FnCtx<'_>, object: &Expr) -> Option<(crate::codegen::FactsRecv
             }
             let top = ctx.this_stack.last()?;
             let (_, fid) = ctx.wpfacts_this.iter().rev().find(|(s, _)| s == top)?;
-            ctx.wpfacts
-                .this_of
-                .get(fid)
-                .map(|r| (r.clone(), format!("this of fn {fid}")))
+            ctx.wpfacts.this_of.get(fid).map(|r| {
+                crate::facts_consumed::used();
+                (r.clone(), format!("this of fn {fid}"))
+            })
         }
         _ => None,
     }
