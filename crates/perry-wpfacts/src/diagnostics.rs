@@ -98,6 +98,14 @@ impl Model {
             });
         }
     }
+    /// The origin text of a ⊤ whose chain has no recorded seed: the node it
+    /// ended at (its label) and how the chain broke. `ledger::classify`
+    /// reads it as `untraced-top`; the ledger reports the labels.
+    fn untraced(&self, n: NodeId, what: &str) -> String {
+        let label = self.labels.get(n as usize).copied().unwrap_or("");
+        format!("untraced: {what} at {label}")
+    }
+
     fn diagnostic_root(&self, start: NodeId) -> (NodeId, String) {
         let Some(d) = &self.diagnostic else {
             return (start, String::new());
@@ -125,7 +133,7 @@ impl Model {
                         n = o;
                         continue;
                     }
-                    None => return (n, String::new()),
+                    None => return (n, self.untraced(n, "no arrival recorded")),
                 }
             };
             if !why.is_empty() {
@@ -137,7 +145,14 @@ impl Model {
                         n = o;
                         continue;
                     }
-                    None => return (n, String::new()),
+                    None => {
+                        let what = if *src == NO_NODE {
+                            "arrival outside a rule"
+                        } else {
+                            "source no longer holds it"
+                        };
+                        return (n, self.untraced(n, what));
+                    }
                 }
             }
             n = *src;

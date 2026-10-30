@@ -1371,7 +1371,13 @@ impl Model {
             self.activate(g, "composed");
         }
         for &(slot, ref toks, prim) in &s.seeds {
+            // The summary's own slot is where the instance's seed came from
+            // (the dump follows it to the ⊤'s origin).
+            let saved = (self.cur_src, self.cur_why);
+            self.cur_src = s.orig.get(slot as usize).copied().unwrap_or(NO_NODE);
+            self.cur_why = u32::MAX;
             self.add(base[slot as usize], toks, prim);
+            (self.cur_src, self.cur_why) = saved;
         }
         // Closures born here carry this instance's nodes for their outer
         // terms, in the context those cells differ by (design §14.2): its
