@@ -513,10 +513,16 @@ extern "C" fn stdin_on_op(name_ptr: *const u8, name_len: usize, cb: i64, _once: 
         // without this arm perry fires only the direct one, so the `end` half
         // of the reader's `race(once("end"), timeout(3000))` can never win and
         // `echo hi | claude -p …` never completes.
+        // An `end`/`close` listener does not start reading fd 0 (Node's stdin
+        // stays paused until a `data`/`readable` listener, `resume()`, `pipe()`
+        // or `read()`), so it only arms the pump for when something else does.
         "end" | "close" => {
             if let Ok(mut v) = STDIN_END_CALLBACKS.lock() {
                 v.push(cb);
             }
+            #[cfg(all(feature = "async-bridge", not(test)))]
+            crate::common::async_bridge::ensure_pump_registered();
+            return;
         }
         _ => return,
     }
@@ -1689,6 +1695,7 @@ pub extern "C" fn js_readline_stdin_on(event_ptr: *const StringHeader, callback:
         throw_type_error("process.stdin.on cannot be used after process.stdin.destroy()");
     }
     let event = string_header_to_string(event_ptr);
+    perry_runtime::os::note_process_stdin_listener(&event);
     match event.as_str() {
         "data" => {
             if let Ok(mut v) = DATA_CALLBACKS.lock() {
@@ -1724,13 +1731,12 @@ pub extern "C" fn js_readline_stdin_on(event_ptr: *const StringHeader, callback:
         }
         "end" | "close" => {
             // Node supports many `end` listeners; keep them all (see
-            // STDIN_END_CALLBACKS). The reader must also be running or EOF is
-            // never observed for a consumer that only listens for `end`.
+            // STDIN_END_CALLBACKS). Registering one does not start reading:
+            // `end` fires once another consumer drives stdin to EOF.
             if let Ok(mut v) = STDIN_END_CALLBACKS.lock() {
                 v.push(callback);
             }
             try_register_pump();
-            ensure_reader_started();
         }
         _ => {}
     }
@@ -1781,6 +1787,7 @@ pub extern "C" fn js_readline_stdin_remove_listener(
 #[no_mangle]
 pub extern "C" fn js_readline_stdin_pause() -> f64 {
     STDIN_PAUSED.store(true, Ordering::Release);
+    perry_runtime::os::note_process_stdin_paused();
     perry_runtime::value::js_nanbox_handle(STDIN_READLINE_HANDLE)
 }
 
@@ -1788,6 +1795,7 @@ pub extern "C" fn js_readline_stdin_pause() -> f64 {
 pub extern "C" fn js_readline_stdin_resume() -> f64 {
     if !STDIN_DESTROYED.load(Ordering::Acquire) {
         STDIN_PAUSED.store(false, Ordering::Release);
+        perry_runtime::os::note_process_stdin_resumed();
         try_register_pump();
         ensure_reader_started();
     }
