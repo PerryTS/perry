@@ -247,6 +247,33 @@ pub fn transform_generators(module: &mut Module) {
             transform_generator_closures_in_stmts(&mut b, &mut next_local_id, &mut next_func_id);
             m.body = b;
         }
+        // Field initializers and computed keys are evaluated outside any method
+        // body, so `static f = function* () {}` is only reachable from here.
+        for field in class
+            .fields
+            .iter_mut()
+            .chain(class.static_fields.iter_mut())
+        {
+            transform_generator_closures_in_opt_expr(
+                &mut field.init,
+                &mut next_local_id,
+                &mut next_func_id,
+            );
+            transform_generator_closures_in_opt_expr(
+                &mut field.key_expr,
+                &mut next_local_id,
+                &mut next_func_id,
+            );
+        }
+        for member in &mut class.computed_members {
+            let mut key = Some(std::mem::replace(&mut member.key_expr, Expr::Undefined));
+            transform_generator_closures_in_opt_expr(
+                &mut key,
+                &mut next_local_id,
+                &mut next_func_id,
+            );
+            member.key_expr = key.unwrap_or(Expr::Undefined);
+        }
     }
 
     // #3664: drain the async-generator func_ids collected above (named + closure
@@ -256,6 +283,20 @@ pub fn transform_generators(module: &mut Module) {
         module.async_generator_funcs.extend(collected);
     });
     private_frame::run(module);
+}
+
+fn transform_generator_closures_in_opt_expr(
+    expr: &mut Option<Expr>,
+    next_local_id: &mut LocalId,
+    next_func_id: &mut FuncId,
+) {
+    if let Some(e) = expr.take() {
+        let mut stmts = [Stmt::Expr(e)];
+        transform_generator_closures_in_stmts(&mut stmts, next_local_id, next_func_id);
+        if let [Stmt::Expr(e)] = &mut stmts {
+            *expr = Some(std::mem::replace(e, Expr::Undefined));
+        }
+    }
 }
 
 fn transform_generator_closures_in_stmts(
