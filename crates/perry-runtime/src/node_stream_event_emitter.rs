@@ -599,9 +599,11 @@ fn own_data_slot(
         if keys.is_null() {
             return (shape.logical_key_count == 0).then_some(None);
         }
-        let Some(slot) =
-            crate::object::keys_find_slot_by_bytes_resolved(shape.keys_view(), shape.logical_key_count, name)
-        else {
+        let Some(slot) = crate::object::keys_find_slot_by_bytes_resolved(
+            shape.keys_view(),
+            shape.logical_key_count,
+            name,
+        ) else {
             return Some(None);
         };
         let slot = crate::object::key_attrs::key_storage_slot(keys, slot);
@@ -616,7 +618,10 @@ fn is_object_value(value: f64) -> bool {
     }
     let addr = jsval.as_pointer::<u8>() as usize;
     unsafe {
-        crate::value::addr_class::try_read_tracked_gc_header_of_object(addr)
+        crate::value::addr_class::try_read_tracked_gc_header_of_type(
+            addr,
+            crate::gc::GC_TYPE_OBJECT,
+        )
     }
     .is_some()
         || super::object_ptr_from_value(value).is_some()

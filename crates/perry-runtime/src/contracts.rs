@@ -376,7 +376,10 @@ fn class_id_at(addr: usize) -> Option<u32> {
         return None;
     }
     unsafe {
-        crate::value::addr_class::try_read_tracked_gc_header_of_object(addr)?;
+        crate::value::addr_class::try_read_tracked_gc_header_of_type(
+            addr,
+            crate::gc::GC_TYPE_OBJECT,
+        )?;
         Some((*(addr as *const crate::object::ObjectHeader)).class_id)
     }
 }
@@ -592,7 +595,10 @@ fn set_is_intercepted(target: f64, key: f64, name: &[u8]) -> bool {
         return true;
     };
     unsafe {
-        if crate::value::addr_class::try_read_tracked_gc_header_of_object(addr)
+        if crate::value::addr_class::try_read_tracked_gc_header_of_type(
+            addr,
+            crate::gc::GC_TYPE_OBJECT,
+        )
         .is_none()
         {
             return true;
