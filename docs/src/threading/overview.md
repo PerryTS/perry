@@ -226,6 +226,8 @@ registered entry table as dynamically selected files. Literal string eval remain
 compiled ahead of time; dynamically generated source is still unsupported.
 Worker `argv` values are converted in constructor order and installed in the
 child's existing process-argv authority, after execPath and the Worker entry name.
+MessagePort and BroadcastChannel property reads return stored values without
+invoking handlers; method calls retain their receiver through ordinary property lookup.
 Other worker API parity gaps remain.
 
 ## Next Steps
