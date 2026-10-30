@@ -226,6 +226,18 @@ registered entry table as dynamically selected files. Literal string eval remain
 compiled ahead of time; dynamically generated source is still unsupported.
 Worker `argv` values are converted in constructor order and installed in the
 child's existing process-argv authority, after execPath and the Worker entry name.
+MessagePort and BroadcastChannel property reads return stored values without
+invoking handlers; method calls retain their receiver through ordinary property lookup.
+Message methods accept transfer iterables directly or through `options.transfer`.
+The complete sequence is consumed before transfer entries are validated; iterator
+errors retain their identity, and rejection leaves ArrayBuffers attached.
+BroadcastChannel ignores its extra argument. Worker constructor transfer admission
+remains separate; MessagePort endpoint movement and direct-message routing/timeout
+parity are not provided by this normalization.
+Main-thread `postMessageToThread` rejects missing or stopped destinations before
+cloning the payload or detaching transfer buffers. Worker-origin messages retain
+Node's forwarding order: cloning precedes destination rejection. Admission does
+not guarantee rollback if a destination exits concurrently after it was admitted.
 Other worker API parity gaps remain.
 
 ## Next Steps

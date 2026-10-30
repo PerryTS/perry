@@ -47,8 +47,8 @@ unsafe fn init_iter_result(
     // with default attributes and no overflow, so both slots take the plain
     // fresh-object store (string alias demotion + barrier) without the
     // general Set's overflow, representation and attribute re-derivation.
-    let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(object as *mut _))
-        .cast::<u64>();
+    let fields =
+        crate::meta_slots_of!(crate::meta_obj_runtime_born!(object as *mut _)).cast::<u64>();
     for (index, bits) in [first, second].into_iter().enumerate() {
         crate::gc::runtime_store_object_jsvalue_slot(
             object as usize,

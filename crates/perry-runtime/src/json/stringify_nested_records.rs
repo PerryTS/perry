@@ -55,8 +55,7 @@ unsafe fn record(bits: u64) -> Option<Record> {
     }
     Some(Record {
         // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
-        values: crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _))
-            .cast(),
+        values: crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)).cast(),
         len,
     })
 }
@@ -202,8 +201,8 @@ impl Emitter {
             return Some(());
         }
         // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
-        let values = crate::meta_slots_of!(crate::meta_obj_runtime_born!(object as *mut _))
-            .cast::<u64>();
+        let values =
+            crate::meta_slots_of!(crate::meta_obj_runtime_born!(object as *mut _)).cast::<u64>();
         for i in 0..len {
             let value = *values.add(i);
             // Omitted fields require different comma placement; decline before

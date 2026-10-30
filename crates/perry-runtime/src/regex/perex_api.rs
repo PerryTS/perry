@@ -652,7 +652,11 @@ fn execute_rooted_output<P: OutputProjection>(
         None => unsafe {
             let data = &*super::regexp_data_ptr(regexp(receiver));
             let (has_indices, stateful) = (data.has_indices, data.global || data.sticky);
-            (has_indices, stateful, super::get_last_index(regexp(receiver)))
+            (
+                has_indices,
+                stateful,
+                super::get_last_index(regexp(receiver)),
+            )
         },
     };
     let mode = if matches!(output, ExecOutput::Test) {

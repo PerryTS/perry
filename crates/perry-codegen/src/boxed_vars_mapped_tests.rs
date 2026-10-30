@@ -45,6 +45,8 @@ fn write() -> Stmt {
         object: Box::new(Expr::LocalGet(3)),
         index: Box::new(Expr::Integer(0)),
         value: Box::new(Expr::LocalGet(2)),
+        byte_offset: 0,
+        byte_end: 0,
     })
 }
 

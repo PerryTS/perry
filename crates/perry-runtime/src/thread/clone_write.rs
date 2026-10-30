@@ -1155,8 +1155,8 @@ impl Writer<'_> {
         // #9029: a deleted key leaves a hole; skip the key and its slot
         // together so the reader's positional pairs stay aligned.
         // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
-        let fields_ptr = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _))
-            as *const u64;
+        let fields_ptr =
+            crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)) as *const u64;
         // An optional key whose slot holds the hole is absent: skip it the
         // same way, key and slot together.
         let absent = |i: usize| -> bool {

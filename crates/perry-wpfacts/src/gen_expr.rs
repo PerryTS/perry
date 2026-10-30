@@ -728,6 +728,7 @@ impl<'a> Gen<'a> {
                 object,
                 property,
                 value,
+                ..
             } => {
                 let o = self.expr(fx, object);
                 let v = self.expr(fx, value);
@@ -866,6 +867,7 @@ impl<'a> Gen<'a> {
                 object,
                 index,
                 value,
+                ..
             }
             | Expr::Uint8ArraySet {
                 array: object,

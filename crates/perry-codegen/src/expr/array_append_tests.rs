@@ -27,6 +27,8 @@ fn append_ir(ty: Type, value: Expr) -> String {
                     byte_offset: 0,
                 }),
                 value: Box::new(value),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(Expr::LocalGet(0))),
         ],

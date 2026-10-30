@@ -510,8 +510,24 @@ fn resolve_optional_framework_dir(env_name: &str, args_input: &Path) -> Option<P
 /// or a layout-pad object for startup A/Bs); not part of any documented
 /// stable surface. One reader, so no link path silently drops it.
 pub(super) fn extra_link_args() -> Vec<String> {
-    std::env::var("PERRY_EXTRA_LINK_ARGS")
-        .map(|extra| extra.split_whitespace().map(str::to_string).collect())
+    split_link_env("PERRY_EXTRA_LINK_ARGS")
+}
+
+/// `PERRY_LINK_PAD`: whitespace-separated pad objects placed on the link line
+/// right after the compiled objects and before the runtime archive (and any
+/// other library), on every final link perry runs. A measurement input for
+/// startup A/Bs: the linker lays input sections out in command-line order, so
+/// a pad here moves every runtime byte of the section it pads, which an
+/// input appended last (`PERRY_EXTRA_LINK_ARGS`) cannot do. Not part of any
+/// documented stable surface; unset, the link line is unchanged. One reader,
+/// so no link path silently drops it.
+pub(super) fn link_pad_args() -> Vec<String> {
+    split_link_env("PERRY_LINK_PAD")
+}
+
+fn split_link_env(name: &str) -> Vec<String> {
+    std::env::var(name)
+        .map(|value| value.split_whitespace().map(str::to_string).collect())
         .unwrap_or_default()
 }
 
@@ -794,6 +810,23 @@ mod elf_archive_group_tests {
     #[test]
     fn empty_archive_block_emits_no_group() {
         assert!(args(true, &[]).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod link_input_env_tests {
+    use super::split_link_env;
+
+    /// The pad and extra-argument inputs share one reader: whitespace-separated, empty when unset.
+    /// (A name no perry code reads, so parallel tests cannot see it.)
+    #[test]
+    fn link_inputs_split_on_whitespace_and_default_to_empty() {
+        const NAME: &str = "PERRY_TEST_LINK_INPUT_SPLIT_ONLY";
+        std::env::remove_var(NAME);
+        assert!(split_link_env(NAME).is_empty());
+        std::env::set_var(NAME, "  a.o\t-Wl,-x  b.o\n");
+        assert_eq!(split_link_env(NAME), ["a.o", "-Wl,-x", "b.o"]);
+        std::env::remove_var(NAME);
     }
 }
 

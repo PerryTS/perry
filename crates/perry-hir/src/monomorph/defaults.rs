@@ -316,6 +316,7 @@ fn fill_defaults_in_expr(expr: &mut Expr, cx: &DefaultFill) {
             object,
             index,
             value,
+            ..
         } => {
             fill_defaults_in_expr(object, cx);
             fill_defaults_in_expr(index, cx);

@@ -125,8 +125,7 @@ pub(crate) fn enter(
     params: &[perry_hir::Param],
     body: &[perry_hir::Stmt],
 ) -> Result<()> {
-    if !(ctx.private_resume_frame && !ctx.private_async_resume_frame && ctx.fixed_generator_state)
-    {
+    if !(ctx.private_resume_frame && !ctx.private_async_resume_frame && ctx.fixed_generator_state) {
         return Ok(());
     }
     let mut writes = BTreeMap::new();
@@ -150,9 +149,7 @@ pub(crate) fn enter(
         let frame = frame_ptr(ctx, &owner, index);
         let value = if boolean {
             let bits = ctx.block().load(I64, &frame);
-            let bit = ctx
-                .block()
-                .icmp_eq(I64, &bits, crate::nanbox::TAG_TRUE_I64);
+            let bit = ctx.block().icmp_eq(I64, &bits, crate::nanbox::TAG_TRUE_I64);
             ctx.block().zext(I1, &bit, I32)
         } else {
             let raw = ctx.block().load(DOUBLE, &frame);
@@ -276,9 +273,7 @@ pub(crate) fn write_value(ctx: &mut FnCtx<'_>, id: u32, value: &str) -> bool {
     };
     let narrowed = if boolean {
         let bits = ctx.block().bitcast_double_to_i64(value);
-        let bit = ctx
-            .block()
-            .icmp_eq(I64, &bits, crate::nanbox::TAG_TRUE_I64);
+        let bit = ctx.block().icmp_eq(I64, &bits, crate::nanbox::TAG_TRUE_I64);
         ctx.block().zext(I1, &bit, I32)
     } else {
         ctx.block().fptosi(DOUBLE, value, I32)

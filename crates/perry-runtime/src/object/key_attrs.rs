@@ -1508,7 +1508,9 @@ unsafe fn fold_edits(
     }
     let mut entry = old;
     for (edit, &key_at) in edits.iter().zip(at) {
-        if edit.key().is_some() && (key_at != pos || matches!(edit, AttrsEdit::Private(_)) != entry_is_private(old)) {
+        if edit.key().is_some()
+            && (key_at != pos || matches!(edit, AttrsEdit::Private(_)) != entry_is_private(old))
+        {
             continue;
         }
         entry = edit.apply(entry);
@@ -1629,10 +1631,12 @@ pub(crate) unsafe fn apply_edits(obj: *mut crate::object::ObjectHeader, edits: &
     let Some(proof) = crate::object::canonical_keys::SharedLayout::of_receiver(obj) else {
         return;
     };
-    let rebuilt =
-        crate::object::canonical_keys::rebuild_with_entries(&proof, keys, from, |pos, slot, old| {
-            fold_edits(edits, at, pos, slot, old)
-        });
+    let rebuilt = crate::object::canonical_keys::rebuild_with_entries(
+        &proof,
+        keys,
+        from,
+        |pos, slot, old| fold_edits(edits, at, pos, slot, old),
+    );
     crate::object::set_object_keys(obj, rebuilt.view());
 }
 

@@ -40,7 +40,9 @@ pub(super) fn try_enqueue(value: f64, step: ClosurePtr) -> Option<*mut Promise> 
         unsafe {
             // A null metadata owner proves the existing recorded-prototype
             // probe returns None. No property lookup or getter is skipped.
-            if (*inner).state != PromiseState::Fulfilled || !crate::object::cell_meta::promise_cell_meta(inner).is_null() {
+            if (*inner).state != PromiseState::Fulfilled
+                || !crate::object::cell_meta::promise_cell_meta(inner).is_null()
+            {
                 return None;
             }
             (*inner).value
@@ -105,7 +107,9 @@ fn resume_now(value: f64, step: ClosurePtr) -> Option<f64> {
         }
         let inner = crate::value::js_nanbox_get_pointer(value) as *const Promise;
         unsafe {
-            if (*inner).state != PromiseState::Fulfilled || !crate::object::cell_meta::promise_cell_meta(inner).is_null() {
+            if (*inner).state != PromiseState::Fulfilled
+                || !crate::object::cell_meta::promise_cell_meta(inner).is_null()
+            {
                 return None;
             }
             (*inner).value

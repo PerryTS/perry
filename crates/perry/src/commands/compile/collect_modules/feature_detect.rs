@@ -321,15 +321,17 @@ fn module_uses_process_object(module: &perry_hir::Module) -> bool {
     fn uses(expr: &Expr) -> bool {
         match expr {
             Expr::NativeModuleRef(module) | Expr::NativeMethodCall { module, .. }
-                if matches!(module.as_str(), "process" | "process.default" | "process.namespace") =>
+                if matches!(
+                    module.as_str(),
+                    "process" | "process.default" | "process.namespace"
+                ) =>
             {
                 return true;
             }
             // This also covers globalThis.process and a computed literal key.
             // Unknown global keys are covered by global_object::may_escape.
             Expr::PropertyGet { property, .. } if property == "process" => return true,
-            Expr::IndexGet { index, .. }
-                if matches!(index.as_ref(), Expr::String(key) if key == "process") =>
+            Expr::IndexGet { index, .. } if matches!(index.as_ref(), Expr::String(key) if key == "process") =>
             {
                 return true;
             }

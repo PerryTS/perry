@@ -6,7 +6,7 @@
 use super::*;
 
 /// Clone `value` as Node's `postMessage(value, transfer)` does. `transfer` is
-/// an array, `{ transfer: [...] }`, or undefined. ArrayBuffers in it are
+/// an iterable, options containing one, or undefined. ArrayBuffers in it are
 /// detached once the clone succeeded; their native backing ownership moves
 /// through the queued SerializedValue to the receiving heap. Throws `DataCloneError` on failure.
 pub(super) fn clone_message(value: f64, transfer: f64) -> SerializedValue {
@@ -18,12 +18,48 @@ pub(super) fn clone_message(value: f64, transfer: f64) -> SerializedValue {
 }
 
 pub(super) fn try_clone_message(value: f64, transfer: f64) -> Result<SerializedValue, String> {
+    clone_with_admission(value, transfer, |transfer| {
+        perry_runtime::thread::js_worker_transfer_sequence(transfer)
+    })
+}
+
+pub(super) fn clone_worker_data(value: f64, transfer: f64) -> SerializedValue {
+    match clone_with_admission(value, transfer, legacy_constructor_transfer) {
+        Ok(message) => message,
+        Err(detail) => throw_data_clone_error(&detail),
+    }
+}
+
+fn legacy_constructor_transfer(transfer: f64) -> f64 {
+    if array_ptr_from_value(transfer).is_some() {
+        transfer
+    } else if object_ptr_from_value(transfer).is_some() {
+        get_object_field_from_value(transfer, "transfer")
+    } else {
+        js_undefined()
+    }
+}
+
+fn clone_with_admission(
+    value: f64,
+    transfer: f64,
+    admit: impl FnOnce(f64) -> f64,
+) -> Result<SerializedValue, String> {
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
-    // Reading the transfer list can allocate.
     let value = scope.root_nanbox_f64(value);
-    let buffers = transfer_buffers(transfer)?;
-    let outcome = perry_runtime::exception::catch_js_throw(|| unsafe {
-        perry_runtime::thread::serialize_message(value.get_nanbox_f64().to_bits(), &buffers, None)
+    let transfer = scope.root_nanbox_f64(transfer);
+    // JS throws abandon native frames; ownership stays outside the trap.
+    let mut buffers = Vec::new();
+    let outcome = perry_runtime::exception::catch_js_throw(|| {
+        let list = admit(transfer.get_nanbox_f64());
+        transfer_buffers(list, &mut buffers)?;
+        unsafe {
+            perry_runtime::thread::serialize_message(
+                value.get_nanbox_f64().to_bits(),
+                &buffers,
+                None,
+            )
+        }
     });
     drop(buffers);
     drop(scope);
@@ -37,18 +73,11 @@ pub(super) fn try_clone_message(value: f64, transfer: f64) -> Result<SerializedV
 /// skipped: moving a port to another thread is not supported, and a port in
 /// the list was always ignored. Other entries go through, and the runtime
 /// rejects what is not an ArrayBuffer.
-fn transfer_buffers(transfer: f64) -> Result<Vec<usize>, String> {
+fn transfer_buffers(list: f64, buffers: &mut Vec<usize>) -> Result<(), String> {
     const INVALID: &str = "Found invalid value in transferList.";
-    let list = if array_ptr_from_value(transfer).is_some() {
-        transfer
-    } else if object_ptr_from_value(transfer).is_some() {
-        get_object_field_from_value(transfer, "transfer")
-    } else {
-        return Ok(Vec::new());
-    };
     if array_ptr_from_value(list).is_none() {
         return if is_undefined(list) {
-            Ok(Vec::new())
+            Ok(())
         } else {
             Err(INVALID.to_string())
         };
@@ -58,24 +87,29 @@ fn transfer_buffers(transfer: f64) -> Result<Vec<usize>, String> {
     let list = scope.root_nanbox_f64(list);
     let array = || array_ptr_from_value(list.get_nanbox_f64()).unwrap();
     let len = perry_runtime::array::js_array_length(array());
-    let mut buffers = Vec::with_capacity(len as usize);
+    buffers.reserve(len as usize);
     for index in 0..len {
-        let item = perry_runtime::array::js_array_get_f64(array(), index);
-        if !JSValue::from_bits(item.to_bits()).is_pointer() {
+        let item_scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let item =
+            item_scope.root_nanbox_f64(perry_runtime::array::js_array_get_f64(array(), index));
+        let item_value = || item.get_nanbox_f64();
+        if !JSValue::from_bits(item_value().to_bits()).is_pointer() {
             return Err(INVALID.to_string());
         }
         // Buffers do not move, so their addresses stay valid.
-        let addr = perry_runtime::value::js_nanbox_get_pointer(item) as usize;
-        if perry_runtime::clone_markers::is_untransferable(item) {
+        let addr = perry_runtime::value::js_nanbox_get_pointer(item_value()) as usize;
+        if perry_runtime::clone_markers::is_untransferable(item_value()) {
             return Err("An object is marked as untransferable.".to_string());
         }
         if perry_runtime::buffer::is_array_buffer(addr) {
             buffers.push(addr);
-        } else if object_ptr_from_value(item).is_none() || port_id_from_object(item).is_none() {
-            buffers.push(addr);
+        } else if object_ptr_from_value(item_value()).is_none()
+            || port_id_from_object(item_value()).is_none()
+        {
+            buffers.push(perry_runtime::value::js_nanbox_get_pointer(item_value()) as usize);
         }
     }
-    Ok(buffers)
+    Ok(())
 }
 
 #[cfg(test)]

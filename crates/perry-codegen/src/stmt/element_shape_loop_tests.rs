@@ -179,6 +179,8 @@ fn assigning_ctor(fields: &[ClassField]) -> perry_hir::Function {
                 object: Box::new(Expr::This),
                 property: p.name.clone(),
                 value: Box::new(Expr::LocalGet(p.id)),
+                byte_offset: 0,
+                byte_end: 0,
             })
         })
         .collect();
@@ -664,6 +666,8 @@ fn element_shape_versioned_loop_declines_a_body_that_stores() {
                 object: Box::new(Expr::LocalGet(ARRAY_ID)),
                 index: Box::new(Expr::LocalGet(COUNTER_ID)),
                 value: Box::new(Expr::Number(1.0)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
         ],
         None,

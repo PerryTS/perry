@@ -42,16 +42,25 @@ fn defined_functions<'ctx>(module: &Module<'ctx>) -> Vec<FunctionValue<'ctx>> {
         .collect()
 }
 
-/// Give every listed function its rank's section. A function that already
-/// names a section keeps it.
+/// Give every listed function its rank's section. A function in the JS text
+/// section (x86_64 Linux) takes its rank there, so the JS hot run stays in
+/// the range the `Error` capture classifies by (`JsTextRun`); any other
+/// function that already names a section keeps it.
 fn place_listed_functions(module: &Module<'_>, order: &FunctionOrder) {
+    let js_text = crate::codegen::helpers::JS_TEXT_SECTION_NAME;
     for f in defined_functions(module) {
         let global = f.as_global_value();
-        if global.get_section().is_some() {
-            continue;
-        }
         let name = f.get_name().to_string_lossy();
-        if let Some(section) = order.section_for(&name) {
+        let in_js_text = match global.get_section() {
+            None => false,
+            Some(s) if s.to_bytes() == js_text.as_bytes() => true,
+            Some(_) => continue,
+        };
+        let section = match in_js_text {
+            true => order.js_section_for(&name),
+            false => order.section_for(&name),
+        };
+        if let Some(section) = section {
             global.set_section(Some(&section));
         }
     }
@@ -77,12 +86,22 @@ fn back_hot_text(module: &Module<'_>) {
     let ctx = module.get_context();
     let ptr = ctx.ptr_type(AddressSpace::default());
     let mut bounds = Vec::new();
-    for name in ["__perry_hot_text_start", "__perry_hot_text_limit"] {
+    let mut bound = |name: &str| {
         let global = module
             .get_global(name)
             .unwrap_or_else(|| module.add_global(ctx.i8_type(), None, name));
-        bounds.push(global.as_pointer_value().into());
+        global.as_pointer_value().into()
+    };
+    for name in ["__perry_hot_text_start", "__perry_hot_text_limit"] {
+        bounds.push(bound(name));
     }
+    // The JS hot run (the ranked functions of the JS text section) is backed
+    // the same way; on targets without the section it is empty.
+    let js_bounds: Vec<inkwell::values::BasicMetadataValueEnum> =
+        ["__perry_hot_js_text_start", "__perry_hot_js_text_limit"]
+            .iter()
+            .map(|n| bound(n))
+            .collect();
     let hook = module.get_function("js_back_hot_text").unwrap_or_else(|| {
         module.add_function(
             "js_back_hot_text",
@@ -92,13 +111,13 @@ fn back_hot_text(module: &Module<'_>) {
     });
     let builder = ctx.create_builder();
     builder.position_before(&at);
-    let call = builder
-        .build_call(hook, &bounds, "")
-        .expect("hot text call");
-    call.add_attribute(
-        AttributeLoc::Function,
-        ctx.create_string_attribute("gc-leaf-function", ""),
-    );
+    for b in [&bounds, &js_bounds] {
+        let call = builder.build_call(hook, b, "").expect("hot text call");
+        call.add_attribute(
+            AttributeLoc::Function,
+            ctx.create_string_attribute("gc-leaf-function", ""),
+        );
+    }
 }
 
 /// Call the recording hook at the top of every defined function, after its

@@ -434,7 +434,11 @@ mod tests_10595 {
             // brought in line with the other two. Pinned separately because
             // its fast arm is a separate loop, not a delegation.
             assert_eq!(
-                keys_find_slot_by_bytes_resolved(crate::object::ObjectKeys::new(keys, 2), 2, b"tag"),
+                keys_find_slot_by_bytes_resolved(
+                    crate::object::ObjectKeys::new(keys, 2),
+                    2,
+                    b"tag"
+                ),
                 Some(1),
                 "the resolved lookup must agree: most-derived slot (index 1), \
                  not the ancestor's (index 0)"
@@ -455,8 +459,14 @@ mod tests_10595 {
         let lookup_x = crate::string::js_string_from_bytes(b"x".as_ptr(), 1);
         let lookup_y = crate::string::js_string_from_bytes(b"y".as_ptr(), 1);
         unsafe {
-            assert_eq!(keys_find_slot_by_key_ptr(crate::object::ObjectKeys::new(keys, 2), 2, lookup_x), Some(0));
-            assert_eq!(keys_find_slot_by_key_ptr(crate::object::ObjectKeys::new(keys, 2), 2, lookup_y), Some(1));
+            assert_eq!(
+                keys_find_slot_by_key_ptr(crate::object::ObjectKeys::new(keys, 2), 2, lookup_x),
+                Some(0)
+            );
+            assert_eq!(
+                keys_find_slot_by_key_ptr(crate::object::ObjectKeys::new(keys, 2), 2, lookup_y),
+                Some(1)
+            );
         }
     }
 
@@ -470,7 +480,10 @@ mod tests_10595 {
 
         let lookup = crate::string::js_string_from_bytes(b"tagViaGetter".as_ptr(), 12);
         unsafe {
-            assert_eq!(keys_find_slot_by_key_ptr(crate::object::ObjectKeys::new(keys, 1), 1, lookup), None);
+            assert_eq!(
+                keys_find_slot_by_key_ptr(crate::object::ObjectKeys::new(keys, 1), 1, lookup),
+                None
+            );
         }
     }
 }
@@ -503,7 +516,11 @@ pub(crate) unsafe fn keys_find_private_slot_by_bytes(
     if super::overflow::is_table(keys) {
         return keys_find_slot_in_namespace(keys, count, bytes, true);
     }
-    let slot = keys_find_slot_by_bytes(crate::object::ObjectKeys::new(keys as *mut _, count), count, bytes)?;
+    let slot = keys_find_slot_by_bytes(
+        crate::object::ObjectKeys::new(keys as *mut _, count),
+        count,
+        bytes,
+    )?;
     if super::key_attrs::entry_is_private(super::key_attrs::keys_entry(keys, slot)) {
         return Some(slot);
     }

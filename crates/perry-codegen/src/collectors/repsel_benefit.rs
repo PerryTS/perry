@@ -269,6 +269,7 @@ impl<'a> Model<'a> {
                 object,
                 index,
                 value,
+                ..
             } => {
                 self.expr(object, UseCtx::Neutral, depth);
                 self.expr(index, UseCtx::Int, depth);

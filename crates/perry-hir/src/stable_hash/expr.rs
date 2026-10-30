@@ -64,11 +64,11 @@ impl SH for Expr {
             Expr::NativeModuleRef(s) => { tag(h, 22); s.hash(h); }
             Expr::NativeMethodCall { module, class_name, object, method, args, } => { tag(h, 23); module.hash(h); class_name.hash(h); object.hash(h); method.hash(h); args.hash(h); }
             Expr::PropertyGet { object, property, .. } => { tag(h, 24); object.as_ref().hash(h); property.hash(h); }
-            Expr::PropertySet { object, property, value, } => { tag(h, 25); object.as_ref().hash(h); property.hash(h); value.as_ref().hash(h); }
-            Expr::PropertyUpdate { object, property, op, prefix, strict, } => { tag(h, 26); object.as_ref().hash(h); property.hash(h); op.hash(h); prefix.hash(h); strict.hash(h); }
+            Expr::PropertySet { object, property, value, .. } => { tag(h, 25); object.as_ref().hash(h); property.hash(h); value.as_ref().hash(h); }
+            Expr::PropertyUpdate { object, property, op, prefix, strict, .. } => { tag(h, 26); object.as_ref().hash(h); property.hash(h); op.hash(h); prefix.hash(h); strict.hash(h); }
             Expr::IndexGet { object, index , .. } => { tag(h, 27); object.as_ref().hash(h); index.as_ref().hash(h); }
-            Expr::IndexSet { object, index, value, } => { tag(h, 28); object.as_ref().hash(h); index.as_ref().hash(h); value.as_ref().hash(h); }
-            Expr::IndexUpdate { object, index, op, prefix, strict, } => { tag(h, 29); object.as_ref().hash(h); index.as_ref().hash(h); op.hash(h); prefix.hash(h); strict.hash(h); }
+            Expr::IndexSet { object, index, value, .. } => { tag(h, 28); object.as_ref().hash(h); index.as_ref().hash(h); value.as_ref().hash(h); }
+            Expr::IndexUpdate { object, index, op, prefix, strict, .. } => { tag(h, 29); object.as_ref().hash(h); index.as_ref().hash(h); op.hash(h); prefix.hash(h); strict.hash(h); }
             Expr::Object(fields) => { tag(h, 30); fields.hash(h); }
             Expr::ObjectSpread { parts } => { tag(h, 31); parts.hash(h); }
             Expr::ObjectAssign { target, sources } => { tag(h, 32); target.as_ref().hash(h); sources.hash(h); }
@@ -633,7 +633,7 @@ impl SH for Expr {
             Expr::ProxyRevoke(e) => { tag(h, 432); e.as_ref().hash(h); }
             Expr::ReflectGet { target, key, receiver } => { tag(h, 433); target.as_ref().hash(h); key.as_ref().hash(h); receiver.as_ref().hash(h); }
             Expr::ReflectSet { target, key, value, receiver } => { tag(h, 434); target.as_ref().hash(h); key.as_ref().hash(h); value.as_ref().hash(h); receiver.as_ref().hash(h); }
-            Expr::PutValueSet { target, key, value, receiver, strict } => { tag(h, 12235); target.as_ref().hash(h); key.as_ref().hash(h); value.as_ref().hash(h); receiver.as_ref().hash(h); strict.hash(h); }
+            Expr::PutValueSet { target, key, value, receiver, strict, .. } => { tag(h, 12235); target.as_ref().hash(h); key.as_ref().hash(h); value.as_ref().hash(h); receiver.as_ref().hash(h); strict.hash(h); }
             Expr::WithGet { object, property, fallback } => { tag(h, 12236); object.as_ref().hash(h); property.hash(h); fallback.as_ref().hash(h); }
             Expr::WithSet { object, property, value, fallback, strict } => { tag(h, 12237); object.as_ref().hash(h); property.hash(h); value.as_ref().hash(h); hash_with_set_fallback(h, fallback); strict.hash(h); }
             Expr::ReflectHas { target, key } => { tag(h, 435); target.as_ref().hash(h); key.as_ref().hash(h); }

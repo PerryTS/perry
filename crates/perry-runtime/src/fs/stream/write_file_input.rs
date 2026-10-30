@@ -119,7 +119,10 @@ fn write_file_object_ptr_from_value(value: f64) -> Option<*const ObjectHeader> {
         return None;
     }
     unsafe {
-        if !matches!(write_file_gc_type_for_ptr(raw), Some(crate::gc_object_type_pat!())) {
+        if !matches!(
+            write_file_gc_type_for_ptr(raw),
+            Some(crate::gc_object_type_pat!())
+        ) {
             return None;
         }
     }

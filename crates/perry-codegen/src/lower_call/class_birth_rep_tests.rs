@@ -116,6 +116,8 @@ fn a_store_to_a_reservation_can_observe_later_defaults_through_a_setter() {
             object: Box::new(Expr::This),
             property: "signal".into(),
             value: Box::new(Expr::Number(1.0)),
+            byte_offset: 0,
+            byte_end: 0,
         }),
     );
     let ir = emit(&m);
@@ -137,6 +139,8 @@ fn numeric_reservations_keep_the_completed_contract_after_constructor_observatio
             object: Box::new(Expr::This),
             property: "signal".into(),
             value: Box::new(Expr::Number(1.0)),
+            byte_offset: 0,
+            byte_end: 0,
         }),
     );
     let ir = emit(&m);

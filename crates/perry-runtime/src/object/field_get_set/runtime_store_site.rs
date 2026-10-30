@@ -106,12 +106,9 @@ mod tests {
         });
         object.with_const_ptr::<crate::object::ObjectHeader, _>(|o| unsafe {
             let keys = crate::object::object_keys(o);
-            let index = crate::object::keys_find_property_slot_by_bytes(
-                keys,
-                keys.count(),
-                b"lastIndex",
-            )
-            .unwrap();
+            let index =
+                crate::object::keys_find_property_slot_by_bytes(keys, keys.count(), b"lastIndex")
+                    .unwrap();
             assert_ne!(
                 crate::object::key_attrs::keys_entry(keys.arr(), index)
                     & crate::object::key_attrs::ENTRY_NON_WRITABLE,

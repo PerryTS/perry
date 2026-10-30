@@ -96,6 +96,8 @@ fn private_frame_unknown_effect_and_target_keep_standalone_record() {
             object: Box::new(Expr::FuncRef(0)),
             property: "prototype".into(),
             value: Box::new(Expr::Undefined),
+            byte_offset: 0,
+            byte_end: 0,
         },
         Expr::IndexGet {
             byte_offset: 0,

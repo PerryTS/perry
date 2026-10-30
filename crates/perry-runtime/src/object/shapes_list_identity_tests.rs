@@ -49,7 +49,11 @@ fn a_canonical_lists_family_lives_on_its_node_whatever_the_holder() {
         let carried = shape_descriptor_ensure(keys, 2, 2).unwrap();
         let raw = shape_descriptor_ensure(keys.as_ptr(), 2, 2).unwrap();
         assert_eq!(carried, raw, "a node-less spelling resolves the same list");
-        let record = crate::state::state().shapes.slab().get_handle(carried).unwrap();
+        let record = crate::state::state()
+            .shapes
+            .slab()
+            .get_handle(carried)
+            .unwrap();
         assert_eq!(record.keys_node(), keys.node());
         assert!(on_node_family(keys.node(), carried));
         let inner = crate::state::state().shapes.inner.borrow();
@@ -96,7 +100,11 @@ fn the_facts_fold_does_not_depend_on_the_lists_address() {
             let _pad: Vec<_> = (0..shift)
                 .map(|_| scope.root_raw_mut_ptr(crate::array::js_array_alloc(64)))
                 .collect();
-            let _old_pad = crate::object::key_attrs::alloc_canonical_key_list(32 * shift as u32 + 1, true, false);
+            let _old_pad = crate::object::key_attrs::alloc_canonical_key_list(
+                32 * shift as u32 + 1,
+                true,
+                false,
+            );
             let keys = list(&names);
             let id = shape_descriptor_ensure(keys, 3, 3).unwrap();
             runs.push((keys.as_ptr() as usize, keys.node(), bucket_key(id)));
@@ -104,7 +112,10 @@ fn the_facts_fold_does_not_depend_on_the_lists_address() {
     }
     assert_ne!(runs[0].0, runs[1].0, "premise: the backing moved");
     assert_eq!(runs[0].1, runs[1].1, "node ids follow program order");
-    assert_eq!(runs[0].2, runs[1].2, "the bucket names the list, not its address");
+    assert_eq!(
+        runs[0].2, runs[1].2,
+        "the bucket names the list, not its address"
+    );
 }
 
 /// A prefix and its tip append share one backing; the slot index lives on
@@ -134,7 +145,12 @@ fn a_backings_slot_index_lives_on_its_owner_node() {
             }
         });
         assert_eq!(homes, 1, "one index per backing");
-        assert!(crate::state::state().shapes.inner.borrow().owned_indices.is_empty());
+        assert!(crate::state::state()
+            .shapes
+            .inner
+            .borrow()
+            .owned_indices
+            .is_empty());
         // A complete index proves absence.
         let missing = b"cki_s2_missing";
         let hash = crate::object::key_bytes_hash(missing.as_ptr(), missing.len());
@@ -162,8 +178,10 @@ fn a_dead_lists_family_retires_before_its_node_is_freed() {
         assert!(shape_descriptor_for_word(id).is_none());
         canonical_keys::prune_dead_canonical_keys(&|addr| addr == dead);
         let reused = list(&["cki_s2_dead_c"]);
-        assert!(canonical_keys::with_list_shapes(reused.node(), |l| l.family.is_empty())
-            .unwrap_or(true));
+        assert!(
+            canonical_keys::with_list_shapes(reused.node(), |l| l.family.is_empty())
+                .unwrap_or(true)
+        );
     }
 }
 
@@ -193,7 +211,11 @@ fn a_node_outlives_its_holders_and_dies_after_its_records() {
                 crate::gc::js_gc_collect();
             }
             let view = obj.with_const_ptr(|o| crate::object::object_keys(o));
-            assert_ne!(view.node(), canonical_keys::NO_NODE, "premise: a canonical list");
+            assert_ne!(
+                view.node(),
+                canonical_keys::NO_NODE,
+                "premise: a canonical list"
+            );
             assert!(
                 canonical_keys::node_publishes(view.arr(), view.count(), view.node()),
                 "a live holder's node still publishes its list (round {round})"
@@ -212,19 +234,34 @@ fn a_node_outlives_its_holders_and_dies_after_its_records() {
             crate::gc::js_gc_collect();
             // An uncarried record may retire at any full trace; the list
             // and its node stay as long as the handle holds the array.
-            assert!(canonical_keys::node_publishes(keys.as_ptr(), 2, keys.node()));
+            assert!(canonical_keys::node_publishes(
+                keys.as_ptr(),
+                2,
+                keys.node()
+            ));
             (keys.as_ptr() as usize, keys.node(), id)
         };
         crate::gc::js_gc_collect();
-        assert!(shape_descriptor_for_word(id).is_none(), "the record retired with its list");
+        assert!(
+            shape_descriptor_for_word(id).is_none(),
+            "the record retired with its list"
+        );
         let mut stale = 0;
-        crate::state::state().shapes.slab().for_each_handle(|_, record| {
-            let record = &*record;
-            if record.keys as usize == dead || (record.keys_node() == node && record.keys != 0) {
-                stale += 1;
-            }
-        });
+        crate::state::state()
+            .shapes
+            .slab()
+            .for_each_handle(|_, record| {
+                let record = &*record;
+                if record.keys as usize == dead || (record.keys_node() == node && record.keys != 0)
+                {
+                    stale += 1;
+                }
+            });
         assert_eq!(stale, 0, "no record names the dead list or its freed node");
-        assert!(!canonical_keys::node_publishes(dead as *const ArrayHeader, 2, node));
+        assert!(!canonical_keys::node_publishes(
+            dead as *const ArrayHeader,
+            2,
+            node
+        ));
     }
 }

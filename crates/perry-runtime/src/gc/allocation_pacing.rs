@@ -460,7 +460,8 @@ mod tests {
 /// effect. Finish an older non-moving cycle before publishing its new owner;
 /// a suppressed/unsafe construction leaves the guarded stepper deferred.
 pub(crate) fn finish_cycle_before_large_birth() {
-    if super::policy::gc_budgeted_cycle_active() && !super::schedule::budgeted_old_reclaim_forced() {
+    if super::policy::gc_budgeted_cycle_active() && !super::schedule::budgeted_old_reclaim_forced()
+    {
         super::policy::gc_drain_active_budgeted_cycle();
     }
 }

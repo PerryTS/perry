@@ -59,36 +59,39 @@ pub(crate) unsafe fn from_static_layout(
     }
     (*fresh).length = count;
     stamp_shared(fresh);
-    Some(with_table_or(CanonicalKeys::new(fresh, count, NO_NODE), |t| {
-        let mut parent = ROOT_NODE;
-        let mut missing = false;
-        for (i, key) in keys.iter().enumerate() {
-            let atom = &*key.atom;
-            let entry = token(key);
-            let hash = edge_hash_with_entry(atom.hash, entry);
-            if !missing {
-                if let Some(id) =
-                    probe_node(t, parent, i as u32, Appended::Key(atom.string), entry, hash)
-                {
-                    parent = id;
-                    continue;
+    Some(with_table_or(
+        CanonicalKeys::new(fresh, count, NO_NODE),
+        |t| {
+            let mut parent = ROOT_NODE;
+            let mut missing = false;
+            for (i, key) in keys.iter().enumerate() {
+                let atom = &*key.atom;
+                let entry = token(key);
+                let hash = edge_hash_with_entry(atom.hash, entry);
+                if !missing {
+                    if let Some(id) =
+                        probe_node(t, parent, i as u32, Appended::Key(atom.string), entry, hash)
+                    {
+                        parent = id;
+                        continue;
+                    }
+                    // An absent edge makes its entire suffix absent. Every edge
+                    // before this point has already been checked exactly once.
+                    missing = true;
                 }
-                // An absent edge makes its entire suffix absent. Every edge
-                // before this point has already been checked exactly once.
-                missing = true;
+                parent = t.alloc_node(fresh as usize, parent, hash, i as u32 + 1, true, false);
             }
-            parent = t.alloc_node(fresh as usize, parent, hash, i as u32 + 1, true, false);
-        }
-        let node = &t.nodes[parent as usize];
-        if node.published {
-            let existing = CanonicalKeys::new(node.addr as *mut ArrayHeader, count, parent);
-            t.note_reached(parent);
-            return existing;
-        }
-        t.publish(parent, fresh as usize, true);
-        t.own_backing(parent, count);
-        CanonicalKeys::new(fresh, count, parent)
-    }))
+            let node = &t.nodes[parent as usize];
+            if node.published {
+                let existing = CanonicalKeys::new(node.addr as *mut ArrayHeader, count, parent);
+                t.note_reached(parent);
+                return existing;
+            }
+            t.publish(parent, fresh as usize, true);
+            t.own_backing(parent, count);
+            CanonicalKeys::new(fresh, count, parent)
+        },
+    ))
 }
 
 #[cfg(test)]
@@ -154,44 +157,47 @@ pub(crate) unsafe fn link_image_list(
             return None;
         }
     }
-    Some(with_table_or(CanonicalKeys::new(cell, count, NO_NODE), |t| {
-        let mut parent = ROOT_NODE;
-        let mut missing = false;
-        for (i, key) in keys.iter().enumerate() {
-            let atom = &*key.atom;
-            let entry = u64::from(key.attrs)
-                | if mapped {
-                    (u64::from(key.slot) + 1) << 8
+    Some(with_table_or(
+        CanonicalKeys::new(cell, count, NO_NODE),
+        |t| {
+            let mut parent = ROOT_NODE;
+            let mut missing = false;
+            for (i, key) in keys.iter().enumerate() {
+                let atom = &*key.atom;
+                let entry = u64::from(key.attrs)
+                    | if mapped {
+                        (u64::from(key.slot) + 1) << 8
+                    } else {
+                        0
+                    };
+                let appended = if atom.kind == crate::codegen_abi::ATOM_KIND_STRING {
+                    Appended::Key(atom.string)
                 } else {
-                    0
+                    Appended::Slot(JSValue::from_bits(*slots.add(i)))
                 };
-            let appended = if atom.kind == crate::codegen_abi::ATOM_KIND_STRING {
-                Appended::Key(atom.string)
-            } else {
-                Appended::Slot(JSValue::from_bits(*slots.add(i)))
-            };
-            let hash = if atom.kind == crate::codegen_abi::ATOM_KIND_STRING {
-                edge_hash_with_entry(atom.hash, entry)
-            } else {
-                appended.edge_hash(entry)
-            };
-            if !missing {
-                if let Some(id) = probe_node(t, parent, i as u32, appended, entry, hash) {
-                    parent = id;
-                    continue;
+                let hash = if atom.kind == crate::codegen_abi::ATOM_KIND_STRING {
+                    edge_hash_with_entry(atom.hash, entry)
+                } else {
+                    appended.edge_hash(entry)
+                };
+                if !missing {
+                    if let Some(id) = probe_node(t, parent, i as u32, appended, entry, hash) {
+                        parent = id;
+                        continue;
+                    }
+                    missing = true;
                 }
-                missing = true;
+                parent = t.alloc_node(cell as usize, parent, hash, i as u32 + 1, true, false);
             }
-            parent = t.alloc_node(cell as usize, parent, hash, i as u32 + 1, true, false);
-        }
-        let node = &t.nodes[parent as usize];
-        if node.published {
-            let existing = CanonicalKeys::new(node.addr as *mut ArrayHeader, count, parent);
-            t.note_reached(parent);
-            return existing;
-        }
-        // The cell is image data: no backing was allocated for it.
-        t.publish(parent, cell as usize, true);
-        CanonicalKeys::new(cell, count, parent)
-    }))
+            let node = &t.nodes[parent as usize];
+            if node.published {
+                let existing = CanonicalKeys::new(node.addr as *mut ArrayHeader, count, parent);
+                t.note_reached(parent);
+                return existing;
+            }
+            // The cell is image data: no backing was allocated for it.
+            t.publish(parent, cell as usize, true);
+            CanonicalKeys::new(cell, count, parent)
+        },
+    ))
 }

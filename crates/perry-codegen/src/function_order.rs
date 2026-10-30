@@ -49,6 +49,11 @@ pub const RECORD_OUTPUT_ENV: &str = "PERRY_FUNCTION_ORDER_OUT";
 /// `.text`, so the zero-padded rank orders them.
 pub const SORTED_SECTION_PREFIX: &str = ".text.sorted.";
 
+/// Prefix of the ranked sections of the JS text section (x86_64 Linux puts
+/// every generated function in `perry_js_text`): the JS hot run, gathered in
+/// rank order at the front of that output section.
+pub const JS_SORTED_SECTION_PREFIX: &str = "perry_js_text.sorted.";
+
 /// A parsed order list: function name -> rank (0 runs first).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionOrder {
@@ -96,6 +101,15 @@ impl FunctionOrder {
             .map(|rank| format!("{SORTED_SECTION_PREFIX}{rank:08}"))
     }
 
+    /// The section a listed function of the JS text section is placed in:
+    /// its rank inside that section, so the ranked JS functions form the
+    /// JS hot run at its front (`elf_linker_script`) and every JS frame
+    /// stays inside the range the `Error` capture classifies by.
+    pub fn js_section_for(&self, name: &str) -> Option<String> {
+        self.rank(name)
+            .map(|rank| format!("{JS_SORTED_SECTION_PREFIX}{rank:08}"))
+    }
+
     /// An ELF linker-script augmentation: consume the selected generated
     /// sections and runtime archive sections before the default .text rule.
     /// Rust uses function sections by default on Linux; no archive rewriting
@@ -119,6 +133,13 @@ impl FunctionOrder {
         }
         out.push_str(
             "  __perry_hot_text_end = .;\n  __perry_hot_text_limit = __perry_hot_text_end;\n  *(.text.unlikely .text.*_unlikely .text.unlikely.*)\n  *(.text.exit .text.exit.*)\n  *(.text.startup .text.startup.*)\n  *(.text.hot .text.hot.*)\n  *(SORT(.text.sorted.*))\n  *(.text .stub .text.* .gnu.linkonce.t.*)\n }\n} INSERT BEFORE .text;\n",
+        );
+        // The JS text section: its ranked functions first (the JS hot run,
+        // backed like the runtime's), then the rest. A C-identifier output
+        // section name, so the linker defines `__start_`/`__stop_perry_js_text`
+        // around both: every JS frame is in that range.
+        out.push_str(
+            "SECTIONS {\n perry_js_text : ALIGN(16) {\n  __perry_hot_js_text_start = .;\n  *(SORT(perry_js_text.sorted.*))\n  __perry_hot_js_text_end = .;\n  __perry_hot_js_text_limit = __perry_hot_js_text_end;\n  *(perry_js_text)\n }\n} INSERT AFTER .text;\n",
         );
         Ok(out)
     }
@@ -244,6 +265,26 @@ mod tests {
             FunctionLayout::Record.cache_key(),
             FunctionLayout::Default.cache_key()
         );
+    }
+
+    /// A ranked JS body takes its rank inside the JS text section, and the
+    /// script gathers those ranks at the front of that output section with
+    /// their own hot-run bounds: every JS frame stays in the range the
+    /// `Error` capture classifies by, and the JS hot run is backed as the
+    /// runtime's is.
+    #[test]
+    fn elf_order_keeps_the_js_hot_run_inside_the_js_text_section() {
+        let order = FunctionOrder::parse("perry_fn_a\njs_string_concat\n");
+        assert_eq!(order.js_section_for("perry_fn_a").as_deref(), Some("perry_js_text.sorted.00000000"));
+        assert_eq!(order.section_for("js_string_concat").as_deref(), Some(".text.sorted.00000001"));
+        let script = order.elf_linker_script().unwrap();
+        let js = script.split("perry_js_text : ALIGN(16)").nth(1).expect("JS text output section");
+        let first = js.find("*(SORT(perry_js_text.sorted.*))").expect("ranked first");
+        let rest = js.find("*(perry_js_text)").expect("then the rest");
+        assert!(first < rest);
+        assert!(js.contains("__perry_hot_js_text_start"));
+        assert!(js.contains("__perry_hot_js_text_limit = __perry_hot_js_text_end"));
+        assert!(script.contains("INSERT AFTER .text"));
     }
 
     #[test]

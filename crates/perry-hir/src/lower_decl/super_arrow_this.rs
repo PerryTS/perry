@@ -94,6 +94,8 @@ fn bind_before_super(ctx: &mut LoweringContext, stmts: &mut Vec<Stmt>, at: usize
         object: Box::new(Expr::LocalGet(cell)),
         property: "t".to_string(),
         value: Box::new(Expr::This),
+        byte_offset: 0,
+        byte_end: 0,
     }));
     stmts.insert(0, cell_decl(cell));
     true

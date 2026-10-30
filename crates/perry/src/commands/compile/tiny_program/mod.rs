@@ -115,7 +115,9 @@ pub(super) fn try_compile(
     if args.target.as_deref() == Some("macos") {
         command.arg("-mmacosx-version-min=15.0");
     }
-    command.arg(&object_path).arg("-o").arg(&absolute_output);
+    command.arg(&object_path);
+    command.args(super::link::link_pad_args());
+    command.arg("-o").arg(&absolute_output);
     if cfg!(target_os = "macos") {
         command.arg("-Wl,-dead_strip");
     } else {

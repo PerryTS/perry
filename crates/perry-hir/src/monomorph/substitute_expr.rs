@@ -172,10 +172,15 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             object,
             property,
             value,
+            byte_offset,
+            byte_end,
+            ..
         } => Expr::PropertySet {
             object: Box::new(substitute_expr(object, substitutions)),
             property: property.clone(),
             value: Box::new(substitute_expr(value, substitutions)),
+            byte_offset: *byte_offset,
+            byte_end: *byte_end,
         },
         Expr::PropertyUpdate {
             object,
@@ -183,12 +188,17 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             op,
             prefix,
             strict,
+            byte_offset,
+            byte_end,
+            ..
         } => Expr::PropertyUpdate {
             object: Box::new(substitute_expr(object, substitutions)),
             property: property.clone(),
             op: *op,
             prefix: *prefix,
             strict: *strict,
+            byte_offset: *byte_offset,
+            byte_end: *byte_end,
         },
 
         // Index access
@@ -208,10 +218,15 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             object,
             index,
             value,
+            byte_offset,
+            byte_end,
+            ..
         } => Expr::IndexSet {
             object: Box::new(substitute_expr(object, substitutions)),
             index: Box::new(substitute_expr(index, substitutions)),
             value: Box::new(substitute_expr(value, substitutions)),
+            byte_offset: *byte_offset,
+            byte_end: *byte_end,
         },
 
         // Literals

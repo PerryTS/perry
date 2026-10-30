@@ -143,6 +143,8 @@ fn param_prologue_ctor(field_name: &str, param_id: u32, param_ty: Type) -> Funct
             object: Box::new(Expr::This),
             property: field_name.to_string(),
             value: Box::new(Expr::LocalGet(param_id)),
+            byte_offset: 0,
+            byte_end: 0,
         })],
         is_async: false,
         is_generator: false,
@@ -364,6 +366,8 @@ fn module_with_local_receiver_store(class: Class, stored: Expr) -> Module {
             object: Box::new(Expr::LocalGet(5)),
             property: "v".to_string(),
             value: Box::new(stored),
+            byte_offset: 0,
+            byte_end: 0,
         }),
         Stmt::Return(Some(Expr::PropertyGet {
             byte_end: 0,
@@ -458,6 +462,8 @@ fn module_with_param_receiver_raw_f64_store(strict: bool, stored: Expr) -> Modul
             object: Box::new(Expr::LocalGet(8)),
             property: "v".to_string(),
             value: Box::new(stored),
+            byte_offset: 0,
+            byte_end: 0,
         }),
         Stmt::Return(Some(Expr::LocalGet(8))),
     ];

@@ -1460,7 +1460,7 @@ def compare_exact_census(observed: dict[str, object], baseline: dict[str, object
             )
 
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--emit-baseline",
@@ -1468,18 +1468,27 @@ def main() -> None:
         help="print the current exact multiset for reviewed baseline refresh",
     )
     args = parser.parse_args()
-    run_literal_lexer_selftest()
-    sources = rust_sources()
-    observed = observed_census(sources)
-    if args.emit_baseline:
-        print(json.dumps(observed, indent=2, sort_keys=True))
-        return
-    baseline = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
-    compare_exact_census(observed, baseline)
-    assert_authority_surfaces(sources)
-    run_sabotage_selftests(sources, baseline)
+    try:
+        run_literal_lexer_selftest()
+        sources = rust_sources()
+        observed = observed_census(sources)
+        if args.emit_baseline:
+            print(json.dumps(observed, indent=2, sort_keys=True))
+            return 0
+        baseline = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+        compare_exact_census(observed, baseline)
+        assert_authority_surfaces(sources)
+        run_sabotage_selftests(sources, baseline)
+    except (CensusError, AssertionError) as error:
+        # A detected drift must read as a verdict, not as a traceback. This census
+        # stacks dozens of independent assertions, so every run reports exactly one
+        # of them; an escaping exception buries which subject moved under a stack
+        # trace and makes the next one harder to reach.
+        print(f"::error::shape_descriptor_census: {error}")
+        return 1
     print(json.dumps(observed["summary"], indent=2, sort_keys=True))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

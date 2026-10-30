@@ -46,11 +46,17 @@ fn selected_export(slot: ExportSlot, export: &'static ExportSpec) -> f64 {
         match export.name {
             "default" | "test" | "it" => (
                 &js_node_export_test_test::SPEC,
-                ExportSlot { ordinal: js_node_export_test_test::ORDINAL, ..slot },
+                ExportSlot {
+                    ordinal: js_node_export_test_test::ORDINAL,
+                    ..slot
+                },
             ),
             "suite" | "describe" => (
                 &js_node_export_test_suite::SPEC,
-                ExportSlot { ordinal: js_node_export_test_suite::ORDINAL, ..slot },
+                ExportSlot {
+                    ordinal: js_node_export_test_suite::ORDINAL,
+                    ..slot
+                },
             ),
             _ => (export, slot),
         }

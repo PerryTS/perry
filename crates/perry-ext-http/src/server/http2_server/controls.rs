@@ -62,9 +62,7 @@ pub(crate) fn queue_session_ping(handle: i64, args: &[f64]) -> f64 {
     } else {
         (
             second_callback,
-            args.first()
-                .copied()
-                .filter(|v| !is_nullish(*v)),
+            args.first().copied().filter(|v| !is_nullish(*v)),
         )
     };
     let payload = match payload_value {

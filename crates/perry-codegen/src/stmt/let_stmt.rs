@@ -291,6 +291,20 @@ pub(crate) fn lower_let(
         ty.clone()
     };
 
+    // `new C()` where a constructor on C's chain returns a value yields an
+    // object that is not laid out as C: the binding keeps no class identity.
+    let refined_ty = match (init, &refined_ty) {
+        (
+            Some(perry_hir::Expr::New { class_name, .. }),
+            perry_hir::types::Type::Named(named),
+        ) if crate::lower_call::ctor_chain_has_value_return(ctx.classes, named)
+            || crate::lower_call::ctor_chain_has_value_return(ctx.classes, class_name) =>
+        {
+            perry_hir::types::Type::Object(Default::default())
+        }
+        _ => refined_ty,
+    };
+
     // Keep runtime-derived evidence separate from the erased declaration.
     // A binding such as `const n: number = ({} as any)` therefore records an
     // Object proof (or no proof), never Number. The accessor additionally
@@ -302,6 +316,20 @@ pub(crate) fn lower_let(
             .or_else(|| crate::lower_call::guarded_expr_proof(ctx, expr, ty))
             .or_else(|| crate::type_analysis::proven_type_from_init(ctx, expr))
     }) {
+        // A constructor chain that returns a value yields an object that is
+        // not laid out as the class: no class identity is proven.
+        let value_returning_new = matches!(
+            init,
+            Some(perry_hir::Expr::New { class_name, .. })
+                if crate::lower_call::ctor_chain_has_value_return(ctx.classes, class_name)
+        );
+        let proven = if value_returning_new
+            && matches!(proven, perry_hir::types::Type::Named(_))
+        {
+            perry_hir::types::Type::Object(Default::default())
+        } else {
+            proven
+        };
         ctx.proven_local_types.insert(id, proven);
     }
 

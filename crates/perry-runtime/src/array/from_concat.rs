@@ -53,7 +53,11 @@ fn throw_map_fn_not_callable(map_fn: f64) -> ! {
     let jv = JSValue::from_bits(map_fn.to_bits());
     let type_name = if jv.is_null() || jv.is_pointer() {
         "object"
-    } else if map_fn.to_bits() >> 48 == 0x7FFF {
+    } else if jv.is_any_string() {
+        // Both string representations, not just the heap one: a short (SSO)
+        // mapper used to report `number x is not a function`. `is_any_string`
+        // covers STRING_TAG and SHORT_STRING_TAG, so the message matches Node
+        // for every length.
         "string"
     } else {
         "number"
@@ -1397,5 +1401,54 @@ fn append_spread_array(result: *mut ArrayHeader, src: *const ArrayHeader) -> *mu
             out = js_array_push_f64(out, v);
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod mapper_error_tests {
+    use super::*;
+
+    /// Drive the real `Array.from(array, mapFn)` rejection path and return the
+    /// TypeError message it produced.
+    fn rejection(map_fn: f64) -> String {
+        let roots = RuntimeHandleScope::new();
+        let map_fn = roots.root_nanbox_f64(map_fn);
+        let source =
+            roots.root_nanbox_f64(crate::value::js_nanbox_pointer(js_array_alloc(0) as i64));
+        let thrown = crate::exception::catch_js_throw(|| {
+            js_array_from_mapped(
+                source.get_nanbox_f64(),
+                map_fn.get_nanbox_f64(),
+                f64::from_bits(TAG_UNDEFINED),
+            ) as usize
+        })
+        .expect_err("a string mapper must throw");
+        let thrown = roots.root_nanbox_f64(thrown);
+        let err = JSValue::from_bits(thrown.get_nanbox_f64().to_bits())
+            .as_pointer::<crate::error::ErrorHeader>()
+            as *mut crate::error::ErrorHeader;
+        let message = crate::error::js_error_get_message(err);
+        unsafe { crate::object::has_own_helpers::str_from_string_header(message) }
+            .expect("error message is UTF-8")
+            .to_string()
+    }
+
+    /// `Array.from([], "x")` is `TypeError: string x is not a function` in Node.
+    /// An inline (SSO) string and its heap counterpart must report the same
+    /// type, and that type must be `string` — the tag check this asserts used to
+    /// only recognise heap strings, so every short mapper said `number`.
+    #[test]
+    fn short_string_mappers_keep_the_heap_string_error_type() {
+        for bytes in [b"".as_slice(), b"x".as_slice(), b"abcde".as_slice()] {
+            let inline = JSValue::short_string_unchecked(bytes);
+            assert!(inline.is_short_string());
+            let inline_message = rejection(f64::from_bits(inline.bits()));
+            let header = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+            let heap = JSValue::string_ptr(header);
+            assert!(heap.is_string() && !heap.is_short_string());
+            let heap_message = rejection(f64::from_bits(heap.bits()));
+            assert!(heap_message.starts_with("string "));
+            assert_eq!(inline_message, heap_message);
+        }
     }
 }

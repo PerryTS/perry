@@ -1,0 +1,1 @@
+The stack-overflow guard now works when the stack limit is unlimited (`ulimit -s unlimited`): runaway recursion throws a catchable `RangeError: Maximum call stack size exceeded` instead of dying with SIGSEGV. The main-thread stack bound is derived from the kernel's own stack mapping, and an unlimited (or address-space-wide) limit uses the kernel's default 8 MiB stack size.

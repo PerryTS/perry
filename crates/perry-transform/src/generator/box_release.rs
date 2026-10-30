@@ -208,10 +208,7 @@ mod tests {
     /// await still does.
     #[test]
     fn a_state_local_binding_gets_no_frame_cell_but_a_crossing_one_does() {
-        let mut m = async_module(vec![
-            awaited_let(50),
-            Stmt::Return(Some(local_get(50))),
-        ]);
+        let mut m = async_module(vec![awaited_let(50), Stmt::Return(Some(local_get(50)))]);
         run_async_pipeline(&mut m);
         assert!(
             !preallocated(&m.functions[0].body).contains(&50),

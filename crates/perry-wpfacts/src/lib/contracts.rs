@@ -262,6 +262,7 @@ pub(super) fn nested_layouts(
                     birth_keys: atoms_of(g, &g.m.tmpls[itm as usize].birth_keys),
                     definite: atoms_of(g, &g.m.tmpls[itm as usize].definite),
                     ctor_leaks: true,
+                    ctor_returns: g.chain_returns(itm),
                     binding_prim: 0,
                     fn_inst: false,
                 });
@@ -1104,6 +1105,7 @@ pub(super) fn describe_nodes(
                             birth_keys: atoms_of(g, &g.m.tmpls[tm as usize].birth_keys),
                             definite: atoms_of(g, &g.m.tmpls[tm as usize].definite),
                             ctor_leaks: true,
+                            ctor_returns: g.chain_returns(tm),
                             binding_prim: 0,
                             fn_inst: false,
                         });
@@ -1338,7 +1340,7 @@ pub(super) fn describe_toks(
         }
         let (tm, class) = match g.m.toks[t as usize] {
             model::TokKind::Top | model::TokKind::BuiltinFn => {
-                vc.unknown = true;
+                vc.unknown_because("top-value");
                 continue;
             }
             model::TokKind::Builtin(ns) => {
@@ -1372,7 +1374,7 @@ pub(super) fn describe_toks(
             model::TokKind::Func(f, _)
                 if g.m.funcs[f as usize].func_id != u32::MAX && !g.m.contract_fns.contains(&f) =>
             {
-                vc.unknown = true;
+                vc.unknown_because("escaped-function-without-contract");
                 continue;
             }
             model::TokKind::Func(f, _) if g.m.funcs[f as usize].func_id != u32::MAX => {
@@ -1449,12 +1451,13 @@ pub(super) fn describe_toks(
                     birth_keys: atoms_of(g, &g.m.tmpls[tm as usize].birth_keys),
                     definite: atoms_of(g, &g.m.tmpls[tm as usize].definite),
                     ctor_leaks: true,
+                    ctor_returns: g.chain_returns(tm),
                     binding_prim: 0,
                     fn_inst: false,
                 })
             });
         let Some(mut cc) = cc else {
-            vc.unknown = true;
+            vc.unknown_because("class-without-contract");
             continue;
         };
         if g.stand_in_cc.contains_key(&tm) {
@@ -1497,14 +1500,31 @@ pub(super) fn describe_toks(
                 }
                 None => {
                     layouts_out.push(cc.clone());
-                    if let Some(d) = g.describing.borrow_mut().as_mut() {
-                        d.push(cc.display.clone());
-                    }
                     cc.field_fns =
                         literal_field_fns(&g, templates, &toks, tm, layouts_out, open_tm);
                     cc.field_layouts = nested_layouts(g, templates, tm, layouts_out, open_tm);
                     cc.field_values = field_value_contracts(g, templates, tm, layouts_out, open_tm);
                     cc.field_tas = field_ta_contracts(g, tm);
+                    // A literal layout of this unit goes out under its
+                    // display, described: the owner's entry, which a reader
+                    // takes over any copy (`Gen::other_layout`, DECISIONS 106;
+                    // a class goes out as DECISIONS 132 says). Without it the
+                    // only entry is a forwarder's copy of an earlier round,
+                    // which the forwarder itself reads back and forwards again.
+                    match cc.literal_shape {
+                        true => {
+                            if let Some(e) =
+                                layouts_out.iter_mut().find(|c| c.display == cc.display)
+                            {
+                                *e = cc.clone();
+                            }
+                        }
+                        false => {
+                            if let Some(d) = g.describing.borrow_mut().as_mut() {
+                                d.push(cc.display.clone());
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1618,6 +1638,7 @@ pub(super) fn fn_inst_contract(
         birth_keys: atoms_of(g, &tpl.birth_keys),
         definite: atoms_of(g, &tpl.definite),
         ctor_leaks: true,
+        ctor_returns: m.ctor_returns_object(f),
         binding_prim: 0,
         fn_inst: true,
     })
@@ -1705,7 +1726,7 @@ pub(super) fn arg_contract_of(
             // value no contract describes here (as a parameter marker's
             // reach is), not as nothing.
             if toks.iter().any(|&t| arg_reach_unknown(g, t)) {
-                vc.unknown = true;
+                vc.unknown_because("argument-marker-reach");
                 vc.prim |= model::prim::ALL;
             }
             for t in toks.into_iter().flat_map(|t| g.m.marker_members(t)) {
@@ -1750,12 +1771,22 @@ pub(super) fn arg_contract_of(
                                 vc.fns.push(fc);
                             }
                         }
-                        None => vc.unknown = true,
+                        None => vc.unknown_because("function-without-publication"),
                     }
                     continue;
                 }
                 let model::TokKind::Obj(tm, _) = g.m.toks[t as usize] else {
-                    vc.unknown = true;
+                    vc.unknown_because(match g.m.toks[t as usize] {
+                        model::TokKind::Top | model::TokKind::BuiltinFn => "top-argument",
+                        model::TokKind::Bound(_) => "bound-function-argument",
+                        model::TokKind::ClassObj(_) => "class-constructor-argument",
+                        model::TokKind::Proto(_)
+                        | model::TokKind::ObjectProto
+                        | model::TokKind::NativeProto(_) => "prototype-argument",
+                        model::TokKind::Builtin(_) => "builtin-argument",
+                        model::TokKind::ModNs(_) => "module-namespace-argument",
+                        model::TokKind::Func(..) | model::TokKind::Obj(..) => "argument-value",
+                    });
                     continue;
                 };
                 if let Some((tm, kind)) = crate::bindings::sealed_owner(&g.m, t) {
@@ -1816,7 +1847,11 @@ pub(super) fn arg_contract_of(
                 }
                 if g.m.param_marker.contains_key(&t) || g.unit_in.is_some_and(|u| u.broken(display))
                 {
-                    vc.unknown = true;
+                    vc.unknown_because(if g.m.param_marker.contains_key(&t) {
+                        "parameter-marker"
+                    } else {
+                        "broken-layout"
+                    });
                     // A marker is the whole argument (DECISIONS 119).
                     if g.m.param_marker.contains_key(&t) {
                         vc.prim |= model::prim::ALL;
@@ -1870,6 +1905,7 @@ pub(super) fn arg_contract_of(
                             birth_keys: atoms_of(g, &g.m.tmpls[tm as usize].birth_keys),
                             definite: atoms_of(g, &g.m.tmpls[tm as usize].definite),
                             ctor_leaks: true,
+                            ctor_returns: g.chain_returns(tm),
                             binding_prim: 0,
                             fn_inst: false,
                         }),
@@ -1892,7 +1928,7 @@ pub(super) fn arg_contract_of(
                         vc.layouts.push(cc)
                     }
                     Some(_) => {}
-                    None => vc.unknown = true,
+                    None => vc.unknown_because("layout-without-contract"),
                 }
             }
         }

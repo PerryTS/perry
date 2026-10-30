@@ -812,6 +812,7 @@ where
             object,
             index,
             value,
+            ..
         } => {
             f(object);
             f(index);

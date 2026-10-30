@@ -362,12 +362,16 @@ fn inline_writers_raise_the_frontier() {
             byte_offset: 0,
         }),
         value: Box::new(Expr::LocalGet(1)),
+        byte_offset: 0,
+        byte_end: 0,
     }));
     assert!(frontier_raises(&append) >= 1, "a[a.length] = v raises P");
     let indexed = store_ir(Stmt::Expr(Expr::IndexSet {
         object: Box::new(Expr::LocalGet(0)),
         index: Box::new(Expr::Integer(0)),
         value: Box::new(Expr::LocalGet(1)),
+        byte_offset: 0,
+        byte_end: 0,
     }));
     assert!(
         frontier_raises(&indexed) >= 2,
