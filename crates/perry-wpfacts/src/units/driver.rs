@@ -1733,6 +1733,39 @@ fn output_changes(u: &ProgramFacts, old: &ProgramFacts) -> Vec<String> {
     keyed(&mut out, "class", &named(&u.contracts_out), &named(&old.contracts_out));
     keyed(&mut out, "value", &named(&u.values_out), &named(&old.values_out));
     keyed(&mut out, "cell", &cells(&joined), &cells(&old.cells_out));
+    // Every other output the driver publishes or feeds back to the units:
+    // a change in any of them re-seeds a reader, so each is compared (a
+    // forwarded layout replaced each round once read as "nothing").
+    fn by_display(v: &[ClassContract]) -> Vec<(String, &ClassContract)> {
+        v.iter().map(|c| (c.display.clone(), c)).collect()
+    }
+    fn plain<C>(v: &[(String, C)]) -> Vec<(String, &C)> {
+        v.iter().map(|(k, c)| (k.clone(), c)).collect()
+    }
+    fn stores(v: &[(String, String, ValueContract)]) -> Vec<(String, &ValueContract)> {
+        v.iter().map(|(d, k, c)| (format!("{d}.{k}"), c)).collect()
+    }
+    keyed(&mut out, "layout", &by_display(&u.layouts_out), &by_display(&old.layouts_out));
+    keyed(&mut out, "args", &plain(&u.args_out), &plain(&old.args_out));
+    keyed(&mut out, "ctor_args", &named(&u.ctor_args_out), &named(&old.ctor_args_out));
+    keyed(&mut out, "store", &stores(&u.stores_out), &stores(&old.stores_out));
+    keyed(&mut out, "write", &named(&u.writes_out), &named(&old.writes_out));
+    keyed(&mut out, "this_args", &plain(&u.this_args_out), &plain(&old.this_args_out));
+    keyed(&mut out, "method_args", &plain(&u.method_args_out), &plain(&old.method_args_out));
+    keyed(&mut out, "ctor_runs", &plain(&u.ctor_runs_out), &plain(&old.ctor_runs_out));
+    for (what, new, was) in [
+        ("fn defined", &u.fns_defined, &old.fns_defined),
+        ("method run", &u.method_runs_out, &old.method_runs_out),
+        ("forwarded layout", &u.layouts_fwd, &old.layouts_fwd),
+        ("report", &u.reports, &old.reports),
+    ] {
+        for n in new.iter().filter(|n| !was.contains(n)) {
+            out.push(format!("+{what} {n}"));
+        }
+        for n in was.iter().filter(|n| !new.contains(n)) {
+            out.push(format!("-{what} {n}"));
+        }
+    }
     let added = u.shared_out.iter().filter(|w| !old.shared_out.contains(w)).count();
     let gone = old.shared_out.iter().filter(|w| !u.shared_out.contains(w)).count();
     if added + gone != 0 {
