@@ -20,12 +20,12 @@
 //!   frame between such a request and the offered frame is the runtime's own,
 //!   and holds no roots. An entry that can call back into JS must not offer.
 //!   It clears the offer when it returns.
-//! * [`ActiveOrigin`] lives for one collection and restores what it replaced
-//!   (every synchronous collection entry and every budgeted step installs
-//!   one). A nested collection
-//!   installs its own, so a scan always reads the origin of the collection it
-//!   belongs to, and a collection that was not handed one walks from the scan
-//!   itself.
+//! * [`ActiveOrigin`] lives for one synchronous collection (every collection
+//!   entry installs one) and restores what it replaced. A nested collection
+//!   installs its own, so a scan reads the origin of the collection it belongs
+//!   to. Outside every collection it is `None`: a budgeted step taken between
+//!   two mutator stretches walks from the scan, and one a collection drains
+//!   runs beneath that collection, whose origin is then still beneath it.
 //!
 //! The frame is never stored past either guard, so a walk can only start at
 //! a frame that is live and beneath the scan: the entry's caller, while the

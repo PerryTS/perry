@@ -4277,7 +4277,7 @@ fn js_gc_loop_safepoint_armed() {
     gc_safepoint_moving_minor();
 }
 
-struct BudgetedGcStepGuard(#[allow(dead_code)] super::ActiveWalkOrigin);
+struct BudgetedGcStepGuard;
 
 impl BudgetedGcStepGuard {
     fn enter() -> Option<Self> {
@@ -4287,9 +4287,7 @@ impl BudgetedGcStepGuard {
                 None
             } else {
                 active.set(true);
-                // A step scans the stack it runs on, which is no entry's
-                // caller frame: its walk starts at the scan.
-                Some(Self(super::ActiveWalkOrigin::enter(None)))
+                Some(Self)
             }
         })
     }

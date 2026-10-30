@@ -232,13 +232,11 @@ unsafe fn first_birth(desc: *const PerryLayoutDesc, index: u32) -> Option<u32> {
 pub unsafe extern "C" fn perry_alloc_literal_layout(
     desc: *const PerryLayoutDesc,
 ) -> *mut ObjectHeader {
-    unsafe { perry_alloc_literal_layout_body(desc) }
+    unsafe { perry_alloc_literal_layout_body(desc, None) }
 }
 
-/// x86-64 Linux: an allocation slow path JS calls directly, entered through a
-/// shim that hands its caller's frame to the collections it can run
-/// (`gc::roots::walk_origin`). Allocation runs no JS, which is what lets it
-/// offer.
+/// x86-64 Linux: as `perry_alloc_layout`, the caller's frame reaches only the
+/// arena slow path (`gc::roots::walk_origin`).
 #[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
 #[unsafe(naked)]
 #[no_mangle]
@@ -255,11 +253,13 @@ extern "C" fn perry_alloc_literal_layout_from(
     sp: usize,
     fp: usize,
 ) -> *mut ObjectHeader {
-    let _origin = crate::gc::EntryWalkOrigin::enter(crate::gc::WalkOrigin { pc, sp, fp });
-    unsafe { perry_alloc_literal_layout_body(desc) }
+    unsafe { perry_alloc_literal_layout_body(desc, Some(crate::gc::WalkOrigin { pc, sp, fp })) }
 }
 
-unsafe fn perry_alloc_literal_layout_body(desc: *const PerryLayoutDesc) -> *mut ObjectHeader {
+unsafe fn perry_alloc_literal_layout_body(
+    desc: *const PerryLayoutDesc,
+    origin: Option<crate::gc::WalkOrigin>,
+) -> *mut ObjectHeader {
     #[cfg(test)]
     crate::test_support::bootstrap_test_thread();
     let Some(id) = registered_for_birth(desc) else {
@@ -268,7 +268,7 @@ unsafe fn perry_alloc_literal_layout_body(desc: *const PerryLayoutDesc) -> *mut 
         );
         std::process::abort();
     };
-    alloc_layout_object(&*desc, LayoutWord(id))
+    alloc_layout_object_offering(&*desc, LayoutWord(id), origin)
 }
 
 #[cfg(feature = "keepalive-anchors")]
