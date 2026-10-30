@@ -366,9 +366,19 @@ pub(crate) fn closure_get_dynamic_prop_keyed(
             // (and prime) the inherited-read cache instead of minting a fresh
             // key string that no cache entry can ever match again.
             let key_hdr = crate::string::canonical_key(prop.as_bytes());
+            // An accessor further up the prototype's own chain runs with the
+            // closure as `this`, not the prototype the walk entered through.
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let prev_override = crate::object::field_get_set::accessor_receiver_override_begin(
+                crate::value::js_nanbox_pointer(ptr as i64),
+            );
+            let prev_override_handle = prev_override.map(|value| scope.root_nanbox_f64(value));
             let v = crate::object::js_object_get_field_by_name(
                 proto_ptr as *const crate::object::ObjectHeader,
                 key_hdr as *const crate::StringHeader,
+            );
+            crate::object::field_get_set::accessor_receiver_override_end(
+                prev_override_handle.map(crate::gc::RuntimeHandle::into_nanbox_f64),
             );
             if !v.is_undefined() && !v.is_null() {
                 return f64::from_bits(v.bits());
