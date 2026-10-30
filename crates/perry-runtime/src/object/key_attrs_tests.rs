@@ -299,3 +299,65 @@ fn an_object_owner_answers_as_its_tagged_word_and_its_raw_address() {
     ));
     assert!(!unsafe { attrs_live_in_keys(array as usize) });
 }
+
+/// The fold decides by the position the edit key was found at: whichever way a
+/// slot spells its key (SSO, atom, a plain heap string) the edit changes that
+/// slot and no other, including a different key of equal length.
+/// Sabotage: comparing the slot text per position instead is the byte fold
+/// that the pad gate measures; this test pins the behaviour either way.
+#[test]
+fn an_edit_changes_exactly_the_slot_of_its_key_whatever_its_spelling() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    unsafe {
+        for (hit, other) in [
+            ("id", "ad"),
+            ("name", "nbme"),
+            ("prototype", "qrototype"),
+            ("aVeryLongPropertyNameBeyondShort", "bVeryLongPropertyNameBeyondShort"),
+        ] {
+            let obj = crate::object::js_object_alloc(0, 4);
+            crate::object::js_object_set_field_by_name(obj, key(other), 1.0);
+            crate::object::js_object_set_field_by_name(obj, key(hit), 2.0);
+            apply_edits(obj, &[AttrsEdit::Data(hit.as_bytes(), 4)]);
+            assert_eq!(
+                crate::object::get_property_attrs(obj as usize, hit).map(|a| a.bits),
+                Some(4),
+                "{hit}"
+            );
+            assert!(
+                crate::object::get_property_attrs(obj as usize, other).is_none(),
+                "{other} keeps its default entry"
+            );
+            // the same edit twice, and a pair on one key, fold on one slot
+            apply_edits(
+                obj,
+                &[AttrsEdit::Data(hit.as_bytes(), 2), AttrsEdit::Data(hit.as_bytes(), 1)],
+            );
+            assert_eq!(
+                crate::object::get_property_attrs(obj as usize, hit).map(|a| a.bits),
+                Some(1),
+                "{hit}: the later edit wins"
+            );
+            assert_eq!(crate::object::object_keys(obj).count(), 2, "{hit}: no key was claimed");
+        }
+    }
+}
+
+/// An edit on a long key held by a heap (non-interned) string still finds
+/// that key in a shared list: `apply_edits` meets it by text.
+#[test]
+fn an_edit_meets_a_non_interned_heap_key_by_text() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    unsafe {
+        let long = "aLongKeyThatNobodyInternedBeforeThisTest";
+        let obj = crate::object::js_object_alloc(0, 4);
+        crate::object::js_object_set_field_by_name(obj, key("first"), 1.0);
+        crate::object::js_object_set_field_by_name(obj, key(long), 2.0);
+        apply_edits(obj, &[AttrsEdit::Data(long.as_bytes(), 4)]);
+        let attrs = crate::object::get_property_attrs(obj as usize, long).unwrap();
+        assert_eq!(attrs.bits, 4);
+        let keys = crate::object::object_keys(obj);
+        assert_eq!(keys.count(), 2, "the edit did not claim a second copy");
+        assert!(crate::object::get_property_attrs(obj as usize, "first").is_none());
+    }
+}
