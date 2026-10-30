@@ -26,3 +26,19 @@ up to v0.5.1264 and no longer grows.
 CI: a PR that touches `crates/` must add a fragment here (enforced in the
 `lint` job). Apply the `skip-changelog` label to opt out — typo fixes,
 CI-only churn, etc.
+
+## Getting the number right
+
+`scripts/check_changeset_fragment.sh` reads the fragment name a PR adds, and
+treats the two mistake classes differently:
+
+- an all-zero prefix (`changelog.d/0000-<slug>.md`) is a **hard failure** — no
+  PR is ever number 0, so it is always an unfilled placeholder;
+- a real but different number is a **warning**, because two legitimate shapes
+  do that deliberately: a backfill renaming older fragments, and a stacked PR
+  whose fragment names the parent change.
+
+Getting it wrong is otherwise silent: nothing reads the fragment until a
+release is cut, and it then attributes the change to a different PR.
+`PENDING-<issue>-<slug>.md` does not match the shape the gate accepts
+(`^changelog\.d/[0-9]+-`), so a new fragment is always named for its PR.

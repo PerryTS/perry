@@ -102,16 +102,27 @@ Comment on the issue saying you'd like to take it. We'll assign it to you. If yo
 
 Most red PRs come from gates that `cargo build` never looks at — a file
 that crossed the 2000-line cap, fmt drift, or an unbarriered GC store site.
-Run the fast, non-compiling subset with:
+The authoritative local mirror of CI's `lint` job is:
 
 ```bash
-./scripts/pre-tag-check.sh --quick
+BASE_SHA=origin/main ./scripts/run_lint_gates.sh
 ```
 
-That is every gate in the `lint` job that doesn't compile anything, so it
-costs seconds. Drop `--quick` to add the docs linter, `cargo check`, and
-Clippy; it also runs `cargo deny` when installed. The script prints every
-failure in one pass rather than one per push.
+It derives its command list from `.github/workflows/test.yml` at run time, so
+it cannot drift from what CI does, and it also covers the `warnings` and
+`check` tiers. `--list` prints the set without running it, `--self-test`
+proves the extraction still works, and `SKIP_COMPILE_GATES=1` drops the
+compiling tiers while its summary line says they were skipped. It needs
+PyYAML, which only the workflow pins:
+`python3 -m pip install PyYAML==6.0.2`.
+
+`./scripts/pre-tag-check.sh --quick` is the legacy fast subset — the
+no-compile gates in seconds rather than minutes, which is the right tool for
+a tight loop. Without `--quick` it also runs the docs linter, `cargo check`,
+Clippy, and `cargo deny` when installed. It is not the full job; the line
+above is, and a fast run must not stand in for a full one.
+
+Both print every failure in one pass rather than one per push.
 
 Behavioral changes (HIR, codegen, runtime) also need the conformance suite,
 which diffs compiled programs byte-for-byte against Node:
