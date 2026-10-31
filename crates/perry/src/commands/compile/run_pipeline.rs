@@ -3090,6 +3090,30 @@ pub fn run_with_parse_cache(
             }
         }
     }
+
+    // A module that namespace-imports ITSELF (`import * as Self from
+    // "./this-module.ts"`) is its own namespace consumer: it needs its own
+    // `@__perry_ns_<prefix>` global emitted and populated, which is what
+    // membership in this set means. The populator runs before the module's
+    // top-level body (see `CompileOptions::namespace_self_import`), because
+    // that body may hand the whole namespace to a function that enumerates it
+    // — trails' activesupport does exactly that through `include()`.
+    for (path, hir_module) in &ctx.native_modules {
+        let self_namespace_import = hir_module.imports.iter().any(|import| {
+            !import.type_only
+                && !import.runtime_erased
+                && import.specifiers.iter().any(|spec| {
+                    matches!(spec, perry_hir::ImportSpecifier::Namespace { .. })
+                })
+                && import
+                    .resolved_path
+                    .as_deref()
+                    .is_some_and(|resolved| Path::new(resolved) == path.as_path())
+        });
+        if self_namespace_import {
+            dyn_target_paths.insert(path.clone());
+        }
+    }
     // #7189: `export * as ns from "./m.ts"` names a member whose VALUE is
     // another module's namespace object. That object is exactly what
     // `@__perry_ns_<prefix>` already holds for dynamic-import targets, and
@@ -6166,6 +6190,26 @@ pub fn run_with_parse_cache(
             disable_buffer_fast_path,
             namespace_imports,
             namespace_source_prefixes,
+            // A module that namespace-imports ITSELF (`import * as Self from
+            // "./this-module.ts"`) is its own namespace consumer: its
+            // `@__perry_ns_<prefix>` populator must run before its top-level
+            // body, because that body may pass the whole namespace to a
+            // function that enumerates it. Per-member reads already worked,
+            // which is why the undefined value stayed silent.
+            namespace_self_import: ctx.native_modules.get(path).is_some_and(|hir_module| {
+
+                hir_module.imports.iter().any(|import| {
+                    !import.type_only
+                        && !import.runtime_erased
+                        && import.specifiers.iter().any(|spec| {
+                            matches!(spec, perry_hir::ImportSpecifier::Namespace { .. })
+                        })
+                        && import
+                            .resolved_path
+                            .as_deref()
+                            .is_some_and(|resolved| Path::new(resolved) == path.as_path())
+                })
+            }),
             namespace_member_nested: namespace_member_nested.into_iter().collect(),
             cjs_interop_namespaces: cjs_interop_namespaces.into_iter().collect(),
             imported_classes,
