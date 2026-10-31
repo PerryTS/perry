@@ -405,7 +405,7 @@ pub fn extract_object_literal_exports_from_require(source: &str) -> Vec<(String,
 /// through `__toCommonJS` into `module.exports`.
 pub fn extract_exports_from_source(source: &str) -> Vec<String> {
     let mut names = Vec::new();
-    let push_unique = |names: &mut Vec<String>, name: &str| {
+    for_each_export_write(source, &mut |name, _| {
         if name == "__esModule" {
             return;
         }
@@ -426,8 +426,73 @@ pub fn extract_exports_from_source(source: &str) -> Vec<String> {
         if !names.contains(&owned) {
             names.push(owned);
         }
-    };
+    });
+    names
+}
 
+/// True when this module provably puts its own top-level binding `name` on
+/// `exports` under the key `name`: at least one recognized export write of
+/// that key exists, and every one of them stores exactly the bare identifier
+/// `name` (`exports.X = X`, `module.exports = { X }`, `{ X: X }`, or
+/// esbuild's `__export(t, { X: () => X })`). Any other write of the key (a
+/// different value, a defineProperty descriptor) refutes it. Only then may
+/// the wrap surface the key as the binding itself (`export { X }`); otherwise
+/// the key's value is read from `module.exports`.
+pub fn export_key_is_own_binding(source: &str, name: &str) -> bool {
+    let mut proven = false;
+    let mut refuted = false;
+    for_each_export_write(source, &mut |key, value| {
+        if key != name {
+            return;
+        }
+        if value.is_some_and(|value| value_is_bare_identifier(value, name)) {
+            proven = true;
+        } else {
+            refuted = true;
+        }
+    });
+    proven && !refuted
+}
+
+/// Does the expression text `value` (which may run on to the end of the
+/// source) consist of exactly the identifier `name`? The identifier must end
+/// the expression: the next token is a statement or list terminator, or an
+/// ASI line break followed by a token that cannot continue the expression.
+fn value_is_bare_identifier(value: &str, name: &str) -> bool {
+    let Some(rest) = value.trim_start().strip_prefix(name) else {
+        return false;
+    };
+    let after = rest.trim_start_matches([' ', '\t']);
+    let Some(&next) = after.as_bytes().first() else {
+        return true;
+    };
+    if matches!(next, b';' | b',' | b'}' | b')') {
+        return true;
+    }
+    if !matches!(next, b'\n' | b'\r') {
+        return false;
+    }
+    let following = after.trim_start();
+    let Some(&first) = following.as_bytes().first() else {
+        return true;
+    };
+    let word_len = following
+        .bytes()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == b'_' || *c == b'$')
+        .count();
+    let word = &following[..word_len];
+    ((first.is_ascii_alphabetic() || first == b'_' || first == b'$')
+        && word != "in"
+        && word != "instanceof")
+        || matches!(first, b';' | b'}')
+}
+
+/// Calls `out(key, value)` for every recognized write of a named export key.
+/// `value` is the written expression's text (for an assignment, the source
+/// from after its `=` on; for an object-literal entry, the entry's value; for
+/// an esbuild getter, the getter's body expression), or `None` when the shape
+/// does not show the stored value textually (a defineProperty descriptor).
+fn for_each_export_write(source: &str, out: &mut dyn FnMut(&str, Option<&str>)) {
     // Shape 1: `exports.X = ...` / `module.exports.X = ...`
     // The boundary class excludes `.` so `e.exports.X = …` (a property write on
     // some OTHER object — e.g. a webpack/ncc inner module's own exports param,
@@ -449,8 +514,8 @@ pub fn extract_exports_from_source(source: &str) -> Vec<String> {
         .into_iter()
         .flatten()
     {
-        if let Some(m) = cap.get(1) {
-            push_unique(&mut names, m.as_str());
+        if let (Some(write), Some(m)) = (cap.get(0), cap.get(1)) {
+            out(m.as_str(), Some(&source[write.end()..]));
         }
     }
 
@@ -472,8 +537,8 @@ pub fn extract_exports_from_source(source: &str) -> Vec<String> {
         .into_iter()
         .flatten()
     {
-        if let Some(m) = cap.get(1) {
-            push_unique(&mut names, m.as_str());
+        if let (Some(write), Some(m)) = (cap.get(0), cap.get(1)) {
+            out(m.as_str(), Some(&source[write.end()..]));
         }
     }
 
@@ -503,7 +568,7 @@ pub fn extract_exports_from_source(source: &str) -> Vec<String> {
             .get(call.start()..)
             .is_some_and(|rest| rest.starts_with(b"Object"))
         {
-            push_unique(&mut names, cap.get(2).unwrap().as_str());
+            out(cap.get(2).unwrap().as_str(), None);
         }
     }
 
@@ -605,7 +670,7 @@ pub fn extract_exports_from_source(source: &str) -> Vec<String> {
         }
         let body_end = q - 1; // points at the closing `}`
         let body = &source[body_start..body_end];
-        extract_object_literal_keys(body, &mut |name| push_unique(&mut names, name));
+        extract_object_literal_entries(body, &mut |name, value| out(name, Some(value)));
         search_from = q;
     }
 
@@ -683,22 +748,33 @@ pub fn extract_exports_from_source(source: &str) -> Vec<String> {
         }
         if depth == 0 {
             let body = &source[open + 1..q - 1];
-            extract_object_literal_keys(body, &mut |name| push_unique(&mut names, name));
+            // Each entry is a getter `() => <expr>`; the export's value is
+            // `<expr>`. Any other entry form does not show the value.
+            extract_object_literal_entries(body, &mut |name, value| {
+                let getter_body = value
+                    .trim_start()
+                    .strip_prefix("()")
+                    .and_then(|rest| rest.trim_start().strip_prefix("=>"));
+                out(name, getter_body);
+            });
         }
     }
-
-    names
 }
 
-/// Extract top-level keys from an object-literal body (the text between
+/// Extract top-level entries from an object-literal body (the text between
 /// `{` and `}`, exclusive). Skips nested braces / brackets / parens so
 /// `fn: function() { return 1; }` doesn't pull `return` as a key. Calls
-/// `out` with each shorthand or `name:` key encountered at depth 0.
-pub fn extract_object_literal_keys(body: &str, out: &mut dyn FnMut(&str)) {
+/// `out(key, value)` for each shorthand or `name:` entry at depth 0: the
+/// shorthand `{ name }` reports `name` itself as its value, `{ name: <expr> }`
+/// reports `<expr>` (up to the next depth-0 `,` or the end of the body).
+fn extract_object_literal_entries(body: &str, out: &mut dyn FnMut(&str, &str)) {
     let bytes = body.as_bytes();
     let mut i = 0;
     let mut at_entry_start = true;
     let mut depth: i32 = 0;
+    // An explicit `name: <expr>` entry whose value is still being scanned:
+    // (key start, key end, value start).
+    let mut open_entry: Option<(usize, usize, usize)> = None;
     while i < bytes.len() {
         let b = bytes[i];
         match b {
@@ -712,6 +788,9 @@ pub fn extract_object_literal_keys(body: &str, out: &mut dyn FnMut(&str)) {
                 i += 1;
             }
             b',' if depth == 0 => {
+                if let Some((key_start, key_end, value_start)) = open_entry.take() {
+                    out(&body[key_start..key_end], &body[value_start..i]);
+                }
                 at_entry_start = true;
                 i += 1;
             }
@@ -739,8 +818,10 @@ pub fn extract_object_literal_keys(body: &str, out: &mut dyn FnMut(&str)) {
                         j += 1;
                     }
                     // Accept shorthand (`,` / end-of-body) or explicit key (`:`).
-                    if j == bytes.len() || bytes[j] == b',' || bytes[j] == b':' {
-                        out(name);
+                    if j == bytes.len() || bytes[j] == b',' {
+                        out(name, name);
+                    } else if bytes[j] == b':' {
+                        open_entry = Some((start, i, j + 1));
                     }
                     at_entry_start = false;
                 } else {
@@ -756,5 +837,8 @@ pub fn extract_object_literal_keys(body: &str, out: &mut dyn FnMut(&str)) {
                 i += 1;
             }
         }
+    }
+    if let Some((key_start, key_end, value_start)) = open_entry {
+        out(&body[key_start..key_end], &body[value_start..]);
     }
 }

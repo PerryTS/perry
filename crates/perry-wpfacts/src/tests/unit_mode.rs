@@ -599,3 +599,6 @@ mod commonjs_helper;
 mod forwarded_literal_copies;
 #[path = "unit_mode/pub_callable.rs"]
 mod pub_callable;
+
+#[path = "unit_mode/method_on_read.rs"]
+mod method_on_read;

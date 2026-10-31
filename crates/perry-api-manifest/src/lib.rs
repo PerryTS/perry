@@ -351,6 +351,7 @@ pub fn is_node_core_module(module: &str) -> bool {
             | "timers"
             | "timers/promises"
             | "tls"
+            | "trace_events"
             | "tty"
             | "url"
             | "util"

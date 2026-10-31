@@ -1172,8 +1172,12 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
         is_global_value_builtin_name(n) && !identifier_is_declared_binding(source, n)
     };
     let export_snapshot = |n: &str| {
-        if flat_default_class.is_some() || builtin_value_global_collision(n) {
-            // Flat emission keeps the original bindings at module scope.
+        if flat_default_class.is_some()
+            || builtin_value_global_collision(n)
+            || hoisted_class_names.iter().any(|class| class == n)
+        {
+            // Flat emission keeps the original bindings at module scope, and
+            // a hoisted class is a module-scope binding of the same name.
             // Alias all snapshots, including destructuring and multi-declarator
             // bindings the lexical scanner misses. Read the CJS property, which
             // can differ from the same-named original binding.
@@ -1181,16 +1185,6 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
         } else {
             format!("export const {n} = _cjs.{n};")
         }
-    };
-
-    let direct_class_exports = if hoisted_class_names.is_empty() {
-        String::new()
-    } else {
-        hoisted_class_names
-            .iter()
-            .map(|n| format!("export {{ {} }};", n))
-            .collect::<Vec<_>>()
-            .join("\n")
     };
 
     // Issue #665 follow-up: detect `(?:module\.)?exports\.X = require('Y')`
@@ -1253,9 +1247,27 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
         .map(|(n, _)| n.clone())
         .collect();
 
+    // A hoisted class surfaces as a direct binding (`export { X }`, keeping
+    // class identity for the consumer) only under an export key the module
+    // actually writes, and only when every write of that key stores the class
+    // binding itself (`exports.X = X`) and the binding is never reassigned.
+    // A namespace holds exactly the module's exports: a hoisted class the
+    // module keeps private is no export, and a key holding another value
+    // (`exports.X = wrap(X)`) is read from `module.exports` like any other.
+    let direct_class_names: Vec<&String> = hoisted_class_names
+        .iter()
+        .filter(|n| named_exports.contains(n) && !named_reexport_names.contains(n))
+        .filter(|n| export_key_is_own_binding(source, n) && !identifier_is_reassigned(source, n))
+        .collect();
+    let direct_class_exports = direct_class_names
+        .iter()
+        .map(|n| format!("export {{ {n} }};"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
     let named_export_decls = named_exports
         .iter()
-        .filter(|n| !hoisted_class_names.contains(n))
+        .filter(|n| !direct_class_names.contains(n))
         .filter(|n| !named_reexport_names.contains(n))
         .map(|n| export_snapshot(n))
         .collect::<Vec<_>>()
@@ -1750,14 +1762,6 @@ function __perry_require_static_{i}() {{
         // still carries any sibling classes we DID hoist; `{flat_class}` itself
         // was refused a hoist (it closes over an IIFE-local), so it stays in
         // `{body_for_iife}` and lands at module scope here unchanged.
-        // An explicit CJS property with the class's name already has its
-        // snapshot/re-export below. Do not export that name a second time.
-        let flat_class_named_export =
-            if named_exports.contains(flat_class) || named_reexport_names.contains(flat_class) {
-                String::new()
-            } else {
-                format!("export {{ {flat_class} }};")
-            };
         format!(
             r#"{imports}
 {cjs_link_decls}
@@ -1770,7 +1774,6 @@ function __perry_require_static_{i}() {{
 const _cjs = __cjs_module.exports;
 {path_register}
 export default {flat_class};
-{flat_class_named_export}
 {direct_class_exports}
 {direct_named_reexports}
 {named_export_decls}
