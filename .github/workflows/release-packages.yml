@@ -667,7 +667,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - os: macos-15
             target: aarch64-apple-darwin
             artifact: perry-macos-aarch64
             wasi: true
@@ -1766,7 +1766,7 @@ jobs:
   #   manifest.json         (perry_version + target_triple + sha256+size per file)
   #
   # Each matrix entry runs on the natural host runner for its toolchain:
-  #   - Apple targets: macos-14 (real Xcode + SDKs)
+  #   - Apple targets: macos-15 (real Xcode + SDKs)
   #   - Android      : ubuntu-24.04 + pre-installed NDK
   #   - Windows MSVC : windows-latest (clang-cl + lib.exe)
   # — so no Linux→Apple sysroot or Linux→Windows VM dance is needed inside
@@ -1781,7 +1781,7 @@ jobs:
       matrix:
         include:
           # --- Apple, Tier-2 (stable) ---------------------------------------
-          - os: macos-14
+          - os: macos-15
             target: aarch64-apple-darwin
             ui_crate: perry-ui-macos
             ui_lib: libperry_ui_macos.a
@@ -1789,11 +1789,11 @@ jobs:
             target: x86_64-apple-darwin
             ui_crate: perry-ui-macos
             ui_lib: libperry_ui_macos.a
-          - os: macos-14
+          - os: macos-15
             target: aarch64-apple-ios
             ui_crate: perry-ui-ios
             ui_lib: libperry_ui_ios.a
-          - os: macos-14
+          - os: macos-15
             target: aarch64-apple-ios-sim
             ui_crate: perry-ui-ios
             ui_lib: libperry_ui_ios.a
