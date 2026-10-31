@@ -321,3 +321,37 @@ fn a_copy_of_a_published_body_is_an_internal_compiler_error() {
         .collect();
     crate::decl_units::flatten(m, &all);
 }
+
+#[test]
+fn a_deep_chain_flattens_on_a_test_thread_stack() {
+    // The run-once view copies the statements of the bodies it flattens. A
+    // derived `Expr::clone` recursed per operand, about 16 KB a level in a
+    // debug build: the 150 operands below took about 2.4 MB, beyond the 2 MB
+    // of a test thread (the 64 of
+    // `a_closed_local_called_only_in_its_unit_costs_its_own_stores` took 1.1).
+    let n = 150;
+    let sum: Vec<String> = (0..n).map(|i| format!("o.k{i}")).collect();
+    let src = format!(
+        "function run(o: any) {{ return {}; }}\nconst r = run({{}});\nconsole.log(r);\n",
+        sum.join(" + ")
+    );
+    let h = hirs(&[("a", src.as_str())]);
+    let flat = crate::decl_units::run_once_flat(&h[0].1).expect("`run` runs once");
+    assert!(flat.functions.iter().all(|f| f.name != "run"), "`run` is flat");
+    // `r` is bound to the chain: n - 1 additions down its left spine.
+    let r = flat
+        .init
+        .iter()
+        .find_map(|s| match s {
+            Stmt::Let { name, init: Some(e), .. } if name == "r" => Some(e),
+            _ => None,
+        })
+        .expect("the `let` of `r`");
+    let mut depth = 0;
+    let mut at = r;
+    while let Expr::Binary { left, .. } = at {
+        depth += 1;
+        at = left;
+    }
+    assert_eq!(depth, n - 1, "{at:?}");
+}
