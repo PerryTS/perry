@@ -135,6 +135,12 @@ pub struct Gen<'a> {
     /// (`sunk_fields`, its nodes `sunk_field_toks`). `all_sunk`: the
     /// published objects whose fields all leave.
     pub leaving: Vec<Tok>,
+    /// This unit's literals handed to another unit's closed function
+    /// (decision 13) and the literals of this unit their described fields
+    /// hold: the argument contract describes their fields as a published
+    /// literal's (`nested_fields`), but nothing of them leaves: the closed
+    /// callee's uses come back through its contract.
+    pub handed: Vec<Tok>,
     pub field_layouts: FxHashMap<(TmplId, Atom), Vec<TmplId>>,
     pub field_prims: crate::pts::FxHashSet<(TmplId, Atom)>,
     /// A field holding other units' stand-ins (builtins, unknown values)
@@ -408,6 +414,7 @@ impl<'a> Gen<'a> {
             fn_contracts: Vec::new(),
             ret_ok: Default::default(),
             leaving: Vec::new(),
+            handed: Vec::new(),
             field_layouts: FxHashMap::default(),
             field_prims: Default::default(),
             field_values: FxHashMap::default(),
