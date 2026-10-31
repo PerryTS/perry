@@ -105,14 +105,14 @@ def main():
         if status:
             raise SystemExit(status if status > 0 else 1)
 
-    def build_guest(directory, prefix=""):
+    def build_guest(directory, prefix="", environment=None):
         generated = directory / "generated"
         run(prefix + "guest-bindings", [args.wit.resolve(), "--guest-c", directory / "world.wit",
                                generated, "plugin"])
         library = directory / "libtransform.a"
         run(prefix + "compile-guest", [args.perry.resolve(), "compile", directory / "guest.ts",
                               "--target", "wasi", "--output-type", "staticlib",
-                              "--no-auto-optimize", "--no-cache", "-o", library])
+                              "--no-auto-optimize", "--no-cache", "-o", library], environment=environment)
         component = directory / "transform.component.wasm"
         # wasi-sdk's P2 driver componentizes the linked reactor, combining the
         # application WIT metadata with its libc/WASI imports. Include all TS
@@ -155,7 +155,13 @@ def main():
         expected="PASS canonical values: 14 import/export calls")
     resources = output / "resources"
     shutil.copytree(fixture.parent / "guest-resources", resources, dirs_exist_ok=True)
-    resource_component = build_guest(resources, "resources-")
+    # The moving run's guest knobs (perry-component-host `--resources-moving`)
+    # include PERRY_GC_DIAG, whose `[gc-copy-minor]` witness the GC diagnostics
+    # print; a program installs them only when the knob is set while compiling.
+    guest_env = env.copy()
+    if args.guest_moving_gc:
+        guest_env.update(PERRY_GC_FORCE_EVACUATE="1", PERRY_GC_VERIFY_EVACUATION="1", PERRY_GC_DIAG="1")
+    resource_component = build_guest(resources, "resources-", guest_env)
     run("run-resources", [host, resource_component, "--resources"], timeout=120,
         expected="PASS Perry guest resources: imported ownership, rollback, nested transfers, exported payload GC, expired borrows, 51 explicit destructions, deferred cleanup, trap")
     if args.guest_moving_gc:
