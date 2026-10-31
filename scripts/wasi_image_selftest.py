@@ -33,6 +33,11 @@ FLAVOURS = {
     "p1": ("wasm32-wasip1", "wasip1", ["-W", "exceptions=y"]),
 }
 MINIMUM_CHECKS = 4
+# Moving collections with the evacuation verifier, and their log. These are GC
+# diagnostics: a program installs them only when they are set while compiling,
+# so the same knobs go to the compile and to the run.
+GC_KNOBS = {"PERRY_GC_FORCE_EVACUATE": "1", "PERRY_GC_VERIFY_EVACUATION": "1",
+            "PERRY_GC_DIAG": "1", "PERRY_GC_LOG": "1"}
 
 
 def main() -> int:
@@ -76,7 +81,7 @@ def main() -> int:
         wasm = work / "selftest.wasm"
         (work / "ir").mkdir()
         compile_env = dict(os.environ, PERRY_NO_AUTO_OPTIMIZE="1", PERRY_NO_CACHE="1",
-                           PERRY_RUNTIME_DIR=str(archive_dir), PERRY_SAVE_LL=str(work / "ir"))
+                           PERRY_RUNTIME_DIR=str(archive_dir), PERRY_SAVE_LL=str(work / "ir"), **GC_KNOBS)
         compiled = subprocess.run([str(perry), "compile", str(source), "--target", perry_target, "-o", str(wasm)],
                                   cwd=work, env=compile_env, capture_output=True, text=True)
         if compiled.returncode or not wasm.is_file():
@@ -90,8 +95,7 @@ def main() -> int:
             sys.exit(f"coalescing gate needs two defining LLVM modules, found {definitions}")
         executed = subprocess.run(
             [args.wasmtime, "run", *wasmtime_flags,
-             "--env", "PERRY_GC_FORCE_EVACUATE=1", "--env", "PERRY_GC_VERIFY_EVACUATION=1",
-             "--env", "PERRY_GC_DIAG=1", "--env", "PERRY_GC_LOG=1", str(wasm)],
+             *(arg for knob, value in GC_KNOBS.items() for arg in ("--env", f"{knob}={value}")), str(wasm)],
             cwd=work, capture_output=True, text=True)
     sys.stdout.write(executed.stdout)
     sys.stderr.write(executed.stderr)
@@ -104,8 +108,11 @@ def main() -> int:
     passed, section_bytes = int(summary.group(1)), int(summary.group(4))
     if passed < MINIMUM_CHECKS or section_bytes == 0:
         sys.exit(f"selftest too weak: {passed} checks, {section_bytes}-byte perry_strings section")
-    copying = re.search(r"copying_minors=(\d+)", executed.stderr)
-    if not copying or int(copying.group(1)) == 0 or executed.stderr.count("[gc-log] kind=full") < 4:
+    # A verified evacuating minor (the `copying_minors` counter is an
+    # instrument, absent from this uninstrumented archive) and one full
+    # collection per collect().
+    verified = len(re.findall(r"^\[gc-verify\] minor=\d+ evacuation_ok ", executed.stderr, re.M))
+    if verified == 0 or executed.stderr.count("[gc-log] kind=full") < 4:
         sys.exit("the moving/full-collection subject was not live")
     seeds = re.search(r"wasm static seeds: (\d+) seeds, (\d+) image, (\d+) by-names mints", executed.stderr)
     if not seeds or int(seeds.group(1)) < 2 or seeds.group(1) != seeds.group(2) or int(seeds.group(3)) != 0:
