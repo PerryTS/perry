@@ -338,6 +338,10 @@ struct State {
     /// The thread that runs module evaluation; the runner tracks only its
     /// memory (a worker agent has its own heap regions).
     main_tid: i64,
+    /// Single steps of other threads: (tid, page). Those accesses belong
+    /// to no init; they are stepped through and counted.
+    foreign: [(i64, usize); 64],
+    foreign_faults: u64,
     realm: (usize, usize),
     d_mode: bool,
     perf_fd: i32,
@@ -455,6 +459,8 @@ unsafe fn start(out: String) {
         rset_word: 0,
         in_handler: 0,
         main_tid: libc::syscall(libc::SYS_gettid),
+        foreign: [(0, 0); 64],
+        foreign_faults: 0,
         realm,
         d_mode: false,
         perf_fd: open_instruction_counter(),
@@ -1167,10 +1173,21 @@ extern "C" fn on_segv(sig: libc::c_int, info: *mut libc::siginfo_t, ctx: *mut li
         let st = &mut *st_ptr;
         let tid = libc::syscall(libc::SYS_gettid);
         if tid != st.main_tid {
+            let page = addr & !(PAGE - 1);
+            let tracked = page_flags(st, page).is_some_and(|f| *f & PF_TRACKED != 0);
+            let free = st.foreign.iter().position(|e| e.0 == 0);
+            if !tracked || free.is_none() {
+                let uc = ctx as *mut libc::ucontext_t;
+                let pc = (*uc).uc_mcontext.gregs[libc::REG_RIP as usize] as u64;
+                diag(&[0x7d, tid as u64, addr as u64, pc]);
+                return chain(std::ptr::addr_of!(PREV_SEGV.0).cast(), sig);
+            }
+            st.foreign_faults += 1;
+            st.foreign[free.unwrap()] = (tid, page);
+            libc::mprotect(page as *mut _, PAGE, libc::PROT_READ | libc::PROT_WRITE);
             let uc = ctx as *mut libc::ucontext_t;
-            let pc = (*uc).uc_mcontext.gregs[libc::REG_RIP as usize] as u64;
-            diag(&[0x7d, tid as u64, addr as u64, pc]);
-            return chain(std::ptr::addr_of!(PREV_SEGV.0).cast(), sig);
+            (*uc).uc_mcontext.gregs[libc::REG_EFL as usize] |= EFLAGS_TF;
+            return;
         }
         if st.in_handler > 0 {
             let uc = ctx as *mut libc::ucontext_t;
@@ -1241,6 +1258,27 @@ unsafe fn on_segv_inner(
 extern "C" fn on_trap(sig: libc::c_int, _info: *mut libc::siginfo_t, ctx: *mut libc::c_void) {
     unsafe {
         let st_ptr = ANCHOR.state.load(Relaxed);
+        if !st_ptr.is_null() {
+            let st = &mut *st_ptr;
+            let tid = libc::syscall(libc::SYS_gettid);
+            if tid != st.main_tid {
+                let mut mine = false;
+                for k in 0..st.foreign.len() {
+                    if st.foreign[k].0 == tid {
+                        let page = st.foreign[k].1;
+                        st.foreign[k] = (0, 0);
+                        libc::mprotect(page as *mut _, PAGE, policy(st, page));
+                        mine = true;
+                    }
+                }
+                if mine {
+                    let uc = ctx as *mut libc::ucontext_t;
+                    (*uc).uc_mcontext.gregs[libc::REG_EFL as usize] &= !EFLAGS_TF;
+                    return;
+                }
+                return chain(std::ptr::addr_of!(PREV_TRAP.0).cast(), sig);
+            }
+        }
         if st_ptr.is_null() || (*st_ptr).pending[0] == 0 {
             return chain(std::ptr::addr_of!(PREV_TRAP.0).cast(), sig);
         }
@@ -1752,6 +1790,7 @@ fn write_report(st: &mut State) {
         let _ = writeln!(f, "#digest_total\t{total:016x}\t{}", per.len());
     }
     let _ = writeln!(f, "#excluded\t{}", st.excluded);
+    let _ = writeln!(f, "#foreign_thread_faults\t{}", st.foreign_faults);
     let _ = writeln!(f, "#untracked_slots\t{}\tof\t{}", st.untracked_slots, st.globals.len);
     for (what, pcs) in &st.realm_hosts {
         let pcs: Vec<String> = pcs.iter().map(|p| format!("{p:x}")).collect();
