@@ -19,8 +19,13 @@ fn unicode_symbol_names_survive_stack_map_compaction() {
             .expect("stack map rewritten");
         assert_eq!(stats.functions, 1);
         assert!(out.contains(&format!("{symbol}:")), "{target}: {out}");
-        if !target.contains("linux") {
-            assert!(out.contains(&format!("{symbol}-_perry_gc_map")), "{out}");
+        if target.contains("apple") {
+            assert!(out.contains(&format!("{symbol}-lperry_gcmap0")), "{out}");
+        } else if target.contains("windows") {
+            assert!(out.contains(&format!("{symbol}-.Lperry_gcmap0")), "{out}");
+            assert!(out.contains(&format!(",associative,{symbol}\n")), "{out}");
+        } else {
+            assert!(out.contains(&format!(",\"ao\",@progbits,{symbol},unique,")), "{out}");
         }
     }
 }
@@ -86,12 +91,12 @@ fn sample_asm() -> String {
 /// offset** and a `.word` **32-bit `Offset` field per location**, which is
 /// what makes the width of `.word` load-bearing rather than cosmetic.
 #[test]
-fn every_target_emits_the_same_blob_with_a_relative_function_field() {
-    // v6 (#11508): the function field is `fn - blob_start`, a 32-bit link-time
+fn every_target_emits_the_same_entry_with_a_relative_function_field() {
+    // v6 (#11508): the function field is `fn - entry`, a 32-bit link-time
     // constant, on every target. An absolute `.quad fn` would put one dynamic
     // relocation per function into the linked image (applied eagerly at load,
     // dirtying the table's pages) and force the section writable.
-    let mut blobs = Vec::new();
+    let mut entries = Vec::new();
     for target in [
         "arm64-apple-macosx15.0.0",
         "arm64_32-apple-watchos",
@@ -102,124 +107,120 @@ fn every_target_emits_the_same_blob_with_a_relative_function_field() {
             .unwrap_or_else(|e| panic!("{target} must parse: {e}"))
             .unwrap_or_else(|| panic!("{target} must be rewritten"));
         // ELF names the entry by a local label (see
-        // `elf_names_each_function_by_a_local_entry_label`).
+        // `elf_names_each_function_by_a_local_entry_label`); Mach-O labels are
+        // linker-private `l` symbols, each its own atom.
         let entry = if target.contains("linux") {
             ".Lperry_gcmap_fn0"
         } else {
             "_probe_fn"
         };
+        let (map, rec) = if target.contains("apple") {
+            ("lperry_gcmap0", "lperry_gcrec0")
+        } else {
+            (".Lperry_gcmap0", ".Lperry_gcrec0")
+        };
         assert!(
-            out.contains(&format!("\t.long\t{entry}-_perry_gc_map\n")),
-            "{target}: the function field must be relative to the blob:\n{out}"
+            out.contains(&format!("\t.long\t{entry}-{map}\n")),
+            "{target}: the function field must be relative to the entry:\n{out}"
         );
         assert!(
             !out.contains(".quad"),
             "{target}: an absolute address is a dynamic relocation:\n{out}"
         );
+        assert_eq!(GC_MAP_VERSION, 9);
         assert!(
-            out.contains(&format!("\t.byte\t{GC_MAP_VERSION}\n")),
-            "the emitted blob must declare the version the runtime expects:\n{out}"
+            out.contains(&format!("\t.long\t{}\n", 1 | u32::from(GC_MAP_VERSION) << 24)),
+            "the entry must carry its record count and the version the runtime expects:\n{out}"
         );
-        assert_eq!(GC_MAP_VERSION, 8);
-        // v8 directory: 32-byte header + one 20-byte function entry; records:
-        // one 4-byte instruction offset + a 3-byte root stream, on ILP32 and
-        // LP64 alike.
-        assert_eq!(stats.compact_bytes, 32 + 20 + 4 + 3, "{target}");
+        // v9: one 20-byte entry; records: one 4-byte instruction offset + a
+        // 3-byte root stream, on ILP32 and LP64 alike.
+        assert_eq!(stats.compact_bytes, 20 + 4 + 3, "{target}");
         assert!(
-            out.contains("\t.long\t_perry_gc_rec-_perry_gc_map\n"),
-            "{target}: the directory names its records by a link-time offset:\n{out}"
+            out.contains(&format!("\t.long\t{rec}-{map}\n")),
+            "{target}: the entry names its records by a link-time offset:\n{out}"
         );
-        // Everything after the section directive is format-independent.
-        let blob = &out[out.find("_perry_gc_map:").expect("label")..];
-        blobs.push(blob.replace(entry, "ENTRY"));
+        assert!(out.contains("\t.long\t7\n"), "{target}: records length:\n{out}");
+        // Everything after the entry label is format-independent.
+        let blob = &out[out.find(&format!("{map}:")).expect("label")..];
+        entries.push(blob.replace(entry, "ENTRY").replace(map, "MAP").replace(rec, "REC"));
     }
     assert!(
-        blobs.windows(2).all(|pair| pair[0] == pair[1]),
-        "{blobs:#?}"
+        entries.windows(2).all(|pair| pair[0] == pair[1]),
+        "{entries:#?}"
     );
 }
 
 #[test]
 fn the_map_section_is_read_only_where_the_format_allows() {
     // Nothing in a v6 blob needs a load-time fixup, so ELF drops SHF_WRITE
-    // (keeping SHF_GNU_RETAIN, or `--gc-sections` discards the map) and COFF
-    // is `dr`, not `dw`.
+    // and COFF is `dr`, not `dw`. v9: nothing is retained by itself; ELF ties
+    // each section to its function's (`o`), COFF makes it associative.
     let (elf, _) = compact_stack_map_asm(&x86_64_elf_sample_asm(""), "x86_64-unknown-linux-gnu")
         .expect("parses")
         .expect("rewritten");
     assert!(
-        elf.contains("\t.section\t.perry_gcmap,\"aR\",@progbits\n"),
+        elf.contains("\t.section\t.perry_gcmap,\"ao\",@progbits,probe_fn,unique,1073741824\n"),
         "{elf}"
     );
     assert!(
-        elf.contains("\t.section\t.perry_gcrec,\"aR\",@progbits\n"),
+        elf.contains("\t.section\t.perry_gcrec,\"ao\",@progbits,probe_fn,unique,1073741825\n"),
         "{elf}"
     );
     let (coff, _) = compact_stack_map_asm(&sample_asm(), "x86_64-pc-windows-msvc")
         .expect("parses")
         .expect("rewritten");
-    assert!(coff.contains("\t.section\t.pgcmap,\"dr\"\n"), "{coff}");
-    assert!(coff.contains("\t.section\t.pgcrec,\"dr\"\n"), "{coff}");
+    assert!(
+        coff.contains("\t.section\t.pgcmap$m,\"dr\",associative,_probe_fn\n"),
+        "{coff}"
+    );
+    assert!(
+        coff.contains("\t.section\t.pgcrec$m,\"dr\",associative,_probe_fn\n"),
+        "{coff}"
+    );
+    assert!(!elf.contains("\"aR\"") && !coff.contains(".no_dead_strip"));
 }
 
-/// v8: the directory (what the runtime reads to build its index) and the
+/// v8/v9: the entries (what the runtime reads to build its index) and the
 /// records (what a collection reads per frame) are separate sections, so the
-/// linker gathers every module's directory into one contiguous run and the
-/// records stay untouched until a walk names them. Emitting the records
-/// inside the directory section would interleave them again — every
-/// directory page would fault in its neighbours' records.
+/// linker gathers every entry into one contiguous run and the records stay
+/// untouched until a walk names them.
 #[test]
-fn records_live_in_their_own_section_after_no_directory_bytes() {
+fn records_live_in_their_own_section_after_no_entry_bytes() {
     let (out, _) = compact_stack_map_asm(&x86_64_elf_sample_asm(""), "x86_64-unknown-linux-gnu")
         .expect("parses")
         .expect("rewritten");
-    let rec = out.find("_perry_gc_rec:").expect("records label");
-    let dir = out.find("_perry_gc_map:").expect("directory label");
+    let rec = out.find(".Lperry_gcrec0:").expect("records label");
+    let map = out.find(".Lperry_gcmap0:").expect("entry label");
     let rec_section = out[..rec].rfind("\t.section\t").expect("records section");
-    let dir_section = out[..dir].rfind("\t.section\t").expect("directory section");
+    let map_section = out[..map].rfind("\t.section\t").expect("entry section");
     assert!(
         out[rec_section..].starts_with("\t.section\t.perry_gcrec"),
         "{out}"
     );
     assert!(
-        out[dir_section..].starts_with("\t.section\t.perry_gcmap"),
+        out[map_section..].starts_with("\t.section\t.perry_gcmap"),
         "{out}"
     );
-    // Nothing but directory words between the directory label and the next
-    // section switch: 8 header directives + 5 per function.
-    let tail = &out[dir..];
+    // Nothing but the entry's five words between its label and the next
+    // section switch.
+    let tail = &out[map..];
     let end = tail[1..].find("\t.section").map_or(tail.len(), |i| i + 1);
-    let words = tail[..end]
-        .lines()
-        .filter(|l| {
-            l.starts_with("\t.long")
-                || l.starts_with("\t.short")
-                || l.starts_with("\t.byte")
-                || l.starts_with("\t.ascii")
-        })
-        .count();
-    assert_eq!(words, 1 + 2 + 1 + 6 + 5, "{}", &tail[..end]);
-    // The header and the one entry, as the runtime reads them.
     let longs: Vec<&str> = tail[..end]
         .lines()
         .filter_map(|l| l.strip_prefix("\t.long\t"))
         .collect();
-    assert_eq!(longs[0], "1", "function count");
+    let words = tail[..end]
+        .lines()
+        .filter(|l| l.starts_with("\t.long") || l.starts_with("\t.short") || l.starts_with("\t.byte"))
+        .count();
+    assert_eq!(words, 5, "{}", &tail[..end]);
+    assert_eq!(longs[0], ".Lperry_gcmap_fn0-.Lperry_gcmap0", "function field");
     assert_eq!(
-        longs[1], "52",
-        "directory length: 32-byte header + one 20-byte entry"
+        longs[2].parse::<u32>().unwrap() >> 24,
+        u32::from(GC_MAP_VERSION),
+        "the version rides in the record count's top byte"
     );
-    assert_eq!(longs[2], "_perry_gc_rec-_perry_gc_map", "records offset");
-    assert_eq!(
-        longs[4], longs[8],
-        "record total == the only function's record count"
-    );
-    assert_eq!(longs[5], "0", "reserved");
-    assert_eq!(
-        longs[9], "0",
-        "the first function's records start at record 0"
-    );
-    assert_eq!(longs[10], "0", "and at stream offset 0");
+    assert_eq!(longs[3], ".Lperry_gcrec0-.Lperry_gcmap0", "records offset");
 }
 
 /// A Linux plugin is linked `cc -shared` without `-Bsymbolic`, so an exported
@@ -237,7 +238,7 @@ fn elf_names_each_function_by_a_local_entry_label() {
         "the label must sit at the function's entry, right after its definition:\n{out}"
     );
     assert!(
-        out.contains("\t.long\t.Lperry_gcmap_fn0-_perry_gc_map\n"),
+        out.contains("\t.long\t.Lperry_gcmap_fn0-.Lperry_gcmap0\n"),
         "{out}"
     );
     assert!(
@@ -348,11 +349,11 @@ fn every_apple_target_is_accepted() {
             .unwrap_or_else(|e| panic!("{target} must parse: {e}"))
             .unwrap_or_else(|| panic!("{target} must be rewritten"));
         assert!(
-            out.contains("\t.long\t_probe_fn-_perry_gc_map\n"),
-            "{target} must emit a blob-relative function field:\n{out}"
+            out.contains("\t.long\t_probe_fn-lperry_gcmap0\n"),
+            "{target} must emit an entry-relative function field:\n{out}"
         );
         assert!(
-            out.contains("__PERRY_GCMAP,__perry_gcmap"),
+            out.contains("__PERRY_GCMAP,__perry_gcmap,regular,live_support"),
             "{target} must emit the section the runtime looks up:\n{out}"
         );
     }
@@ -402,8 +403,8 @@ fn aarch64_elf_word_directives_decode_to_the_right_root() {
     assert_eq!(stats.records, 1);
     // Four locations in, one root out: the three preamble constants drop.
     assert_eq!(stats.roots, 1, "the SP-relative root must survive");
-    assert!(out.contains("_perry_gc_map:"));
-    assert!(out.contains(".long\t.Lperry_gcmap_fn0-_perry_gc_map"));
+    assert!(out.contains(".Lperry_gcmap0:"));
+    assert!(out.contains(".long\t.Lperry_gcmap_fn0-.Lperry_gcmap0"));
     assert!(!out.contains("llvm_stackmaps"));
 }
 
@@ -456,14 +457,15 @@ fn compacts_and_keeps_only_real_roots() {
         stats.compact_bytes,
         stats.original_bytes
     );
-    assert!(out.contains("_perry_gc_map:"));
-    assert!(out.contains(".long\t_probe_fn-_perry_gc_map"));
+    assert!(out.contains("lperry_gcmap0:"));
+    assert!(out.contains(".long\t_probe_fn-lperry_gcmap0"));
     // The old section must be gone, and nothing may still name its label.
     assert!(!out.contains("__llvm_stackmaps"));
     assert!(!out.contains("__LLVM_StackMaps"));
-    // The dead-strip guard must survive, retargeted.
-    assert!(out.contains(".no_dead_strip\t_perry_gc_map"));
-    assert!(out.contains(".no_dead_strip\t_perry_gc_rec"));
+    // v9: nothing is kept by itself; `live_support` keeps each entry with
+    // its function, so no dead-strip guard is emitted.
+    assert!(!out.contains(".no_dead_strip"));
+    assert!(out.contains("__PERRY_GCMAP,__perry_gcmap,regular,live_support"));
 
     // Guard the -O3 ELF shapes that broke the aarch64-linux arm. Both are
     // GNU-as symbol assignments -- zero bytes, no leading directive -- so
@@ -597,7 +599,7 @@ fn elf_personality_slot_attributes_survive_the_rewrite() {
     // Order: map, then the attributes, then the slot's own section — the
     // layout LLVM printed, so the assembler sees exactly what it would
     // have seen without the rewrite.
-    let map = out.find("_perry_gc_map:").expect("compact map label");
+    let map = out.find("perry_gcmap0:").expect("compact map label");
     let hidden = out.find("\t.hidden\tDW.ref").expect("hidden directive");
     let weak = out.find("\t.weak\tDW.ref").expect("weak directive");
     let section = out
@@ -623,7 +625,7 @@ fn the_map_labels_own_attributes_are_not_carried() {
         .expect("an x86-64 ELF stack map must parse")
         .expect("an x86-64 ELF stack map must be rewritten");
     assert!(!out.contains("__LLVM_StackMaps"), "{out}");
-    assert!(out.contains("_perry_gc_map:"), "{out}");
+    assert!(out.contains("perry_gcmap0:"), "{out}");
 }
 
 /// The -O3 ELF absolute-symbol aliases land inside the block too. They
@@ -679,7 +681,7 @@ fn macho_alias_attributes_after_the_map_are_carried() {
     let assign = out
         .find("\n_m_ts_.fnname.0 = _perry_image_literal_0_66+8+20\n")
         .expect("the alias assignment must be re-emitted");
-    let map = out.find("_perry_gc_map:").expect("compact map label");
+    let map = out.find("perry_gcmap0:").expect("compact map label");
     let tail = out.find(".subsections_via_symbols").expect("epilogue");
     assert!(map < alt && alt < assign && assign < tail, "{out}");
 }
@@ -785,7 +787,7 @@ fn encodes_a_foreign_register_base() {
         .expect("block parses")
         .expect("a foreign base must still encode");
     assert_eq!(stats.roots, 1);
-    assert!(out.contains("_perry_gc_map:"));
+    assert!(out.contains("perry_gcmap0:"));
 }
 
 /// #7803: derived (interior) slots survive the encode/decode round trip,
