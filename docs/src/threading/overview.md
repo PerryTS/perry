@@ -248,6 +248,11 @@ port or its prototype. A private ID supplies the brand without observable getter
 or proxy traps; closing a port preserves its brand without retaining a closed
 runtime port in the delivery table. Listener methods and realm movement remain
 separate parity work.
+MessagePort `close(callback)` registers callable callbacks in the existing close
+listener sequence before closing. Repeated registrations preserve listener order
+and callback deduplication; non-callable callback values are ignored. This does
+not change queued-message flushing, endpoint close ordering or runtime-only
+fallback close-event support.
 Other worker API parity gaps remain.
 
 ## Next Steps

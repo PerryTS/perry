@@ -35,8 +35,8 @@ fn runtime_port_core_operations_preserve_closed_identity_without_retaining_state
         has_ref_port(std::ptr::null(), receiver(&first)).to_bits(),
         js_bool(true).to_bits()
     );
-    close(std::ptr::null(), receiver(&first));
-    close(std::ptr::null(), receiver(&second));
+    close(std::ptr::null(), receiver(&first), js_undefined());
+    close(std::ptr::null(), receiver(&second), js_undefined());
     assert!(!with_port_states(|map| map.contains_key(
         &(first.get_raw_mut_ptr::<ObjectHeader>() as usize)
     )));
