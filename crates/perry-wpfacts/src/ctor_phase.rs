@@ -9,7 +9,10 @@
 //!
 //! A leak is any use of `this` other than as the receiver of a named
 //! property read/write in this body: passing it, storing it, calling a
-//! method on it, capturing it in a closure. Conservative by construction:
+//! method on it (the callee receives it), capturing it in a closure, a
+//! `super` method call or accessor, and a read of a key not yet assigned
+//! that is no method of the class (it consults the prototype chain, where
+//! an accessor can run with `this`). Conservative by construction:
 //! everything unrecognised closes the phase.
 
 use perry_hir::walker::walk_expr_children;
@@ -37,6 +40,8 @@ struct St {
 
 struct W {
     ph: CtorPhase,
+    /// The class's own plain methods: reading one runs no code.
+    methods: BTreeSet<String>,
     late: BTreeSet<String>,
     read_before: BTreeSet<String>,
     exits: Vec<BTreeSet<String>>,
@@ -51,29 +56,32 @@ pub fn analyze(c: &Class) -> CtorPhase {
             (&f.init, named)
         })
         .collect();
+    let methods: BTreeSet<String> = c.methods.iter().map(|m| m.name.clone()).collect();
     match &c.constructor {
-        Some(ctor) => analyze_body(&fields, &ctor.params, &ctor.body),
-        None => analyze_body(&fields, &[], &[]),
+        Some(ctor) => analyze_body(&fields, methods, &ctor.params, &ctor.body),
+        None => analyze_body(&fields, methods, &[], &[]),
     }
 }
 
 /// The construction phase of a constructor-function body (`new f()`).
 pub fn analyze_fn(f: &perry_hir::Function) -> CtorPhase {
-    analyze_body(&[], &f.params, &f.body)
+    analyze_body(&[], BTreeSet::new(), &f.params, &f.body)
 }
 
 /// Same for a closure body used as a constructor.
 pub fn analyze_closure(params: &[perry_hir::Param], body: &[Stmt]) -> CtorPhase {
-    analyze_body(&[], params, body)
+    analyze_body(&[], BTreeSet::new(), params, body)
 }
 
 fn analyze_body(
     fields: &[(&Option<Expr>, Option<&str>)],
+    methods: BTreeSet<String>,
     params: &[perry_hir::Param],
     body: &[Stmt],
 ) -> CtorPhase {
     let mut w = W {
         ph: CtorPhase::default(),
+        methods,
         late: BTreeSet::new(),
         read_before: BTreeSet::new(),
         exits: Vec::new(),
@@ -269,11 +277,32 @@ impl W {
     fn expr(&mut self, st: &mut St, e: &Expr) {
         match e {
             Expr::This => self.leak(st),
+            // `this.m(...)`: the callee runs with `this` as its receiver.
+            Expr::Call { callee, .. } | Expr::CallSpread { callee, .. }
+                if matches!(callee.as_ref(), Expr::PropertyGet { object, .. }
+                    if matches!(object.as_ref(), Expr::This)) =>
+            {
+                self.leak(st);
+                walk_expr_children(e, &mut |c| self.expr(st, c));
+            }
+            // A `super` method or accessor runs with `this`.
+            Expr::SuperMethodCall { .. }
+            | Expr::SuperMethodCallSpread { .. }
+            | Expr::SuperPropertyGet { .. }
+            | Expr::SuperPropertySet { .. } => {
+                self.leak(st);
+                walk_expr_children(e, &mut |c| self.expr(st, c));
+            }
             Expr::PropertyGet {
                 object, property, ..
             } if matches!(object.as_ref(), Expr::This) => {
                 if !st.assigned.contains(property) {
                     self.read_before.insert(property.clone());
+                    // Not own yet: the read walks the prototype chain, where
+                    // an accessor runs with `this`.
+                    if !self.methods.contains(property) {
+                        self.leak(st);
+                    }
                 }
             }
             Expr::PropertySet {
@@ -305,6 +334,9 @@ impl W {
             } if matches!(object.as_ref(), Expr::This) => {
                 if !st.assigned.contains(property) {
                     self.read_before.insert(property.clone());
+                    if !self.methods.contains(property) {
+                        self.leak(st);
+                    }
                 }
                 self.store(st, e, property);
             }

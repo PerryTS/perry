@@ -304,7 +304,10 @@ impl<'a> Gen<'a> {
                 Some(tm)
                     if published.is_some_and(|p| !p.broken(&self.m.tmpls[tm as usize].display)) =>
                 {
-                    let extended = published.is_some_and(|p| p.extended(path_of(self, mi), name));
+                    let extended = published.is_some_and(|p| {
+                        p.extended(path_of(self, mi), name)
+                            || p.broken(&format!("extends {}", self.m.tmpls[tm as usize].display))
+                    });
                     self.publish_contract_class(Some((mi, a)), n, tm, extended, r);
                 }
                 _ => {
