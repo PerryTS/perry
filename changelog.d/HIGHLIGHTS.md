@@ -2,6 +2,20 @@
 
 This is the first release since v0.5.1520 (2026-09-11). The per-PR entries follow under "All changes". Numbers below come from the linked fragments or from measured results; PRs without a fragment are cited by number only.
 
+### What is new in this release
+
+**Faster, smaller programs.** On the js-compiled benchmark set, all 22 programs compile and print the same output as node, with this release and with v0.5.1520. Median run time, v0.5.1520 to this release: nbody 9368 to 364 ms, matmul 27916 to 182 ms, generators 20724 to 394 ms, array-sort 3300 to 102 ms, crc32 2804 to 524 ms. Compiled binaries shrank from about 17 MB to 6.5 MB, and hello world starts in 0.9 ms instead of 2.6 ms. No perry benchmark in that set is more than 10% slower than before (the worst is mandelbrot at +7%).
+
+**Startup.** Small programs start faster: the runtime builds its object layouts when the first such object is born, maps its fixed caches on first use, and builds per-thread state in place. On macOS arm64, hello world takes 2.33 ms instead of 2.95 ms and uses 5.3 MB instead of 6.0 MB peak RSS (#13345); a further 57,000 instructions (8.5% of hello on x86-64) were removed (#13484), and Linux no longer parses `/proc/self/maps` for the stack bounds (#13456).
+
+**Memory.** Large strings, arrays and objects are allocated in a young large-object space. Measured in the PRs: string building -22% RSS and JSON parsing -25% instructions (#13479), file reading -39% RSS and -74% instructions (#13463), and a second file-reading pass with -60% instructions and -27% RSS (#13392).
+
+**Whole-program analysis that scales.** The compiler's analysis of what the program does (used to remove checks and resolve calls at compile time) now works per module, with contracts between modules. It is the default (#13132) and finishes on large programs where the whole-program version did not: fastify, the TypeScript compiler, and opencode (6,877 modules, 31 GiB for the whole compile, #13355). It proves more read and call sites than before (tsc +4.8%, TypeScript compiler sources +6.9%, Effect schema +13.5%, #13297).
+
+**WebAssembly and WASI.** `perry compile --target wasip1` produces a core module that imports only `wasi_snapshot_preview1` and runs on plain preview 1 runtimes (#13343). It supports inbound TCP, signals and stdin (#13376), perry-stdlib and the Node module crates (#13356), and optional outbound networking (`PERRY_WASM_NET=1`, #13386) and page discard (`PERRY_WASM_DISCARD=1`, #13417). `--target wasi` produces a WASI 0.2 component; the native component host runs WASI 0.2 and 0.3 and no longer depends on tokio (#13189, #13364). Installed releases ship both the `wasm32-wasip1` and `wasm32-wasip2` runtime archives (#13394). Compiling for WASI needs LLVM 22.1.5 for native WebAssembly exception handling.
+
+**Real programs.** The scoreboard of 43 real programs matched node on every row at the 2026-10-19 check. fastify, zod, the TypeScript compiler, Effect and Next.js 16 compile and run; fastify handles request bodies through `req.pipe` (#13275), and zod 4.4.3 no longer miscompiles `generateFastpass` (#13270). Programs no longer abort at startup on Linux kernels built without transparent huge pages (#13309). `node:trace_events` namespace imports work (#13607), and the Windows, `dns`, `net` and `zlib` modules received further fixes listed under "All changes".
+
 ### Upgrade notes and breaking changes
 
 **Native npm bindings were removed; the real package is compiled from source.** If your project imports one of these, the package must now be installed in `node_modules` (no `perry.compilePackages` entry is needed). The old bindings were hand-written Rust copies that differed from upstream, for example `jsonwebtoken.verify` accepting forged tokens, `decimal.js` division returning `1`, and `commander` never running `.action()` callbacks.
@@ -85,7 +99,7 @@ Dynamic code (`eval`, `new Function`, dynamic `require`) is a single summary nod
 - Namespaces, including `enum` + `namespace` merging, compile with direct calls (#12775, #12802).
 - `events`, `stream`, `http` (`IncomingMessage`, `ServerResponse`), `worker_threads` (no multi-second stalls, #12448; `terminate()` stops any loop, #12762), `perf_hooks`, `dgram`, WebSocket upgrade (#12460) and `node:test` mocking (#12747) received parity fixes. See the per-PR list.
 - Bun: `Bun.Transpiler`/`Bun.build` subsets (#9602), `bun:sqlite` (#8525), SQL (#9634), zero-copy `bun:ffi` views (#8329).
-- On the 2026-10-19 check, all 43 scoreboard programs print the same output as node. On the 2026-10-17 measurement, rows above 2× node by instructions were: fastify, schema-record, qs, zod, commander, effect, property-prototype. tsc is 1.72×; the rest are under 1.8×.
+- On the 2026-10-19 check, all 43 scoreboard programs printed the same output as node. On the 2026-10-17 measurement, rows above 2× node by instructions were: fastify, schema-record, qs, zod, commander, effect, property-prototype. tsc is 1.72×; the rest are under 1.8×.
 
 ### Platforms
 
@@ -94,11 +108,10 @@ Dynamic code (`eval`, `new Function`, dynamic `require`) is a single summary nod
 
 - Linux musl x86_64/aarch64 release packages build again (#9584, #9298, #12811). Android UI apps link `perry-stdlib` (#11290, #12768).
 - macOS UI builds produce signed `.app` bundles (#10240). Windows gets `fork()` IPC over named pipes (#8318), libuv-shaped errnos and `node:net` `err.errno` (#10385, #10403), `file://` drive letters (#12545) and `fs.fchown` parity (#12525). visionOS heap guards were fixed (#12247).
-- `perry compile --target wasi` links a WASIp2 component behind the off-by-default `target-wasi` feature (#11413). Target detection covers OpenHarmony aliases (#12400).
+- `perry compile --target wasi` builds a WASI 0.2 component and `--target wasip1` a preview 1 module (see above). Target detection covers OpenHarmony aliases (#12400).
 
 ### Known gaps
 
-- ES2025 `Set` methods (`union`, `intersection`, and the rest) are not supported.
 - Promise/timer ordering differs from node in one case that is not yet root-caused.
 - Typed arrays larger than 1 GiB are not supported, and allocation-exhaustion behavior differs from node.
 - On the competitive suite at 2026-10-19, 218 of 242 rows pass, with no regressions against the previous release.
