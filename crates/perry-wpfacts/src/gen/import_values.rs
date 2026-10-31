@@ -602,7 +602,7 @@ impl<'a> Gen<'a> {
         c: &'a crate::units::FnContract,
         holder: Option<(TmplId, bool)>,
     ) -> NodeId {
-        use crate::model::{MARK_ESCAPE, MARK_TOUCH};
+        use crate::model::{MARK_ESCAPE, MARK_TOUCHES};
         let c = self.owner_fn(c);
         if let Some(&(n, _)) = self.stand_in_fns.get(&(c.name.clone(), holder)) {
             return n;
@@ -784,17 +784,15 @@ impl<'a> Gen<'a> {
             let u = c.params[i];
             let ru = c.reach[i];
             if u & MARK_ESCAPE != 0 {
+                if let Some(d) = self.m.diagnostic.as_mut() {
+                    d.stand_in_params.push((p, c.name.clone(), i as u32, None));
+                }
                 self.m.sink_node(p, r);
                 continue;
             }
-            if u & MARK_TOUCH != 0 {
-                self.m.cons(
-                    p,
-                    Cons::Implicit {
-                        reason: r,
-                        proto: Protocol::Any,
-                    },
-                );
+            // The protocols the callee runs on it, each with its own keys.
+            for proto in Protocol::of_touches(u) {
+                self.m.cons(p, Cons::Implicit { reason: r, proto });
             }
             // The keys the callee stores into the argument (DECISIONS 84):
             // what it stores under each (DECISIONS 118), a store this unit
@@ -880,6 +878,14 @@ impl<'a> Gen<'a> {
             }
             for (key, ru) in buckets {
                 if ru & MARK_ESCAPE != 0 {
+                    if let Some(d) = self.m.diagnostic.as_mut() {
+                        let k = match key {
+                            crate::model::Key::Named(a) => self.m.atoms[a as usize].clone(),
+                            crate::model::Key::Any => String::new(),
+                        };
+                        d.stand_in_params
+                            .push((p, c.name.clone(), i as u32, Some(k)));
+                    }
                     let q = match self.reach_escape {
                         Some(q) => q,
                         None => {
@@ -891,11 +897,12 @@ impl<'a> Gen<'a> {
                         }
                     };
                     self.m.cons(p, Cons::Load { key, dst: q });
-                } else if ru & MARK_TOUCH != 0 {
-                    let q = match self.reach_touch {
-                        Some(q) => q,
+                } else if ru & MARK_TOUCHES != 0 {
+                    let touches = ru & MARK_TOUCHES;
+                    let q = match self.reach_touch.iter().find(|&&(b, _)| b == touches) {
+                        Some(&(_, q)) => q,
                         None => {
-                            let q = self.m.node_named("reach", || "reached(touch)".into());
+                            let q = self.m.node_named("reach", || format!("reached(touch {touches})"));
                             self.m.nodes[q as usize].sink = true;
                             self.m.cons(
                                 q,
@@ -904,14 +911,10 @@ impl<'a> Gen<'a> {
                                     dst: q,
                                 },
                             );
-                            self.m.cons(
-                                q,
-                                Cons::Implicit {
-                                    reason: r,
-                                    proto: Protocol::Any,
-                                },
-                            );
-                            self.reach_touch = Some(q);
+                            for proto in Protocol::of_touches(touches) {
+                                self.m.cons(q, Cons::Implicit { reason: r, proto });
+                            }
+                            self.reach_touch.push((touches, q));
                             q
                         }
                     };
@@ -999,6 +1002,14 @@ impl<'a> Gen<'a> {
                     .m
                     .node_named("arg", || format!("called{i}-arg{j}({})", c.name));
                 self.m.own(a);
+                // UEB: the call is the run's (DECISIONS 44 (b)): its
+                // arguments are temporaries of the run, as its result is, so
+                // what the run's parameters hand them stays relative to each
+                // call (the argument markers of this unit's values passed to
+                // the run) and the owner of those values describes them in
+                // its own contract (a function forwarded to a third unit's
+                // function that calls it, DECISIONS 140).
+                self.m.nodes[a as usize].frame = run;
                 let why = "argument from another unit's function";
                 self.fill_described(mi, c, d, &d.value, this, &params, a, why);
                 args.push(a);

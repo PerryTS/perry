@@ -43,6 +43,39 @@ pub const TOP: Tok = 0;
 pub const NO_CTX: CallId = u32::MAX;
 
 /// Primitive kind bits carried next to the object tokens of a node.
+/// What a test value must be able to hold for a [`Cons::Guard`] to let its
+/// branch through. ⊤ and parameter or argument markers (another unit's or
+/// an unseen caller's value) can hold anything; every other token is an
+/// object or a function: truthy, neither `undefined` nor `null`.
+pub mod guard {
+    pub const UNDEF: u8 = 0;
+    pub const NOT_UNDEF: u8 = 1;
+    pub const NULLISH: u8 = 2;
+    pub const NOT_NULLISH: u8 = 3;
+    pub const TRUTHY: u8 = 4;
+    pub const FALSY: u8 = 5;
+
+    /// The primitive kinds (`prim` bits) a test admits.
+    pub fn prims(test: u8) -> u16 {
+        use super::prim as p;
+        match test {
+            UNDEF => p::UNDEF,
+            NOT_UNDEF => p::ALL & !p::UNDEF,
+            NULLISH => p::UNDEF | p::NULL,
+            NOT_NULLISH => p::ALL & !(p::UNDEF | p::NULL),
+            // Every primitive kind but `undefined`/`null` has a truthy value.
+            TRUTHY => p::NUM | p::STR | p::BOOL | p::BIGINT | p::SYMBOL,
+            // `0`, `""`, `false`, `0n`, `null`, `undefined`.
+            _ => p::NUM | p::STR | p::BOOL | p::BIGINT | p::NULL | p::UNDEF,
+        }
+    }
+
+    /// An object or function token admits the test.
+    pub fn objects(test: u8) -> bool {
+        matches!(test, NOT_UNDEF | NOT_NULLISH | TRUTHY)
+    }
+}
+
 pub mod prim {
     pub const NUM: u16 = 1 << 0;
     pub const STR: u16 = 1 << 1;
@@ -87,6 +120,11 @@ pub enum BuiltinNs {
     GlobalThis,
     Process,
     Error,
+    AggregateError,
+    Date,
+    RegExp,
+    TypedArray,
+    ArrayBuffer,
     Symbol,
     Number,
     String,
@@ -285,6 +323,12 @@ pub struct Template {
     /// slots, absent until stored (each read pairs its load with the hole
     /// compare).
     pub declared: Vec<Atom>,
+    /// Birth keys reserved for a constructor store
+    /// (`ClassFieldOrigin::ConstructorStore`) that are not `definite`: code
+    /// can observe the instance before the constructor stores them (a method
+    /// call on `this`, ...). Known slots, holding the hole (absent) until
+    /// stored; each read pairs its load with the hole compare.
+    pub reserved: Vec<Atom>,
     /// Parent template (class `extends`), when statically known.
     pub parent: Option<TmplId>,
     /// The constructor function of a class template (None: implicit ctor).
@@ -527,6 +571,32 @@ impl Protocol {
         }
     }
 
+    /// The use bit of a touch by this protocol (`MARK_TOUCH*`).
+    pub fn touch_bit(self) -> u8 {
+        match self {
+            Protocol::ToPrimitive => MARK_TOUCH_PRIMITIVE,
+            Protocol::Iterate => MARK_TOUCH_ITERATE,
+            Protocol::IterNext => MARK_TOUCH_ITER_NEXT,
+            Protocol::IterResult => MARK_TOUCH_ITER_RESULT,
+            Protocol::HasInstance => MARK_TOUCH_HAS_INSTANCE,
+            Protocol::Json | Protocol::OwnKeys | Protocol::Any => MARK_TOUCH,
+        }
+    }
+
+    /// The protocols the touch bits of `uses` name, each once.
+    pub fn of_touches(uses: u8) -> impl Iterator<Item = Protocol> {
+        [
+            Protocol::Any,
+            Protocol::ToPrimitive,
+            Protocol::Iterate,
+            Protocol::IterNext,
+            Protocol::IterResult,
+            Protocol::HasInstance,
+        ]
+        .into_iter()
+        .filter(move |p| uses & p.touch_bit() != 0)
+    }
+
     /// The protocol run on what the called methods return.
     pub fn of_result(self) -> Option<Protocol> {
         match self {
@@ -664,6 +734,17 @@ pub enum Cons {
         from: NodeId,
         reason: Option<u32>,
     },
+    /// `from` flows into `dst` once the node may hold a value `test`
+    /// admits (`guard`): a conditional's branch, a logical operator's right
+    /// operand, a destructuring default reach the result only when their
+    /// test can take the value that selects them. A node that never holds
+    /// such a value is a test that never selects the branch.
+    Guard { test: u8, from: NodeId, dst: NodeId },
+    /// The node's values flow into `dst` without `undefined`: the chain of
+    /// a read whose own data key the object surely holds. The lookup stops
+    /// at the object, so the chain's end (a key no link defines reads
+    /// `undefined`) is never reached; its values stay, a superset.
+    Defined { dst: NodeId },
     /// Every object token reaches a HARD operation.
     Hard { kind: Hard, reason: u32 },
     /// `delete o.key`: E7 HARD on every object token; on ⊤ (which may be a
@@ -715,6 +796,10 @@ pub enum Cons {
     /// them (`ObjectProto` collapses them), whose members the chain cannot
     /// name: the chain also holds an unknown prototype.
     ProtoGiven { protos: NodeId },
+    /// The node holds a value given as the [[Prototype]] of class object
+    /// `of` (or of ⊤): `of`'s `super()` runs a class held here as its
+    /// parent, on an instance of `of`.
+    ParentGiven { of: Tok },
     /// The node is `ProtoNode(t)`: dst ⊇ every prototype, transitively.
     ProtoClosure { dst: NodeId },
     /// The node is the prototype closure of receiver `origin`: builtin
@@ -909,6 +994,8 @@ impl Cons {
             Cons::ContractThis { .. } => "contractthis",
             Cons::OverrideThis { .. } => "overridethis",
             Cons::TopIfAny { .. } => "topifany",
+            Cons::Guard { .. } => "guard",
+            Cons::Defined { .. } => "defined",
             Cons::Hard { .. } => "hard",
             Cons::DeleteKey { .. } => "deletekey",
             Cons::AddsKeys => "addskeys",
@@ -919,6 +1006,7 @@ impl Cons {
             Cons::CreateProto { .. } => "createproto",
             Cons::ChainUnion { .. } => "chainunion",
             Cons::ProtoGiven { .. } => "protogiven",
+            Cons::ParentGiven { .. } => "parentgiven",
             Cons::ProtoClosure { .. } => "protoclosure",
             Cons::ProtoMethods { .. } => "protomethods",
             Cons::AnyAccessors { .. } => "anyaccessors",
@@ -1082,6 +1170,16 @@ impl WorkProfile {
     pub const STEP: u64 = 5_000_000;
 }
 
+/// An object literal with spreads: the keys it defines itself, and per
+/// spread site the keys every source so far surely holds (`None`: no source
+/// yet). A key is sure when the literal defines it or one spread copies it
+/// from every source.
+#[derive(Default, Clone, Debug)]
+pub struct LitSpread {
+    pub named: Vec<Atom>,
+    pub sites: Vec<(SiteId, Option<Vec<Atom>>)>,
+}
+
 #[derive(Default)]
 pub struct Model {
     pub(crate) diagnostic: Option<crate::diagnostics::Trace>,
@@ -1208,6 +1306,23 @@ pub struct Model {
     /// the source gains later is copied too (`Model::field`).
     pub spread_to: FxHashMap<Tok, Vec<(Tok, SiteId)>>,
     pub spread_done: crate::pts::FxHashSet<(Tok, Tok)>,
+    /// Object literals with spreads (`{ a, ...s }`): which keys they surely
+    /// hold (`LitSpread`), by template, and their spread sites.
+    pub lit_spread: FxHashMap<TmplId, LitSpread>,
+    pub lit_spread_site: FxHashMap<SiteId, TmplId>,
+    /// Reads of a key a fact unit surely holds (they read no `undefined`),
+    /// by template: when the key stops being sure (a spread source that
+    /// lacks it, a `delete`), each gets `undefined` after all.
+    pub present_reads: FxHashMap<TmplId, Vec<(Atom, NodeId)>>,
+    pub present_seen: crate::pts::FxHashSet<(TmplId, Atom, NodeId)>,
+    /// The `Cons::Defined` node a present read's chain flows through, by
+    /// the read's destination.
+    pub defined_via: FxHashMap<NodeId, NodeId>,
+    /// (chain node, read destination) pairs with their `Cons::Defined`.
+    pub defined_done: crate::pts::FxHashSet<(NodeId, NodeId)>,
+    /// Fact units whose keys can disappear (delete, defineProperty, with):
+    /// no key of theirs is sure.
+    pub keys_unsure: crate::pts::FxHashSet<TmplId>,
     /// Calls the runtime makes for a protocol (ToPrimitive, iteration …).
     pub protocol_calls: crate::pts::FxHashSet<CallId>,
     /// Shared prototype-chain value nodes: (token, key) → node.
@@ -1419,6 +1534,10 @@ pub struct Model {
     pub arr_named_srcs: FxHashMap<Tok, Vec<NodeId>>,
     /// Targets of a possible [[Prototype]] write (TOP included).
     pub super_relink: crate::pts::FxHashSet<Tok>,
+    /// Another unit's classes this unit gives as a class object's parent:
+    /// their constructor runs on a receiver their unit does not see. The
+    /// census reports each (`Gen::reports`, `extends <class>`).
+    pub relinked_parents: crate::pts::FxHashSet<TmplId>,
     /// Source constructor of a type-specialized instance layout (compiler data).
     pub constructor_origins: FxHashMap<TmplId, TmplId>,
     pub constructor_this_done: crate::pts::FxHashSet<(CallId, TmplId, Tok)>,
@@ -1870,3 +1989,18 @@ pub(crate) fn marker_top_bit(bits: &[u64], t: Tok) -> bool {
 }
 pub const MARK_TOUCH: u8 = 2;
 pub const MARK_ESCAPE: u8 = 4;
+/// A touch by a protocol whose keys ECMA-262 fixes (`Protocol::keys`):
+/// the reader runs that protocol on its value, not `Protocol::Any`
+/// (`MARK_TOUCH`: a touch whose keys are any, `Any` and JSON).
+pub const MARK_TOUCH_PRIMITIVE: u8 = 8;
+pub const MARK_TOUCH_ITERATE: u8 = 16;
+pub const MARK_TOUCH_ITER_NEXT: u8 = 32;
+pub const MARK_TOUCH_ITER_RESULT: u8 = 64;
+pub const MARK_TOUCH_HAS_INSTANCE: u8 = 128;
+/// Every touch bit.
+pub const MARK_TOUCHES: u8 = MARK_TOUCH
+    | MARK_TOUCH_PRIMITIVE
+    | MARK_TOUCH_ITERATE
+    | MARK_TOUCH_ITER_NEXT
+    | MARK_TOUCH_ITER_RESULT
+    | MARK_TOUCH_HAS_INSTANCE;

@@ -362,6 +362,7 @@ impl Model {
         {
             self.super_relink.insert(t);
             if let TokKind::ClassObj(tm) = self.toks[t as usize] {
+                self.cons(src, Cons::ParentGiven { of: t });
                 let parent = self.proto_node(t);
                 self.edge(src, parent);
                 let instance = self.tok(TokKind::Obj(tm, NO_CTX));
@@ -418,7 +419,7 @@ impl Model {
                 return;
             }
             if key == Key::Any {
-                self.mark_use(t, crate::model::MARK_ESCAPE);
+                self.mark_escape_why(t, &|_| "store: under a computed key".into());
             }
             if self.arg_store_done.insert((t, key, src)) {
                 // DECISIONS 187/193: kept on `t` alone, where it was made,
@@ -513,7 +514,7 @@ impl Model {
                 return;
             }
         }
-        self.mark_use(t, crate::model::MARK_ESCAPE);
+        self.mark_escape_why(t, &|_| "store: into a marker".into());
         // A parameter marker stands for another unit's value (design §11.2):
         // it has no fields in this unit. The store is its contract's escape
         // (above), and the stored value goes where the receiver's other
@@ -552,10 +553,9 @@ impl Model {
                         k != "__proto__"
                             && !facts.fields.iter().any(|f| !f.data_field && &f.key == k)
                     }
-                    "class" => facts
-                        .fields
-                        .iter()
-                        .any(|f| f.data_field && &f.key == k && (f.definite || f.declared)),
+                    "class" => facts.fields.iter().any(|f| {
+                        f.data_field && &f.key == k && (f.definite || f.declared || f.reserved)
+                    }),
                     _ => false,
                 }
             }

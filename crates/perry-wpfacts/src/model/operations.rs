@@ -576,6 +576,11 @@ impl Model {
             .and_then(|d| d.get(i as usize))
             .is_some_and(|&d| d);
         if new & MARK_ESCAPE != 0 {
+            if let Some(d) = self.diagnostic.as_mut() {
+                let w = d.esc_ctx.last().cloned().unwrap_or_else(|| "other".into());
+                let n = d.cause_node;
+                d.esc_why.entry(t).or_insert((w, n));
+            }
             self.virt_revoke(t, None);
         }
         if new & MARK_ESCAPE != 0 && !described {
@@ -1410,6 +1415,7 @@ impl Model {
             birth_keys: Vec::new(),
             definite: Vec::new(),
             declared: Vec::new(),
+            reserved: Vec::new(),
             parent: None,
             ctor: None,
             native_parent: None,
@@ -1445,6 +1451,7 @@ impl Model {
             birth_keys: Vec::new(),
             definite: Vec::new(),
             declared: Vec::new(),
+            reserved: Vec::new(),
             parent: None,
             ctor: None,
             native_parent: None,

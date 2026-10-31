@@ -85,6 +85,9 @@ pub(crate) struct ClassContract {
     /// the same unit does.
     pub birth_keys: Vec<String>,
     pub definite: Vec<String>,
+    /// The birth keys reserved for a constructor store that are not
+    /// definite (`Template::reserved`): known slots, present once stored.
+    pub reserved: Vec<String>,
     pub ctor_leaks: bool,
     /// Its constructor, or one up its chain, may return an object other than
     /// `this` (`return expr`): a reader's `new` then yields that value, not
@@ -312,6 +315,108 @@ pub(crate) struct FnContract {
     /// The binding name of a closed function (decision 19): a unit that
     /// calls it as a value publishes what it passes under this name.
     pub closed: Option<String>,
+}
+
+impl FnContract {
+    /// The function named, not described (DECISIONS 106): its identity,
+    /// and of its body only what makes no claim (every parameter, its
+    /// receiver and its result escape or are unknown). A reader holding it
+    /// calls the function through its owner's entry (`Gen::owner_fn`); with
+    /// no entry it runs this, which is sound.
+    pub(crate) fn named(&self) -> FnContract {
+        use crate::model::MARK_ESCAPE;
+        let n = self.params.len();
+        FnContract {
+            compiled_body: self.compiled_body.clone(),
+            name: self.name.clone(),
+            method: self.method,
+            callable: self.callable,
+            this_class: self.this_class.clone(),
+            params: vec![MARK_ESCAPE; n],
+            reach: vec![MARK_ESCAPE; n],
+            reach_keys: vec![Vec::new(); n],
+            variadic: self.variadic,
+            rest: self.rest,
+            ret: None,
+            ret_params: Vec::new(),
+            ret_reach: Vec::new(),
+            ret_reach_keys: Vec::new(),
+            ret_unknown: true,
+            ret_value: Default::default(),
+            ret_prim: crate::model::prim::ALL,
+            lexical_this: self.lexical_this,
+            this_use: MARK_ESCAPE,
+            this_reach: MARK_ESCAPE,
+            this_stores: None,
+            this_calls: Vec::new(),
+            param_stores: vec![None; n],
+            param_flows: Vec::new(),
+            param_calls: Vec::new(),
+            param_handovers: Vec::new(),
+            param_cells: Vec::new(),
+            closed: self.closed.clone(),
+        }
+    }
+}
+
+/// DECISIONS 106 for what a forwarded copy of another unit's function
+/// holds: every function described inside it whose owner publishes an entry
+/// (`owned`) is named (`FnContract::named`), as the reader takes that entry
+/// by name in any case. Copied whole, a description held the copies its
+/// owner's description held, which held it again: two units whose functions
+/// pass each other's closures (zod's `emitOwnKeys` and the record check it
+/// calls back) nested one more level every round, the contracts grew 4x
+/// per two rounds and the fixpoint never came. Named, a description holds
+/// only its own unit's functions and one level of copies: its size is
+/// bounded by the program's, whatever the rounds.
+pub(crate) fn name_owned_in_fn(fc: &mut FnContract, owned: &dyn Fn(&str) -> bool) {
+    name_owned_in_value(&mut fc.ret_value, owned);
+    for pc in &mut fc.param_calls {
+        for a in &mut pc.args {
+            name_owned_in_value(&mut a.value, owned);
+        }
+    }
+    for fl in &mut fc.param_flows {
+        if let Some(d) = &mut fl.value {
+            name_owned_in_value(&mut d.value, owned);
+        }
+    }
+}
+
+fn name_owned_fns(fns: &mut [FnContract], owned: &dyn Fn(&str) -> bool) {
+    for f in fns {
+        name_owned(f, owned);
+    }
+}
+
+fn name_owned(f: &mut FnContract, owned: &dyn Fn(&str) -> bool) {
+    if owned(&f.name) {
+        *f = f.named();
+    } else {
+        name_owned_in_fn(f, owned);
+    }
+}
+
+fn name_owned_in_value(vc: &mut ValueContract, owned: &dyn Fn(&str) -> bool) {
+    name_owned_fns(&mut vc.fns, owned);
+    for c in vc.layouts.iter_mut().chain(vc.classes.iter_mut()) {
+        name_owned_in_class(c, owned);
+    }
+}
+
+fn name_owned_in_class(c: &mut ClassContract, owned: &dyn Fn(&str) -> bool) {
+    for (_, fs) in &mut c.field_fns {
+        name_owned_fns(fs, owned);
+    }
+    for (_, vc) in c.field_values.iter_mut().chain(c.static_values.iter_mut()) {
+        name_owned_in_value(vc, owned);
+    }
+    for (_, f) in c.static_fns.iter_mut().chain(c.method_fns.iter_mut()) {
+        name_owned(f, owned);
+    }
+    if let Some(f) = &mut c.ctor_fn {
+        name_owned(f, owned);
+    }
 }
 
 /// A published module-scope value binding as its readers see it (design
@@ -813,7 +918,17 @@ impl ClassContract {
         // The layout prefix a subclass in another unit takes: the common
         // birth keys, definite in both; a leak in either leaks.
         common_prefix(&mut self.birth_keys, &o.birth_keys);
+        // A known slot whose presence one of them does not know.
+        let known = |c: &Self, k: &String| c.definite.contains(k) || c.reserved.contains(k);
+        let reserved: Vec<String> = self
+            .definite
+            .iter()
+            .chain(self.reserved.iter())
+            .filter(|k| known(o, k) && !(self.definite.contains(k) && o.definite.contains(k)))
+            .cloned()
+            .collect();
         self.definite.retain(|k| o.definite.contains(k));
+        self.reserved = reserved;
         self.ctor_leaks |= o.ctor_leaks;
         self.ctor_returns |= o.ctor_returns;
         self.binding_prim |= o.binding_prim;

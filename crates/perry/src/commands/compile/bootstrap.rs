@@ -263,7 +263,20 @@ pub(super) fn rerun_collect_with_class_field_types(
     // were lowered. The set is kept (it is already the program-wide union), so
     // the re-walk lowers every module against the final set and cannot grow it.
     let patched_builtins_rerun = ctx.patched_builtins_grew_after_lower;
+    // Layer-1 DCE: the export demand of the first walk's graph; the second
+    // walk lowers each module without what nothing demands.
+    let mut demand_roots = vec![args
+        .input
+        .canonicalize()
+        .unwrap_or_else(|_| args.input.clone())];
+    if let Some(ext_dir) = &args.bundle_extensions {
+        for (entry_path, _) in discover_extension_entries(ext_dir)? {
+            demand_roots.push(entry_path.canonicalize().unwrap_or(entry_path));
+        }
+    }
+    let export_prunes = super::export_demand::make_plan(ctx, &demand_roots)?;
     if field_map.is_empty()
+        && !export_prunes
         && accessor_map.is_empty()
         && !ctx.solid_client_recollect
         && !patched_builtins_rerun
@@ -316,6 +329,7 @@ pub(super) fn rerun_collect_with_class_field_types(
         }
     }
     ctx.cjs_require_diagnostics = cjs_require_diagnostics;
+    super::export_demand::check_walks(ctx)?;
     Ok(())
 }
 

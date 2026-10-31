@@ -626,6 +626,12 @@ impl Model {
         if !self.spread_done.insert((s, d)) {
             return;
         }
+        if let Some(&tm) = self.lit_spread_site.get(&site) {
+            if self.tmpl_of(d) == Some(tm) {
+                let keys = self.spread_source_keys(s);
+                self.spread_source(tm, site, keys);
+            }
+        }
         if d == TOP || matches!(self.toks[d as usize], TokKind::BuiltinFn) {
             let r = self.reason("spread into a value from unmodeled code");
             let all = if s == TOP {
@@ -1275,11 +1281,11 @@ impl Model {
     /// stored keys hold unknown values, what it reaches is escaped or
     /// touched as published). False: `t` escapes.
     pub(crate) fn admit_this(&mut self, t: Tok, tmpl: TmplId, this: u32, reason: u32) -> bool {
-        use crate::model::{MARK_ESCAPE, MARK_READ, MARK_TOUCH};
+        use crate::model::{MARK_ESCAPE, MARK_READ, MARK_TOUCHES};
         let Some(c) = self.this_contracts.get(this as usize).cloned() else {
             return false;
         };
-        if c.uses & (MARK_ESCAPE | MARK_TOUCH) != 0 {
+        if c.uses & (MARK_ESCAPE | MARK_TOUCHES) != 0 {
             return false;
         }
         // A published receiver token stands for its class's instances; a
@@ -1347,7 +1353,7 @@ impl Model {
         }
         // What the receiver reaches (its fields, transitively), as for an
         // argument (gen.rs `stand_in_fn_of`).
-        if c.reach & (MARK_ESCAPE | MARK_TOUCH) != 0 {
+        if c.reach & (MARK_ESCAPE | MARK_TOUCHES) != 0 {
             let h = self.node_l("admitted-this");
             let q = self.node_l("admitted-this-reach");
             self.cons(
@@ -1367,13 +1373,9 @@ impl Model {
             if c.reach & MARK_ESCAPE != 0 {
                 self.sink_node(q, reason);
             } else {
-                self.cons(
-                    q,
-                    Cons::Implicit {
-                        reason,
-                        proto: Protocol::Any,
-                    },
-                );
+                for proto in Protocol::of_touches(c.reach) {
+                    self.cons(q, Cons::Implicit { reason, proto });
+                }
             }
             self.add_tok(h, t);
         }
@@ -1558,7 +1560,9 @@ impl Model {
                 }
                 Some((g, j)) if g == f && j != u32::MAX => from.push(j),
                 _ => match own {
-                    Some(at) => self.mark_use(at, crate::model::MARK_ESCAPE),
+                    Some(at) => {
+                        self.mark_escape_why(at, &|_| "store: flow of another value".into())
+                    }
                     None => {
                         top = true;
                         self.escape(s, reason);
@@ -1634,7 +1638,7 @@ impl Model {
         if !calls && reads.is_empty() {
             return;
         }
-        self.mark_use(t, crate::model::MARK_TOUCH);
+        self.mark_use(t, proto.touch_bit());
         // A marker: the protocol runs on the values beside it; on the
         // marker it calls what the marker reaches under the protocol's
         // keys, an escape of that (`method_on`, DECISIONS 111). It has no
@@ -1644,12 +1648,12 @@ impl Model {
             match &keys {
                 None => {
                     let r = self.reach_of(t);
-                    self.mark_use(r, crate::model::MARK_ESCAPE);
+                    self.mark_escape_why(r, &|_| "protocol: on a marker".into());
                 }
                 Some(ks) => {
                     for &a in ks {
                         let m = self.marker_load(t, Some(a));
-                        self.mark_use(m, crate::model::MARK_ESCAPE);
+                        self.mark_escape_why(m, &|_| "protocol: on a marker".into());
                     }
                 }
             }
@@ -1773,6 +1777,8 @@ impl Model {
                 "overridethis {n} {tmpl} {} {reason}",
                 self.key_name(Key::Named(*key))
             ),
+            Cons::Guard { test, from, dst } => format!("guard {n} {test} {from} {dst}"),
+            Cons::Defined { dst } => format!("defined {n} {dst}"),
             Cons::TopIfAny { dst, from, reason } => format!(
                 "topifany {n} {dst} {from} {}",
                 reason.map_or(-1, |r| r as i64)
@@ -1816,6 +1822,7 @@ impl Model {
                 format!("chainunion {n} {} {dst} {of}", self.key_name(*key))
             }
             Cons::ProtoGiven { protos } => format!("protogiven {n} {protos}"),
+            Cons::ParentGiven { of } => format!("parentgiven {n} {of}"),
             Cons::ProtoClosure { dst } => format!("protoclosure {n} {dst}"),
             Cons::ProtoMethods { origin, key, call } => {
                 format!("protomethods {n} {origin} {} {call}", self.key_name(*key))

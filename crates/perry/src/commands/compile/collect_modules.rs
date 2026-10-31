@@ -620,6 +620,9 @@ fn collect_module_one(
     let ast_module = forwarding_module.as_ref().unwrap_or(ast_module);
     let native_namespace_module = native_esm_namespace::rewrite_static(ast_module, &ctx.cache_dir)?;
     let ast_module = native_namespace_module.as_ref().unwrap_or(ast_module);
+    // Layer-1 DCE: summarized in the first walk, pruned in the second.
+    let demand_pruned = super::export_demand::visit(ctx, &canonical, ast_module, was_cjs_wrapped);
+    let ast_module = demand_pruned.as_ref().unwrap_or(ast_module);
     let file_loader_sources = file_loader_import_sources(ast_module);
     let source_file_path = canonical.to_string_lossy().to_string();
     if !perry_hir::source_remap::is_covered(&canonical) {

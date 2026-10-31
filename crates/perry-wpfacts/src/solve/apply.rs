@@ -201,7 +201,9 @@ impl Model {
                         // put into another function's marker or ⊤ goes there
                         // as before: ⊤ to the reader, and it escapes (below).
                         _ if dst == u32::MAX && reach && to == at => {
-                            self.mark_use(at, crate::model::MARK_ESCAPE);
+                            self.mark_escape_why(at, &|_| {
+                                "store: into the receiver's reach".into()
+                            });
                         }
                         // Another function's marker: another unit's value
                         // the reader cannot follow (DECISIONS 149b).
@@ -292,6 +294,23 @@ impl Model {
                         }
                         _ => self.escape(t, reason),
                     }
+                }
+            }
+            Cons::Guard { test, from, dst } => {
+                let admits = prim & guard::prims(test) != 0
+                    || toks
+                        .into_iter()
+                        .any(|&t| t == TOP || guard::objects(test) || self.is_marker(t));
+                if admits {
+                    self.edge(from, dst);
+                }
+            }
+            Cons::Defined { dst } => {
+                for &t in toks {
+                    self.add_tok(dst, t);
+                }
+                if prim & !prim::UNDEF != 0 {
+                    self.add_prim(dst, prim & !prim::UNDEF);
                 }
             }
             Cons::TopIfAny { dst, from, reason } => {
@@ -611,16 +630,25 @@ impl Model {
                             self.cons(holder, Cons::AccessorInstall { key, f: t, setter });
                         }
                         TokKind::Top | TokKind::BuiltinFn | TokKind::Bound(_) => {
-                            // An unknown accessor: reads of any key on the
-                            // holder return ⊤ and stores escape.
+                            // An unknown accessor: the key it is installed
+                            // under (any key, when computed) reads ⊤ on the
+                            // holder, and the holder escapes to the code that
+                            // runs. It defines that one key: on a holder from
+                            // unmodeled code, a builtin prototype may hold it
+                            // under that key only.
                             let r = self.reason("accessor of unknown function value");
                             let fa = self.node_l("acc-unknown");
                             self.add_top(fa, |_| "accessor of unknown function value".into());
                             let site = self.anon_post_site("unknown accessor");
+                            let k = if self.atoms[key as usize] == crate::STAR_KEY {
+                                Key::Any
+                            } else {
+                                Key::Named(key)
+                            };
                             self.cons(
                                 holder,
                                 Cons::Store {
-                                    key: Key::Any,
+                                    key: k,
                                     src: fa,
                                     site,
                                 },
@@ -704,6 +732,9 @@ impl Model {
             }
             Cons::ProtoFrom { src } => {
                 for &t in toks {
+                    if t == TOP || matches!(self.toks[t as usize], TokKind::ClassObj(_)) {
+                        self.cons(src, Cons::ParentGiven { of: t });
+                    }
                     // `%Object.prototype%` is an immutable prototype exotic
                     // object: setting its [[Prototype]] to anything but its
                     // own (null) throws.
@@ -732,6 +763,33 @@ impl Model {
                     .any(|&t| matches!(self.toks[t as usize], TokKind::ObjectProto))
                 {
                     self.add_tok(protos, TOP);
+                }
+            }
+            // A class given as the parent of class object `of`: `of`'s
+            // `super()` runs its constructor on `of`'s instances. A class of
+            // this unit given to a class it constructs runs there
+            // (`Cons::SuperCall` follows the live superclass); given to
+            // another unit's class or to ⊤, the code running `super()` is
+            // unknown here, so the class escapes to it. Another unit's class
+            // is that unit's to run on the receiver: the census reports it
+            // (`extends <class>`), and its unit publishes its constructor
+            // as it does for an `extends` naming it (DECISIONS 57).
+            Cons::ParentGiven { of } => {
+                let theirs = |m: &Self, t: Tok| match m.toks[t as usize] {
+                    TokKind::ClassObj(tm) => m.foreign.contains_key(&tm),
+                    _ => t == TOP,
+                };
+                for &p in toks {
+                    let TokKind::ClassObj(tm) = self.toks[p as usize] else {
+                        continue;
+                    };
+                    if self.foreign.contains_key(&tm) {
+                        self.relinked_parents.insert(tm);
+                    } else if theirs(self, of) {
+                        let reason = self
+                            .reason("class given as the parent of a class unknown code constructs");
+                        self.escape(p, reason);
+                    }
                 }
             }
             Cons::ProtoOf { dst } => {
@@ -1057,6 +1115,13 @@ impl Model {
             Cons::RetInto { call, run } => self.ret_into(call, run, toks, prim),
             Cons::ArgInto { call, run, i } => self.arg_into(call, run, i, toks),
             Cons::Spread { into, site } => {
+                // A primitive source copies no key surely (`null`,
+                // `undefined`: none at all).
+                if prim != 0 {
+                    if let Some(&tm) = self.lit_spread_site.get(&site) {
+                        self.spread_source(tm, site, Vec::new());
+                    }
+                }
                 for &s in toks {
                     self.cons(into, Cons::SpreadFrom { src: s, site });
                 }

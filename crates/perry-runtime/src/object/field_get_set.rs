@@ -333,7 +333,6 @@ pub(crate) use has_property::{
 pub use has_property::{js_in_operator, js_object_has_property};
 #[cfg(test)]
 pub(crate) use ic_miss::get_field_miss;
-#[cfg(feature = "regex-engine")]
 pub(crate) use ic_miss::intrinsic_private_add;
 #[cfg(feature = "regex-engine")]
 pub(crate) use ic_miss::intrinsic_private_set;

@@ -238,6 +238,16 @@ Main-thread `postMessageToThread` rejects missing or stopped destinations before
 cloning the payload or detaching transfer buffers. Worker-origin messages retain
 Node's forwarding order: cloning precedes destination rejection. Admission does
 not guarantee rollback if a destination exits concurrently after it was admitted.
+Core-module messaging constructor exports retain the original thread-realm
+MessageChannel, MessagePort and BroadcastChannel objects even after global
+reassignment. Explicit CommonJS export overrides and named-export synchronization
+remain separate; vm/eval global population does not replace these thread-core values.
+MessagePort core methods (`postMessage`, `start`, `close`, `ref`, `unref`,
+`hasRef`) operate on their actual receiver, including calls borrowed from another
+port or its prototype. A private ID supplies the brand without observable getters
+or proxy traps; closing a port preserves its brand without retaining a closed
+runtime port in the delivery table. Listener methods and realm movement remain
+separate parity work.
 Other worker API parity gaps remain.
 
 ## Next Steps

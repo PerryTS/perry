@@ -446,9 +446,26 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
                     published_layouts.insert(c.display.clone());
                     if u.layouts_fwd.contains(&c.display) {
                         if !owned_layouts.contains(&c.display) {
-                            input
-                                .layouts
-                                .insert(c.display.clone(), Digested::new(c.clone()));
+                            // Several units forward copies of one literal
+                            // shape no unit here births: its entry is their
+                            // join, ascending from the last round's copy, as
+                            // for several owners (DECISIONS 112). Replaced,
+                            // the last forwarder of a round would win and a
+                            // reader solved before it would never read what
+                            // the round leaves.
+                            let e = match input.layouts.get(&c.display).map(|e| &e.c) {
+                                Some(p)
+                                    if c.literal_shape
+                                        && p.literal_shape
+                                        && copy_of.contains_key(&c.display) =>
+                                {
+                                    let mut j = p.clone();
+                                    j.join(c);
+                                    j
+                                }
+                                _ => c.clone(),
+                            };
+                            input.layouts.insert(c.display.clone(), Digested::new(e));
                             copy_of.insert(c.display.clone(), si);
                         }
                         continue;
@@ -1072,13 +1089,16 @@ pub(super) fn replay_is_own(w: &crate::model::SharedWrite) -> bool {
 /// ⊤ is one on that object, as the whole-program solve sees it on the
 /// object's own token. A store under a computed key covers every key of its
 /// object: the stores under one key beside it are dropped, so a write that
-/// says nothing new solves no unit again.
+/// says nothing new solves no unit again. The builtin prototypes are not
+/// such an object: a store or accessor into ⊤ already writes its key on
+/// each of them (`builtins::native_written`), as in the whole program; it
+/// installs no accessor on `Object.prototype` (E23) and stores no value.
 pub(super) fn shared_closure(shared: &mut std::collections::BTreeSet<crate::model::SharedWrite>) {
     use crate::model::{Shared, SharedWrite};
     let handed: Vec<Shared> = shared
         .iter()
         .filter_map(|w| match w {
-            SharedWrite::Handed(s) => Some(s.clone()),
+            SharedWrite::Handed(s) if *s != Shared::ObjectProto => Some(s.clone()),
             _ => None,
         })
         .collect();
@@ -1393,11 +1413,14 @@ pub(super) fn resolve_again(
         // An override report changes the overridden class's unit
         // (DECISIONS 59).
         // So does a typed-array field report (DECISIONS 126).
+        // So does a relinked parent's report (`extends <class>`).
         let d = d
             .strip_prefix("override ")
             .or_else(|| d.strip_prefix("ta "))
             .and_then(|r| r.split_once(" of "))
-            .map_or(d.as_str(), |(_, c)| c);
+            .map(|(_, c)| c)
+            .or_else(|| d.strip_prefix("extends "))
+            .unwrap_or(d.as_str());
         match owner.get(d) {
             Some(sis) => work.extend(sis.iter().copied()),
             // No unit owns it: every unit again, but a unit over the bound

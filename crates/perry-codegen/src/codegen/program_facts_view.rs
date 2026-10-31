@@ -61,9 +61,24 @@ pub struct FactsField {
     /// known, presence is not. A read pairs the load with the hole compare;
     /// stores stay on the checked route (an add orders the key).
     pub declared: bool,
+    /// A constructor-store reservation code can observe before the
+    /// constructor stores it: the slot is the class's own (codegen's layout),
+    /// presence is not. A read pairs the load with the hole compare; stores
+    /// stay on the checked route (filling the hole adds the key).
+    pub reserved: bool,
     /// The field holds only these bodies of this module (FVA): a call
     /// through it is a call of them. Empty when it may hold anything else.
     pub fns: Vec<FactsBody>,
+    /// Holder facts: every value any write of any unit stores into the field
+    /// is an instance of one of these prefix-stable classes, or (when
+    /// `nullable`) null/undefined. A read of the field is then a receiver the
+    /// facts prove (`wpfacts_access::receiver`): the field's proof travels
+    /// with its holder. Empty when the field can hold anything else (⊤, a
+    /// function, a builtin, another primitive, an instance of a class that
+    /// is not prefix-stable), when its presence is not known (`declared`),
+    /// or when interpreted code can run.
+    pub classes: Vec<u32>,
+    pub nullable: bool,
 }
 
 /// A plain compiled body of this module that a binding or a field holds

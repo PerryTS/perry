@@ -7,6 +7,7 @@
 use crate::pts::{FxHashMap, FxHashSet};
 use perry_hir::tdz_check::{for_each_class_expr, for_each_expr_in, for_each_function_expr};
 use perry_hir::{Export, Expr, Import, ImportSpecifier, Module, Stmt};
+use std::borrow::Cow;
 
 /// A declaration unit's view of its module: the HIR ids of the other
 /// units' declarations it refers to, each bound to the import named by the
@@ -109,6 +110,9 @@ struct Refs {
     join_names: Vec<String>,
     join_locals: Vec<u32>,
     join_globals: Vec<u32>,
+    /// The chunk functions of a literal birth it holds (a call passing
+    /// `Expr::LiteralChunkObject`): joined, they initialize its object.
+    join_funcs: Vec<u32>,
     /// Locals the item declares (closure parameters here; `declared` adds
     /// its functions' parameters, `let`s and catch bindings).
     declared: Vec<u32>,
@@ -239,6 +243,17 @@ fn expr_refs(e: &Expr, r: &mut Refs) {
         Expr::GlobalSet(id, _) => r.join_globals.push(*id),
         Expr::FuncRef(id) => r.funcs.push(*id),
         Expr::ClassRef(n) | Expr::ExternFuncRef { name: n, .. } => r.names.push(n.clone()),
+        // A chunk of a literal birth (codegen's literal splitting) is part
+        // of the birth: its slot inits are the birth's own initializers of
+        // the unpublished object, which no other unit holds. Cut apart, the
+        // birth's unit published the chunked slots as unknown values.
+        Expr::Call { callee, args, .. }
+            if args.iter().any(|a| matches!(a, Expr::LiteralChunkObject)) =>
+        {
+            if let Expr::FuncRef(id) = callee.as_ref() {
+                r.join_funcs.push(*id);
+            }
+        }
         Expr::Closure {
             captures,
             mutable_captures,
@@ -375,16 +390,102 @@ pub(crate) fn flatten(module: &Module, closed: &Closed) -> Option<Module> {
         changed: false,
     };
     for s in &module.init {
-        flat.stmt(s);
+        flat.stmt(Cow::Borrowed(s));
     }
     if !flat.changed {
         return None;
     }
-    let mut m = module.clone();
-    m.functions.retain(|f| !flat.inlined.contains(&f.id));
-    m.init = flat.out.into_iter().flatten().collect();
+    let init = flat.out.into_iter().flatten().collect();
+    let m = beside(module, init, &flat.inlined);
     owns_its_copies(module, &m, &flat.copies);
     Some(m)
+}
+
+/// The view: a module of its own beside `module` (which codegen emits), so
+/// a copy, made once per part: its statements are `init`, the flat view's,
+/// and of `module`'s functions it keeps those not copied into them
+/// (`inlined`).
+fn beside(module: &Module, init: Vec<Stmt>, inlined: &FxHashSet<u32>) -> Module {
+    let Module {
+        name,
+        class_family_syntax,
+        imports,
+        exports,
+        classes,
+        interfaces,
+        type_aliases,
+        enums,
+        globals,
+        functions,
+        script_global_functions,
+        references_global_this,
+        annexb_global_undefined_names,
+        init_is_strict,
+        init: _,
+        classic_for_lexical_bindings,
+        exported_native_instances,
+        exported_func_return_native_instances,
+        exported_objects,
+        exported_functions,
+        widgets,
+        uses_fetch,
+        uses_webassembly,
+        extern_funcs,
+        init_was_unrolled,
+        has_top_level_await,
+        init_kind,
+        async_step_closures,
+        closure_display_names,
+        class_display_names,
+        closure_source_text,
+        class_source_text,
+        async_generator_funcs,
+        local_source_spans,
+        gen_param_prologue_len,
+        requested_modules,
+    } = module;
+    Module {
+        name: name.clone(),
+        class_family_syntax: class_family_syntax.clone(),
+        imports: imports.clone(),
+        exports: exports.clone(),
+        classes: classes.clone(),
+        interfaces: interfaces.clone(),
+        type_aliases: type_aliases.clone(),
+        enums: enums.clone(),
+        globals: globals.clone(),
+        functions: functions
+            .iter()
+            .filter(|f| !inlined.contains(&f.id))
+            .cloned()
+            .collect(),
+        script_global_functions: script_global_functions.clone(),
+        references_global_this: *references_global_this,
+        annexb_global_undefined_names: annexb_global_undefined_names.clone(),
+        init_is_strict: *init_is_strict,
+        init,
+        classic_for_lexical_bindings: classic_for_lexical_bindings.clone(),
+        exported_native_instances: exported_native_instances.clone(),
+        exported_func_return_native_instances: exported_func_return_native_instances.clone(),
+        exported_objects: exported_objects.clone(),
+        exported_functions: exported_functions.clone(),
+        widgets: widgets.clone(),
+        uses_fetch: *uses_fetch,
+        uses_webassembly: *uses_webassembly,
+        extern_funcs: extern_funcs.clone(),
+        init_was_unrolled: *init_was_unrolled,
+        has_top_level_await: *has_top_level_await,
+        init_kind: *init_kind,
+        async_step_closures: async_step_closures.clone(),
+        closure_display_names: closure_display_names.clone(),
+        class_display_names: class_display_names.clone(),
+        closure_source_text: closure_source_text.clone(),
+        class_source_text: class_source_text.clone(),
+        async_generator_funcs: async_generator_funcs.clone(),
+        local_source_spans: local_source_spans.clone(),
+        gen_param_prologue_len: gen_param_prologue_len.clone(),
+        requested_modules: requested_modules.clone(),
+    }
 }
 
 /// The references in a module: per module function its `FuncRef`s, per
@@ -506,8 +607,10 @@ struct Flat<'a> {
 type Dest<'s> = Option<(u32, &'s str, &'s perry_hir::types::Type, bool)>;
 
 impl Flat<'_> {
-    fn stmt(&mut self, s: &Stmt) {
-        match s {
+    /// Emit `s` into the view, flat. A statement the view owns already (of
+    /// a literal moved out of its `let`) moves; one of the module is copied.
+    fn stmt(&mut self, s: Cow<'_, Stmt>) {
+        match &*s {
             Stmt::Expr(Expr::Call { callee, args, .. }) if self.call(callee, args, None) => return,
             Stmt::Let {
                 id,
@@ -539,7 +642,7 @@ impl Flat<'_> {
             }
             _ => {}
         }
-        self.out.push(Some(s.clone()));
+        self.out.push(Some(s.into_owned()));
     }
 
     /// Inline the call if its callee's body runs once here (true).
@@ -557,7 +660,7 @@ impl Flat<'_> {
                 }
                 self.inlined.insert(*id);
                 self.copies.push(Copy::Func(*id, f.name.clone()));
-                self.body(&f.params, args, &f.body, dest);
+                self.body(&f.params, args, Cow::Borrowed(&f.body), dest);
                 return true;
             }
             Expr::LocalGet(id) => {
@@ -596,8 +699,7 @@ impl Flat<'_> {
                 if !once {
                     return false;
                 }
-                let lit = lit.clone();
-                if !inline_literal(&lit) {
+                if !inline_literal(lit) {
                     return false;
                 }
                 let top = self
@@ -609,35 +711,52 @@ impl Flat<'_> {
                     true => Copy::Factory(*id),
                     false => Copy::Let(*id, top.then(|| name.clone())),
                 });
-                self.out[k] = match self.out[k].take() {
-                    Some(Stmt::Let {
-                        id,
-                        name,
-                        ty,
-                        mutable,
-                        ..
-                    }) if factory => Some(Stmt::Let {
+                // The literal moves out of its `let` into the view's
+                // statements; the `let` goes, or (the factory) stays bound
+                // to `undefined`.
+                let Some(Stmt::Let {
+                    id,
+                    name,
+                    ty,
+                    mutable,
+                    init: Some(lit),
+                }) = self.out[k].take()
+                else {
+                    unreachable!("the `let` of the literal");
+                };
+                if factory {
+                    self.out[k] = Some(Stmt::Let {
                         id,
                         name,
                         ty,
                         mutable,
                         init: Some(Expr::Undefined),
-                    }),
-                    _ => None,
-                };
-                lit
+                    });
+                }
+                Cow::Owned(lit)
             }
-            Expr::Closure { .. } if inline_literal(callee) => callee.clone(),
+            Expr::Closure { .. } if inline_literal(callee) => Cow::Borrowed(callee),
             _ => return false,
         };
-        let Expr::Closure { params, body, .. } = &lit else {
-            return false;
-        };
-        self.body(params, args, body, dest);
+        match lit {
+            Cow::Owned(Expr::Closure { params, body, .. }) => {
+                self.body(&params, args, Cow::Owned(body), dest)
+            }
+            Cow::Borrowed(Expr::Closure { params, body, .. }) => {
+                self.body(params, args, Cow::Borrowed(body), dest)
+            }
+            _ => return false,
+        }
         true
     }
 
-    fn body(&mut self, params: &[perry_hir::Param], args: &[Expr], body: &[Stmt], dest: Dest) {
+    fn body(
+        &mut self,
+        params: &[perry_hir::Param],
+        args: &[Expr],
+        body: Cow<'_, [Stmt]>,
+        dest: Dest,
+    ) {
         self.changed = true;
         for (i, p) in params.iter().enumerate() {
             let init = args.get(i).cloned().unwrap_or(Expr::Undefined);
@@ -652,27 +771,46 @@ impl Flat<'_> {
         for a in args.iter().skip(params.len()) {
             self.out.push(Some(Stmt::Expr(a.clone())));
         }
-        let (stmts, result) = match body.split_last() {
-            Some((Stmt::Return(e), rest)) => (rest, e.clone()),
-            _ => (body, None),
+        // The body's statements and its final `return`'s value.
+        let result = match body {
+            Cow::Borrowed(body) => {
+                let (stmts, result) = match body.split_last() {
+                    Some((Stmt::Return(e), rest)) => (rest, e.clone()),
+                    _ => (body, None),
+                };
+                for s in stmts {
+                    self.stmt(Cow::Borrowed(s));
+                }
+                result
+            }
+            Cow::Owned(mut body) => {
+                let result = match body.pop() {
+                    Some(Stmt::Return(e)) => e,
+                    last => {
+                        body.extend(last);
+                        None
+                    }
+                };
+                for s in body {
+                    self.stmt(Cow::Owned(s));
+                }
+                result
+            }
         };
-        for s in stmts {
-            self.stmt(s);
-        }
         match dest {
             Some((id, name, ty, mutable)) => {
                 let init = Some(result.unwrap_or(Expr::Undefined));
-                self.stmt(&Stmt::Let {
+                self.stmt(Cow::Owned(Stmt::Let {
                     id,
                     name: name.to_string(),
                     ty: ty.clone(),
                     mutable,
                     init,
-                });
+                }));
             }
             None => {
                 if let Some(e) = result {
-                    self.stmt(&Stmt::Expr(e));
+                    self.stmt(Cow::Owned(Stmt::Expr(e)));
                 }
             }
         }
@@ -1299,9 +1437,11 @@ pub(crate) fn decl_units(module: &Module) -> Vec<Vec<Item>> {
                 free.push((i, *id));
             }
         }
-        for id in &r.funcs {
-            if let Some(&j) = by_func.get(id) {
-                edge(j, false);
+        for (list, both) in [(&r.funcs, false), (&r.join_funcs, true)] {
+            for id in list {
+                if let Some(&j) = by_func.get(id) {
+                    edge(j, both);
+                }
             }
         }
         for (list, both) in [(&r.globals, false), (&r.join_globals, true)] {

@@ -49,6 +49,9 @@ pub(crate) const STAR_KEY: &str = "\u{1}*";
 
 #[derive(Clone, Debug, Default)]
 pub struct FactsConfig {
+    /// Modules the program loads besides the ones no edge enters (worker
+    /// entries, bundle extensions): their bodies run whatever imports them.
+    pub roots: Vec<String>,
     /// Capture observational site data for the existing facts dump only.
     pub diagnostics: bool,
     /// Record the constraint relations for the independent recomputation.
@@ -314,6 +317,7 @@ fn generate<'a>(
         g.m.diagnostic = Some(Default::default());
     }
     g.export_sources = cfg.export_sources.clone();
+    g.roots = cfg.roots.clone();
     g.dynimport_sabotage = cfg.sabotage.as_deref() == Some("dynimport");
     g.unit_in = published;
     g.view = view;
@@ -409,6 +413,32 @@ fn activation<'a>(
     cfg: &FactsConfig,
     t0: std::time::Instant,
 ) -> Option<model::Act> {
+    activation_pass(sorted, cfg, t0).map(|(a, _)| a)
+}
+
+/// The dynamic `import()` / `require(expr)` specifiers a body that can run
+/// holds (DECISIONS 225's activation pass over the whole program), as
+/// (module path, specifier); `None` past the work bound (every site may
+/// run). A site no body that can run holds never imports its target.
+pub fn live_dynamic_imports(
+    modules: &[(String, &Module)],
+    cfg: &FactsConfig,
+) -> Option<std::collections::BTreeSet<(String, String)>> {
+    let mut sorted: Vec<(&str, &Module)> = modules.iter().map(|(p, m)| (p.as_str(), *m)).collect();
+    sorted.sort_by(|a, b| a.0.cmp(b.0));
+    let (_, seen) = activation_pass(&sorted, cfg, std::time::Instant::now())?;
+    Some(
+        seen.into_iter()
+            .map(|(mi, spec)| (sorted[mi as usize].0.to_owned(), spec))
+            .collect(),
+    )
+}
+
+fn activation_pass<'a>(
+    sorted: &[(&'a str, &'a Module)],
+    cfg: &FactsConfig,
+    t0: std::time::Instant,
+) -> Option<(model::Act, crate::pts::FxHashSet<(u32, String)>)> {
     let sabotage = cfg
         .sabotage
         .as_deref()
@@ -429,7 +459,7 @@ fn activation<'a>(
     let mut a = g.m.act.take()?;
     a.fixed = true;
     a.queue.clear();
-    Some(a)
+    Some((a, std::mem::take(&mut g.dynimport_seen)))
 }
 
 /// [`compute`] for one unit of a per-unit run: `published` is what the other
@@ -656,6 +686,9 @@ fn compute_act<'a>(
     } else {
         g.m.fnproto_write.map(|r| g.m.reasons[r as usize].clone())
     };
+    // Per unit, a class's own unit says whether it is relinked: another
+    // unit's class (a stand-in) may be relinked where this unit does not
+    // see it, and the driver joins every unit's claims.
     let super_unrelinked = if stats.aborted {
         Default::default()
     } else {
@@ -666,6 +699,9 @@ fn compute_act<'a>(
                 let model::TokKind::ClassObj(tm) = kind else {
                     return None;
                 };
+                if g.m.foreign.contains_key(tm) {
+                    return None;
+                }
                 let model::TmplKind::Class { class_id, .. } = g.m.tmpls[*tm as usize].kind else {
                     return None;
                 };
@@ -891,6 +927,7 @@ fn compute_act<'a>(
                         ctor_fn,
                         birth_keys: atoms_of(&g, &g.m.tmpls[tm as usize].birth_keys),
                         definite: atoms_of(&g, &g.m.tmpls[tm as usize].definite),
+                        reserved: atoms_of(&g, &g.m.tmpls[tm as usize].reserved),
                         ctor_leaks: g.chain_leaks(tm),
                         ctor_returns: g.chain_returns(tm),
                         binding_prim: match e {
@@ -1739,6 +1776,30 @@ impl ProgramFacts {
             })
             .map(|(c, ts)| (c, ts[0]))
             .collect()
+    }
+
+    /// The class ids of the objects a field's kind names (its `objs`, by
+    /// display), sorted. `None` when one of them is no class instance (a
+    /// literal or function-instance template) or its display does not name
+    /// exactly one class. Says nothing about the kind's other members (⊤,
+    /// functions, builtins, primitives): the caller decides on those.
+    pub fn classes_of(&self, k: &derive::KindFact) -> Option<Vec<u32>> {
+        let mut out = Vec::with_capacity(k.objs.len());
+        for d in &k.objs {
+            let mut ids = self
+                .templates
+                .iter()
+                .filter(|t| t.display == *d)
+                .map(|t| t.class_id);
+            let cid = ids.next()??;
+            if !ids.all(|c| c == Some(cid)) {
+                return None;
+            }
+            out.push(cid);
+        }
+        out.sort_unstable();
+        out.dedup();
+        Some(out)
     }
 
     /// Receiver facts of module `path`'s bindings (empty when unknown).
