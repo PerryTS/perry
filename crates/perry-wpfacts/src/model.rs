@@ -1318,6 +1318,8 @@ pub struct Model {
     /// The `Cons::Defined` node a present read's chain flows through, by
     /// the read's destination.
     pub defined_via: FxHashMap<NodeId, NodeId>,
+    /// (chain node, read destination) pairs with their `Cons::Defined`.
+    pub defined_done: crate::pts::FxHashSet<(NodeId, NodeId)>,
     /// Fact units whose keys can disappear (delete, defineProperty, with):
     /// no key of theirs is sure.
     pub keys_unsure: crate::pts::FxHashSet<TmplId>,

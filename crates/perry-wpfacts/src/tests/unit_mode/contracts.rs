@@ -317,9 +317,9 @@ pub(super) fn a_broken_namespace_field_function_resolves_only_the_units_that_see
     // reads its key's reach (`method_on`): [754, 1090, 948, 42] -> the pin
     // below. DCE: a read of a key the object surely holds takes its chain
     // through a relay that drops the chain end's `undefined`
-    // (`Cons::Defined`): one node and one rule per such read, [758, 1094,
-    // 952, 42] -> the pin below.
-    assert_eq!(pf.round_work, [762, 1105, 960, 42], "{:?}", pf.units);
+    // (`Cons::Defined`): a relay node for the read's own builtin members
+    // and a rule on the chain node, [758, 1094, 952, 42] -> the pin below.
+    assert_eq!(pf.round_work, [762, 1104, 960, 42], "{:?}", pf.units);
 }
 
 #[test]

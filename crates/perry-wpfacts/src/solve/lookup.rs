@@ -189,13 +189,13 @@ impl Model {
         // An own data key the object surely holds stops the lookup at the
         // object: the chain's end, where a key no link defines reads
         // `undefined`, is never reached. Its values stay (a superset).
-        let chain = if present && !self.is_proto_key(key) {
-            self.defined_into(dst)
-        } else {
-            dst
-        };
+        let defined = present && !self.is_proto_key(key);
+        let chain = if defined { self.defined_into(dst) } else { dst };
         if !(self.is_marker(t) && self.beside_values(t)) {
             self.with_b(|m| builtins::tok_load(m, t, key, chain));
+        }
+        if matches!(self.toks[t as usize], TokKind::ObjectProto) && !self.is_proto_key(key) {
+            self.with_b(|m| builtins::intrinsic_proto_own(m, key, dst));
         }
         // Element reads of array-likes stop at their own elements: their
         // builtin prototype members are approximated by `tok_load`.
@@ -204,7 +204,16 @@ impl Model {
         }
         // The prototype chain's values, shared by every receiver of `t`.
         let cv = self.cv(t, key);
-        self.edge(cv, chain);
+        if defined {
+            // A rule on the chain node, not an edge into a relay: an
+            // observation node feeds only observation nodes (`edge`), and
+            // `sum_skip` applies that to this rule by its `dst`.
+            if self.defined_done.insert((cv, dst)) {
+                self.cons(cv, Cons::Defined { dst });
+            }
+        } else {
+            self.edge(cv, dst);
+        }
         // Accessors run with the receiver as `this`: walk per receiver, only
         // for keys an accessor may be defined under.
         self.accessor_walk(origin, t, key, ChainAct::Load(dst));
@@ -448,7 +457,8 @@ impl Model {
         n
     }
 
-    /// The node whose values reach `dst` without `undefined` (`Cons::Defined`).
+    /// The node whose values reach `dst` without `undefined` (`Cons::Defined`):
+    /// `tok_load` writes into it (no edge, so an observation `dst` is fine).
     fn defined_into(&mut self, dst: NodeId) -> NodeId {
         if let Some(&n) = self.defined_via.get(&dst) {
             return n;
