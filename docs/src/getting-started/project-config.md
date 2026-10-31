@@ -96,6 +96,8 @@ List npm packages to compile natively instead of routing through the JavaScript 
 When a package is listed here, Perry:
 1. Resolves the package in `node_modules/`
 2. Prefers TypeScript source (`src/index.ts`) over compiled JavaScript (`lib/index.js`)
+   unless `PERRY_PREFER_EMIT_PACKAGES` names it (a comma-separated list of package
+   names, or `*` for all), which keeps it on its compiled entry
 3. Compiles all functions natively through LLVM
 4. Deduplicates across nested `node_modules/` to prevent duplicate linker symbols
 
