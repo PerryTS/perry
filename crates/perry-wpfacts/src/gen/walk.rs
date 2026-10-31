@@ -87,6 +87,7 @@ impl<'a> Gen<'a> {
         }
         let mut keys = Vec::new();
         let mut definite = Vec::new();
+        let mut reserved = Vec::new();
         if let Some(p) = self.m.tmpls[tm as usize].parent {
             if let TmplKind::Class { module: pm, .. } = self.m.tmpls[p as usize].kind {
                 let pmod = self.modules[pm as usize].1;
@@ -94,6 +95,7 @@ impl<'a> Gen<'a> {
             }
             keys = self.m.tmpls[p as usize].birth_keys.clone();
             definite = self.m.tmpls[p as usize].definite.clone();
+            reserved = self.m.tmpls[p as usize].reserved.clone();
         }
         if let Some((_, np)) = self.m.tmpls[tm as usize].native_parent.clone() {
             // Keys the native parent constructor defines (summary, E21).
@@ -115,10 +117,14 @@ impl<'a> Gen<'a> {
             }
             let a = self.m.atom(&f.name);
             push_unique(&mut keys, a);
-            if f.origin == perry_hir::ClassFieldOrigin::Declared {
-                push_unique(&mut declared, a);
-            } else {
-                push_unique(&mut definite, a);
+            match f.origin {
+                perry_hir::ClassFieldOrigin::Declared => push_unique(&mut declared, a),
+                // A reservation holds the hole until the constructor stores
+                // it: present from birth on only when the construction phase
+                // stores it before anyone can observe the instance
+                // (`CtorPhase::definite`, below).
+                perry_hir::ClassFieldOrigin::ConstructorStore => push_unique(&mut reserved, a),
+                perry_hir::ClassFieldOrigin::Definition => push_unique(&mut definite, a),
             }
         }
         self.m.tmpls[tm as usize].declared = declared;
@@ -139,14 +145,17 @@ impl<'a> Gen<'a> {
         // keys are the prefix (`settle_parent_layouts`).
         if self.parent_pending(tm) {
             definite.clear();
+            reserved.clear();
         } else if self.value_parent_on_chain(tm) && self.parent_chain_leaks(tm) {
             let n = self.m.tmpls[tm as usize]
                 .parent
                 .map_or(0, |p| self.m.tmpls[p as usize].definite.len());
             definite.truncate(n);
         }
+        reserved.retain(|a| !definite.contains(a));
         self.m.tmpls[tm as usize].birth_keys = keys;
         self.m.tmpls[tm as usize].definite = definite;
+        self.m.tmpls[tm as usize].reserved = reserved;
     }
 
     /// Some class on `tm`'s chain has a parent value not settled to one
@@ -246,6 +255,7 @@ impl<'a> Gen<'a> {
         for &(tm, _) in &redo {
             self.m.tmpls[tm as usize].birth_keys.clear();
             self.m.tmpls[tm as usize].definite.clear();
+            self.m.tmpls[tm as usize].reserved.clear();
         }
         for (tm, mi) in redo {
             self.compute_birth_keys(tm, modules[mi].1);

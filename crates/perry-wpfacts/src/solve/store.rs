@@ -552,10 +552,9 @@ impl Model {
                         k != "__proto__"
                             && !facts.fields.iter().any(|f| !f.data_field && &f.key == k)
                     }
-                    "class" => facts
-                        .fields
-                        .iter()
-                        .any(|f| f.data_field && &f.key == k && (f.definite || f.declared)),
+                    "class" => facts.fields.iter().any(|f| {
+                        f.data_field && &f.key == k && (f.definite || f.declared || f.reserved)
+                    }),
                     _ => false,
                 }
             }
