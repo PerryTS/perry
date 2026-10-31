@@ -645,6 +645,8 @@ unsafe fn image_atom_symbol(atom: *const StaticAtom) -> Option<*mut crate::symbo
 mod atoms;
 #[cfg(test)]
 use atoms::image_atoms;
+#[cfg(any(all(feature = "wasm-image-selftest", target_family = "wasm"), all(test, target_os = "windows")))]
+use atoms::atom_bounds;
 pub(crate) use atoms::{atom_bytes, coloured_atoms, seed_static_atoms, shadow_name_descriptor};
 pub use atoms::StaticAtom;
 
