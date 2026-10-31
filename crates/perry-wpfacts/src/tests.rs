@@ -1711,3 +1711,4 @@ fn a_protocol_touch_of_an_argument_marker_reads_nothing() {
     let tj = m.marker_load(r, Some(a));
     assert!(m.marker_use.get(&tj).is_some_and(|&u| u & MARK_ESCAPE != 0));
 }
+mod constructor_values;
