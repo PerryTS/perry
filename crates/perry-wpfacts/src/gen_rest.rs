@@ -67,6 +67,7 @@ impl<'a> Gen<'a> {
         Some((class_name, args, arg("get"), arg("set")))
     }
 
+
     /// The class whose method home `home` reads, when it is that home.
     fn class_home_of(&self, fx: &Fx, home: &Expr) -> Option<TmplId> {
         match home {

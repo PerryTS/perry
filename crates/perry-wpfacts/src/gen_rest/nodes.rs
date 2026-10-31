@@ -6,14 +6,7 @@
 use super::*;
 
 impl<'a> Gen<'a> {
-    pub(super) fn prim_kids(
-        &mut self,
-        fx: &Fx,
-        e: &Expr,
-        result: u16,
-        why: &str,
-        proto: Protocol,
-    ) -> NodeId {
+    pub(super) fn prim_kids(&mut self, fx: &Fx, e: &Expr, result: u16, why: &str, proto: Protocol) -> NodeId {
         let ks = kids(e);
         self.prim_op(fx, &ks, result, why, proto)
     }
@@ -70,12 +63,7 @@ impl<'a> Gen<'a> {
         self.load(recv, key)
     }
 
-    pub(super) fn array_cb(
-        &mut self,
-        fx: &Fx,
-        array: &Expr,
-        callback: &Expr,
-    ) -> (NodeId, NodeId, NodeId) {
+    pub(super) fn array_cb(&mut self, fx: &Fx, array: &Expr, callback: &Expr) -> (NodeId, NodeId, NodeId) {
         let a = self.expr(fx, array);
         let cb = self.expr(fx, callback);
         let ek = self.m.elem_key();
