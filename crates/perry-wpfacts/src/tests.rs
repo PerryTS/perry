@@ -52,6 +52,7 @@ mod summary;
 mod super_heritage;
 mod unit_alias;
 mod unit_cjs;
+mod ctor_observed;
 mod ctor_return;
 mod unit_ctor;
 mod unit_effects;

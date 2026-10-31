@@ -85,6 +85,9 @@ pub(crate) struct ClassContract {
     /// the same unit does.
     pub birth_keys: Vec<String>,
     pub definite: Vec<String>,
+    /// The birth keys reserved for a constructor store that are not
+    /// definite (`Template::reserved`): known slots, present once stored.
+    pub reserved: Vec<String>,
     pub ctor_leaks: bool,
     /// Its constructor, or one up its chain, may return an object other than
     /// `this` (`return expr`): a reader's `new` then yields that value, not
@@ -915,7 +918,17 @@ impl ClassContract {
         // The layout prefix a subclass in another unit takes: the common
         // birth keys, definite in both; a leak in either leaks.
         common_prefix(&mut self.birth_keys, &o.birth_keys);
+        // A known slot whose presence one of them does not know.
+        let known = |c: &Self, k: &String| c.definite.contains(k) || c.reserved.contains(k);
+        let reserved: Vec<String> = self
+            .definite
+            .iter()
+            .chain(self.reserved.iter())
+            .filter(|k| known(o, k) && !(self.definite.contains(k) && o.definite.contains(k)))
+            .cloned()
+            .collect();
         self.definite.retain(|k| o.definite.contains(k));
+        self.reserved = reserved;
         self.ctor_leaks |= o.ctor_leaks;
         self.ctor_returns |= o.ctor_returns;
         self.binding_prim |= o.binding_prim;

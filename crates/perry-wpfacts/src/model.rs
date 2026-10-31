@@ -285,6 +285,12 @@ pub struct Template {
     /// slots, absent until stored (each read pairs its load with the hole
     /// compare).
     pub declared: Vec<Atom>,
+    /// Birth keys reserved for a constructor store
+    /// (`ClassFieldOrigin::ConstructorStore`) that are not `definite`: code
+    /// can observe the instance before the constructor stores them (a method
+    /// call on `this`, ...). Known slots, holding the hole (absent) until
+    /// stored; each read pairs its load with the hole compare.
+    pub reserved: Vec<Atom>,
     /// Parent template (class `extends`), when statically known.
     pub parent: Option<TmplId>,
     /// The constructor function of a class template (None: implicit ctor).
