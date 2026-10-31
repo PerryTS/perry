@@ -248,6 +248,23 @@ fn disjoint_owner_scopes_have_dynamic_single_scope_declarations_and_verify() {
         .create_module_from_ir(buffer)
         .expect("owner-region LLVM parses");
     module.verify().expect("dynamic owner-region scopes verify");
+    // Split modules build bodies through the native reader: the same
+    // emission must construct there with every scope declaration and
+    // attachment LLVM's parse keeps.
+    let llvm = module.print_to_string().to_string();
+    let reader = crate::dialect::tests::reader_module_print(&ir);
+    for form in [
+        "call void @llvm.experimental.noalias.scope.decl(metadata",
+        "!alias.scope !",
+        "!noalias !",
+    ] {
+        assert!(llvm.contains(form), "LLVM parse lost `{form}`");
+        assert_eq!(
+            llvm.matches(form).count(),
+            reader.matches(form).count(),
+            "reader and LLVM disagree on `{form}`"
+        );
+    }
 }
 
 #[test]
