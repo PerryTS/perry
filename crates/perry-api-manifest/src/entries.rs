@@ -192,6 +192,7 @@ pub const NODE_SUBMODULES: &[&str] = &[
     // helpers) so the unimplemented-API gate and docs recognize the modules.
     "timers",
     "timers/promises",
+    "trace_events",
 ];
 
 /// Internal manifest keys used by dispatch/property gates but not importable

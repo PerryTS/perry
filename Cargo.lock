@@ -5190,6 +5190,7 @@ dependencies = [
  "perry-codegen-wasm",
  "perry-codegen-wear-tiles",
  "perry-diagnostics",
+ "perry-dispatch",
  "perry-gc-effects",
  "perry-hex",
  "perry-hir",
