@@ -12,6 +12,7 @@ pub(super) fn cp_stdin_written(handle: u64, len: usize, broken: bool) {
     let mut emit_drain = false;
     let mut writable_length = 0;
     let mut close_now = false;
+    let mut finish_now = false;
     let mut found = false;
     {
         let mut guard = cp_live_lock();
@@ -29,6 +30,7 @@ pub(super) fn cp_stdin_written(handle: u64, len: usize, broken: bool) {
                     emit_drain = stdin.need_drain && !stdin.end_pending && !broken;
                     stdin.need_drain = false;
                     close_now = stdin.end_pending || broken;
+                    finish_now = stdin.end_pending && !broken;
                 }
             }
             if close_now {
@@ -72,6 +74,9 @@ pub(super) fn cp_stdin_written(handle: u64, len: usize, broken: bool) {
                 0,
             );
         }
+    }
+    if finish_now {
+        cp_stdin_finish(stream);
     }
 }
 
