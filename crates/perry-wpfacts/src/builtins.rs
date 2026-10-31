@@ -404,6 +404,17 @@ fn undescribed_member(m: &mut Model, dst: NodeId) {
     m.add_prim(dst, prim::ALL);
 }
 
+/// A read on `ObjectProto` itself, not through a chain (`Function.prototype
+/// .call`, `String.prototype.replace`): it stands for every builtin
+/// prototype, the undescribed ones included, so any key but `constructor`
+/// (`tok_load`) may name a builtin function or a primitive member.
+pub fn intrinsic_proto_own(m: &mut Model, key: Key, dst: NodeId) {
+    if m.is_constructor_key(key) {
+        return;
+    }
+    undescribed_member(m, dst);
+}
+
 /// The family's `constructor`.
 fn family_ctor(m: &mut Model, fam: Family, dst: NodeId) {
     let nss: &[BuiltinNs] = match fam {
@@ -1970,7 +1981,11 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
         }
         BuiltinNs::Date | BuiltinNs::RegExp => {
             implicit_args(m, call, "builtin constructor argument", Protocol::Any);
-            let what = if ns == BuiltinNs::Date { "Date" } else { "RegExp" };
+            let what = if ns == BuiltinNs::Date {
+                "Date"
+            } else {
+                "RegExp"
+            };
             let o = site_tmpl(m, call, what);
             ret_tok(m, call, o);
         }

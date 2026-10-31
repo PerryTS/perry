@@ -424,7 +424,7 @@ fn follow_import_local(
 // Edge rewriting (drop references to pruned modules from survivors)
 // ---------------------------------------------------------------------------
 
-fn rewrite_pruned_edges(ctx: &mut CompilationContext, pruned: &HashSet<PathBuf>) {
+pub(super) fn rewrite_pruned_edges(ctx: &mut CompilationContext, pruned: &HashSet<PathBuf>) {
     let surviving: Vec<PathBuf> = ctx
         .native_modules
         .keys()
@@ -807,4 +807,15 @@ mod tests {
             "non-barrel binding pulls whole module"
         );
     }
+}
+
+/// The graph module a resolved import path names, if any (no resolver call).
+pub(super) fn resolve_edge_cached(
+    key_set: &HashSet<PathBuf>,
+    resolved_path: Option<&str>,
+) -> Option<PathBuf> {
+    let rp = resolved_path?;
+    let canon = PathBuf::from(rp);
+    let canon = canon.canonicalize().unwrap_or(canon);
+    key_set.contains(&canon).then_some(canon)
 }

@@ -102,6 +102,10 @@ pub(crate) enum PendingWalk<'a> {
     Fields(u32, &'a perry_hir::Class),
     /// A closure's body (its emitted definition) in its creation context.
     Closure(crate::gen::Fx, &'a perry_hir::Expr),
+    /// A module only `import()` loads: its body runs once an `import()`
+    /// site a body that can run holds names it (or a module it loads
+    /// imports it).
+    Module(u32),
 }
 
 pub struct Gen<'a> {
@@ -281,6 +285,16 @@ pub struct Gen<'a> {
     /// The negative control (`PERRY_FACTS_SABOTAGE=dynimport`): `import()`
     /// sites skip their module mapping (DECISIONS 226).
     pub dynimport_sabotage: bool,
+    /// The `import()` / `require(expr)` specifiers of the bodies walked, by
+    /// module (`live_dynamic_imports`): in the activation pass, the sites a
+    /// body that can run holds.
+    pub dynimport_seen: crate::pts::FxHashSet<(u32, String)>,
+    /// Activation: the modules only `import()` loads (`dynamic_only`), and
+    /// every module's body function once they exist.
+    pub dynamic_only: crate::pts::FxHashSet<u32>,
+    /// `FactsConfig::roots`: modules loaded whatever imports them.
+    pub roots: Vec<String>,
+    pub init_fn_of: FxHashMap<u32, FnIdx>,
     /// Object-literal IIFE parameter node → the literal template it births.
     pub iife_birth: FxHashMap<NodeId, TmplId>,
     /// Construction-phase analysis of plain functions used as constructors.
@@ -331,6 +345,11 @@ pub(crate) struct Fx {
     pub new_target: NodeId,
     /// A plain function / function expression that `new` may call.
     pub fn_ctor: bool,
+    /// The innermost `if` branch being walked: its test node and the test
+    /// that selects it. An assignment to a local there reaches the local
+    /// only when the test can select the branch (`Cons::Guard`); every
+    /// other effect of the branch stays unconditional.
+    pub guard: Option<(NodeId, u8)>,
 }
 
 #[path = "gen/import_values.rs"]
@@ -477,6 +496,10 @@ impl<'a> Gen<'a> {
             class_envs: FxHashMap::default(),
             export_sources: Default::default(),
             dynimport_sabotage: false,
+            dynimport_seen: Default::default(),
+            dynamic_only: Default::default(),
+            roots: Vec::new(),
+            init_fn_of: FxHashMap::default(),
             iife_birth: FxHashMap::default(),
             fn_phase: FxHashMap::default(),
             rooted_stores: Default::default(),
@@ -1121,6 +1144,19 @@ impl<'a> Gen<'a> {
         if !c.is_literal_shape() {
             self.own_classes.entry(display.clone()).or_insert(tm);
         }
+        // An object literal's shape: every birth evaluates all its values
+        // first and defines every key before the object can be seen, so its
+        // keys are present (the fields of a class are not: its constructor
+        // can read them before they are stored).
+        let literal_keys: Vec<Atom> = if c.is_literal_shape() {
+            c.fields
+                .iter()
+                .filter(|f| f.key_expr.is_none())
+                .map(|f| self.m.atom(&f.name))
+                .collect()
+        } else {
+            Vec::new()
+        };
         self.m.tmpls.push(Template {
             kind: TmplKind::Class {
                 module: mi,
@@ -1130,7 +1166,7 @@ impl<'a> Gen<'a> {
             },
             display,
             birth_keys: Vec::new(),
-            definite: Vec::new(),
+            definite: literal_keys,
             declared: Vec::new(),
             reserved: Vec::new(),
             parent: None,

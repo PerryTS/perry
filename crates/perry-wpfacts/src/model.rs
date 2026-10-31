@@ -43,6 +43,39 @@ pub const TOP: Tok = 0;
 pub const NO_CTX: CallId = u32::MAX;
 
 /// Primitive kind bits carried next to the object tokens of a node.
+/// What a test value must be able to hold for a [`Cons::Guard`] to let its
+/// branch through. ⊤ and parameter or argument markers (another unit's or
+/// an unseen caller's value) can hold anything; every other token is an
+/// object or a function: truthy, neither `undefined` nor `null`.
+pub mod guard {
+    pub const UNDEF: u8 = 0;
+    pub const NOT_UNDEF: u8 = 1;
+    pub const NULLISH: u8 = 2;
+    pub const NOT_NULLISH: u8 = 3;
+    pub const TRUTHY: u8 = 4;
+    pub const FALSY: u8 = 5;
+
+    /// The primitive kinds (`prim` bits) a test admits.
+    pub fn prims(test: u8) -> u16 {
+        use super::prim as p;
+        match test {
+            UNDEF => p::UNDEF,
+            NOT_UNDEF => p::ALL & !p::UNDEF,
+            NULLISH => p::UNDEF | p::NULL,
+            NOT_NULLISH => p::ALL & !(p::UNDEF | p::NULL),
+            // Every primitive kind but `undefined`/`null` has a truthy value.
+            TRUTHY => p::NUM | p::STR | p::BOOL | p::BIGINT | p::SYMBOL,
+            // `0`, `""`, `false`, `0n`, `null`, `undefined`.
+            _ => p::NUM | p::STR | p::BOOL | p::BIGINT | p::NULL | p::UNDEF,
+        }
+    }
+
+    /// An object or function token admits the test.
+    pub fn objects(test: u8) -> bool {
+        matches!(test, NOT_UNDEF | NOT_NULLISH | TRUTHY)
+    }
+}
+
 pub mod prim {
     pub const NUM: u16 = 1 << 0;
     pub const STR: u16 = 1 << 1;
@@ -701,6 +734,17 @@ pub enum Cons {
         from: NodeId,
         reason: Option<u32>,
     },
+    /// `from` flows into `dst` once the node may hold a value `test`
+    /// admits (`guard`): a conditional's branch, a logical operator's right
+    /// operand, a destructuring default reach the result only when their
+    /// test can take the value that selects them. A node that never holds
+    /// such a value is a test that never selects the branch.
+    Guard { test: u8, from: NodeId, dst: NodeId },
+    /// The node's values flow into `dst` without `undefined`: the chain of
+    /// a read whose own data key the object surely holds. The lookup stops
+    /// at the object, so the chain's end (a key no link defines reads
+    /// `undefined`) is never reached; its values stay, a superset.
+    Defined { dst: NodeId },
     /// Every object token reaches a HARD operation.
     Hard { kind: Hard, reason: u32 },
     /// `delete o.key`: E7 HARD on every object token; on ⊤ (which may be a
@@ -950,6 +994,8 @@ impl Cons {
             Cons::ContractThis { .. } => "contractthis",
             Cons::OverrideThis { .. } => "overridethis",
             Cons::TopIfAny { .. } => "topifany",
+            Cons::Guard { .. } => "guard",
+            Cons::Defined { .. } => "defined",
             Cons::Hard { .. } => "hard",
             Cons::DeleteKey { .. } => "deletekey",
             Cons::AddsKeys => "addskeys",
@@ -1124,6 +1170,16 @@ impl WorkProfile {
     pub const STEP: u64 = 5_000_000;
 }
 
+/// An object literal with spreads: the keys it defines itself, and per
+/// spread site the keys every source so far surely holds (`None`: no source
+/// yet). A key is sure when the literal defines it or one spread copies it
+/// from every source.
+#[derive(Default, Clone, Debug)]
+pub struct LitSpread {
+    pub named: Vec<Atom>,
+    pub sites: Vec<(SiteId, Option<Vec<Atom>>)>,
+}
+
 #[derive(Default)]
 pub struct Model {
     pub(crate) diagnostic: Option<crate::diagnostics::Trace>,
@@ -1250,6 +1306,23 @@ pub struct Model {
     /// the source gains later is copied too (`Model::field`).
     pub spread_to: FxHashMap<Tok, Vec<(Tok, SiteId)>>,
     pub spread_done: crate::pts::FxHashSet<(Tok, Tok)>,
+    /// Object literals with spreads (`{ a, ...s }`): which keys they surely
+    /// hold (`LitSpread`), by template, and their spread sites.
+    pub lit_spread: FxHashMap<TmplId, LitSpread>,
+    pub lit_spread_site: FxHashMap<SiteId, TmplId>,
+    /// Reads of a key a fact unit surely holds (they read no `undefined`),
+    /// by template: when the key stops being sure (a spread source that
+    /// lacks it, a `delete`), each gets `undefined` after all.
+    pub present_reads: FxHashMap<TmplId, Vec<(Atom, NodeId)>>,
+    pub present_seen: crate::pts::FxHashSet<(TmplId, Atom, NodeId)>,
+    /// The `Cons::Defined` node a present read's chain flows through, by
+    /// the read's destination.
+    pub defined_via: FxHashMap<NodeId, NodeId>,
+    /// (chain node, read destination) pairs with their `Cons::Defined`.
+    pub defined_done: crate::pts::FxHashSet<(NodeId, NodeId)>,
+    /// Fact units whose keys can disappear (delete, defineProperty, with):
+    /// no key of theirs is sure.
+    pub keys_unsure: crate::pts::FxHashSet<TmplId>,
     /// Calls the runtime makes for a protocol (ToPrimitive, iteration …).
     pub protocol_calls: crate::pts::FxHashSet<CallId>,
     /// Shared prototype-chain value nodes: (token, key) → node.

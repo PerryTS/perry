@@ -296,6 +296,23 @@ impl Model {
                     }
                 }
             }
+            Cons::Guard { test, from, dst } => {
+                let admits = prim & guard::prims(test) != 0
+                    || toks
+                        .into_iter()
+                        .any(|&t| t == TOP || guard::objects(test) || self.is_marker(t));
+                if admits {
+                    self.edge(from, dst);
+                }
+            }
+            Cons::Defined { dst } => {
+                for &t in toks {
+                    self.add_tok(dst, t);
+                }
+                if prim & !prim::UNDEF != 0 {
+                    self.add_prim(dst, prim & !prim::UNDEF);
+                }
+            }
             Cons::TopIfAny { dst, from, reason } => {
                 if !toks.is_empty() || prim != 0 {
                     if let Some(r) = reason {
@@ -769,7 +786,8 @@ impl Model {
                     if self.foreign.contains_key(&tm) {
                         self.relinked_parents.insert(tm);
                     } else if theirs(self, of) {
-                        let reason = self.reason("class given as the parent of a class unknown code constructs");
+                        let reason = self
+                            .reason("class given as the parent of a class unknown code constructs");
                         self.escape(p, reason);
                     }
                 }
@@ -1097,6 +1115,13 @@ impl Model {
             Cons::RetInto { call, run } => self.ret_into(call, run, toks, prim),
             Cons::ArgInto { call, run, i } => self.arg_into(call, run, i, toks),
             Cons::Spread { into, site } => {
+                // A primitive source copies no key surely (`null`,
+                // `undefined`: none at all).
+                if prim != 0 {
+                    if let Some(&tm) = self.lit_spread_site.get(&site) {
+                        self.spread_source(tm, site, Vec::new());
+                    }
+                }
                 for &s in toks {
                     self.cons(into, Cons::SpreadFrom { src: s, site });
                 }

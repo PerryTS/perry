@@ -753,7 +753,10 @@ pub(super) fn an_escaped_value_beside_top_is_that_top() {
         (e8, e16, e32),
         // DEC221 removes four entries from the redundant wildcard escape
         // at each n; the existing quadratic storage behavior is unchanged.
-        (1064, 2944, 9392),
+        // DCE: `o.l{i} || (o.l{i} = ...)` joins its right operand when the
+        // left one can be falsy (here ⊤), through an edge the solve makes,
+        // which takes no shared set: two entries per literal.
+        (1080, 2976, 9456),
         "entries {e8} {e16} {e32}"
     );
 }

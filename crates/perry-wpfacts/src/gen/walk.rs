@@ -31,52 +31,188 @@ impl<'a> Gen<'a> {
                 self.compute_birth_keys(tm, module);
             }
         }
+        // DECISIONS 225: a module only `import()` loads runs when an active
+        // body loads it; its body is walked then (`PendingWalk::Module`).
+        if self.m.act.is_some() {
+            self.dynamic_only = self.dynamic_only_modules();
+        }
+        if !self.dynamic_only.is_empty() {
+            for mi in 0..modules.len() as u32 {
+                let f = self.synthetic_fn(mi, "<init>");
+                self.init_fn_of.insert(mi, f);
+            }
+        }
         for mi in 0..modules.len() {
             // Over a bound: the program gets no facts; stop generating.
             if self.m.aborted {
                 return;
             }
             let mi = mi as u32;
-            let init_fn = self.synthetic_fn(mi, "<init>");
-            self.m.note_walked(init_fn);
-            let this = self.m.funcs[init_fn as usize].this;
-            // Module top-level `this`: CJS `module.exports`-like object or
-            // undefined in ESM; ⊤-free: a fresh literal-ish object.
-            self.m.add_prim(this, prim::UNDEF);
-            let fx = Fx {
-                module: mi,
-                f: init_fn,
-                this,
-                ret: self.m.funcs[init_fn as usize].ret,
-                class: None,
-                ctor_of: None,
-                new_target: self.m.all_prim_node,
-                fn_ctor: false,
+            let init_fn = match self.init_fn_of.get(&mi) {
+                Some(&f) => f,
+                None => {
+                    let f = self.synthetic_fn(mi, "<init>");
+                    self.init_fn_of.insert(mi, f);
+                    f
+                }
             };
-            for g in self.globals_of(mi as usize) {
-                if let Some(init) = &g.init {
-                    let v = self.expr(&fx, init);
-                    let gn = self.global(mi, g.id);
-                    self.m.edge(v, gn);
+            if self.dynamic_only.contains(&mi) && self.defer_walk(init_fn, PendingWalk::Module(mi))
+            {
+                continue;
+            }
+            self.walk_module(mi, init_fn);
+            if self.m.aborted {
+                return;
+            }
+        }
+    }
+
+    /// The modules that load only through `import()`: no static import or
+    /// re-export reaches them from a module no edge enters (the entry, a
+    /// worker). Empty when a re-export source does not resolve (every
+    /// module loads).
+    fn dynamic_only_modules(&self) -> crate::pts::FxHashSet<u32> {
+        let n = self.modules.len();
+        let mut entered = vec![false; n];
+        let mut succ: Vec<Vec<u32>> = vec![Vec::new(); n];
+        for mi in 0..n {
+            let imports = self.imports_of(mi);
+            let path = self.modules[mi].0;
+            // A re-export source as the compile driver resolved it
+            // (`export_sources`), else through an import of the same source.
+            let target = |source: &str| {
+                self.export_sources
+                    .get(path)
+                    .and_then(|m| m.get(source))
+                    .and_then(|r| self.path_index.get(r).copied())
+                    .or_else(|| {
+                        imports
+                            .iter()
+                            .find(|i| i.source == source)
+                            .and_then(|i| i.resolved_path.as_ref())
+                            .and_then(|r| self.path_index.get(r).copied())
+                    })
+            };
+            for i in &imports {
+                if i.type_only || i.runtime_erased {
+                    continue;
+                }
+                let Some(t) = i
+                    .resolved_path
+                    .as_ref()
+                    .and_then(|r| self.path_index.get(r).copied())
+                else {
+                    continue;
+                };
+                entered[t as usize] = true;
+                if !i.is_dynamic {
+                    succ[mi].push(t);
                 }
             }
-            for s in self.init_of(mi as usize) {
-                self.stmt(&fx, s);
-                self.name_enum_object(mi, s);
-            }
-            for f in self.functions_of(mi as usize) {
-                if self.m.aborted {
-                    return;
+            for e in &self.modules[mi].1.exports {
+                let source = match e {
+                    perry_hir::Export::ReExport { source, .. }
+                    | perry_hir::Export::ExportAll { source }
+                    | perry_hir::Export::NamespaceReExport { source, .. } => source,
+                    perry_hir::Export::Named { .. } => continue,
+                };
+                if source.starts_with("node:")
+                    || !(source.starts_with('.') || source.starts_with('/'))
+                {
+                    if let Some(t) = target(source) {
+                        entered[t as usize] = true;
+                        succ[mi].push(t);
+                    }
+                    continue;
                 }
-                let fxi = self.mods[mi as usize].funcs[&f.id];
-                self.walk_fn(mi, fxi, f, None, None);
-            }
-            for c in self.classes_of(mi as usize) {
-                if self.m.aborted {
-                    return;
+                match target(source) {
+                    Some(t) => {
+                        entered[t as usize] = true;
+                        succ[mi].push(t);
+                    }
+                    None => {
+                        return Default::default();
+                    }
                 }
-                self.walk_class(mi, c, &fx);
             }
+        }
+        let mut eager = vec![false; n];
+        let mut work: Vec<u32> = (0..n as u32)
+            .filter(|&m| {
+                !entered[m as usize] || self.roots.iter().any(|r| r == self.modules[m as usize].0)
+            })
+            .collect();
+        for &m in &work {
+            eager[m as usize] = true;
+        }
+        while let Some(m) = work.pop() {
+            for &t in &succ[m as usize] {
+                if !eager[t as usize] {
+                    eager[t as usize] = true;
+                    work.push(t);
+                }
+            }
+        }
+        (0..n as u32).filter(|&m| !eager[m as usize]).collect()
+    }
+
+    /// The body of module `mi`: its globals, top-level statements, functions
+    /// and classes. A module it loads statically loads with it.
+    pub(crate) fn walk_module(&mut self, mi: u32, init_fn: FnIdx) {
+        if !self.dynamic_only.is_empty() {
+            for i in self.imports_of(mi as usize) {
+                if i.is_dynamic || i.type_only || i.runtime_erased {
+                    continue;
+                }
+                let t = i
+                    .resolved_path
+                    .as_ref()
+                    .and_then(|r| self.path_index.get(r).copied());
+                if let Some(t) = t.filter(|t| self.dynamic_only.contains(t)) {
+                    let f = self.init_fn_of[&t];
+                    self.m.activate(f, "import");
+                }
+            }
+        }
+        self.m.note_walked(init_fn);
+        let this = self.m.funcs[init_fn as usize].this;
+        // Module top-level `this`: CJS `module.exports`-like object or
+        // undefined in ESM; ⊤-free: a fresh literal-ish object.
+        self.m.add_prim(this, prim::UNDEF);
+        let fx = Fx {
+            guard: None,
+            module: mi,
+            f: init_fn,
+            this,
+            ret: self.m.funcs[init_fn as usize].ret,
+            class: None,
+            ctor_of: None,
+            new_target: self.m.all_prim_node,
+            fn_ctor: false,
+        };
+        for g in self.globals_of(mi as usize) {
+            if let Some(init) = &g.init {
+                let v = self.expr(&fx, init);
+                let gn = self.global(mi, g.id);
+                self.m.edge(v, gn);
+            }
+        }
+        for s in self.init_of(mi as usize) {
+            self.stmt(&fx, s);
+            self.name_enum_object(mi, s);
+        }
+        for f in self.functions_of(mi as usize) {
+            if self.m.aborted {
+                return;
+            }
+            let fxi = self.mods[mi as usize].funcs[&f.id];
+            self.walk_fn(mi, fxi, f, None, None);
+        }
+        for c in self.classes_of(mi as usize) {
+            if self.m.aborted {
+                return;
+            }
+            self.walk_class(mi, c, &fx);
         }
     }
 
@@ -315,6 +451,10 @@ impl<'a> Gen<'a> {
                         }
                         PendingWalk::Fields(mi, c) => self.walk_fields_body(mi, c),
                         PendingWalk::Closure(cfx, e) => self.walk_closure_body(&cfx, e),
+                        PendingWalk::Module(mi) => {
+                            let f = self.init_fn_of[&mi];
+                            self.walk_module(mi, f);
+                        }
                     }
                 }
             }
@@ -333,6 +473,7 @@ impl<'a> Gen<'a> {
         let info = self.m.funcs[fxi as usize].clone();
         let fn_ctor = class.is_none() && ctor_of.is_none();
         let fx = Fx {
+            guard: None,
             module: mi,
             f: fxi,
             this: info.this,
@@ -376,8 +517,18 @@ impl<'a> Gen<'a> {
         for p in params {
             let n = self.local(fx.module, p.id);
             if let Some(d) = &p.default {
+                // The default is the parameter's value only when a call
+                // passes `undefined` or nothing (missing arguments are
+                // `undefined`, `bind_args`).
                 let v = self.expr(fx, d);
-                self.m.edge(v, n);
+                self.m.cons(
+                    n,
+                    Cons::Guard {
+                        test: crate::model::guard::UNDEF,
+                        from: v,
+                        dst: n,
+                    },
+                );
             }
         }
     }
@@ -400,6 +551,7 @@ impl<'a> Gen<'a> {
         self.m.note_walked(fi);
         let fthis = self.m.funcs[fi as usize].this;
         let ffx = Fx {
+            guard: None,
             module: mi,
             f: fi,
             this: fthis,
@@ -423,7 +575,13 @@ impl<'a> Gen<'a> {
                 // `x: T;` defines `undefined` first; when the constructor
                 // assigns it before anyone can observe the instance, that
                 // `undefined` is never seen.
-                None if f.key_expr.is_none() && ctor_definite.contains(&f.name) => continue,
+                None if f.key_expr.is_none()
+                    && (ctor_definite.contains(&f.name) || c.is_literal_shape()) =>
+                {
+                    // An object literal's shape: its constructor stores
+                    // every key from the literal's values first.
+                    continue;
+                }
                 None => self.prim_node(prim::UNDEF),
             };
             match &f.key_expr {
@@ -468,6 +626,7 @@ impl<'a> Gen<'a> {
         let si = self.static_init_fn[&tm];
         self.m.note_walked(si);
         let sfx = Fx {
+            guard: None,
             module: mi,
             f: si,
             this: self.m.funcs[si as usize].this,
@@ -681,10 +840,18 @@ impl<'a> Gen<'a> {
                 then_branch,
                 else_branch,
             } => {
-                let _ = self.expr(fx, condition);
-                self.stmts(fx, then_branch);
+                let (t, then_test, else_test) = self.guard_test(fx, condition);
+                let then_fx = Fx {
+                    guard: Some((t, then_test)),
+                    ..fx.clone()
+                };
+                self.stmts(&then_fx, then_branch);
                 if let Some(e) = else_branch {
-                    self.stmts(fx, e);
+                    let else_fx = Fx {
+                        guard: Some((t, else_test)),
+                        ..fx.clone()
+                    };
+                    self.stmts(&else_fx, e);
                 }
             }
             Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {

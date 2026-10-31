@@ -626,6 +626,12 @@ impl Model {
         if !self.spread_done.insert((s, d)) {
             return;
         }
+        if let Some(&tm) = self.lit_spread_site.get(&site) {
+            if self.tmpl_of(d) == Some(tm) {
+                let keys = self.spread_source_keys(s);
+                self.spread_source(tm, site, keys);
+            }
+        }
         if d == TOP || matches!(self.toks[d as usize], TokKind::BuiltinFn) {
             let r = self.reason("spread into a value from unmodeled code");
             let all = if s == TOP {
@@ -1771,6 +1777,8 @@ impl Model {
                 "overridethis {n} {tmpl} {} {reason}",
                 self.key_name(Key::Named(*key))
             ),
+            Cons::Guard { test, from, dst } => format!("guard {n} {test} {from} {dst}"),
+            Cons::Defined { dst } => format!("defined {n} {dst}"),
             Cons::TopIfAny { dst, from, reason } => format!(
                 "topifany {n} {dst} {from} {}",
                 reason.map_or(-1, |r| r as i64)

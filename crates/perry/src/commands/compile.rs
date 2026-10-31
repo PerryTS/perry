@@ -37,6 +37,7 @@ mod collect_modules;
 mod collect_modules_helpers;
 mod component_host;
 mod compressed_libs;
+mod dynamic_reach;
 mod embed;
 mod env_fold;
 mod export_analysis;
