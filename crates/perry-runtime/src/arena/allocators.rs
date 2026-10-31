@@ -678,6 +678,7 @@ fn arena_alloc_gc_slow(size: usize, align: usize, obj_type: u8, total: usize) ->
     };
 
     if let Some(user_ptr) = reused {
+        crate::snap_census::birth(unsafe { user_ptr.sub(GC_HEADER_SIZE) }, total);
         ARENA.with(|a| unsafe { (&mut *a.get()).note_allocation(total, total >= 16 * 1024) });
         // Reusing a free-list slot: the GcHeader is already in place (before user_ptr)
         // Just update it

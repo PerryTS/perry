@@ -89,6 +89,9 @@ unsafe fn map_zeroed<T>(count: usize) -> *mut T {
     p.cast()
 }
 
+/// A removed [`WordSet`] slot (no word is all ones).
+const TOMBSTONE: u64 = u64::MAX;
+
 /// Open-addressing set of nonzero words.
 struct WordSet {
     slots: *mut u64,
@@ -123,6 +126,23 @@ impl WordSet {
                     *self.slots.add(i) = w;
                     self.len += 1;
                     return true;
+                }
+                i = (i + 1) & self.mask;
+            }
+        }
+    }
+    /// Drop `w` (a tombstone keeps later probes intact).
+    fn remove(&mut self, w: u64) {
+        let mut i = Self::hash(w) & self.mask;
+        unsafe {
+            loop {
+                let s = *self.slots.add(i);
+                if s == w {
+                    *self.slots.add(i) = TOMBSTONE;
+                    return;
+                }
+                if s == 0 {
+                    return;
                 }
                 i = (i + 1) & self.mask;
             }
@@ -364,6 +384,7 @@ struct State {
     /// One bit per 8-byte word of the realm section: an image cell starts.
     realm_starts: *mut u64,
     free_space: u64,
+    reborn: u64,
     noprotect: bool,
     /// Global root slots on no tracked page (the thread pointer's page,
     /// or not a binding: a root slot elsewhere): not watched.
@@ -503,6 +524,7 @@ unsafe fn start(out: String) {
         sizes: SizeMap::new(26),
         realm_starts: map_zeroed::<u64>(((realm.1 - realm.0) / 8).div_ceil(64).max(1)),
         free_space: 0,
+        reborn: 0,
         noprotect: std::env::var("PERRY_SNAP_NOPROTECT").is_ok_and(|v| v == "1"),
         untracked_slots: 0,
         top_mode: std::env::var("PERRY_SNAP_MODE").is_ok_and(|v| v == "top"),
@@ -953,6 +975,23 @@ fn object_start(st: &State, word: usize) -> Option<usize> {
 
 pub(super) fn birth(addr: usize, size: usize) {
     let st = state();
+    // Memory handed out again (a free-list slot, a rewound bump) holds new
+    // locations: an earlier birth there and what members of D did to its
+    // words are gone.
+    let earlier = object_start(st, addr + size - 1)
+        .is_some_and(|h| st.sizes.get(h as u64).is_some_and(|s| addr < h + s as usize));
+    if earlier {
+        st.reborn += 1;
+        for w in (addr..addr + size).step_by(8) {
+            st.w.remove(w as u64);
+            st.r.remove(w as u64);
+        }
+        if let (Some(a), Some(b)) = (start_bit(st, addr), start_bit(st, addr + size - 1)) {
+            for i in a..=b {
+                unsafe { *st.starts.add(i / 64) &= !(1 << (i % 64)) };
+            }
+        }
+    }
     set_start(st, addr);
     st.sizes.insert(addr as u64, size as u32);
     let top = st.frames.last().map_or(0, |f| f.init);
@@ -1791,13 +1830,20 @@ fn write_report(st: &mut State) {
             .iter()
             .map(|b| (b.addr, b.addr + b.size as usize, b.init))
             .collect();
-        v.sort_unstable();
+        v.sort_by_key(|b| b.0);
         v
     };
     let owner = |word: usize| -> String {
         let i = births.partition_point(|&(a, _, _)| a <= word);
         if i > 0 && word < births[i - 1].1 {
-            format!("birth:{}@{:x}", births[i - 1].2, births[i - 1].0)
+            let (a, e, init) = births[i - 1];
+            let ty = unsafe { (*(a as *const crate::gc::GcHeader)).obj_type };
+            format!(
+                "birth:{init}@{a:x}:{}:{}+{}",
+                crate::gc::gc_type_info(ty).map_or("?", |i| i.name),
+                e - a,
+                word - a
+            )
         } else {
             "static".into()
         }
@@ -1910,6 +1956,7 @@ fn write_report(st: &mut State) {
     }
     let _ = writeln!(f, "#excluded\t{}", st.excluded);
     let _ = writeln!(f, "#free_space\t{}", st.free_space);
+    let _ = writeln!(f, "#reborn\t{}", st.reborn);
     let _ = writeln!(f, "#foreign_thread_faults\t{}", st.foreign_faults);
     let _ = writeln!(f, "#untracked_slots\t{}\tof\t{}", st.untracked_slots, st.globals.len);
     for (what, pcs) in &st.realm_hosts {
