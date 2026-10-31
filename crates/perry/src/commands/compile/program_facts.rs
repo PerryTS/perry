@@ -496,6 +496,56 @@ mod facts_mode_tests {
 mod outlined_tests;
 
 /// Borrow ordinary modules; reconstruct only outlined module entries.
+/// Dead-code elimination (`dynamic_reach`): the dynamic `import()` /
+/// `require(expr)` specifiers a body that can run holds, by the whole
+/// program's activation pass over `modules`, as (module path, specifier).
+/// `None` when facts are off or past their bounds (every site may run).
+pub(crate) fn live_dynamic_imports(
+    modules: &BTreeMap<PathBuf, perry_hir::Module>,
+    export_sources: perry_wpfacts::ExportSources,
+    dynamic_code: bool,
+    dynamic_code_reach: &perry_hir::dynamic_code::DynamicCodeReach,
+) -> Option<std::collections::BTreeSet<(String, String)>> {
+    if !perry_wpfacts::enabled_from_env() {
+        return None;
+    }
+    let cfg = perry_wpfacts::FactsConfig {
+        budget_secs: std::env::var("PERRY_FACTS_BUDGET_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|&s| s != 0),
+        // The activation pass alone, over the whole program: a larger bound
+        // than the per-unit facts' (the Supabase CLI needs ~20x the default).
+        max_work: Some(
+            std::env::var("PERRY_DYNAMIC_REACH_MAX_WORK")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(DEFAULT_MAX_WORK * 100),
+        ),
+        max_pts: Some(
+            std::env::var("PERRY_FACTS_MAX_PTS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(400_000_000),
+        ),
+        export_sources,
+        dynamic_code_reach: dynamic_code_reach.clone(),
+        dynamic_code: dynamic_code.then(|| {
+            "E14 the program can run interpreted code (deferred new Function/eval or node:vm)"
+                .into()
+        }),
+        unit: false,
+        jobs: perry_codegen::workers::unit_workers(),
+        ..Default::default()
+    };
+    let inputs = facts_inputs(modules);
+    let list: Vec<(String, &perry_hir::Module)> = inputs
+        .iter()
+        .map(|(p, m)| (p.clone(), m.as_ref()))
+        .collect();
+    perry_wpfacts::live_dynamic_imports(&list, &cfg)
+}
+
 fn facts_inputs(
     modules: &BTreeMap<PathBuf, perry_hir::Module>,
 ) -> Vec<(String, std::borrow::Cow<'_, perry_hir::Module>)> {

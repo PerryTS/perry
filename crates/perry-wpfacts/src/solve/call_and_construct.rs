@@ -1766,6 +1766,16 @@ impl Model {
 
     pub fn mark_hard(&mut self, t: Tok, kind: Hard, reason: u32) {
         self.virt_revoke(t, None);
+        if matches!(
+            kind,
+            Hard::E5DefineProperty | Hard::E7Delete | Hard::E15With
+        ) {
+            if let Some(tm) = self.tmpl_of(t) {
+                if self.keys_unsure.insert(tm) {
+                    self.flush_present_reads(tm);
+                }
+            }
+        }
         if kind == Hard::E6SetPrototypeOf {
             self.super_relink.insert(t);
         }

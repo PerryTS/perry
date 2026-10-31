@@ -1831,14 +1831,22 @@ impl<'a> Gen<'a> {
                 // codegen's dispatch resolves it. A target outside this view
                 // (native, another unit) is the fallback's ⊤.
                 let out = self.tmp("dynimport");
+                for p in paths {
+                    self.dynimport_seen.insert((mi, p.clone()));
+                }
                 let imports = self.imports_of(mi as usize);
                 for p in paths {
-                    let target = imports
+                    let loads = imports
                         .iter()
-                        .filter(|_| !self.dynimport_sabotage)
                         .find(|i| &i.source == p && (i.is_dynamic || i.is_dynamic_target))
                         .and_then(|i| i.resolved_path.as_ref())
                         .and_then(|r| self.path_index.get(r).copied());
+                    // The site loads its target: its body runs.
+                    if let Some(t) = loads.filter(|t| self.dynamic_only.contains(t)) {
+                        let f = self.init_fn_of[&t];
+                        self.m.activate(f, "import");
+                    }
+                    let target = loads.filter(|_| !self.dynimport_sabotage);
                     if let Some(t) = target {
                         let ns = self.mods[t as usize].ns_tok;
                         self.m.add_tok(out, ns);

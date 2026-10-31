@@ -409,6 +409,32 @@ fn activation<'a>(
     cfg: &FactsConfig,
     t0: std::time::Instant,
 ) -> Option<model::Act> {
+    activation_pass(sorted, cfg, t0).map(|(a, _)| a)
+}
+
+/// The dynamic `import()` / `require(expr)` specifiers a body that can run
+/// holds (DECISIONS 225's activation pass over the whole program), as
+/// (module path, specifier); `None` past the work bound (every site may
+/// run). A site no body that can run holds never imports its target.
+pub fn live_dynamic_imports(
+    modules: &[(String, &Module)],
+    cfg: &FactsConfig,
+) -> Option<std::collections::BTreeSet<(String, String)>> {
+    let mut sorted: Vec<(&str, &Module)> = modules.iter().map(|(p, m)| (p.as_str(), *m)).collect();
+    sorted.sort_by(|a, b| a.0.cmp(b.0));
+    let (_, seen) = activation_pass(&sorted, cfg, std::time::Instant::now())?;
+    Some(
+        seen.into_iter()
+            .map(|(mi, spec)| (sorted[mi as usize].0.to_owned(), spec))
+            .collect(),
+    )
+}
+
+fn activation_pass<'a>(
+    sorted: &[(&'a str, &'a Module)],
+    cfg: &FactsConfig,
+    t0: std::time::Instant,
+) -> Option<(model::Act, crate::pts::FxHashSet<(u32, String)>)> {
     let sabotage = cfg
         .sabotage
         .as_deref()
@@ -429,7 +455,7 @@ fn activation<'a>(
     let mut a = g.m.act.take()?;
     a.fixed = true;
     a.queue.clear();
-    Some(a)
+    Some((a, std::mem::take(&mut g.dynimport_seen)))
 }
 
 /// [`compute`] for one unit of a per-unit run: `published` is what the other

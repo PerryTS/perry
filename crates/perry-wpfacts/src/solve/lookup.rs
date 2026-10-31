@@ -4,6 +4,77 @@ use crate::builtins;
 use crate::model::*;
 
 impl Model {
+    /// `a` is a key every object of spread literal `tm` holds.
+    pub(crate) fn spread_sure(&self, tm: TmplId, a: Atom) -> bool {
+        self.lit_spread.get(&tm).is_some_and(|l| {
+            l.named.contains(&a)
+                || l.sites
+                    .iter()
+                    .any(|(_, keys)| keys.as_ref().is_none_or(|k| k.contains(&a)))
+        })
+    }
+
+    /// The keys a spread copies surely from source `s`: the definite keys of
+    /// a fact unit's object; none from anything else.
+    pub(crate) fn spread_source_keys(&self, s: Tok) -> Vec<Atom> {
+        match self.tmpl_of(s) {
+            Some(tm)
+                if self.tmpls[tm as usize].kind.is_fact_unit()
+                    && !self.keys_unsure.contains(&tm) =>
+            {
+                let mut keys = self.tmpls[tm as usize].definite.clone();
+                if let Some(l) = self.lit_spread.get(&tm) {
+                    keys.extend(l.named.iter().copied());
+                }
+                keys
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Spread site `site` of literal `tm` copies from a source holding
+    /// surely `keys` (empty: a primitive or an opaque value).
+    pub(crate) fn spread_source(&mut self, tm: TmplId, site: SiteId, keys: Vec<Atom>) {
+        let Some(l) = self.lit_spread.get_mut(&tm) else {
+            return;
+        };
+        let Some((_, common)) = l.sites.iter_mut().find(|(s, _)| *s == site) else {
+            return;
+        };
+        let shrank = match common {
+            None => {
+                *common = Some(keys);
+                true
+            }
+            Some(c) => {
+                let before = c.len();
+                c.retain(|k| keys.contains(k));
+                c.len() != before
+            }
+        };
+        if shrank {
+            self.flush_present_reads(tm);
+        }
+    }
+
+    /// The reads of `tm` that found a key no longer sure read `undefined`.
+    pub(crate) fn flush_present_reads(&mut self, tm: TmplId) {
+        let reads = self.present_reads.remove(&tm).unwrap_or_default();
+        let mut kept = Vec::new();
+        for (a, dst) in reads {
+            let sure = !self.keys_unsure.contains(&tm)
+                && (self.tmpls[tm as usize].definite.contains(&a) || self.spread_sure(tm, a));
+            if sure {
+                kept.push((a, dst));
+            } else {
+                self.add_prim(dst, prim::UNDEF);
+            }
+        }
+        if !kept.is_empty() {
+            self.present_reads.insert(tm, kept);
+        }
+    }
+
     /// dst ⊇ value of `key` read on object `t` (receiver `origin`).
     pub fn load_from(&mut self, origin: Tok, t: Tok, key: Key, dst: NodeId) {
         self.mark_use(t, crate::model::MARK_READ);
@@ -61,8 +132,13 @@ impl Model {
         // fact unit is known to be present.
         let present = match (key, self.tmpl_of(t)) {
             (Key::Named(a), Some(tm)) => {
-                self.tmpls[tm as usize].kind.is_fact_unit()
-                    && self.tmpls[tm as usize].definite.contains(&a)
+                let sure = self.tmpls[tm as usize].kind.is_fact_unit()
+                    && !self.keys_unsure.contains(&tm)
+                    && (self.tmpls[tm as usize].definite.contains(&a) || self.spread_sure(tm, a));
+                if sure && self.present_seen.insert((tm, a, dst)) {
+                    self.present_reads.entry(tm).or_default().push((a, dst));
+                }
+                sure
             }
             _ => false,
         };
@@ -92,6 +168,13 @@ impl Model {
                 let all = self.all_fields(t);
                 self.edge(all, dst);
             }
+        }
+        // An own data key the object surely holds shadows its whole chain
+        // (a key that can disappear or become an accessor is not sure:
+        // `keys_unsure`): the prototypes, builtin members and inherited
+        // accessors are never read through it.
+        if present && !self.is_proto_key(key) {
+            return;
         }
         // A marker is use tracking, not a value (DECISIONS 111): a load from
         // it reads its fields only. A parameter marker has no prototype here

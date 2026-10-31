@@ -263,6 +263,7 @@ impl<'a> Gen<'a> {
             self.m.captures.insert((fx.this, g));
         }
         let bfx = Fx {
+            guard: None,
             f: g,
             this,
             ret,

@@ -1073,6 +1073,14 @@ pub fn run_with_parse_cache(
                 .unwrap_or_else(|_| args.input.clone())
         });
         reachability::tree_shake(&mut ctx, &entry_canonical)?;
+        // DCE layer 2: modules only unreachable `import()` sites load.
+        let mut roots = vec![entry_canonical.clone()];
+        if let Some(ext_dir) = &args.bundle_extensions {
+            for (entry_path, _) in super::resolve::discover_extension_entries(ext_dir)? {
+                roots.push(entry_path.canonicalize().unwrap_or(entry_path));
+            }
+        }
+        super::dynamic_reach::prune(&mut ctx, &roots)?;
     }
 
     // --- Web/WASM target: emit WASM binary + JS runtime bridge ---
