@@ -1558,7 +1558,9 @@ impl Model {
                 }
                 Some((g, j)) if g == f && j != u32::MAX => from.push(j),
                 _ => match own {
-                    Some(at) => self.mark_use(at, crate::model::MARK_ESCAPE),
+                    Some(at) => {
+                        self.mark_escape_why(at, &|_| "store: flow of another value".into())
+                    }
                     None => {
                         top = true;
                         self.escape(s, reason);
@@ -1644,12 +1646,12 @@ impl Model {
             match &keys {
                 None => {
                     let r = self.reach_of(t);
-                    self.mark_use(r, crate::model::MARK_ESCAPE);
+                    self.mark_escape_why(r, &|_| "protocol: on a marker".into());
                 }
                 Some(ks) => {
                     for &a in ks {
                         let m = self.marker_load(t, Some(a));
-                        self.mark_use(m, crate::model::MARK_ESCAPE);
+                        self.mark_escape_why(m, &|_| "protocol: on a marker".into());
                     }
                 }
             }

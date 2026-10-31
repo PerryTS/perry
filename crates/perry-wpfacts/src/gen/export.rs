@@ -890,7 +890,16 @@ impl<'a> Gen<'a> {
                         let ru = self
                             .m
                             .reason("passed to a call of an unknown function value");
+                        if let Some(d) = self.m.diagnostic.as_mut() {
+                            d.esc_ctx.push(
+                                "contract: undescribed argument of a call through a parameter"
+                                    .into(),
+                            );
+                        }
                         self.m.sink_node(a, ru);
+                        if let Some(d) = self.m.diagnostic.as_mut() {
+                            d.esc_ctx.pop();
+                        }
                         changed = true;
                     }
                 }

@@ -28,7 +28,18 @@ impl Model {
                 }
                 return;
             }
-            self.mark_use(t, crate::model::MARK_ESCAPE);
+            let spread = !cs.spread.is_empty();
+            self.mark_escape_why(t, &|m: &Self| {
+                if spread {
+                    "call: spread arguments".into()
+                } else if !plain {
+                    "call: with a receiver".into()
+                } else if m.reach_marker.contains(&t) {
+                    "call: of a reach".into()
+                } else {
+                    "call: of a marker that is no own parameter".into()
+                }
+            });
             return self.call_tok(call, TOP, this_tok);
         }
         if matches!(self.toks[t as usize], TokKind::Top | TokKind::BuiltinFn) {
@@ -91,7 +102,7 @@ impl Model {
                 // that is a function (Proxy over a function etc., ⊤ anyway).
                 // A parameter marker stands for the caller's values: one may
                 // be a function.
-                self.mark_use(t, crate::model::MARK_ESCAPE);
+                self.mark_escape_why(t, &|_| "call: of a non-callable".into());
             }
         }
     }
@@ -488,7 +499,7 @@ impl Model {
         }
         // `new` of a bare marker: of an unknown constructor (DECISIONS 119).
         if self.bare_marker(t) {
-            self.mark_use(t, crate::model::MARK_ESCAPE);
+            self.mark_escape_why(t, &|_| "new: of a marker".into());
             return self.construct(call, TOP);
         }
         let c = self.calls[call as usize].clone();
@@ -791,7 +802,16 @@ impl Model {
                 Key::Named(a) => self.marker_load(t, Some(a)),
                 Key::Any => self.reach_of(t),
             };
-            self.mark_use(m, crate::model::MARK_ESCAPE);
+            self.mark_escape_why(m, &|mm: &Self| match key {
+                Key::Named(a)
+                    if matches!(mm.atoms[a as usize].as_str(), "call" | "apply" | "bind") =>
+                {
+                    format!("method: .{}", mm.atoms[a as usize])
+                }
+                Key::Named(_) if mm.reach_marker.contains(&t) => "method: of a reach".into(),
+                Key::Named(_) => "method: of a marker that is no own parameter".into(),
+                Key::Any => "method: computed key".into(),
+            });
             // That method is an unknown function, as a plain call through a
             // marker is (`call_tok`): the arguments escape, the result is
             // unknown (DECISIONS 202).
@@ -1629,7 +1649,14 @@ impl Model {
         // beyond any contract too (DECISIONS 203), its contract functions
         // included (`escape`).
         let reason = self.beyond_contract(reason);
-        self.mark_use(t, crate::model::MARK_ESCAPE);
+        self.mark_escape_why(t, &|m: &Self| match m
+            .diagnostic
+            .as_ref()
+            .and_then(|d| d.esc_ctx.last())
+        {
+            Some(o) => format!("{o} / escape: {}", m.reasons[reason as usize]),
+            None => format!("escape: {}", m.reasons[reason as usize]),
+        });
         self.virt_revoke(t, None);
         if let Some(is) = self.contract_recv.get(&t).cloned() {
             self.recv_log
@@ -1645,7 +1672,14 @@ impl Model {
         // it and escape there (DECISIONS 111).
         if self.is_marker(t) {
             let r = self.reach_of(t);
-            self.mark_use(r, crate::model::MARK_ESCAPE);
+            self.mark_escape_why(r, &|m: &Self| match m
+                .diagnostic
+                .as_ref()
+                .and_then(|d| d.esc_ctx.last())
+            {
+                Some(o) => format!("{o} / escape: {}", m.reasons[reason as usize]),
+                None => format!("escape: {}", m.reasons[reason as usize]),
+            });
             self.mark_escaped(t, reason);
             return;
         }
@@ -1799,7 +1833,7 @@ impl Model {
                 self.mark_hard(i, kind, reason);
             }
         }
-        self.mark_use(t, crate::model::MARK_ESCAPE);
+        self.mark_escape_why(t, &|_| "hard: reflective operation".into());
         // `Object.setPrototypeOf(Object.prototype, p)` throws unless `p` is
         // null (its [[Prototype]] already): nothing changes (immutable
         // prototype exotic object). A ⊤ target that may be it is no E6 on it.
