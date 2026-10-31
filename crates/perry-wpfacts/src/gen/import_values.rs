@@ -602,7 +602,7 @@ impl<'a> Gen<'a> {
         c: &'a crate::units::FnContract,
         holder: Option<(TmplId, bool)>,
     ) -> NodeId {
-        use crate::model::{MARK_ESCAPE, MARK_TOUCH};
+        use crate::model::{MARK_ESCAPE, MARK_TOUCHES};
         let c = self.owner_fn(c);
         if let Some(&(n, _)) = self.stand_in_fns.get(&(c.name.clone(), holder)) {
             return n;
@@ -790,14 +790,9 @@ impl<'a> Gen<'a> {
                 self.m.sink_node(p, r);
                 continue;
             }
-            if u & MARK_TOUCH != 0 {
-                self.m.cons(
-                    p,
-                    Cons::Implicit {
-                        reason: r,
-                        proto: Protocol::Any,
-                    },
-                );
+            // The protocols the callee runs on it, each with its own keys.
+            for proto in Protocol::of_touches(u) {
+                self.m.cons(p, Cons::Implicit { reason: r, proto });
             }
             // The keys the callee stores into the argument (DECISIONS 84):
             // what it stores under each (DECISIONS 118), a store this unit
@@ -902,11 +897,12 @@ impl<'a> Gen<'a> {
                         }
                     };
                     self.m.cons(p, Cons::Load { key, dst: q });
-                } else if ru & MARK_TOUCH != 0 {
-                    let q = match self.reach_touch {
-                        Some(q) => q,
+                } else if ru & MARK_TOUCHES != 0 {
+                    let touches = ru & MARK_TOUCHES;
+                    let q = match self.reach_touch.iter().find(|&&(b, _)| b == touches) {
+                        Some(&(_, q)) => q,
                         None => {
-                            let q = self.m.node_named("reach", || "reached(touch)".into());
+                            let q = self.m.node_named("reach", || format!("reached(touch {touches})"));
                             self.m.nodes[q as usize].sink = true;
                             self.m.cons(
                                 q,
@@ -915,14 +911,10 @@ impl<'a> Gen<'a> {
                                     dst: q,
                                 },
                             );
-                            self.m.cons(
-                                q,
-                                Cons::Implicit {
-                                    reason: r,
-                                    proto: Protocol::Any,
-                                },
-                            );
-                            self.reach_touch = Some(q);
+                            for proto in Protocol::of_touches(touches) {
+                                self.m.cons(q, Cons::Implicit { reason: r, proto });
+                            }
+                            self.reach_touch.push((touches, q));
                             q
                         }
                     };
