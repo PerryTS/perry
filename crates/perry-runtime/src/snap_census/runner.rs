@@ -297,6 +297,7 @@ struct Init {
     parts: u8,
     threw: bool,
     seeded: bool,
+    transparent: bool,
     ir: u64,
     births: u64,
     birth_bytes: u64,
@@ -365,6 +366,15 @@ struct State {
     seeded: Vec<usize>,
     rule4: bool,
     sabotage_env: bool,
+    /// `PERRY_SNAP_TRANSPARENT`: evaluation bodies whose objects and
+    /// globals are not locations (a what-if: the CJS loader's shared state
+    /// split per module). Their objects' overflow and meta cells follow.
+    transparent: Vec<usize>,
+    transp: WordSet,
+    transp_no: WordSet,
+    transp_globals: WordSet,
+    transp_objs: Vec<(usize, usize)>,
+    transparent_hits: u64,
     entry_body_seq: u32,
     require_depth: i32,
     bookkeeping: i32,
@@ -516,6 +526,16 @@ unsafe fn start(out: String) {
         seeded,
         rule4: std::env::var("PERRY_SNAP_RULE4").is_ok_and(|v| v == "1"),
         sabotage_env: std::env::var("PERRY_SNAP_SABOTAGE").is_ok_and(|v| v == "env"),
+        transparent: std::env::var("PERRY_SNAP_TRANSPARENT")
+            .unwrap_or_default()
+            .split(',')
+            .filter_map(|a| usize::from_str_radix(a.trim().trim_start_matches("0x"), 16).ok())
+            .collect(),
+        transp: WordSet::new(18),
+        transp_no: WordSet::new(20),
+        transp_globals: WordSet::new(14),
+        transp_objs: Vec::with_capacity(1 << 15),
+        transparent_hits: 0,
         entry_body_seq: 0,
         require_depth: 0,
         bookkeeping: 0,
@@ -669,6 +689,7 @@ fn blank_init(addr: usize, parent: u32, reach: Reach) -> Init {
         parts: 0,
         threw: false,
         seeded: false,
+        transparent: false,
         ir: 0,
         births: 0,
         birth_bytes: 0,
@@ -829,6 +850,7 @@ pub(super) fn init_enter(addr: usize) {
     init.from_entry_body = (parent.is_none() && st.entry_body_seq != 0)
         || (parent_id != 0 && st.inits[parent_id as usize].from_entry_body);
     init.seeded = st.seeded.contains(&addr);
+    init.transparent = st.transparent.contains(&addr);
     init.in_d = init.seeded;
     if st.top_mode && init.in_d {
         unsafe { extend_top(st) };
@@ -1001,6 +1023,10 @@ pub(super) fn birth(addr: usize, size: usize) {
     set_start(st, addr);
     st.sizes.insert(addr as u64, size as u32);
     let top = st.frames.last().map_or(0, |f| f.init);
+    if st.inits[top as usize].transparent {
+        st.transp.insert(addr as u64);
+        st.transp_objs.push((addr, addr + size));
+    }
     st.births.push(Birth {
         addr,
         size: size as u32,
@@ -1030,6 +1056,9 @@ pub(super) fn global_root(slot: usize) {
     }
     st.globals.insert(slot as u64);
     st.globals_log.push(slot);
+    if st.inits[st.frames.last().map_or(0, |f| f.init) as usize].transparent {
+        st.transp_globals.insert(slot as u64);
+    }
     mark_tracked(slot, slot + 8);
     // Rule 2 names every binding a member of D initializes, written or not.
     let top = st.frames.last().map_or(0, |f| f.init) as usize;
@@ -1473,6 +1502,46 @@ extern "C" fn on_trap(sig: libc::c_int, _info: *mut libc::siginfo_t, ctx: *mut l
 }
 
 /// One access to a tracked word by the top frame.
+/// A word on any page, whatever its protection.
+unsafe fn peek(st: &State, word: usize) -> u64 {
+    let page = word & !(PAGE - 1);
+    let closed = policy(st, page) & libc::PROT_READ == 0;
+    if closed {
+        libc::mprotect(page as *mut _, PAGE, libc::PROT_READ);
+    }
+    let v = *(word as *const u64);
+    if closed {
+        libc::mprotect(page as *mut _, PAGE, policy(st, page));
+    }
+    v
+}
+
+/// `h` is born by a transparent init, or is the overflow table or meta cell
+/// one of those objects points at (decided once per cell).
+fn transparent_cell(st: &mut State, h: usize, ty: u8) -> bool {
+    if st.transp.contains(h as u64) {
+        return true;
+    }
+    if (ty != crate::gc::GC_TYPE_OVERFLOW && ty != crate::gc::GC_TYPE_OBJECT_META)
+        || st.transp_no.contains(h as u64)
+    {
+        return false;
+    }
+    let user = (h + crate::gc::GC_HEADER_SIZE) as u64;
+    let found = st.transp_objs.iter().any(|&(a, e)| {
+        (a..e).step_by(8).any(|w| {
+            let v = unsafe { peek(st, w) };
+            v == user || v == h as u64
+        })
+    });
+    if found {
+        st.transp.insert(h as u64);
+    } else {
+        st.transp_no.insert(h as u64);
+    }
+    found
+}
+
 fn note_access(st: &mut State, word: usize, write: bool, pc: usize) {
     if st.bookkeeping > 0 {
         st.faults_ignored += 1;
@@ -1484,6 +1553,10 @@ fn note_access(st: &mut State, word: usize, write: bool, pc: usize) {
         && !st.globals.contains(word as u64)
     {
         st.faults_ignored += 1;
+        return;
+    }
+    if st.transp_globals.contains(word as u64) {
+        st.transparent_hits += 1;
         return;
     }
     // Immutable value-identity cells are not locations: a string never
@@ -1521,6 +1594,10 @@ fn note_access(st: &mut State, word: usize, write: bool, pc: usize) {
             };
             if ty == crate::gc::GC_TYPE_STRING || flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0 {
                 st.excluded += 1;
+                return;
+            }
+            if !st.transparent.is_empty() && transparent_cell(st, h, ty) {
+                st.transparent_hits += 1;
                 return;
             }
         }
@@ -1978,6 +2055,7 @@ fn write_report(st: &mut State) {
     let _ = writeln!(f, "#free_space\t{}", st.free_space);
     let _ = writeln!(f, "#reborn\t{}", st.reborn);
     let _ = writeln!(f, "#silent_stores\t{}", st.silent_stores);
+    let _ = writeln!(f, "#transparent\t{}\t{}\t{}", st.transparent.len(), st.transp.len, st.transparent_hits);
     let _ = writeln!(f, "#foreign_thread_faults\t{}", st.foreign_faults);
     let _ = writeln!(f, "#untracked_slots\t{}\tof\t{}", st.untracked_slots, st.globals.len);
     for (what, pcs) in &st.realm_hosts {
