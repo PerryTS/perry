@@ -61,6 +61,7 @@ use perry_hir::{Class, Expr, Module, ModuleInitKind, Stmt};
 
 fn entry_opts() -> CompileOptions {
     CompileOptions {
+        namespace_self_import: false,
         static_shape_ids: Vec::new(),
         program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),
