@@ -197,7 +197,6 @@ fn a_branch_runs_only_when_its_test_can_select_it() {
     ));
 }
 
-
 /// Modules `(name, source)`, every relative `import()` site filled with its
 /// specifier and its target a dynamic import entry, as the driver hands them.
 fn program_of(mods: &[(&str, &str)]) -> Vec<(String, perry_hir::Module)> {
@@ -260,5 +259,43 @@ fn a_module_only_an_uncalled_body_imports_never_runs() {
         let on = pf.active_bodies.as_ref().expect("activated");
         let init = on.iter().any(|(p, id, name)| p == "lazy.ts" && *id == u32::MAX && name.ends_with(":<init>"));
         assert_eq!(init, loads, "{main}");
+    }
+}
+
+#[test]
+fn a_root_runs_whatever_imports_it() {
+    // A worker entry: the driver's dynamic edge names it, no `import()` site
+    // does; its body runs in the worker (`FactsConfig::roots`).
+    let worker = "(Object as any)[(globalThis as any)[\"k\" + \"ey\"]] = 1; export const w = 1;";
+    let mut hirs = program_of(&[
+        ("lazy", worker),
+        ("main", "console.log([1].map((x: number) => x));"),
+    ]);
+    hirs[1].1.imports.push(perry_hir::Import {
+        source: "./lazy.ts".to_string(),
+        specifiers: Vec::new(),
+        is_native: false,
+        module_kind: Default::default(),
+        resolved_path: Some("lazy.ts".to_string()),
+        type_only: false,
+        runtime_erased: false,
+        is_dynamic: true,
+        is_dynamic_target: false,
+        is_deferred_require: false,
+        is_adopted_require: false,
+    });
+    let list: Vec<(String, &perry_hir::Module)> =
+        hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
+    for (roots, runs) in [(vec![], false), (vec!["lazy.ts".to_string()], true)] {
+        let cfg = FactsConfig {
+            roots,
+            ..FactsConfig::default()
+        };
+        let pf = crate::compute(&list, &cfg);
+        let on = pf.active_bodies.as_ref().expect("activated");
+        let init = on
+            .iter()
+            .any(|(p, id, name)| p == "lazy.ts" && *id == u32::MAX && name.ends_with(":<init>"));
+        assert_eq!(init, runs);
     }
 }

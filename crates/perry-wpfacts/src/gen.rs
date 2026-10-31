@@ -285,6 +285,8 @@ pub struct Gen<'a> {
     /// Activation: the modules only `import()` loads (`dynamic_only`), and
     /// every module's body function once they exist.
     pub dynamic_only: crate::pts::FxHashSet<u32>,
+    /// `FactsConfig::roots`: modules loaded whatever imports them.
+    pub roots: Vec<String>,
     pub init_fn_of: FxHashMap<u32, FnIdx>,
     /// Object-literal IIFE parameter node → the literal template it births.
     pub iife_birth: FxHashMap<NodeId, TmplId>,
@@ -488,6 +490,7 @@ impl<'a> Gen<'a> {
             dynimport_sabotage: false,
             dynimport_seen: Default::default(),
             dynamic_only: Default::default(),
+            roots: Vec::new(),
             init_fn_of: FxHashMap::default(),
             iife_birth: FxHashMap::default(),
             fn_phase: FxHashMap::default(),

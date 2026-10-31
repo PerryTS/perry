@@ -27,10 +27,11 @@ pub(super) fn prune(ctx: &mut CompilationContext, roots: &[PathBuf]) -> Result<(
     ) {
         return Ok(());
     }
-    let any_dynamic = ctx
-        .native_modules
-        .values()
-        .any(|m| m.imports.iter().any(|i| i.is_dynamic || i.is_dynamic_target));
+    let any_dynamic = ctx.native_modules.values().any(|m| {
+        m.imports
+            .iter()
+            .any(|i| i.is_dynamic || i.is_dynamic_target)
+    });
     if !any_dynamic {
         return Ok(());
     }
@@ -43,6 +44,7 @@ pub(super) fn prune(ctx: &mut CompilationContext, roots: &[PathBuf]) -> Result<(
         super::program_facts::export_sources(ctx),
         dynamic_code,
         &ctx.patched_builtins.dynamic_code_reach,
+        roots.iter().map(|p| p.display().to_string()).collect(),
     ) else {
         eprintln!(
             "perry: dynamic reach: the activation pass ran past its bounds, nothing dropped ({:.1}s)",
@@ -119,7 +121,11 @@ pub(super) fn prune(ctx: &mut CompilationContext, roots: &[PathBuf]) -> Result<(
             }
         }
     }
-    let pruned: HashSet<PathBuf> = paths.iter().filter(|p| !reached.contains(*p)).cloned().collect();
+    let pruned: HashSet<PathBuf> = paths
+        .iter()
+        .filter(|p| !reached.contains(*p))
+        .cloned()
+        .collect();
     let dead_edges = lines.iter().filter(|l| l.starts_with("edge dead")).count();
     eprintln!(
         "perry: dynamic reach: {} dynamic edges, {dead_edges} held only by bodies that cannot run; {} modules dropped ({:.1}s)",
@@ -146,8 +152,11 @@ pub(super) fn prune(ctx: &mut CompilationContext, roots: &[PathBuf]) -> Result<(
                 .iter()
                 .filter(|i| {
                     i.is_dynamic
-                        && super::reachability::resolve_edge_cached(&key_set, i.resolved_path.as_deref())
-                            .is_some_and(|t| pruned.contains(&t))
+                        && super::reachability::resolve_edge_cached(
+                            &key_set,
+                            i.resolved_path.as_deref(),
+                        )
+                        .is_some_and(|t| pruned.contains(&t))
                 })
                 .map(|i| i.source.clone())
                 .collect();
@@ -167,7 +176,10 @@ pub(super) fn prune(ctx: &mut CompilationContext, roots: &[PathBuf]) -> Result<(
             });
         }
     }
-    let mut list: Vec<String> = pruned.iter().map(|p| format!("dropped {}", p.display())).collect();
+    let mut list: Vec<String> = pruned
+        .iter()
+        .map(|p| format!("dropped {}", p.display()))
+        .collect();
     list.sort();
     if let Some(path) = &report {
         lines.sort();

@@ -54,6 +54,15 @@ pub(crate) fn contracts_requested() -> bool {
 /// collection and init order resolve them, for the targets that are program
 /// modules. The HIR keeps a re-export's source as written; without this the
 /// analysis cannot link `export * as X from "./x"` to `./x`'s namespace.
+/// The modules the program loads whatever imports them (worker entries):
+/// `FactsConfig::roots`.
+pub(crate) fn module_roots(ctx: &super::CompilationContext) -> Vec<String> {
+    ctx.worker_url_entries
+        .iter()
+        .flat_map(|(lexical, canonical)| [lexical.display().to_string(), canonical.display().to_string()])
+        .collect()
+}
+
 pub(crate) fn export_sources(ctx: &super::CompilationContext) -> perry_wpfacts::ExportSources {
     let mut out = perry_wpfacts::ExportSources::new();
     for (path, module) in &ctx.native_modules {
@@ -84,6 +93,7 @@ pub(crate) fn run(
     dynamic_code: bool,
     dynamic_code_reach: &perry_hir::dynamic_code::DynamicCodeReach,
     wrapped: &std::collections::HashMap<PathBuf, super::types::CjsWrapDebugSource>,
+    roots: Vec<String>,
 ) -> Option<Arc<perry_wpfacts::ProgramFacts>> {
     if !perry_wpfacts::enabled_from_env() {
         return None;
@@ -93,6 +103,7 @@ pub(crate) fn run(
     let relations =
         dump.is_some() && std::env::var("PERRY_FACTS_RELATIONS").is_ok_and(|v| v == "1");
     let cfg = perry_wpfacts::FactsConfig {
+        roots,
         diagnostics: dump.is_some(),
         relations,
         sabotage: std::env::var("PERRY_FACTS_SABOTAGE")
@@ -505,11 +516,13 @@ pub(crate) fn live_dynamic_imports(
     export_sources: perry_wpfacts::ExportSources,
     dynamic_code: bool,
     dynamic_code_reach: &perry_hir::dynamic_code::DynamicCodeReach,
+    roots: Vec<String>,
 ) -> Option<std::collections::BTreeSet<(String, String)>> {
     if !perry_wpfacts::enabled_from_env() {
         return None;
     }
     let cfg = perry_wpfacts::FactsConfig {
+        roots,
         budget_secs: std::env::var("PERRY_FACTS_BUDGET_SECS")
             .ok()
             .and_then(|v| v.parse().ok())

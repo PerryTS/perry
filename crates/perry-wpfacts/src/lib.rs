@@ -49,6 +49,9 @@ pub(crate) const STAR_KEY: &str = "\u{1}*";
 
 #[derive(Clone, Debug, Default)]
 pub struct FactsConfig {
+    /// Modules the program loads besides the ones no edge enters (worker
+    /// entries, bundle extensions): their bodies run whatever imports them.
+    pub roots: Vec<String>,
     /// Capture observational site data for the existing facts dump only.
     pub diagnostics: bool,
     /// Record the constraint relations for the independent recomputation.
@@ -314,6 +317,7 @@ fn generate<'a>(
         g.m.diagnostic = Some(Default::default());
     }
     g.export_sources = cfg.export_sources.clone();
+    g.roots = cfg.roots.clone();
     g.dynimport_sabotage = cfg.sabotage.as_deref() == Some("dynimport");
     g.unit_in = published;
     g.view = view;
