@@ -53,6 +53,8 @@ pub(crate) struct FetchDispatch {
     /// `js_fetch_post`, …) have no init object to read one from and always
     /// follow, which is what they did before this field existed.
     pub(crate) redirect: super::FetchRedirectMode,
+    /// The `RequestInit.dispatcher`'s TLS profile, when it carries one.
+    pub(crate) tls: Option<&'static crate::turnloop_tls_client::TlsProfile>,
 }
 
 /// Perry's fetch-level mode as the engine's. The engine implements all three
@@ -82,6 +84,7 @@ pub(crate) fn dispatch_inputs(
         body,
         custom_headers,
         redirect,
+        tls,
     } = inputs;
     dispatch(
         FetchDispatch {
@@ -91,6 +94,7 @@ pub(crate) fn dispatch_inputs(
             body,
             abort_key,
             redirect,
+            tls,
         },
         promise_ptr,
     );
@@ -106,6 +110,7 @@ pub(crate) fn dispatch_text(url: String, promise_ptr: usize) {
         body: None,
         redirect: turnloop_http::client::RedirectMode::Follow,
         abort_key: None,
+        tls: None,
     };
     let (url, method) = (spec.url.clone(), spec.method.clone());
     let sink = Sink {
@@ -147,6 +152,7 @@ pub(crate) fn dispatch_stream(
         body,
         redirect: turnloop_http::client::RedirectMode::Follow,
         abort_key: None,
+        tls: None,
     };
     let (url, method) = (spec.url.clone(), spec.method.clone());
     let sink = Sink {
@@ -228,6 +234,7 @@ pub(crate) fn dispatch(dispatch: FetchDispatch, promise_ptr: usize) {
         body: dispatch.body,
         redirect: engine_redirect(dispatch.redirect),
         abort_key: dispatch.abort_key,
+        tls: dispatch.tls,
     };
     let (url, method) = (spec.url.clone(), spec.method.clone());
     let stream = crate::streams::alloc_native_readable(
