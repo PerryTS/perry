@@ -31,6 +31,8 @@ struct Built {
     ll: PathBuf,
     /// The `<dump>.elisions` record: one line per elided field access.
     elisions: String,
+    /// The facts dump (`PERRY_FACTS_DUMP`).
+    facts: String,
     stdout: String,
 }
 
@@ -90,12 +92,18 @@ fn build(dir: &Path, files: &[(&str, &str)], whole: bool) -> Built {
     );
     let mut run = Command::new(&exe);
     let ran = clean(&mut run).output().expect("run");
-    assert!(ran.status.success(), "run failed (whole={whole}): {:?}", ran.status);
+    assert!(
+        ran.status.success(),
+        "run failed (whole={whole}): {:?}",
+        ran.status
+    );
+    let facts = std::fs::read_to_string(&dump).unwrap_or_default();
     let mut el = dump.into_os_string();
     el.push(".elisions");
     Built {
         ll,
         elisions: std::fs::read_to_string(el).unwrap_or_default(),
+        facts,
         stdout: String::from_utf8_lossy(&ran.stdout).into_owned(),
     }
 }
@@ -127,7 +135,11 @@ fn both(files: &[(&str, &str)], expected: &str) -> (Built, Built, tempfile::Temp
     (u, w, dir)
 }
 
-const PROBES: [&str; 3] = ["@perry_probe_get(", "@perry_probe_family_method(", "@js_method_call_slow("];
+const PROBES: [&str; 3] = [
+    "@perry_probe_get(",
+    "@perry_probe_family_method(",
+    "@js_method_call_slow(",
+];
 
 fn assert_no_probe(ir: &str, symbol: &str) {
     let b = body(ir, symbol);
@@ -138,7 +150,10 @@ fn assert_no_probe(ir: &str, symbol: &str) {
 
 fn assert_probe(ir: &str, symbol: &str) {
     let b = body(ir, symbol);
-    assert!(PROBES.iter().any(|p| b.contains(p)), "{symbol} has no generic site:\n{b}");
+    assert!(
+        PROBES.iter().any(|p| b.contains(p)),
+        "{symbol} has no generic site:\n{b}"
+    );
 }
 
 const SINGLE: &str = r#"
@@ -198,17 +213,31 @@ s.set(null);
 try { s.step(1); } catch (e) { console.log(e instanceof TypeError); }
 console.log(acc);
 "#;
+/// `current` holds Task instances, undefined and ⊤, and nothing else: ⊤
+/// is the only reason for no fact. The ⊤ is a property load from a thrown
+/// value (`e.inner`): ⊤ with no primitive kind beside it, so the primitive
+/// guard does not reject the field first (a thrown value itself is ⊤ of
+/// every primitive kind). Every class has `id` and `run`, so even a class
+/// set grown to every class lowers if ⊤ leaks.
 const TOP: &str = r#"
 class Task {
   id: number;
   constructor(id: number) { this.id = id; }
   run(n: number): number { return this.id + n; }
 }
+class Wrap {
+  id: number;
+  inner: Task;
+  constructor(inner: Task) { this.id = 0; this.inner = inner; }
+  run(n: number): number { return n; }
+}
 class Sched {
+  id: number;
   current: any;
   ok: Task;
-  constructor() { this.current = new Task(1); this.ok = new Task(2); }
-  poison(): void { try { throw new Task(40); } catch (e) { this.current = e; } }
+  constructor() { this.id = 0; this.current = new Task(1); this.ok = new Task(2); }
+  run(n: number): number { return n; }
+  poison(): void { try { throw new Wrap(new Task(40)); } catch (e) { this.current = e.inner; } }
   stepOk(n: number): number { return this.ok.run(n) + this.ok.id; }
   step(n: number): number { return this.current.run(n) + this.current.id; }
 }
@@ -346,8 +375,14 @@ fn a_field_of_a_union_of_classes_switches_over_them() {
         let ir = b.ir("main");
         let step = body(&ir, "perry_method_main_ts__Sched__step");
         assert_no_probe(&ir, "perry_method_main_ts__Sched__step");
-        assert!(step.contains("call double @perry_method_main_ts__Worker__run("), "{step}");
-        assert!(step.contains("call double @perry_method_main_ts__Device__run("), "{step}");
+        assert!(
+            step.contains("call double @perry_method_main_ts__Worker__run("),
+            "{step}"
+        );
+        assert!(
+            step.contains("call double @perry_method_main_ts__Device__run("),
+            "{step}"
+        );
     }
 }
 
@@ -363,7 +398,9 @@ fn a_nullable_field_keeps_the_receiver_test() {
             b.elisions
         );
         assert!(
-            !b.elisions.lines().any(|l| l.contains("recv=field current ") && l.contains("nullable=0")),
+            !b.elisions
+                .lines()
+                .any(|l| l.contains("recv=field current ") && l.contains("nullable=0")),
             "{}",
             b.elisions
         );
@@ -374,6 +411,14 @@ fn a_nullable_field_keeps_the_receiver_test() {
 fn a_field_written_top_has_no_fact() {
     let (u, w, _d) = both(&[("main.ts", TOP)], "81\n1005000");
     for b in [&u, &w] {
+        // The guard's input held: the field is ⊤ in the facts.
+        assert!(
+            b.facts
+                .lines()
+                .any(|l| l.starts_with("FACT F2 kind ") && l.ends_with(":Sched.current = top")),
+            "Sched.current is not ⊤:\n{}",
+            b.facts
+        );
         // The control: a field only one class is ever stored into.
         assert!(b.field_elisions("stepOk", "ok") > 0, "{}", b.elisions);
         assert_eq!(b.field_receiver_elisions("step"), 0, "{}", b.elisions);
@@ -415,7 +460,9 @@ fn a_declared_field_observed_before_the_constructor_assigns_it_is_nullable() {
             b.elisions
         );
         assert!(
-            !b.elisions.lines().any(|l| l.contains("recv=field current ") && l.contains("nullable=0")),
+            !b.elisions
+                .lines()
+                .any(|l| l.contains("recv=field current ") && l.contains("nullable=0")),
             "{}",
             b.elisions
         );
@@ -430,7 +477,9 @@ fn a_reserved_key_gives_no_field_class_fact() {
     let (u, w, _d) = both(&[("main.js", RESERVED)], "505500\ntrue");
     for b in [&u, &w] {
         assert!(
-            !b.elisions.lines().any(|l| l.contains("recv=field current ")),
+            !b.elisions
+                .lines()
+                .any(|l| l.contains("recv=field current ")),
             "a reserved key is a proven receiver:\n{}",
             b.elisions
         );
@@ -439,7 +488,11 @@ fn a_reserved_key_gives_no_field_class_fact() {
 
 #[test]
 fn another_modules_writer_is_in_the_field_classes() {
-    let files = [("main.ts", XMOD_MAIN), ("holder.ts", XMOD_HOLDER), ("other.ts", XMOD_OTHER)];
+    let files = [
+        ("main.ts", XMOD_MAIN),
+        ("holder.ts", XMOD_HOLDER),
+        ("other.ts", XMOD_OTHER),
+    ];
     let (u, w, _d) = both(&files, "4424156");
     for b in [&u, &w] {
         assert!(b.field_elisions("stepOk", "ok") > 0, "{}", b.elisions);
@@ -452,7 +505,9 @@ fn another_modules_writer_is_in_the_field_classes() {
     );
     for b in [&u, &w] {
         assert!(
-            !b.elisions.lines().any(|l| l.contains("recv=field current ") && !l.contains("Other")),
+            !b.elisions
+                .lines()
+                .any(|l| l.contains("recv=field current ") && !l.contains("Other")),
             "a field-read receiver proof without the other module's class:\n{}",
             b.elisions
         );
