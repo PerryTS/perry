@@ -709,6 +709,11 @@ pub enum Cons {
     /// test can take the value that selects them. A node that never holds
     /// such a value is a test that never selects the branch.
     Guard { test: u8, from: NodeId, dst: NodeId },
+    /// The node's values flow into `dst` without `undefined`: the chain of
+    /// a read whose own data key the object surely holds. The lookup stops
+    /// at the object, so the chain's end (a key no link defines reads
+    /// `undefined`) is never reached; its values stay, a superset.
+    Defined { dst: NodeId },
     /// Every object token reaches a HARD operation.
     Hard { kind: Hard, reason: u32 },
     /// `delete o.key`: E7 HARD on every object token; on ⊤ (which may be a
@@ -959,6 +964,7 @@ impl Cons {
             Cons::OverrideThis { .. } => "overridethis",
             Cons::TopIfAny { .. } => "topifany",
             Cons::Guard { .. } => "guard",
+            Cons::Defined { .. } => "defined",
             Cons::Hard { .. } => "hard",
             Cons::DeleteKey { .. } => "deletekey",
             Cons::AddsKeys => "addskeys",
@@ -1278,6 +1284,9 @@ pub struct Model {
     /// lacks it, a `delete`), each gets `undefined` after all.
     pub present_reads: FxHashMap<TmplId, Vec<(Atom, NodeId)>>,
     pub present_seen: crate::pts::FxHashSet<(TmplId, Atom, NodeId)>,
+    /// The `Cons::Defined` node a present read's chain flows through, by
+    /// the read's destination.
+    pub defined_via: FxHashMap<NodeId, NodeId>,
     /// Fact units whose keys can disappear (delete, defineProperty, with):
     /// no key of theirs is sure.
     pub keys_unsure: crate::pts::FxHashSet<TmplId>,

@@ -298,6 +298,7 @@ pub fn map_cons(
             from: n(from),
             dst: n(dst),
         },
+        Defined { dst } => Defined { dst: n(dst) },
         TopIfAny { dst, from, reason } => TopIfAny {
             dst: n(dst),
             from: n(from),
@@ -585,7 +586,9 @@ impl Model {
         }
         if self.nodes[n as usize].obs {
             let dst = match *c {
-                Cons::TopIfAny { dst, .. } | Cons::Guard { dst, .. } => Some(dst),
+                Cons::TopIfAny { dst, .. } | Cons::Guard { dst, .. } | Cons::Defined { dst } => {
+                    Some(dst)
+                }
                 _ => read_dst(c),
             };
             return !dst.is_some_and(|d| self.nodes[d as usize].obs);

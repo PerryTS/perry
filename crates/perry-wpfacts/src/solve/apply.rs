@@ -303,6 +303,14 @@ impl Model {
                     self.edge(from, dst);
                 }
             }
+            Cons::Defined { dst } => {
+                for &t in toks {
+                    self.add_tok(dst, t);
+                }
+                if prim & !prim::UNDEF != 0 {
+                    self.add_prim(dst, prim & !prim::UNDEF);
+                }
+            }
             Cons::TopIfAny { dst, from, reason } => {
                 if !toks.is_empty() || prim != 0 {
                     if let Some(r) = reason {
@@ -767,7 +775,8 @@ impl Model {
                     if self.foreign.contains_key(&tm) {
                         self.relinked_parents.insert(tm);
                     } else if theirs(self, of) {
-                        let reason = self.reason("class given as the parent of a class unknown code constructs");
+                        let reason = self
+                            .reason("class given as the parent of a class unknown code constructs");
                         self.escape(p, reason);
                     }
                 }

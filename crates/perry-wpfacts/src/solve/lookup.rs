@@ -169,13 +169,6 @@ impl Model {
                 self.edge(all, dst);
             }
         }
-        // An own data key the object surely holds shadows its whole chain
-        // (a key that can disappear or become an accessor is not sure:
-        // `keys_unsure`): the prototypes, builtin members and inherited
-        // accessors are never read through it.
-        if present && !self.is_proto_key(key) {
-            return;
-        }
         // A marker is use tracking, not a value (DECISIONS 111): a load from
         // it reads its fields only. A parameter marker has no prototype here
         // (DECISIONS 119): what
@@ -193,8 +186,16 @@ impl Model {
         // DECISIONS 124: a receiver marker with values beside it stands for
         // instances of its classes, whose builtin members are the chain's
         // (`cv` below reaches Object.prototype): no builtin object's.
+        // An own data key the object surely holds stops the lookup at the
+        // object: the chain's end, where a key no link defines reads
+        // `undefined`, is never reached. Its values stay (a superset).
+        let chain = if present && !self.is_proto_key(key) {
+            self.defined_into(dst)
+        } else {
+            dst
+        };
         if !(self.is_marker(t) && self.beside_values(t)) {
-            self.with_b(|m| builtins::tok_load(m, t, key, dst));
+            self.with_b(|m| builtins::tok_load(m, t, key, chain));
         }
         // Element reads of array-likes stop at their own elements: their
         // builtin prototype members are approximated by `tok_load`.
@@ -203,7 +204,7 @@ impl Model {
         }
         // The prototype chain's values, shared by every receiver of `t`.
         let cv = self.cv(t, key);
-        self.edge(cv, dst);
+        self.edge(cv, chain);
         // Accessors run with the receiver as `this`: walk per receiver, only
         // for keys an accessor may be defined under.
         self.accessor_walk(origin, t, key, ChainAct::Load(dst));
@@ -444,6 +445,17 @@ impl Model {
         self.cv_nodes.insert((t, key), n);
         let pn = self.proto_node(t);
         self.cons(pn, Cons::ChainUnion { key, dst: n, of: t });
+        n
+    }
+
+    /// The node whose values reach `dst` without `undefined` (`Cons::Defined`).
+    fn defined_into(&mut self, dst: NodeId) -> NodeId {
+        if let Some(&n) = self.defined_via.get(&dst) {
+            return n;
+        }
+        let n = self.node_l("defined");
+        self.defined_via.insert(dst, n);
+        self.cons(n, Cons::Defined { dst });
         n
     }
 
