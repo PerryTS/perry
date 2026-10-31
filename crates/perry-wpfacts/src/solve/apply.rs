@@ -704,6 +704,9 @@ impl Model {
             }
             Cons::ProtoFrom { src } => {
                 for &t in toks {
+                    if t == TOP || matches!(self.toks[t as usize], TokKind::ClassObj(_)) {
+                        self.cons(src, Cons::ParentGiven { of: t });
+                    }
                     // `%Object.prototype%` is an immutable prototype exotic
                     // object: setting its [[Prototype]] to anything but its
                     // own (null) throws.
@@ -732,6 +735,32 @@ impl Model {
                     .any(|&t| matches!(self.toks[t as usize], TokKind::ObjectProto))
                 {
                     self.add_tok(protos, TOP);
+                }
+            }
+            // A class given as the parent of class object `of`: `of`'s
+            // `super()` runs its constructor on `of`'s instances. A class of
+            // this unit given to a class it constructs runs there
+            // (`Cons::SuperCall` follows the live superclass); given to
+            // another unit's class or to ⊤, the code running `super()` is
+            // unknown here, so the class escapes to it. Another unit's class
+            // is that unit's to run on the receiver: the census reports it
+            // (`extends <class>`), and its unit publishes its constructor
+            // as it does for an `extends` naming it (DECISIONS 57).
+            Cons::ParentGiven { of } => {
+                let theirs = |m: &Self, t: Tok| match m.toks[t as usize] {
+                    TokKind::ClassObj(tm) => m.foreign.contains_key(&tm),
+                    _ => t == TOP,
+                };
+                for &p in toks {
+                    let TokKind::ClassObj(tm) = self.toks[p as usize] else {
+                        continue;
+                    };
+                    if self.foreign.contains_key(&tm) {
+                        self.relinked_parents.insert(tm);
+                    } else if theirs(self, of) {
+                        let reason = self.reason("class given as the parent of a class unknown code constructs");
+                        self.escape(p, reason);
+                    }
                 }
             }
             Cons::ProtoOf { dst } => {
