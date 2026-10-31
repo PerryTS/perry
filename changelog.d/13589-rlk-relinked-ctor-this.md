@@ -9,3 +9,7 @@ parent (wrong output, for example `undefined` instead of the fields `A`'s
 constructor sets). Now the unit doing the relink reports the given class, and
 that class's unit runs its constructor on any receiver, as it does for a class
 an `extends` names. Only a class's own unit says whether it is relinked.
+
+Constructing `AbortSignal` through a value (`const S = AbortSignal; new S()`)
+or through the live `super()` of `class X extends AbortSignal` now throws
+`TypeError: Illegal constructor`, as in Node; it used to return a signal.
