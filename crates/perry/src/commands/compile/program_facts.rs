@@ -526,6 +526,10 @@ mod facts_mode_tests {
 #[path = "program_facts/outlined_tests.rs"]
 mod outlined_tests;
 
+#[cfg(test)]
+#[path = "program_facts/literal_chunks_tests.rs"]
+mod literal_chunks_tests;
+
 /// Borrow ordinary modules; reconstruct only outlined module entries.
 fn facts_inputs(
     modules: &BTreeMap<PathBuf, perry_hir::Module>,

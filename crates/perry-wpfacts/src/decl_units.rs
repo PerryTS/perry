@@ -109,6 +109,9 @@ struct Refs {
     join_names: Vec<String>,
     join_locals: Vec<u32>,
     join_globals: Vec<u32>,
+    /// The chunk functions of a literal birth it holds (a call passing
+    /// `Expr::LiteralChunkObject`): joined, they initialize its object.
+    join_funcs: Vec<u32>,
     /// Locals the item declares (closure parameters here; `declared` adds
     /// its functions' parameters, `let`s and catch bindings).
     declared: Vec<u32>,
@@ -239,6 +242,17 @@ fn expr_refs(e: &Expr, r: &mut Refs) {
         Expr::GlobalSet(id, _) => r.join_globals.push(*id),
         Expr::FuncRef(id) => r.funcs.push(*id),
         Expr::ClassRef(n) | Expr::ExternFuncRef { name: n, .. } => r.names.push(n.clone()),
+        // A chunk of a literal birth (codegen's literal splitting) is part
+        // of the birth: its slot inits are the birth's own initializers of
+        // the unpublished object, which no other unit holds. Cut apart, the
+        // birth's unit published the chunked slots as unknown values.
+        Expr::Call { callee, args, .. }
+            if args.iter().any(|a| matches!(a, Expr::LiteralChunkObject)) =>
+        {
+            if let Expr::FuncRef(id) = callee.as_ref() {
+                r.join_funcs.push(*id);
+            }
+        }
         Expr::Closure {
             captures,
             mutable_captures,
@@ -1299,9 +1313,11 @@ pub(crate) fn decl_units(module: &Module) -> Vec<Vec<Item>> {
                 free.push((i, *id));
             }
         }
-        for id in &r.funcs {
-            if let Some(&j) = by_func.get(id) {
-                edge(j, false);
+        for (list, both) in [(&r.funcs, false), (&r.join_funcs, true)] {
+            for id in list {
+                if let Some(&j) = by_func.get(id) {
+                    edge(j, both);
+                }
             }
         }
         for (list, both) in [(&r.globals, false), (&r.join_globals, true)] {
