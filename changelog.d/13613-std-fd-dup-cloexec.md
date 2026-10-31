@@ -1,0 +1,1 @@
+Child processes spawned by Perry no longer inherit duplicates of the parent's stdin, stdout and stderr. A detached child used to keep the parent's output pipes open, so readers of the parent's output never saw EOF.
