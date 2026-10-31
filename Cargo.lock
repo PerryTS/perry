@@ -5909,6 +5909,7 @@ dependencies = [
  "turnloop-smtp",
  "turnloop-tls",
  "url",
+ "webpki-roots",
  "windows-sys 0.61.2",
  "x25519-dalek",
  "x448",

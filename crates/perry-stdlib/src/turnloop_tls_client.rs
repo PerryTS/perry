@@ -13,6 +13,8 @@
 
 pub(crate) use perry_tls_session::{server_name, TlsClientSession};
 
+mod ca_leaf;
+
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn unix_seconds() -> u64 {
@@ -65,7 +67,7 @@ fn build_config(over: &TlsOverride) -> Option<turnloop_tls::ClientConfig> {
         // `None` = turnloop-tls's default provider, `ring`.
         provider: None,
     };
-    turnloop_tls::ClientConfig::new(options, unix_seconds()).ok()
+    ca_leaf::client_config(options, unix_seconds()).ok()
 }
 
 /// Per-request trust settings carried by an undici `Agent`'s `connect` options.
