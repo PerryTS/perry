@@ -7,15 +7,15 @@
 //! `EndTail`, which parks every snapshot the sequence consumes in the
 //! runtime's transient-root stack before any of it crosses a JS call.
 
-use perry_ffi::{JsClosure, JsValue, RawClosureHeader};
+use perry_ffi::{ArrayHeader, JsClosure, JsThis, JsValue, RawClosureHeader};
 
 use crate::server::request::emit_no_arg_to_listeners;
 use crate::server::response::{
     callback_from_bits, finalize_buffered_end, pick_trailing_callback, response_event_listeners,
-    socket_write_str,
+    socket_write_str, take_write_callbacks, EndOutcome,
 };
 use crate::server::turnloop_serve::wire::{self, Framing};
-use crate::server::types::{jsvalue_to_body_bytes, TAG_UNDEFINED};
+use crate::server::types::{jsvalue_to_body_bytes, PTR_MASK, TAG_UNDEFINED};
 
 /// `res.end([chunk][, encoding][, callback])` — the full Node surface routed
 /// from the static native dispatch table. Handles the `end(cb)` form (callback
@@ -48,7 +48,11 @@ pub unsafe extern "C" fn js_node_http_res_end_full(handle: i64, chunk: f64, arg2
     }
 
     let (finish_listeners, close_listeners) =
-        finalize_buffered_end(response_root.get(), real_chunk).unwrap_or_default();
+        match finalize_buffered_end(response_root.get(), real_chunk, callback) {
+            Some(EndOutcome::Deferred) => return,
+            Some(EndOutcome::Immediate { finish, close }) => (finish, close),
+            None => Default::default(),
+        };
     let write_cbs = super::response::take_write_callbacks(response_root.get());
     // #8163: every snapshot crosses the JS calls below — root them all first.
     let scope = perry_ffi::TransientRootScope::enter();
@@ -79,8 +83,10 @@ pub extern "C" fn js_node_http_res_end(handle: i64, chunk: f64) {
         unsafe { standalone_end(response_root.get(), chunk, 0) };
         return;
     }
-    if let Some((finish_listeners, close_listeners)) =
-        finalize_buffered_end(response_root.get(), chunk)
+    if let Some(EndOutcome::Immediate {
+        finish: finish_listeners,
+        close: close_listeners,
+    }) = finalize_buffered_end(response_root.get(), chunk, 0)
     {
         // #8163: the `'close'` snapshot crosses the `'finish'` emits.
         let scope = perry_ffi::TransientRootScope::enter();
@@ -112,7 +118,11 @@ pub unsafe extern "C" fn js_node_http_res_end_with_cb(handle: i64, chunk: f64, c
     // previous code fired `'finish'`/`'close'` (via `js_node_http_res_end`)
     // before any callback ran.
     let (finish_listeners, close_listeners) =
-        finalize_buffered_end(response_root.get(), chunk).unwrap_or_default();
+        match finalize_buffered_end(response_root.get(), chunk, callback_root.get()) {
+            Some(EndOutcome::Deferred) => return,
+            Some(EndOutcome::Immediate { finish, close }) => (finish, close),
+            None => Default::default(),
+        };
     let write_cbs = super::response::take_write_callbacks(response_root.get());
     // #8163: every snapshot crosses the JS calls below — root them all first.
     let scope = perry_ffi::TransientRootScope::enter();
@@ -369,6 +379,115 @@ impl<'a> EndTail<'a> {
     fn current(rooted: &[perry_ffi::TransientRootedAddr]) -> Vec<i64> {
         rooted.iter().map(|cb| cb.get()).collect()
     }
+}
+
+/// The callback an HTTP/1.1 `res.end()` registers on its final socket write:
+/// it carries the tail the response still owes, which runs once the bytes
+/// have reached the OS (Node's `'finish'`).
+pub(crate) fn flush_callback(handle: i64, end_callback: i64) -> f64 {
+    let scope = perry_ffi::TransientRootScope::enter();
+    let write_cbs = scope.root_addrs(&take_write_callbacks(handle));
+    let finish = scope.root_addrs(&response_event_listeners(handle, "finish"));
+    let close = scope.root_addrs(&response_event_listeners(handle, "close"));
+    let end_callback = scope.root_addr(end_callback);
+    let closure = scope
+        .root_addr(
+            perry_ffi::alloc_closure(perry_ffi::js_function_info!(tail_after_flush, 1), 4) as i64,
+        );
+    let captures = [
+        closure_array(&scope, &write_cbs),
+        closure_value(&scope, &end_callback),
+        closure_array(&scope, &finish),
+        closure_array(&scope, &close),
+    ];
+    for (index, capture) in captures.iter().enumerate() {
+        // SAFETY: the closure was allocated with four capture slots and is rooted.
+        unsafe {
+            perry_ffi::set_closure_capture_f64(
+                closure.get() as *mut RawClosureHeader,
+                index as u32,
+                capture.get(),
+            )
+        };
+    }
+    f64::from_bits(JsValue::from_object_ptr(closure.get() as *mut RawClosureHeader).bits())
+}
+
+fn closure_value(
+    scope: &perry_ffi::TransientRootScope,
+    callback: &perry_ffi::TransientRootedAddr,
+) -> perry_ffi::TransientRootedNanbox {
+    scope.root_nanbox(if callback.get() == 0 {
+        f64::from_bits(TAG_UNDEFINED)
+    } else {
+        f64::from_bits(JsValue::from_object_ptr(callback.get() as *mut RawClosureHeader).bits())
+    })
+}
+
+fn closure_array(
+    scope: &perry_ffi::TransientRootScope,
+    callbacks: &[perry_ffi::TransientRootedAddr],
+) -> perry_ffi::TransientRootedNanbox {
+    // SAFETY: each allocation result is rooted before the next one; every
+    // callback is re-read from its root at the moment it is pushed.
+    unsafe {
+        let mut array = scope.root_addr(perry_ffi::js_array_alloc(callbacks.len() as u32) as i64);
+        for callback in callbacks.iter().filter(|cb| cb.get() != 0) {
+            let value = JsValue::from_object_ptr(callback.get() as *mut RawClosureHeader);
+            array = scope
+                .root_addr(perry_ffi::js_array_push(array.get() as *mut ArrayHeader, value) as i64);
+        }
+        scope.root_nanbox(f64::from_bits(
+            JsValue::from_object_ptr(array.get() as *mut ArrayHeader).bits(),
+        ))
+    }
+}
+
+fn array_addrs(array: f64) -> Vec<i64> {
+    let array = JsValue::from_bits(array.to_bits()).as_pointer::<ArrayHeader>();
+    if array.is_null() {
+        return Vec::new();
+    }
+    // SAFETY: the array is a capture of the running closure, so it is live.
+    unsafe {
+        (0..perry_ffi::js_array_length(array))
+            .map(|i| (perry_ffi::js_array_get(array, i).bits() & PTR_MASK) as i64)
+            .collect()
+    }
+}
+
+/// Runs the tail [`flush_callback`] captured. A write that failed because the
+/// socket closed first never finished the response, so only `'close'` fires.
+extern "C" fn tail_after_flush(closure: *const RawClosureHeader, _this: JsThis, error: f64) -> f64 {
+    let scope = perry_ffi::TransientRootScope::enter();
+    // SAFETY: the closure was allocated with four capture slots.
+    let capture =
+        |index| scope.root_nanbox(unsafe { perry_ffi::closure_capture_f64(closure, index) });
+    let write_cbs = capture(0);
+    let end_callback = capture(1);
+    let finish = capture(2);
+    let close = capture(3);
+    let failed = JsValue::from_bits(error.to_bits()).is_pointer();
+    let end_callback_bits = end_callback.get().to_bits();
+    let end_callback = if JsValue::from_bits(end_callback_bits).is_pointer() {
+        (end_callback_bits & PTR_MASK) as i64
+    } else {
+        0
+    };
+    let tail = EndTail::root(
+        &scope,
+        &array_addrs(write_cbs.get()),
+        end_callback,
+        &array_addrs(finish.get()),
+        &array_addrs(close.get()),
+    );
+    if !failed {
+        tail.run_write_callbacks();
+        tail.emit_finish();
+        tail.run_end_callback();
+    }
+    tail.emit_close();
+    f64::from_bits(TAG_UNDEFINED)
 }
 
 /// The head `writeHead` renders for a heap response's `_header` (node's
