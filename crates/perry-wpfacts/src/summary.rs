@@ -293,6 +293,11 @@ pub fn map_cons(
             this,
         },
         OverrideThis { tmpl, key, reason } => OverrideThis { tmpl, key, reason },
+        Guard { test, from, dst } => Guard {
+            test,
+            from: n(from),
+            dst: n(dst),
+        },
         TopIfAny { dst, from, reason } => TopIfAny {
             dst: n(dst),
             from: n(from),
@@ -523,6 +528,7 @@ fn gen_kind(c: &Cons) -> bool {
             | ContractThis { .. }
             | OverrideThis { .. }
             | TopIfAny { .. }
+            | Guard { .. }
             | Hard { .. }
             | DeleteKey { .. }
             | DefineKey { .. }
@@ -579,7 +585,7 @@ impl Model {
         }
         if self.nodes[n as usize].obs {
             let dst = match *c {
-                Cons::TopIfAny { dst, .. } => Some(dst),
+                Cons::TopIfAny { dst, .. } | Cons::Guard { dst, .. } => Some(dst),
                 _ => read_dst(c),
             };
             return !dst.is_some_and(|d| self.nodes[d as usize].obs);
