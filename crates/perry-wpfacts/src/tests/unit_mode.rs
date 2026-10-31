@@ -609,3 +609,5 @@ mod method_on_read;
 mod fn_transfer;
 #[path = "unit_mode/protocol_touch.rs"]
 mod protocol_touch;
+#[path = "unit_mode/unit_cycle_order.rs"]
+mod unit_cycle_order;
