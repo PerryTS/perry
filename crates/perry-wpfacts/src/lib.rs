@@ -1741,6 +1741,30 @@ impl ProgramFacts {
             .collect()
     }
 
+    /// The class ids of the objects a field's kind names (its `objs`, by
+    /// display), sorted. `None` when one of them is no class instance (a
+    /// literal or function-instance template) or its display does not name
+    /// exactly one class. Says nothing about the kind's other members (⊤,
+    /// functions, builtins, primitives): the caller decides on those.
+    pub fn classes_of(&self, k: &derive::KindFact) -> Option<Vec<u32>> {
+        let mut out = Vec::with_capacity(k.objs.len());
+        for d in &k.objs {
+            let mut ids = self
+                .templates
+                .iter()
+                .filter(|t| t.display == *d)
+                .map(|t| t.class_id);
+            let cid = ids.next()??;
+            if !ids.all(|c| c == Some(cid)) {
+                return None;
+            }
+            out.push(cid);
+        }
+        out.sort_unstable();
+        out.dedup();
+        Some(out)
+    }
+
     /// Receiver facts of module `path`'s bindings (empty when unknown).
     pub fn bindings_for(&self, path: &str) -> Option<&ModuleBindings> {
         self.bindings.get(self.module_index(path)?)
