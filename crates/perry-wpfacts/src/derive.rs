@@ -78,6 +78,11 @@ pub struct FieldFacts {
     /// A declared key (`Template::declared`): `slot` is known, presence is
     /// not, so a read is the load plus the hole compare.
     pub declared: bool,
+    /// A constructor-store reservation that is not `definite`
+    /// (`Template::reserved`): `slot` is known, presence is not (the slot
+    /// holds the hole until the constructor stores the key), so a read is
+    /// the load plus the hole compare, and a store adds the key.
+    pub reserved: bool,
     pub data_field: bool,
     pub readonly: bool,
     pub writers_ctor: usize,
@@ -204,6 +209,11 @@ impl FieldFacts {
         }
         self.definite &= o.definite;
         self.declared &= o.declared;
+        // A known slot whose presence one of them does not know.
+        self.reserved = (self.definite || self.reserved)
+            && (o.definite || o.reserved)
+            && !(self.definite && o.definite);
+        self.definite &= o.definite;
         self.data_field &= o.data_field;
         self.readonly &= o.readonly;
         self.writers_ctor = self.writers_ctor.max(o.writers_ctor);
@@ -244,13 +254,17 @@ impl TemplateFacts {
         for f in self.fields.iter_mut() {
             match o.fields.iter().find(|g| g.key == f.key) {
                 Some(g) => f.join(g),
-                None => f.definite = false,
+                None => {
+                    f.definite = false;
+                    f.reserved = false;
+                }
             }
         }
         for g in &o.fields {
             if !self.fields.iter().any(|f| f.key == g.key) {
                 let mut g = g.clone();
                 g.definite = false;
+                g.reserved = false;
                 self.fields.push(g);
             }
         }
@@ -492,11 +506,19 @@ fn template_facts(
         let is_accessor = accessor_keys.contains(&a);
         let definite = birth && tpl.definite.contains(&a) && !is_accessor;
         let declared = birth && tpl.declared.contains(&a) && !is_accessor;
-        if birth && !definite && !declared {
+        let reserved = birth && tpl.reserved.contains(&a) && !definite && !is_accessor;
+        if birth && !definite && !declared && !reserved {
             slot_ok = false;
             fixed_layout = false;
         }
-        let slot = (birth && (definite || declared) && slot_ok).then_some(i as u32);
+        // A reserved key keeps its slot, but an instance can be observed
+        // while the slot still holds the hole: its presence is not the
+        // complete birth layout's, so code compiled for that layout (the
+        // `$pshape` clones) keeps its keys recheck.
+        if reserved {
+            fixed_layout = false;
+        }
+        let slot = (birth && (definite || declared || reserved) && slot_ok).then_some(i as u32);
         let w = m.writers.get(&(tm, a)).cloned().unwrap_or_default();
         let any = m.any_writers.get(&tm).cloned().unwrap_or_default();
         let readonly = escape.is_none()
@@ -527,6 +549,7 @@ fn template_facts(
             slot,
             definite,
             declared,
+            reserved,
             data_field: !is_accessor,
             readonly,
             writers_ctor: w.ctor.len(),
@@ -1031,7 +1054,11 @@ fn judge(
                     continue;
                 }
                 match tf.fields.iter().find(|f| f.key == *key) {
-                    Some(f) if (f.definite || f.declared) && f.data_field && f.slot.is_some() => {
+                    Some(f)
+                        if (f.definite || f.declared || f.reserved)
+                            && f.data_field
+                            && f.slot.is_some() =>
+                    {
                         slots.push(f.slot)
                     }
                     Some(f) if !f.data_field => {

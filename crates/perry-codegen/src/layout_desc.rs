@@ -32,7 +32,7 @@ use crate::strings::StringPool;
 pub const DESC_TY: &str =
     "{ i32, i16, i8, i8, i32, i32, i64, ptr, ptr, i32, i32, ptr, i32, i32, ptr, i32, i32, ptr, i64, [32 x i8] }";
 pub(crate) mod methods;
-/// `%PerryLayoutKey`: atom, slot, attrs, pad, off (16 bytes).
+/// `%PerryLayoutKey`: atom, slot, attrs, pad, off (16 bytes on LP64, 12 on ILP32).
 pub const KEY_TY: &str = "{ ptr, i32, i8, i8, i16 }";
 
 /// The descriptor tail after `image_keys`: `gc_header_word` for a layout of `slot_count` slots.

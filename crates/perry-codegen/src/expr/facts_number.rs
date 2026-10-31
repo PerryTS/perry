@@ -282,7 +282,7 @@ fn this_kinds(ctx: &FnCtx<'_>, cids: &[u32], key: &str) -> Option<u16> {
     for &cid in cids {
         let f = ctx.wpfacts.field(cid, key)?;
         crate::facts_consumed::used();
-        if f.declared {
+        if f.declared || f.reserved {
             return None;
         }
         mask |= f.kind_mask;

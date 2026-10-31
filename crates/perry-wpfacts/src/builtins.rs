@@ -194,6 +194,7 @@ fn site_tmpl(m: &mut Model, call: CallId, what: &'static str) -> Tok {
         birth_keys: vec![],
         definite: vec![],
         declared: Vec::new(),
+        reserved: Vec::new(),
         parent: None,
         ctor: None,
         native_parent: None,

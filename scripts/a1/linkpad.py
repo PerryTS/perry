@@ -28,8 +28,10 @@ Two pad objects per arm, both made of unreferenced SHF_GNU_RETAIN input sections
   linkpad.py check <main-bin> <head-bin> [<runtime-lib.a>]
       Print the layout comparison and, per output section, how many symbols defined in both binaries (and
       in the runtime archive, when given) sit at the same address; exit 1 unless all markers and paddable
-      section ends coincide, all PT_LOAD segments start at the same address and the image ends at the same
-      address.
+      section ends coincide, all PT_LOAD segments start at the same address, the GNU_RELRO region and the
+      TLS segment start at the same address with the same (TLS: aligned) size, .tdata/.tbss/.init_array/
+      .fini_array/.data.rel.ro start at the same address, the thread-pointer-relative address of every TLS symbol both
+      binaries and the runtime archive define is reported, and the image ends at the same address.
 
 .eh_frame is padded with one FDE (a retained function in .text.lpad); its marker is the end of that FDE, found
 through the .eh_frame_hdr search table. Sections the runtime walks record by record (perry_*, stack maps)
@@ -62,6 +64,12 @@ MERGES = {
     "rodata.cst32": (".rodata.cst32", '"aM",@progbits,32', 32),
     "rodata.str1.1": (".rodata.str1.1", '"aMS",@progbits,1', 1),
 }
+# The TLS block is addressed from the thread pointer by the segment's size rounded up to its alignment, so a
+# thread-local added to one arm's runtime shifts EVERY thread-local's address when it crosses a 64-byte boundary.
+# An end pad (nobits, TLS) in .tbss raises the smaller arm's TLS size to the larger one's. It takes no address
+# space and is linked last, so only the (unavoidable) offsets after the added variable differ.
+TLS_PAD = ".tbss"
+TLS_END = ".tbss.lpade"
 EH = ".eh_frame"  # mid pad only: one FDE of 24 + extra bytes, extra a multiple of 8, made of DW_CFA_GNU_args_size
 # ops (the linker strips trailing DW_CFA_nop padding, so nops would not count)
 EH_FN = "__lpad_eh_fn"
@@ -94,6 +102,30 @@ def sections(path):
 def loads(path):
     return [(int(f[2], 16), int(f[5], 16), f[6]) for f in (l.split() for l in run("readelf", "-lW", path).splitlines())
             if f and f[0] == "LOAD"]
+
+
+def segments(path):
+    """{type: (vaddr, memsz, align)} of the GNU_RELRO and TLS program headers."""
+    out = {}
+    for l in run("readelf", "-lW", path).splitlines():
+        f = l.split()
+        if f and f[0] in ("GNU_RELRO", "TLS"):
+            out[f[0]] = (int(f[2], 16), int(f[5], 16), int(f[-1], 16))
+    return out
+
+
+def tls_symbols(path):
+    """{name: offset in the TLS segment} of every defined TLS symbol (nm prints these offsets as addresses)."""
+    out = {}
+    for line in run("readelf", "-sW", path).splitlines():
+        f = line.split()
+        if len(f) >= 8 and f[3] == "TLS" and f[6] != "UND":
+            out.setdefault(f[7], int(f[1], 16))
+    return out
+
+
+# sections that follow the RELRO start: their starts move with the RELRO size
+RW_SECTIONS = (".tdata", ".tbss", ".init_array", ".fini_array", ".data.rel.ro")
 
 
 def notes(path):
@@ -218,6 +250,8 @@ def end_source(want):
     for n, (_, flags, fill, _, name) in PADDABLE.items():
         if want.get(n):
             src += f".section {name},{flags}\n" + (f".space {want[n]},{fill}\n" if fill else f".zero {want[n]}\n")
+    if want.get(TLS_PAD):
+        src += f'.section {TLS_END},"awRT",@nobits\n.zero {want[TLS_PAD]}\n'
     return src + '.section .note.GNU-stack,"",@progbits\n' if src else ""
 
 
@@ -225,12 +259,6 @@ def write_arm(pads, arm, pad_dir):
     mid = write_obj(f"{arm}-mid", pad_dir, mid_source({k: v for k, v in pads[arm]["mid"].items() if v > 0}, pads[arm].get("fde", 0)))
     esrc = end_source({k: v for k, v in pads[arm]["end"].items() if v > 0})
     return mid, (write_obj(f"{arm}-end", pad_dir, esrc) if esrc else "-")
-
-
-# .data.rel.ro lies in the RELRO region, which the linker anchors at its END (page aligned): a pad in it moves
-# the section's start, not its end. So the runtime bytes before the compiled ones need the sections' sizes equal
-# (mid pad) and the bytes after them need the markers equal (end pad, which lowers the marker).
-ANCHORED = ".data.rel.ro"
 
 
 def level(pads, kind, n, am, ah):
@@ -249,21 +277,26 @@ def level(pads, kind, n, am, ah):
     return True
 
 
-def anchored(pads, mk_m, mk_h, size_m, size_h):
+# .data.rel.ro lies in the RELRO region, which the linker anchors at its END (page aligned): a pad in it moves
+# the section start, not its end. The region also holds what follows the section (.dynamic, .got, the first
+# .got.plt slots), whose size differs between arms (link-time-resolved GOT slots; the 64-byte section alignment
+# turns 0x18 more .got into a 0x40 lower RW LOAD start, .tdata, .tbss, .init_array, .fini_array and .data.rel.ro).
+# So the section END differs between arms and equal section sizes do not give equal starts. Two knobs:
+#   end pad  lowers the marker (the runtime's bytes start at: section end - runtime tail - end pad)
+#   mid pad  lowers the section start and the RW start, and leaves the marker where it is
+# Equal markers first (end pad), then equal section starts (mid pad); the RELRO size then coincides as well.
+ANCHORED = ".data.rel.ro"
+
+
+def anchored(pads, mk_m, mk_h, st_m, st_h):
     n = ANCHORED
     old = {a: (pads[a]["end"].get(n, 0), pads[a]["mid"].get(n, 0)) for a in pads}
-    # marker = anchor - (runtime bytes after it + end pad): the arm with the higher marker gets the end pad
-    d = old["head"][0] - old["main"][0] + (mk_h - mk_m)
-    end = {"head": max(d, 0), "main": max(-d, 0)}
-    # start = anchor - size: the arm with the smaller section gets the mid pad
-    diff = (size_h + end["head"] - old["head"][0]) - (size_m + end["main"] - old["main"][0])
-    d = old["main"][1] - old["head"][1] + diff
-    mid = {"main": max(d, 0), "head": max(-d, 0)}
-    changed = False
-    for a in pads:
-        changed |= (end[a], mid[a]) != old[a]
-        pads[a]["end"][n], pads[a]["mid"][n] = end[a], mid[a]
-    return changed
+    for kind, i, diff in (("end", 0, mk_h - mk_m), ("mid", 1, st_h - st_m)):
+        if diff:
+            d = old["head"][i] - old["main"][i] + diff
+            pads["head"][kind][n], pads["main"][kind][n] = max(d, 0), max(-d, 0)
+            return True
+    return False
 
 
 def plan(main_bin, head_bin, pads_json, pad_dir):
@@ -293,13 +326,26 @@ def plan(main_bin, head_bin, pads_json, pad_dir):
     for n in sorted(mk_m, key=lambda k: mk_m[k][0]) if not changed else ():
         (mm, em, sm), (mh, eh, sh) = mk_m[n], mk_h[n]
         if n == ANCHORED:
-            changed = anchored(pads, mm, mh, em - sm if em else 0, eh - sh if eh else 0)
+            changed = anchored(pads, mm, mh, sm, sh)
         else:
             changed = level(pads, "mid", n, mm, mh)
             if not changed and em is not None:
                 changed = level(pads, "end", n, em, eh)
         if changed:
             break
+    if not changed:
+        gm, gh = segments(main_bin).get("TLS"), segments(head_bin).get("TLS")
+        if gm and gh:
+            base = {a: g[1] - pads[a]["end"].get(TLS_PAD, 0) for a, g in (("main", gm), ("head", gh))}
+            up = lambda z, al: -(-z // al) * al
+            if up(base["main"], gm[2]) != up(base["head"], gh[2]):
+                big, small = ("head", "main") if base["head"] > base["main"] else ("main", "head")
+                want = {small: -(-(base[big] - base[small]) // 8) * 8, big: 0}
+            else:
+                want = {"main": 0, "head": 0}
+            for a in pads:
+                changed |= pads[a]["end"].get(TLS_PAD, 0) != want[a]
+                pads[a]["end"][TLS_PAD] = want[a]
     json.dump(pads, open(pads_json, "w"), indent=1, sort_keys=True)
     if not changed:
         print("CONVERGED")
@@ -332,6 +378,27 @@ def check(main_bin, head_bin, rt_lib=None):
         if vm != vh or fm != fh:
             print(f"LOAD {fm} {vm:x} vs {fh} {vh:x}  START DIFFERS")
             ok = False
+    # the RELRO region (anchored at its page-aligned end: its size sets the RW start), the TLS segment and the
+    # start of every section placed at the RW start
+    gm, gh = segments(main_bin), segments(head_bin)
+    for k in ("GNU_RELRO", "TLS"):
+        if k not in gm or k not in gh:
+            if (k in gm) != (k in gh):
+                print(f"{k}: present in one binary only")
+                ok = False
+            continue
+        (vm, zm, am), (vh, zh, ah) = gm[k], gh[k]
+        # the TLS block is addressed from the thread pointer by the aligned size: only that must coincide
+        if k == "TLS":
+            zm, zh = -(-zm // am) * am, -(-zh // ah) * ah
+        bad = vm != vh or zm != zh or am != ah
+        ok &= not bad
+        print(f"{k:<10} start main {vm:x} head {vh:x}  size{' (aligned)' if k == 'TLS' else ''} main {zm:x} head {zh:x}" + ("  DIFFERS" if bad else ""))
+    sm_, sh_ = {s[0]: s[1] for s in secs_m}, {s[0]: s[1] for s in secs_h}
+    for n in RW_SECTIONS:
+        if n in sm_ and sm_[n] != sh_.get(n):
+            print(f"{n} starts main {sm_[n]:x} head {sh_.get(n, 0):x}  DIFFERS")
+            ok = False
     em_, eh_ = lm[-1][0] + lm[-1][1], lh[-1][0] + lh[-1][1]
     print(f"image end (heap start side): main {em_:x} head {eh_:x}" + ("" if em_ == eh_ else "  DIFFERS"))
     if len(lm) != len(lh) or em_ != eh_:
@@ -360,6 +427,16 @@ def check(main_bin, head_bin, rt_lib=None):
     print(f"runtime symbols in both binaries{' and the runtime archive' if rt_lib else ''}: same address / compared, per section")
     for sec, (cnt, moved, ex) in sorted(per.items(), key=lambda kv: -kv[1][0]):
         print(f"  {sec:<22}{cnt - moved:>8}/{cnt:<8}" + (f" moved e.g. {ex[0][:60]}" if moved else ""))
+    # TLS symbols (.tdata/.tbss): same offset in the TLS segment
+    tm, th = tls_symbols(main_bin), tls_symbols(head_bin)
+    tcommon = set(tm) & set(th)
+    if rt_lib:
+        tcommon &= {l.split(None, 2)[2] for l in run("nm", "--defined-only", rt_lib).splitlines() if len(l.split(None, 2)) == 3}
+    # thread-pointer-relative address: offset - TLS size (aligned). A thread-local the runtimes differ by shifts
+    # the ones after it by its size: reported, not gated (the TLS start and aligned size above are)
+    zt = lambda g: -(-g["TLS"][1] // g["TLS"][2]) * g["TLS"][2] if "TLS" in g else 0
+    tmoved = sorted(n for n in tcommon if tm[n] - zt(gm) != th[n] - zt(gh))
+    print(f"TLS symbols (.tdata/.tbss), thread-pointer-relative: same {len(tcommon) - len(tmoved)}/{len(tcommon)}" + (f" moved e.g. {tmoved[0][:60]}" if tmoved else ""))
     print("LAYOUT-EQUAL" if ok else "LAYOUT-DIFFERS")
     return 0 if ok else 1
 

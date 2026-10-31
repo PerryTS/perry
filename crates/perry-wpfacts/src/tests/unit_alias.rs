@@ -657,6 +657,7 @@ fn a_layout_met_again_in_its_own_description_is_named_once() {
         ctor_fn: None,
         birth_keys: Vec::new(),
         definite: Vec::new(),
+        reserved: Vec::new(),
         ctor_leaks: true,
         ctor_returns: false,
         binding_prim: 0,
