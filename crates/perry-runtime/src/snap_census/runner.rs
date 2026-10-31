@@ -145,6 +145,59 @@ impl WordSet {
     }
 }
 
+/// Open-addressing map from a birth's start to its size.
+struct SizeMap {
+    keys: *mut u64,
+    vals: *mut u32,
+    mask: usize,
+    len: usize,
+}
+
+impl SizeMap {
+    unsafe fn new(log2: u32) -> Self {
+        let n = 1usize << log2;
+        SizeMap {
+            keys: map_zeroed::<u64>(n),
+            vals: map_zeroed::<u32>(n),
+            mask: n - 1,
+            len: 0,
+        }
+    }
+    fn insert(&mut self, k: u64, v: u32) {
+        assert!(self.len * 2 < self.mask, "snap census: size map full");
+        let mut i = WordSet::hash(k) & self.mask;
+        unsafe {
+            loop {
+                let s = *self.keys.add(i);
+                if s == k || s == 0 {
+                    if s == 0 {
+                        self.len += 1;
+                    }
+                    *self.keys.add(i) = k;
+                    *self.vals.add(i) = v;
+                    return;
+                }
+                i = (i + 1) & self.mask;
+            }
+        }
+    }
+    fn get(&self, k: u64) -> Option<u32> {
+        let mut i = WordSet::hash(k) & self.mask;
+        unsafe {
+            loop {
+                let s = *self.keys.add(i);
+                if s == k {
+                    return Some(*self.vals.add(i));
+                }
+                if s == 0 {
+                    return None;
+                }
+                i = (i + 1) & self.mask;
+            }
+        }
+    }
+}
+
 /// Append-only log of fixed records.
 struct Log<T: Copy> {
     p: *mut T,
@@ -306,6 +359,12 @@ struct State {
     /// populating itself on first use. (what, call chain), first per what.
     realm_hosts: Vec<(&'static str, [usize; 6])>,
     excluded: u64,
+    /// Size of every birth and realm image cell, by start.
+    sizes: SizeMap,
+    /// One bit per 8-byte word of the realm section: an image cell starts.
+    realm_starts: *mut u64,
+    free_space: u64,
+    noprotect: bool,
     /// Global root slots on no tracked page (the thread pointer's page,
     /// or not a binding: a root slot elsewhere): not watched.
     untracked_slots: u64,
@@ -441,6 +500,10 @@ unsafe fn start(out: String) {
         starts: map_zeroed::<u64>(((res_hi - res_lo) / 8).div_ceil(64).max(1)),
         realm_hosts: Vec::new(),
         excluded: 0,
+        sizes: SizeMap::new(26),
+        realm_starts: map_zeroed::<u64>(((realm.1 - realm.0) / 8).div_ceil(64).max(1)),
+        free_space: 0,
+        noprotect: std::env::var("PERRY_SNAP_NOPROTECT").is_ok_and(|v| v == "1"),
         untracked_slots: 0,
         top_mode: std::env::var("PERRY_SNAP_MODE").is_ok_and(|v| v == "top"),
         pre_bits: map_zeroed::<u64>(((res_hi - res_lo) / 8).div_ceil(64).max(1)),
@@ -498,6 +561,7 @@ unsafe fn start(out: String) {
     crate::arena::arena_walk_objects_with_block_index(|header, _| {
         let size = (*(header as *const crate::gc::GcHeader)).size as usize;
         set_start(st, header as usize);
+        st.sizes.insert(header as u64, size as u32);
         st.births.push(Birth {
             addr: header as usize,
             size: size as u32,
@@ -519,9 +583,49 @@ unsafe fn start(out: String) {
         st.globals_log.push(slot);
         mark_tracked(slot, slot + 8);
     }
+    walk_realm_cells(st);
     install_handlers();
     ANCHOR.on.store(true, Relaxed);
     crate::arena::refresh_inline_allocation_limit();
+}
+
+/// Record the realm section's image cells (header + size, back to back,
+/// zero padding between them skipped).
+unsafe fn walk_realm_cells(st: &mut State) {
+    let (lo, hi) = st.realm;
+    let mut p = (lo + 7) & !7;
+    while p + 8 <= hi {
+        let g = &*(p as *const crate::gc::GcHeader);
+        let size = g.size as usize;
+        if size >= 8 && size % 8 == 0 && p + size <= hi && g.obj_type != 0 {
+            let i = (p - lo) / 8;
+            *st.realm_starts.add(i / 64) |= 1 << (i % 64);
+            st.sizes.insert(p as u64, size as u32);
+            p += size;
+        } else {
+            p += 8;
+        }
+    }
+}
+
+/// The realm image cell that holds `word`.
+fn realm_cell(st: &State, word: usize) -> Option<usize> {
+    let (lo, hi) = st.realm;
+    if word < lo || word >= hi {
+        return None;
+    }
+    let mut i = (word - lo) / 8;
+    loop {
+        let w = unsafe { *st.realm_starts.add(i / 64) } & (u64::MAX >> (63 - (i % 64)));
+        if w != 0 {
+            let bit = 63 - w.leading_zeros() as usize;
+            return Some(lo + ((i / 64) * 64 + bit) * 8);
+        }
+        if i < 64 {
+            return None;
+        }
+        i = i - (i % 64) - 1;
+    }
 }
 
 fn blank_init(addr: usize, parent: u32, reach: Reach) -> Init {
@@ -655,7 +759,7 @@ fn set_mode_for_top(st: &mut State) {
         // A syscall trace (strace) attributes what follows to this init.
         unsafe { libc::syscall(libc::SYS_lseek, -1 as libc::c_int, top as libc::c_long, 0x5a) };
     }
-    let want = top != 0 && st.inits[top].in_d;
+    let want = top != 0 && st.inits[top].in_d && !st.noprotect;
     if want != st.d_mode {
         st.d_mode = want;
         unsafe { apply_protection(st) };
@@ -850,6 +954,7 @@ fn object_start(st: &State, word: usize) -> Option<usize> {
 pub(super) fn birth(addr: usize, size: usize) {
     let st = state();
     set_start(st, addr);
+    st.sizes.insert(addr as u64, size as u32);
     let top = st.frames.last().map_or(0, |f| f.init);
     st.births.push(Birth {
         addr,
@@ -868,7 +973,7 @@ pub(super) fn region_mapped(base: usize, len: usize) {
     }
     st.regions.push((base, base + len));
     mark_tracked(base, base + len);
-    if st.d_mode {
+    if st.d_mode && !st.noprotect {
         unsafe { libc::mprotect(base as *mut _, len, libc::PROT_NONE) };
     }
 }
@@ -1326,8 +1431,22 @@ fn note_access(st: &mut State, word: usize, write: bool, pc: usize) {
     // changes after its birth (its cached hash is no observation), and a
     // shared canonical key list is an interned trie node. Reaching one
     // through a location a member of D wrote is caught at that location.
-    if st.heap.slot(word).is_some() {
-        if let Some(h) = object_start(st, word) {
+    let cell = if st.heap.slot(word).is_some() {
+        object_start(st, word)
+    } else {
+        realm_cell(st, word)
+    };
+    if st.heap.slot(word).is_some() || cell.is_some() {
+        // A word outside every born object is free space the allocator
+        // touched (block setup), not a location.
+        let inside = cell.is_some_and(|h| {
+            st.sizes.get(h as u64).is_some_and(|s| word < h + s as usize)
+        });
+        if !inside {
+            st.free_space += 1;
+            return;
+        }
+        if let Some(h) = cell {
             let hp = h & !(PAGE - 1);
             let fp = word & !(PAGE - 1);
             let (ty, flags) = unsafe {
@@ -1790,6 +1909,7 @@ fn write_report(st: &mut State) {
         let _ = writeln!(f, "#digest_total\t{total:016x}\t{}", per.len());
     }
     let _ = writeln!(f, "#excluded\t{}", st.excluded);
+    let _ = writeln!(f, "#free_space\t{}", st.free_space);
     let _ = writeln!(f, "#foreign_thread_faults\t{}", st.foreign_faults);
     let _ = writeln!(f, "#untracked_slots\t{}\tof\t{}", st.untracked_slots, st.globals.len);
     for (what, pcs) in &st.realm_hosts {
