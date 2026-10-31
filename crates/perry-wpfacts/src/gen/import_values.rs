@@ -1010,6 +1010,14 @@ impl<'a> Gen<'a> {
                     .m
                     .node_named("arg", || format!("called{i}-arg{j}({})", c.name));
                 self.m.own(a);
+                // UEB: the call is the run's (DECISIONS 44 (b)): its
+                // arguments are temporaries of the run, as its result is, so
+                // what the run's parameters hand them stays relative to each
+                // call (the argument markers of this unit's values passed to
+                // the run) and the owner of those values describes them in
+                // its own contract (a function forwarded to a third unit's
+                // function that calls it, DECISIONS 140).
+                self.m.nodes[a as usize].frame = run;
                 let why = "argument from another unit's function";
                 self.fill_described(mi, c, d, &d.value, this, &params, a, why);
                 args.push(a);

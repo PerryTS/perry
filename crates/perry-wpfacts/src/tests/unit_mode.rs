@@ -600,3 +600,6 @@ mod pub_callable;
 
 #[path = "unit_mode/method_on_read.rs"]
 mod method_on_read;
+
+#[path = "unit_mode/fn_transfer.rs"]
+mod fn_transfer;
