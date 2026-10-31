@@ -1009,6 +1009,11 @@ impl<'a> Gen<'a> {
                 self.m.callable_pub.insert(f);
             }
         }
+        for t in self.closed_arg_literals() {
+            if !self.arr_ok(t) && !self.handed.contains(&t) {
+                self.handed.push(t);
+            }
+        }
         changed |= self.nested_fields(r);
         // A literal of this unit passed to another unit's closed function
         // (decision 13) is described by the argument contract as a value
@@ -1687,8 +1692,14 @@ impl<'a> Gen<'a> {
         let mut changed = false;
         loop {
             let n0 = self.leaving.len();
+            let h0 = self.handed.len();
             let mut by: FxHashMap<TmplId, Vec<Tok>> = FxHashMap::default();
-            for &t in &self.leaving {
+            let lv: crate::pts::FxHashSet<Tok> = self.leaving.iter().copied().collect();
+            for &t in self
+                .leaving
+                .iter()
+                .chain(self.handed.iter().filter(|t| !lv.contains(t)))
+            {
                 if let Some(tm) = self.m.tmpl_of(t) {
                     by.entry(tm).or_default().push(t);
                 }
@@ -1697,12 +1708,16 @@ impl<'a> Gen<'a> {
             tms.sort_unstable();
             for tm in tms {
                 let ts = by.remove(&tm).unwrap_or_default();
+                // Only a leaving token's fields are sunk; a handed one's
+                // (`handed`) are described or read as unknown by the callee.
+                let leaves: Vec<Tok> = ts.iter().copied().filter(|t| lv.contains(t)).collect();
+                let handed_only = leaves.is_empty();
                 if !self.keyed_leave(tm) {
                     // Broken by the census: every field leaves as before.
                     self.field_layouts.retain(|&(t2, _), _| t2 != tm);
                     self.field_values.retain(|&(t2, _), _| t2 != tm);
                     self.field_tas.retain(|&(t2, _), _| t2 != tm);
-                    for &t in &ts {
+                    for &t in &leaves {
                         if !self.all_sunk.contains(&t) {
                             self.sink_all_fields(t, r);
                             changed = true;
@@ -1845,6 +1860,11 @@ impl<'a> Gen<'a> {
                             continue;
                         }
                     }
+                    // A handed literal's instance of a contract class would
+                    // leave key by key: not described here.
+                    if handed_only && !cls.is_empty() {
+                        ok = false;
+                    }
                     if ok {
                         for x in std::mem::take(&mut cls) {
                             changed |= self.fields_leave(x, r);
@@ -1864,7 +1884,7 @@ impl<'a> Gen<'a> {
                         self.field_values.insert((tm, a), ns);
                         self.field_layouts.remove(&(tm, a));
                         for (_, x) in inner {
-                            changed |= self.fields_leave(x, r);
+                            changed |= self.inner_leave(x, handed_only, r);
                         }
                         continue;
                     }
@@ -1880,7 +1900,7 @@ impl<'a> Gen<'a> {
                             self.field_prims.insert((tm, a));
                         }
                         for (_, x) in inner {
-                            changed |= self.fields_leave(x, r);
+                            changed |= self.inner_leave(x, handed_only, r);
                         }
                         continue;
                     }
@@ -1894,7 +1914,7 @@ impl<'a> Gen<'a> {
                     self.field_tas.remove(&(tm, a));
                     self.field_prims.remove(&(tm, a));
                     let ru = self.m.reason(UNDESCRIBED);
-                    for &t in &ts {
+                    for &t in &leaves {
                         if let Some(&n) = self.m.fields.get(&(t, a)) {
                             if self.sunk_field_toks.insert((t, a)) {
                                 let rf = match self.field_fns.contains_key(&(t, a)) {
@@ -1908,11 +1928,23 @@ impl<'a> Gen<'a> {
                     }
                 }
             }
-            if self.leaving.len() == n0 {
+            if self.leaving.len() == n0 && self.handed.len() == h0 {
                 break;
             }
         }
         changed
+    }
+
+    /// A literal of this unit a described field holds: it leaves with its
+    /// holder (`fields_leave`), or is handed with it (`handed`).
+    fn inner_leave(&mut self, x: Tok, handed: bool, r: u32) -> bool {
+        if !handed {
+            return self.fields_leave(x, r);
+        }
+        if !self.handed.contains(&x) {
+            self.handed.push(x);
+        }
+        false
     }
 
     /// The module an `export … from source` of module `mi` reads: the

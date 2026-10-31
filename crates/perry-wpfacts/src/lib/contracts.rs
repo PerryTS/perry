@@ -1923,6 +1923,19 @@ pub(super) fn arg_contract_of(
                                 layouts_out,
                                 open_tm,
                             );
+                            // UEB: its fields as a published literal's
+                            // (`Gen::nested_fields` decided them for the
+                            // literals handed to a closed function,
+                            // `Gen::handed`): what they hold, by key.
+                            if cc.literal_shape
+                                && !contracts_out.iter().any(|(_, c)| &c.display == display)
+                            {
+                                cc.field_layouts =
+                                    nested_layouts(g, templates, tm, layouts_out, open_tm);
+                                cc.field_values =
+                                    field_value_contracts(g, templates, tm, layouts_out, open_tm);
+                                cc.field_tas = field_ta_contracts(g, tm);
+                            }
                         }
                         vc.layouts.push(cc)
                     }
