@@ -1485,62 +1485,64 @@ mod tests {
     /// claimed per *declaration*, not per thread.
     #[test]
     fn converted_declarations_survive_thread_turnover() {
-        fn touch_the_converted_registries() -> usize {
-            let mut seen = 0;
-            for probe in [0usize, 1, 0x1000, usize::MAX / 2] {
-                seen += usize::from(crate::map::is_registered_map(probe));
-                seen += usize::from(crate::set::is_registered_set(probe));
-                seen += usize::from(crate::buffer::is_registered_buffer(probe));
-                seen += usize::from(crate::symbol::is_registered_symbol(probe));
-                seen += usize::from(
-                    crate::regex::regexp_data_of(crate::value::js_nanbox_pointer(
-                        (probe as *const u8) as i64,
-                    ))
-                    .is_some(),
-                );
+        crate::test_isolation::in_own_process(|| {
+            fn touch_the_converted_registries() -> usize {
+                let mut seen = 0;
+                for probe in [0usize, 1, 0x1000, usize::MAX / 2] {
+                    seen += usize::from(crate::map::is_registered_map(probe));
+                    seen += usize::from(crate::set::is_registered_set(probe));
+                    seen += usize::from(crate::buffer::is_registered_buffer(probe));
+                    seen += usize::from(crate::symbol::is_registered_symbol(probe));
+                    seen += usize::from(
+                        crate::regex::regexp_data_of(crate::value::js_nanbox_pointer(
+                            (probe as *const u8) as i64,
+                        ))
+                        .is_some(),
+                    );
+                }
+                seen
             }
-            seen
-        }
 
-        touch_the_converted_registries();
-        let after_main = super::claimed_slots();
+            touch_the_converted_registries();
+            let after_main = super::claimed_slots();
 
-        for _ in 0..8 {
-            let batch: Vec<_> = (0..8)
-                .map(|_| std::thread::spawn(touch_the_converted_registries))
-                .collect();
-            for worker in batch {
-                worker.join().expect("worker thread panicked");
+            for _ in 0..8 {
+                let batch: Vec<_> = (0..8)
+                    .map(|_| std::thread::spawn(touch_the_converted_registries))
+                    .collect();
+                for worker in batch {
+                    worker.join().expect("worker thread panicked");
+                }
             }
-        }
 
-        let after_workers = super::claimed_slots();
-        // A TOLERANCE, not equality, and the reason is the measurement rather
-        // than the mechanism: `claimed_slots()` is PROCESS-global, so any other
-        // test in this binary that touches a converted declaration for the
-        // first time lands a claim inside this window. Under `--test-threads=1`
-        // the delta is exactly 0; in parallel it is 0 or a stray 1-2 from a
-        // neighbour. Asserting equality made this fail 6/6 under load while
-        // passing 3/3 in isolation and 1/1 single-threaded.
-        //
-        // The tolerance still separates the two outcomes by two orders of
-        // magnitude: per-THREAD claiming — the bug this test exists to catch —
-        // would add 5 declarations x 64 workers = 320, not 1.
-        const TURNOVER_CLAIM_TOLERANCE: u32 = 8;
-        let extra = after_workers.saturating_sub(after_main);
-        assert!(
-            extra <= TURNOVER_CLAIM_TOLERANCE,
-            "64 worker threads claimed {extra} extra slots (tolerance \
-             {TURNOVER_CLAIM_TOLERANCE}); indices must be per declaration, not \
-             per thread — per-thread claiming would add 5 x 64 = 320",
-        );
-        assert!(
-            (after_workers as usize) < super::HOT_SLOT_CAPACITY,
-            "capacity {} exhausted at {after_workers}",
-            super::HOT_SLOT_CAPACITY,
-        );
-        // And the parent thread's own cache is still serving after all that.
-        assert_eq!(touch_the_converted_registries(), 0);
+            let after_workers = super::claimed_slots();
+            // A TOLERANCE, not equality, and the reason is the measurement rather
+            // than the mechanism: `claimed_slots()` is PROCESS-global, so any other
+            // test in this binary that touches a converted declaration for the
+            // first time lands a claim inside this window. Under `--test-threads=1`
+            // the delta is exactly 0; in parallel it is 0 or a stray 1-2 from a
+            // neighbour. Asserting equality made this fail 6/6 under load while
+            // passing 3/3 in isolation and 1/1 single-threaded.
+            //
+            // The tolerance still separates the two outcomes by two orders of
+            // magnitude: per-THREAD claiming — the bug this test exists to catch —
+            // would add 5 declarations x 64 workers = 320, not 1.
+            const TURNOVER_CLAIM_TOLERANCE: u32 = 8;
+            let extra = after_workers.saturating_sub(after_main);
+            assert!(
+                extra <= TURNOVER_CLAIM_TOLERANCE,
+                "64 worker threads claimed {extra} extra slots (tolerance \
+                 {TURNOVER_CLAIM_TOLERANCE}); indices must be per declaration, not \
+                 per thread — per-thread claiming would add 5 x 64 = 320",
+            );
+            assert!(
+                (after_workers as usize) < super::HOT_SLOT_CAPACITY,
+                "capacity {} exhausted at {after_workers}",
+                super::HOT_SLOT_CAPACITY,
+            );
+            // And the parent thread's own cache is still serving after all that.
+            assert_eq!(touch_the_converted_registries(), 0);
+        });
     }
 
     /// The guard exists exactly when the value has something to destroy — that
