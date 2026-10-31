@@ -120,6 +120,11 @@ pub enum BuiltinNs {
     GlobalThis,
     Process,
     Error,
+    AggregateError,
+    Date,
+    RegExp,
+    TypedArray,
+    ArrayBuffer,
     Symbol,
     Number,
     String,
@@ -564,6 +569,32 @@ impl Protocol {
             Protocol::IterResult => &["done", "value"],
             _ => &[],
         }
+    }
+
+    /// The use bit of a touch by this protocol (`MARK_TOUCH*`).
+    pub fn touch_bit(self) -> u8 {
+        match self {
+            Protocol::ToPrimitive => MARK_TOUCH_PRIMITIVE,
+            Protocol::Iterate => MARK_TOUCH_ITERATE,
+            Protocol::IterNext => MARK_TOUCH_ITER_NEXT,
+            Protocol::IterResult => MARK_TOUCH_ITER_RESULT,
+            Protocol::HasInstance => MARK_TOUCH_HAS_INSTANCE,
+            Protocol::Json | Protocol::OwnKeys | Protocol::Any => MARK_TOUCH,
+        }
+    }
+
+    /// The protocols the touch bits of `uses` name, each once.
+    pub fn of_touches(uses: u8) -> impl Iterator<Item = Protocol> {
+        [
+            Protocol::Any,
+            Protocol::ToPrimitive,
+            Protocol::Iterate,
+            Protocol::IterNext,
+            Protocol::IterResult,
+            Protocol::HasInstance,
+        ]
+        .into_iter()
+        .filter(move |p| uses & p.touch_bit() != 0)
     }
 
     /// The protocol run on what the called methods return.
@@ -1956,3 +1987,18 @@ pub(crate) fn marker_top_bit(bits: &[u64], t: Tok) -> bool {
 }
 pub const MARK_TOUCH: u8 = 2;
 pub const MARK_ESCAPE: u8 = 4;
+/// A touch by a protocol whose keys ECMA-262 fixes (`Protocol::keys`):
+/// the reader runs that protocol on its value, not `Protocol::Any`
+/// (`MARK_TOUCH`: a touch whose keys are any, `Any` and JSON).
+pub const MARK_TOUCH_PRIMITIVE: u8 = 8;
+pub const MARK_TOUCH_ITERATE: u8 = 16;
+pub const MARK_TOUCH_ITER_NEXT: u8 = 32;
+pub const MARK_TOUCH_ITER_RESULT: u8 = 64;
+pub const MARK_TOUCH_HAS_INSTANCE: u8 = 128;
+/// Every touch bit.
+pub const MARK_TOUCHES: u8 = MARK_TOUCH
+    | MARK_TOUCH_PRIMITIVE
+    | MARK_TOUCH_ITERATE
+    | MARK_TOUCH_ITER_NEXT
+    | MARK_TOUCH_ITER_RESULT
+    | MARK_TOUCH_HAS_INSTANCE;

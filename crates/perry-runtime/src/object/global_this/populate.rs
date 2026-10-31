@@ -442,7 +442,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
                     );
                 }
             }
-            if matches!(name, "MessageChannel" | "MessagePort" | "BroadcastChannel") {
+            if super::super::native_module::is_worker_messaging_constructor(name) {
                 crate::messaging_hook_slots::populate_messaging_prototype(
                     name, proto_obj, ctor_value,
                 );
@@ -582,6 +582,11 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
             ctor_value,
             name.to_string(),
             super::super::PropertyAttrs::new(true, false, true),
+        );
+        super::super::native_module::publish_worker_messaging_constructor(
+            singleton(),
+            name,
+            ctor_value,
         );
     }
     // Interface inheritance carries prototype methods. DOMException has

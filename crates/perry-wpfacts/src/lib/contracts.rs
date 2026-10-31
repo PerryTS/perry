@@ -114,7 +114,7 @@ pub(super) fn literal_field_fns(
         let fcs = fs
             .into_iter()
             .map(|(f, ft)| match g.stand_in_fc.get(&ft) {
-                Some(&c) if g.m.funcs[f as usize].func_id == u32::MAX => c.clone(),
+                Some(&c) if g.m.funcs[f as usize].func_id == u32::MAX => forwarded_fn(g, c),
                 _ => fn_contract_of(g, templates, f, layouts_out, open_tm),
             })
             .collect();
@@ -369,6 +369,17 @@ fn compiled_body_of(g: &gen::Gen, f: model::FnIdx) -> Option<(String, u32, bool)
             closure,
         )
     })
+}
+
+/// Another unit's function `fc` (a stand-in's contract) as this unit
+/// forwards it: whole, with the functions described inside it that have an
+/// owner's entry named (`units::name_owned_in_fn`, DECISIONS 106).
+pub(super) fn forwarded_fn(g: &gen::Gen, fc: &units::FnContract) -> units::FnContract {
+    let mut c = fc.clone();
+    if let Some(u) = g.unit_in {
+        units::name_owned_in_fn(&mut c, &|n| u.own_fn(n).is_some());
+    }
+    c
 }
 
 pub(super) fn fn_contract_of(
@@ -990,7 +1001,7 @@ pub(super) fn describe_nodes(
                 // stand-in contract.
                 if let model::TokKind::Func(f2, _) = g.m.toks[t as usize] {
                     let fc = match g.stand_in_fc.get(&t) {
-                        Some(&fc) => fc.clone(),
+                        Some(&fc) => forwarded_fn(g, fc),
                         None if g.m.funcs[f2 as usize].func_id != u32::MAX => fn_named(g, f2),
                         None => {
                             ret_unknown = true;
@@ -1373,7 +1384,7 @@ pub(super) fn describe_toks(
             _ => {
                 if let Some(&fc) = g.stand_in_fc.get(&t) {
                     if !vc.fns.iter().any(|c| c.name == fc.name) {
-                        vc.fns.push(fc.clone());
+                        vc.fns.push(forwarded_fn(g, fc));
                     }
                 }
                 continue;
@@ -1736,7 +1747,7 @@ pub(super) fn arg_contract_of(
                 if let model::TokKind::Func(f, _) = g.m.toks[t as usize] {
                     match g.stand_in_fc.get(&t) {
                         Some(&fc) if !vc.fns.iter().any(|c| c.name == fc.name) => {
-                            vc.fns.push(fc.clone())
+                            vc.fns.push(forwarded_fn(g, fc))
                         }
                         Some(_) => {}
                         // Its closed publication (23), or a valid normal
@@ -1912,6 +1923,19 @@ pub(super) fn arg_contract_of(
                                 layouts_out,
                                 open_tm,
                             );
+                            // UEB: its fields as a published literal's
+                            // (`Gen::nested_fields` decided them for the
+                            // literals handed to a closed function,
+                            // `Gen::handed`): what they hold, by key.
+                            if cc.literal_shape
+                                && !contracts_out.iter().any(|(_, c)| &c.display == display)
+                            {
+                                cc.field_layouts =
+                                    nested_layouts(g, templates, tm, layouts_out, open_tm);
+                                cc.field_values =
+                                    field_value_contracts(g, templates, tm, layouts_out, open_tm);
+                                cc.field_tas = field_ta_contracts(g, tm);
+                            }
                         }
                         vc.layouts.push(cc)
                     }

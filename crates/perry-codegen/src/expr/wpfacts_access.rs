@@ -13,7 +13,8 @@
 //! which throws), no ShapeId compare, no miss call.
 //!
 //! The receiver facts come from the whole-program solve (`locals`,
-//! `this_of`).
+//! `this_of`, and, for a receiver that is itself a field read, the field's
+//! holder facts `FactsField::classes`).
 //! The GC write barrier stays for stores that can carry a pointer (F2 decides
 //! which can); the raw-f64 lane discipline stays for stores into an F64 lane.
 //!
@@ -165,6 +166,44 @@ fn receiver(ctx: &FnCtx<'_>, object: &Expr) -> Option<(crate::codegen::FactsRecv
                 crate::facts_consumed::used();
                 (r.clone(), format!("this of fn {fid}"))
             })
+        }
+        // Holder facts: a read of a field of an unchecked proven receiver
+        // holds, in every class of that receiver, only instances of the
+        // field's classes (or null/undefined): their union is this value's
+        // receiver fact. No guard: an unchecked receiver needs none, and a
+        // field with ⊤ or interpreted writers has no classes.
+        Expr::PropertyGet {
+            object: inner,
+            property,
+            ..
+        } => {
+            if property.starts_with('#') || ctx.wpfacts.interp_guard {
+                return None;
+            }
+            let (r, binding) = receiver(ctx, inner)?;
+            if r.checked || r.class_ids.is_empty() {
+                return None;
+            }
+            let mut class_ids: Vec<u32> = Vec::new();
+            let mut nullable = false;
+            for &cid in &r.class_ids {
+                let f = ctx.wpfacts.field(cid, property)?;
+                if f.reserved || f.classes.is_empty() {
+                    return None;
+                }
+                class_ids.extend_from_slice(&f.classes);
+                nullable |= f.nullable;
+            }
+            class_ids.sort_unstable();
+            class_ids.dedup();
+            Some((
+                crate::codegen::FactsRecv {
+                    class_ids,
+                    nullable,
+                    checked: false,
+                },
+                format!("field {property} of {binding}"),
+            ))
         }
         _ => None,
     }

@@ -340,6 +340,14 @@ pub struct CompileOptions {
     /// Locals that are namespace imports (`import * as X from "./mod"`).
     /// Codegen uses this to know that `X.foo()` should be dispatched as
     /// a cross-module call rather than an object method call.
+    /// A module that namespace-imports ITSELF (`import * as Mod from
+    /// "./this-module.js"`). Its `@__perry_ns_<prefix>` populator must run
+    /// BEFORE the top-level body, because the body is itself a namespace
+    /// consumer: trails' activesupport does `import * as C from
+    /// "./calculations.js"` and then, at top level, `include(RubyTime, C)`,
+    /// which reads `Object.getOwnPropertyNames(C)`. Populating at the tail left
+    /// that read seeing the global's initial NaN-boxed `undefined`.
+    pub namespace_self_import: bool,
     pub namespace_imports: Vec<String>,
     /// Namespace local -> owning compiled module prefix, before following re-exports.
     pub namespace_source_prefixes: std::collections::HashMap<String, String>,
@@ -986,6 +994,8 @@ pub(crate) struct CrossModuleCtx<'a> {
     /// The class and method tables inverted (`class_hierarchy`). Set once
     /// both tables are final, before any function body is lowered.
     pub class_hierarchy: super::class_hierarchy::ClassHierarchy,
+    /// See `CompileOptions::namespace_self_import`.
+    pub namespace_self_import: bool,
     pub namespace_imports: std::collections::HashSet<String>,
     pub namespace_source_prefixes: std::collections::HashMap<String, String>,
     /// #7189: `(namespace local, member)` pairs whose member is itself a MODULE

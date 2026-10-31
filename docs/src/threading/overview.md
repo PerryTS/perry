@@ -238,6 +238,10 @@ Main-thread `postMessageToThread` rejects missing or stopped destinations before
 cloning the payload or detaching transfer buffers. Worker-origin messages retain
 Node's forwarding order: cloning precedes destination rejection. Admission does
 not guarantee rollback if a destination exits concurrently after it was admitted.
+Core-module messaging constructor exports retain the original thread-realm
+MessageChannel, MessagePort and BroadcastChannel objects even after global
+reassignment. Explicit CommonJS export overrides and named-export synchronization
+remain separate; vm/eval global population does not replace these thread-core values.
 Other worker API parity gaps remain.
 
 ## Next Steps

@@ -139,6 +139,12 @@ pub struct Gen<'a> {
     /// (`sunk_fields`, its nodes `sunk_field_toks`). `all_sunk`: the
     /// published objects whose fields all leave.
     pub leaving: Vec<Tok>,
+    /// This unit's literals handed to another unit's closed function
+    /// (decision 13) and the literals of this unit their described fields
+    /// hold: the argument contract describes their fields as a published
+    /// literal's (`nested_fields`), but nothing of them leaves: the closed
+    /// callee's uses come back through its contract.
+    pub handed: Vec<Tok>,
     pub field_layouts: FxHashMap<(TmplId, Atom), Vec<TmplId>>,
     pub field_prims: crate::pts::FxHashSet<(TmplId, Atom)>,
     /// A field holding other units' stand-ins (builtins, unknown values)
@@ -206,7 +212,8 @@ pub struct Gen<'a> {
     /// DECISIONS 45: what other units' functions let escape, or touch, of
     /// what their arguments reach: one node each for the unit.
     pub reach_escape: Option<NodeId>,
-    pub reach_touch: Option<NodeId>,
+    /// Per set of protocols (`MARK_TOUCH*` bits) the touch runs.
+    pub reach_touch: Vec<(u8, NodeId)>,
     /// The contracts behind the stand-ins: a stand-in template's class or
     /// layout contract, a stand-in function token's function contract.
     pub(crate) stand_in_cc: FxHashMap<TmplId, crate::units::ClassContract>,
@@ -427,6 +434,7 @@ impl<'a> Gen<'a> {
             fn_contracts: Vec::new(),
             ret_ok: Default::default(),
             leaving: Vec::new(),
+            handed: Vec::new(),
             field_layouts: FxHashMap::default(),
             field_prims: Default::default(),
             field_values: FxHashMap::default(),
@@ -455,7 +463,7 @@ impl<'a> Gen<'a> {
             stand_in_nss: FxHashMap::default(),
             unnamed_imports: FxHashMap::default(),
             reach_escape: None,
-            reach_touch: None,
+            reach_touch: Vec::new(),
             stand_in_cc: FxHashMap::default(),
             own_classes: FxHashMap::default(),
             closed_ctors: Vec::new(),
@@ -731,8 +739,9 @@ impl<'a> Gen<'a> {
                 why.push(format!("{d}: {}", rs.join("; ")));
             }
             why.sort();
+            let unit = self.view.map_or("", |v| v.key.as_str());
             for w in why {
-                eprintln!("perry: wpfacts explain: unit reports {w}");
+                eprintln!("perry: wpfacts explain: unit {unit} reports {w}");
             }
         }
         for ((name, _), &(_, t)) in &self.stand_in_fns {
@@ -773,7 +782,8 @@ impl<'a> Gen<'a> {
                         .get(t)
                         .map(|&(_, r)| self.m.reasons[r as usize].clone());
                     eprintln!(
-                        "perry: wpfacts explain: unit reports {rep}: written {written} escaped {esc:?} hard {hard:?}"
+                        "perry: wpfacts explain: unit {} reports {rep}: written {written} escaped {esc:?} hard {hard:?}",
+                        self.view.map_or("", |v| v.key.as_str())
                     );
                 }
                 out.push(rep.clone());

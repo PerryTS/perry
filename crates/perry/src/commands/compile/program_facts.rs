@@ -444,6 +444,33 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             out.this_of.insert(*id, r);
         }
     }
+    // Holder facts: the prefix-stable classes a definite data field holds
+    // (a reserved key may still be absent: no field-class fact),
+    // when it holds nothing else but null/undefined (no ⊤, function,
+    // builtin, other primitive, literal or class without stable facts).
+    // The field kind is the join over every unit's stores, so per unit it
+    // is never stronger than whole. Interpreted code can store anything.
+    let holder_classes = |f: &perry_wpfacts::FieldFacts| -> Option<(Vec<u32>, bool)> {
+        let k = &f.kind;
+        if interp
+            || f.declared
+            || f.reserved
+            || !f.definite
+            || !f.data_field
+            || k.top
+            || k.funcs != 0
+            || k.builtin_objs != 0
+            || k.objs.is_empty()
+            || k.prims & !(prim::NULL | prim::UNDEF) != 0
+        {
+            return None;
+        }
+        let ids = pf.classes_of(k)?;
+        if ids.is_empty() || !ids.iter().all(|c| stable.contains_key(c)) {
+            return None;
+        }
+        Some((ids, k.prims != 0))
+    };
     // Step 5b: a typed body's entry check proves a class set for a
     // parameter no binding fact covers, so every prefix-stable class's
     // layout facts are visible, not only those of classes some binding holds.
@@ -453,7 +480,10 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             .iter()
             .filter(|f| (f.definite || f.declared || f.reserved) && f.data_field)
             .filter_map(|f| {
+                let (classes, nullable) = holder_classes(f).unwrap_or_default();
                 Some(FactsField {
+                    classes,
+                    nullable,
                     fns: bodies(&f.fns),
                     key: f.key.clone(),
                     slot: f.slot?,
@@ -511,6 +541,10 @@ mod facts_mode_tests {
 #[cfg(test)]
 #[path = "program_facts/outlined_tests.rs"]
 mod outlined_tests;
+
+#[cfg(test)]
+#[path = "program_facts/literal_chunks_tests.rs"]
+mod literal_chunks_tests;
 
 /// Borrow ordinary modules; reconstruct only outlined module entries.
 /// Dead-code elimination (`dynamic_reach`): the dynamic `import()` /

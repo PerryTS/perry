@@ -30,6 +30,8 @@ fn body(with_facts: bool, checked: bool, interp: bool, kind: u16) -> String {
                 display: c.name.clone(),
                 fixed_layout: true,
                 fields: vec![FactsField {
+                    classes: Vec::new(),
+                    nullable: false,
                     key: "x".into(),
                     slot: 0,
                     readonly: false,

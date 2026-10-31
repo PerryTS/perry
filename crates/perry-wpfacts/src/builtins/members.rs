@@ -497,11 +497,18 @@ fn ns_statics(ns: BuiltinNs) -> Option<&'static [(&'static str, Mem)]> {
         // Error and its native subclasses; V8's `captureStackTrace` and
         // `stackTraceLimit` (node), `prepareStackTrace` (absent until set:
         // a program write is a store, `intrinsic_written`).
-        BuiltinNs::Error => &[
+        // `AggregateError` is an `Error` subclass: the same statics apply.
+        BuiltinNs::Error | BuiltinNs::AggregateError => &[
             ("captureStackTrace", FN),
             ("isError", FN),
             ("stackTraceLimit", N),
         ],
+        // The model does not describe these namespaces' own members. They are
+        // constructor tokens only, for the `new`/call summaries; naming them
+        // here would claim a precision the model does not have.
+        BuiltinNs::Date | BuiltinNs::RegExp | BuiltinNs::TypedArray | BuiltinNs::ArrayBuffer => {
+            return None
+        }
         BuiltinNs::Symbol => &[
             ("asyncDispose", SY),
             ("asyncIterator", SY),
