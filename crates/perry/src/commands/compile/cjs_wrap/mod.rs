@@ -73,7 +73,7 @@ mod static_edge_tests;
 use deferred_requires::deferred_require_specs_for_path;
 use detect::is_js_reserved_word;
 use extract_exports::{
-    extract_exports_from_source, extract_named_exports_from_require,
+    export_key_is_own_binding, extract_exports_from_source, extract_named_exports_from_require,
     extract_object_literal_exports_from_require, extract_single_module_exports_assignment,
     module_reexport_specs,
 };
