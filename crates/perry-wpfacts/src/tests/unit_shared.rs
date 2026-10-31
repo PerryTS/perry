@@ -412,3 +412,37 @@ fn another_units_accessor_on_a_namespace_is_one_key() {
         pf.shared_out
     );
 }
+
+/// Per unit, another unit's handover of `Object.prototype` is what the
+/// whole program sees: a store or accessor into ⊤ writes its key on every
+/// builtin prototype (`builtins::native_written`), not an accessor installed
+/// on `Object.prototype` (E23, every lookup off) nor a ⊤ value stored there.
+#[test]
+fn another_units_handover_of_object_prototype_writes_only_the_keys_stored_into_top() {
+    let src = r#"
+        class A { a = 1; }
+        class M { m(o: any) { return o.a; } }
+        class N { inner: any; constructor() { this.inner = new M(); } }
+        declare const k: number;
+        declare const unknown: any;
+        function hand(): void { unknown.take(Object.prototype); }
+        function install(): void {
+          Object.defineProperty(unknown.v, "zz", { get() { return 1; } });
+        }
+        hand();
+        install();
+        const v: any = k > 1 ? new N() : "text";
+        const i = v.inner;
+        if (i) console.log(i.m(new A()));
+        "#;
+    for (mode, pf) in [("unit", units(src)), ("whole", whole(src))] {
+        let s: Vec<_> = pf.sites.iter().filter(|s| s.key == "m").collect();
+        assert!(
+            !s.is_empty()
+                && s.iter()
+                    .all(|s| !s.top && matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set)),
+            "{mode}\n{}",
+            pf.dump_text()
+        );
+    }
+}
