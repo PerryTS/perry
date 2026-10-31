@@ -352,6 +352,7 @@ impl<'a> Gen<'a> {
             birth_keys: atoms.clone(),
             definite: atoms,
             declared: Vec::new(),
+            reserved: Vec::new(),
             parent: None,
             ctor: None,
             native_parent: None,

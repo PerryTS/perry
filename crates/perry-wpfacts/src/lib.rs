@@ -686,6 +686,9 @@ fn compute_act<'a>(
     } else {
         g.m.fnproto_write.map(|r| g.m.reasons[r as usize].clone())
     };
+    // Per unit, a class's own unit says whether it is relinked: another
+    // unit's class (a stand-in) may be relinked where this unit does not
+    // see it, and the driver joins every unit's claims.
     let super_unrelinked = if stats.aborted {
         Default::default()
     } else {
@@ -696,6 +699,9 @@ fn compute_act<'a>(
                 let model::TokKind::ClassObj(tm) = kind else {
                     return None;
                 };
+                if g.m.foreign.contains_key(tm) {
+                    return None;
+                }
                 let model::TmplKind::Class { class_id, .. } = g.m.tmpls[*tm as usize].kind else {
                     return None;
                 };
@@ -921,6 +927,7 @@ fn compute_act<'a>(
                         ctor_fn,
                         birth_keys: atoms_of(&g, &g.m.tmpls[tm as usize].birth_keys),
                         definite: atoms_of(&g, &g.m.tmpls[tm as usize].definite),
+                        reserved: atoms_of(&g, &g.m.tmpls[tm as usize].reserved),
                         ctor_leaks: g.chain_leaks(tm),
                         ctor_returns: g.chain_returns(tm),
                         binding_prim: match e {

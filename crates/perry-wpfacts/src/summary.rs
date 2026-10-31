@@ -339,6 +339,7 @@ pub fn map_cons(
             of,
         },
         ProtoGiven { protos } => ProtoGiven { protos: n(protos) },
+        ParentGiven { of } => ParentGiven { of },
         ProtoClosure { dst } => ProtoClosure { dst: n(dst) },
         ProtoMethods { origin, key, call } => ProtoMethods {
             origin,

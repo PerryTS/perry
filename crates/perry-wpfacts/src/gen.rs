@@ -780,6 +780,16 @@ impl<'a> Gen<'a> {
             }
         }
         out.extend(self.override_reports());
+        // A class of another unit this unit gave as a class object's parent
+        // (`Object.setPrototypeOf(B, A)`, `B.__proto__ = A`): a `super()`
+        // runs its constructor on a receiver its unit does not see, as for
+        // a class whose `extends` names it (DECISIONS 57). Not a break: its
+        // unit publishes the constructor contract.
+        for (d, (_, tm, _)) in &self.stand_ins {
+            if self.m.relinked_parents.contains(tm) {
+                out.push(format!("extends {d}"));
+            }
+        }
         out.sort();
         out.dedup();
         out
@@ -1148,6 +1158,7 @@ impl<'a> Gen<'a> {
             birth_keys: Vec::new(),
             definite: literal_keys,
             declared: Vec::new(),
+            reserved: Vec::new(),
             parent: None,
             ctor: None,
             native_parent: c.native_extends.clone(),
@@ -1613,6 +1624,7 @@ impl<'a> Gen<'a> {
             birth_keys: vec![],
             definite: vec![],
             declared: Vec::new(),
+            reserved: Vec::new(),
             parent: None,
             ctor: None,
             native_parent: None,
@@ -1649,6 +1661,7 @@ impl<'a> Gen<'a> {
             birth_keys: vec![],
             definite: vec![],
             declared: Vec::new(),
+            reserved: Vec::new(),
             parent: None,
             ctor: None,
             native_parent: None,

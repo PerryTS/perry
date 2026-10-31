@@ -10,80 +10,90 @@
 //! Process-global rather than thread-local: the report is about the run.
 
 use std::cell::Cell;
-#[cfg(perry_gc_instruments)]
+#[cfg(any(test, perry_gc_instruments))]
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// A liveness counter. Only the instrumented runtime build (the
 /// `perry_gc_instruments` cfg, set by `scripts/build_instr_runtime.sh` and by
-/// debug-profile test builds) stores and counts. In the default release
+/// debug-profile builds) and lib-test builds of any profile (the unit tests
+/// assert on these counters, so a release-profile test run must not read 0)
+/// store and count. In the default release
 /// archives it is zero-sized, `add` compiles to nothing and `get` is 0, so the
 /// polls and GC events that note an event pay no locked read-modify-write for a
 /// number nothing reads (a `lock incq` on the "nothing due" budgeted-step
 /// poll was 1% of the instructions and 7% of the cycles of a regex loop).
 pub(crate) struct Counter {
-    #[cfg(perry_gc_instruments)]
+    #[cfg(any(test, perry_gc_instruments))]
     cell: AtomicU64,
 }
 
 impl Counter {
     pub(crate) const fn new() -> Self {
         Self {
-            #[cfg(perry_gc_instruments)]
+            #[cfg(any(test, perry_gc_instruments))]
             cell: AtomicU64::new(0),
         }
     }
 
     #[inline(always)]
     pub(crate) fn add(&self, n: u64) {
-        #[cfg(perry_gc_instruments)]
+        #[cfg(any(test, perry_gc_instruments))]
         self.cell.fetch_add(n, Ordering::Relaxed);
-        #[cfg(not(perry_gc_instruments))]
+        #[cfg(not(any(test, perry_gc_instruments)))]
         let _ = n;
     }
 
     #[inline(always)]
     pub(crate) fn get(&self) -> u64 {
-        #[cfg(perry_gc_instruments)]
+        #[cfg(any(test, perry_gc_instruments))]
         return self.cell.load(Ordering::Relaxed);
-        #[cfg(not(perry_gc_instruments))]
+        #[cfg(not(any(test, perry_gc_instruments)))]
         0
     }
 
     /// Raise the stored value to `value` if it is larger.
     #[inline(always)]
     pub(crate) fn raise_to(&self, value: u64) {
-        #[cfg(perry_gc_instruments)]
+        #[cfg(any(test, perry_gc_instruments))]
         self.cell.fetch_max(value, Ordering::Relaxed);
-        #[cfg(not(perry_gc_instruments))]
+        #[cfg(not(any(test, perry_gc_instruments)))]
         let _ = value;
     }
 
     /// Store `value` when the counter is 0.
     #[inline(always)]
     pub(crate) fn set_if_zero(&self, value: u64) {
-        #[cfg(perry_gc_instruments)]
+        #[cfg(any(test, perry_gc_instruments))]
         let _ = self
             .cell
             .compare_exchange(0, value, Ordering::Relaxed, Ordering::Relaxed);
-        #[cfg(not(perry_gc_instruments))]
+        #[cfg(not(any(test, perry_gc_instruments)))]
         let _ = value;
     }
 
     /// Return the stored value and reset it to 0.
     #[inline(always)]
     pub(crate) fn take(&self) -> u64 {
-        #[cfg(perry_gc_instruments)]
+        #[cfg(any(test, perry_gc_instruments))]
         return self.cell.swap(0, Ordering::Relaxed);
-        #[cfg(not(perry_gc_instruments))]
+        #[cfg(not(any(test, perry_gc_instruments)))]
         0
     }
 
     #[cfg(test)]
     pub(crate) fn reset(&self) {
-        #[cfg(perry_gc_instruments)]
+        #[cfg(any(test, perry_gc_instruments))]
         self.cell.store(0, Ordering::Relaxed);
     }
 }
+
+// The default release archives carry no counter state at all: the cfg is the
+// single switch, and a counter that stores in a build that does not instrument
+// would put the locked read-modify-write back on the polls. A lib-test build
+// always counts (see `Counter`), so the shipping shape is checked here, at
+// compile time, in every build that is not a test or instrumented one.
+#[cfg(not(any(test, perry_gc_instruments)))]
+const _: () = assert!(std::mem::size_of::<Counter>() == 0);
 
 static COPYING_MINORS: Counter = Counter::new();
 static MOVED_OBJECTS: Counter = Counter::new();
@@ -610,21 +620,6 @@ fn instruments_unavailable(knob: &str) -> ! {
 #[cfg(test)]
 mod counter_tests {
     use super::Counter;
-
-    /// The default release archives carry no counter state at all: the cfg is
-    /// the single switch, and a counter that stores in a build that does not
-    /// instrument would put the locked read-modify-write back on the polls.
-    #[cfg(not(perry_gc_instruments))]
-    #[test]
-    fn counter_is_zero_sized_and_inert_without_instruments() {
-        assert_eq!(std::mem::size_of::<Counter>(), 0);
-        let c = Counter::new();
-        c.add(5);
-        c.raise_to(9);
-        c.set_if_zero(3);
-        assert_eq!(c.get(), 0);
-        assert_eq!(c.take(), 0);
-    }
 
     /// The instrumented build (and every debug-profile test build) must really
     /// count: tests that read `copying_minor_cycles`, `loop_polls_reached`,

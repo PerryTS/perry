@@ -318,6 +318,12 @@ pub struct Template {
     /// slots, absent until stored (each read pairs its load with the hole
     /// compare).
     pub declared: Vec<Atom>,
+    /// Birth keys reserved for a constructor store
+    /// (`ClassFieldOrigin::ConstructorStore`) that are not `definite`: code
+    /// can observe the instance before the constructor stores them (a method
+    /// call on `this`, ...). Known slots, holding the hole (absent) until
+    /// stored; each read pairs its load with the hole compare.
+    pub reserved: Vec<Atom>,
     /// Parent template (class `extends`), when statically known.
     pub parent: Option<TmplId>,
     /// The constructor function of a class template (None: implicit ctor).
@@ -754,6 +760,10 @@ pub enum Cons {
     /// them (`ObjectProto` collapses them), whose members the chain cannot
     /// name: the chain also holds an unknown prototype.
     ProtoGiven { protos: NodeId },
+    /// The node holds a value given as the [[Prototype]] of class object
+    /// `of` (or of ⊤): `of`'s `super()` runs a class held here as its
+    /// parent, on an instance of `of`.
+    ParentGiven { of: Tok },
     /// The node is `ProtoNode(t)`: dst ⊇ every prototype, transitively.
     ProtoClosure { dst: NodeId },
     /// The node is the prototype closure of receiver `origin`: builtin
@@ -959,6 +969,7 @@ impl Cons {
             Cons::CreateProto { .. } => "createproto",
             Cons::ChainUnion { .. } => "chainunion",
             Cons::ProtoGiven { .. } => "protogiven",
+            Cons::ParentGiven { .. } => "parentgiven",
             Cons::ProtoClosure { .. } => "protoclosure",
             Cons::ProtoMethods { .. } => "protomethods",
             Cons::AnyAccessors { .. } => "anyaccessors",
@@ -1481,6 +1492,10 @@ pub struct Model {
     pub arr_named_srcs: FxHashMap<Tok, Vec<NodeId>>,
     /// Targets of a possible [[Prototype]] write (TOP included).
     pub super_relink: crate::pts::FxHashSet<Tok>,
+    /// Another unit's classes this unit gives as a class object's parent:
+    /// their constructor runs on a receiver their unit does not see. The
+    /// census reports each (`Gen::reports`, `extends <class>`).
+    pub relinked_parents: crate::pts::FxHashSet<TmplId>,
     /// Source constructor of a type-specialized instance layout (compiler data).
     pub constructor_origins: FxHashMap<TmplId, TmplId>,
     pub constructor_this_done: crate::pts::FxHashSet<(CallId, TmplId, Tok)>,

@@ -798,18 +798,24 @@ pub(crate) unsafe fn build_create_data_descriptor(value: f64) -> f64 {
 /// receiver's `[[DefineOwnProperty]]`. This is the operation used by public
 /// class fields: it bypasses inherited setters on ordinary objects and still
 /// drives a Proxy's `defineProperty` trap.
+///
+/// The descriptor is a Property Descriptor record, not a JS object: no
+/// descriptor object is allocated, and nothing is read back through
+/// `%Object.prototype%` (an inherited `get` cannot turn it into an accessor).
 pub(crate) fn create_data_property(receiver: f64, key: f64, value: f64) -> bool {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let receiver = scope.root_nanbox_f64(receiver);
-    let key = scope.root_nanbox_f64(key);
-    let value = scope.root_nanbox_f64(value);
-    let descriptor = unsafe { build_create_data_descriptor(value.get_nanbox_f64()) };
-    let descriptor = scope.root_nanbox_f64(descriptor);
-    crate::value::js_is_truthy(js_reflect_define_property(
-        receiver.get_nanbox_f64(),
-        key.get_nanbox_f64(),
-        descriptor.get_nanbox_f64(),
-    )) != 0
+    unsafe {
+        if !crate::object::object_ops::definition_target_is_object(receiver) {
+            reflect_non_object_typeerror("defineProperty");
+        }
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let receiver =
+            scope.root_nanbox_f64(crate::object::object_ops::normalize_descriptor_operand(receiver));
+        let value = scope.root_nanbox_f64(value);
+        let key = scope.root_nanbox_f64(crate::object::js_to_property_key(key));
+        let descriptor =
+            crate::object::object_ops::DescView::create_data(&scope, value.get_nanbox_f64());
+        crate::object::object_ops::define_own_property_decoded(&scope, &receiver, &key, &descriptor)
+    }
 }
 
 /// #5129: build a `{ value }`-only property descriptor — the `valueDesc` of

@@ -88,7 +88,7 @@ compile() { # arm perry ws name dir src [mid-pad,end-pad]  -> $OUT/w/$n.$arm
 linkpad() { # name dir src
   local n=$1 d=$2 s=$3 r res pm=- ph=- cm=- ch=-
   rm -f "$OUT/pad/$n.json"
-  for r in 1 2 3 4 5 6 7 8 9 10 11 12 13 14; do
+  for r in $(seq 1 30); do
     res=$(python3 "$LINKPAD_PY" plan "$OUT/w/$n.main" "$OUT/w/$n.head" "$OUT/pad/$n.json" "$OUT/pad") || return 1
     [ "$res" = CONVERGED ] && break
     pm=$(sed 's/.*main=\([^ ]*\).*/\1/' <<< "$res"); ph=$(sed 's/.*head=\([^ ]*\).*/\1/' <<< "$res")
