@@ -23,6 +23,7 @@ use perry_hir::{Class, ClassField, Expr, Function, Module, ModuleInitKind, Param
 
 fn empty_opts() -> CompileOptions {
     CompileOptions {
+        namespace_self_import: false,
         static_shape_ids: Vec::new(),
         program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),
