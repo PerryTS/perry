@@ -14,7 +14,7 @@ This is the first release since v0.5.1520 (2026-09-11). The per-PR entries follo
 
 **WebAssembly and WASI.** `perry compile --target wasip1` produces a core module that imports only `wasi_snapshot_preview1` and runs on plain preview 1 runtimes (#13343). It supports inbound TCP, signals and stdin (#13376), perry-stdlib and the Node module crates (#13356), and optional outbound networking (`PERRY_WASM_NET=1`, #13386) and page discard (`PERRY_WASM_DISCARD=1`, #13417). `--target wasi` produces a WASI 0.2 component; the native component host runs WASI 0.2 and 0.3 and no longer depends on tokio (#13189, #13364). Installed releases ship both the `wasm32-wasip1` and `wasm32-wasip2` runtime archives (#13394). Compiling for WASI needs LLVM 22.1.5 for native WebAssembly exception handling.
 
-**Real programs.** The scoreboard of 43 real programs matched node on every row at the 2026-10-19 check. fastify, zod, the TypeScript compiler, Effect and Next.js 16 compile and run; fastify handles request bodies through `req.pipe` (#13275), and zod 4.4.3 no longer miscompiles `generateFastpass` (#13270). Programs no longer abort at startup on Linux kernels built without transparent huge pages (#13309). `node:trace_events` namespace imports work (#13607), and the Windows, `dns`, `net` and `zlib` modules received further fixes listed under "All changes".
+**Real programs.** The scoreboard of 43 real programs matches node on every row on this release (checked 2026-10-31), including zod 4 and three.js math, whose compiles no longer run out of memory or loop in the per-module analysis (#13579, #13608). fastify, zod, the TypeScript compiler, Effect and Next.js 16 compile and run; fastify handles request bodies through `req.pipe` (#13275), and zod 4.4.3 no longer miscompiles `generateFastpass` (#13270). Programs no longer abort at startup on Linux kernels built without transparent huge pages (#13309). `node:trace_events` namespace imports work (#13607), and the Windows, `dns`, `net` and `zlib` modules received further fixes listed under "All changes".
 
 ### Upgrade notes and breaking changes
 
@@ -80,13 +80,13 @@ Dynamic code (`eval`, `new Function`, dynamic `require`) is a single summary nod
 - A front-end prefetch (#12705) moved the tsc front end from 43.9 s to 35.9 s with byte-identical objects (#12728).
 - The whole-program analysis is computed faster (#12686). The per-module object cache and the completed-build cache share one compile-environment identity (#12582), and cached units are checkpointed atomically (#9997).
 - Compile memory is released across phase boundaries (#12813), class analysis is bounded by graph distance (#12814), and lowering inputs and function source text are released or shared instead of cloned (#12916).
-- Compiling opencode now fits in about 30 GB, down from 140 GB: one walk per IIFE body and one shared type-alias map (#12890).
+- Compiling opencode now fits in about 34 GB, down from 140 GB: one walk per IIFE body and one shared type-alias map (#12890).
 - Large links go through a response file on every host, so very big programs no longer hit command-line length limits (#12913).
 - Compile wall time and peak RSS measured on 2026-10-17: tsc 286 s / 9.7 GB, effect 31 s / 3.8 GB, schema-record 30 s / 3.9 GB. `perry compile --report-size` writes a per-crate and per-symbol size report (#8576).
 
 ### Node and ecosystem compatibility
 
-- opencode compiles and runs again: compile memory (#12890), Effect tagged errors and `extends Error` across modules (#12897, #12898, #12899), class-expression instances (#12919), and the macOS link (#12913).
+- opencode compiles and runs again (`opencode --help` prints the same as the bun build): compile memory (#12890), inline LLVM metadata in split modules (#13598), Effect tagged errors and `extends Error` across modules (#12897, #12898, #12899), class-expression instances (#12919), and the macOS link (#12913).
 - Subclasses of `EventEmitter`, streams, `Map`/`Set` and `Promise` run their overrides and methods correctly, through typed and untyped receivers and through `await` (#12815, #12888, #12891).
 - `zod` and `marked` can be used in the same program (#12882). `{ ...a, ...b }` where `b` came from `{ ...undefined }` no longer crashes, which `marked.parse` hit (#12843).
 - `commander` programs run 14.7% faster (#12894).
@@ -99,7 +99,7 @@ Dynamic code (`eval`, `new Function`, dynamic `require`) is a single summary nod
 - Namespaces, including `enum` + `namespace` merging, compile with direct calls (#12775, #12802).
 - `events`, `stream`, `http` (`IncomingMessage`, `ServerResponse`), `worker_threads` (no multi-second stalls, #12448; `terminate()` stops any loop, #12762), `perf_hooks`, `dgram`, WebSocket upgrade (#12460) and `node:test` mocking (#12747) received parity fixes. See the per-PR list.
 - Bun: `Bun.Transpiler`/`Bun.build` subsets (#9602), `bun:sqlite` (#8525), SQL (#9634), zero-copy `bun:ffi` views (#8329).
-- On the 2026-10-19 check, all 43 scoreboard programs printed the same output as node. On the 2026-10-17 measurement, rows above 2× node by instructions were: fastify, schema-record, qs, zod, commander, effect, property-prototype. tsc is 1.72×; the rest are under 1.8×.
+- On the 2026-10-31 check, all 43 scoreboard programs printed the same output as node. On the 2026-10-17 measurement, rows above 2× node by instructions were: fastify, schema-record, qs, zod, commander, effect, property-prototype. tsc is 1.72×; the rest are under 1.8×.
 
 ### Platforms
 
