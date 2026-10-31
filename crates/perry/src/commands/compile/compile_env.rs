@@ -49,6 +49,7 @@ pub(super) const COMPILE_ENV_VARS: &[&str] = &[
     "PERRY_ENTRY_SYMBOL",
     "PERRY_ENUM_DIAG",
     "PERRY_EVAL_CSP",
+    "PERRY_EXPORT_DEMAND",
     "PERRY_EXTRA_LINK_ARGS",
     "PERRY_FACTS_BUDGET_SECS",
     "PERRY_FACTS_ELIDE",
@@ -229,6 +230,7 @@ pub(super) fn compile_env_value(name: &str) -> Option<String> {
 
 #[cfg(test)]
 const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
+    ("PERRY_EXPORT_DEMAND_REPORT", "Writes the export-demand report file only; no pruning decision or emitted code depends on it."),
     ("PERRY_REALM_REACH", "Compiler-only diagnostic of source facts; changes no emitted bytes, runtime state or archive selection."),
     ("PERRY_REACH_REPORT", "Compiler-only diagnostic; bypasses object caches and does not change emitted code."),
     ("PERRY_SOURCE_NEED_REPORT", "Compiler-only retained-source census; bypasses object caches and does not change emitted code."),
