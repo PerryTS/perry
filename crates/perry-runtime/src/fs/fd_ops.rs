@@ -468,7 +468,7 @@ pub(crate) fn write_buffer_sync_result(
 
 /// Whether `value` is a Buffer or Uint8Array: the data form whose third
 /// argument is an offset into it, not a file position.
-fn is_byte_buffer_value(value: f64) -> bool {
+pub(crate) fn is_byte_buffer_value(value: f64) -> bool {
     let bits = value.to_bits();
     if bits >> 48 != 0x7FFD {
         return false;
@@ -477,12 +477,27 @@ fn is_byte_buffer_value(value: f64) -> bool {
     crate::buffer::is_registered_buffer(addr) || crate::buffer::is_uint8array_buffer(addr)
 }
 
-/// A file position argument: a non-negative number, or `None` (`null`,
-/// `undefined`, `-1`) for "use the current file position".
+/// Whether `value` is a Buffer or any typed array: what `fs.read` accepts as
+/// its buffer argument, as opposed to an options object.
+pub(crate) fn is_buffer_like_value(value: f64) -> bool {
+    let bits = value.to_bits();
+    is_byte_buffer_value(value)
+        || (bits >> 48 == 0x7FFD
+            && crate::typedarray_props::is_typed_array_owner(
+                (bits & 0x0000_FFFF_FFFF_FFFF) as usize,
+            ))
+}
+
+/// A file position argument: a non-negative number or bigint, or `None`
+/// (`null`, `undefined`, `-1`) for "use the current file position".
 fn position_arg(value: f64) -> Option<u64> {
-    number_arg(value)
-        .filter(|position| position.is_finite() && *position >= 0.0)
-        .map(|position| position as u64)
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    let position = if jv.is_bigint() {
+        crate::bigint_hooks::js_bigint_to_f64(jv.as_bigint_ptr())
+    } else {
+        number_arg(value)?
+    };
+    (position.is_finite() && position >= 0.0).then_some(position as u64)
 }
 
 /// A number argument as an f64, whether it is a plain double or an int32.
