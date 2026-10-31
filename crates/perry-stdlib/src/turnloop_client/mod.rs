@@ -227,6 +227,9 @@ pub(crate) struct RequestSpec {
     /// The `AbortSignal` object address, when the caller bound one. Used only
     /// as a cancellation key; never dereferenced here.
     pub(crate) abort_key: Option<usize>,
+    /// The TLS profile of the request's dispatcher; `None` uses the shared
+    /// process-wide configuration.
+    pub(crate) tls: Option<&'static crate::turnloop_tls_client::TlsProfile>,
 }
 
 /// Final response metadata, plus bytes only for a buffered sink.
@@ -705,7 +708,7 @@ fn prepare(spec: &RequestSpec) -> Result<Prepared, Declined> {
     let request = tlc::Request::new(&spec.url, &spec.method).map_err(Declined::Unsupported)?;
     port_policy::check(&request.url).map_err(Declined::Unsupported)?;
     let proxy = proxy_for(&request.url)?;
-    if request.url.scheme() == "https" && exchange::tls_config().is_none() {
+    if request.url.scheme() == "https" && exchange::tls_config(spec.tls).is_none() {
         return Err(Declined::NoTls);
     }
     Ok(Prepared { request, proxy })

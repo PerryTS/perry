@@ -65,6 +65,7 @@ pub unsafe extern "C" fn js_bun_http_request_from_json(snapshot_ptr: *const Stri
         keepalive: false,
         duplex: "half".to_string(),
         signal,
+        tls: None,
         cached_headers_id: None,
         body_error: None,
     };
