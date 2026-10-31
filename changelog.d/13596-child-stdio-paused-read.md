@@ -1,0 +1,1 @@
+child_process: a child's `stdout`, `stderr` and extra `stdio` pipes can be read in paused mode: a `readable` listener makes `read()` return the buffered Buffer (or string after `setEncoding`), and `end` follows only once the buffer is drained.
