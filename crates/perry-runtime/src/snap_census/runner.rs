@@ -335,6 +335,9 @@ struct State {
     rset_word: usize,
     /// Handler depth: a fault inside the handler is reported, not hidden.
     in_handler: u32,
+    /// The thread that runs module evaluation; the runner tracks only its
+    /// memory (a worker agent has its own heap regions).
+    main_tid: i64,
     realm: (usize, usize),
     d_mode: bool,
     perf_fd: i32,
@@ -451,6 +454,7 @@ unsafe fn start(out: String) {
         pending: [0; 8],
         rset_word: 0,
         in_handler: 0,
+        main_tid: libc::syscall(libc::SYS_gettid),
         realm,
         d_mode: false,
         perf_fd: open_instruction_counter(),
@@ -853,6 +857,9 @@ pub(super) fn birth(addr: usize, size: usize) {
 
 pub(super) fn region_mapped(base: usize, len: usize) {
     let st = state();
+    if unsafe { libc::syscall(libc::SYS_gettid) } != st.main_tid {
+        return;
+    }
     st.regions.push((base, base + len));
     mark_tracked(base, base + len);
     if st.d_mode {
@@ -1158,6 +1165,13 @@ extern "C" fn on_segv(sig: libc::c_int, info: *mut libc::siginfo_t, ctx: *mut li
             return chain(std::ptr::addr_of!(PREV_SEGV.0).cast(), sig);
         }
         let st = &mut *st_ptr;
+        let tid = libc::syscall(libc::SYS_gettid);
+        if tid != st.main_tid {
+            let uc = ctx as *mut libc::ucontext_t;
+            let pc = (*uc).uc_mcontext.gregs[libc::REG_RIP as usize] as u64;
+            diag(&[0x7d, tid as u64, addr as u64, pc]);
+            return chain(std::ptr::addr_of!(PREV_SEGV.0).cast(), sig);
+        }
         if st.in_handler > 0 {
             let uc = ctx as *mut libc::ucontext_t;
             let pc = (*uc).uc_mcontext.gregs[libc::REG_RIP as usize] as u64;
