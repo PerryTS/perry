@@ -1832,6 +1832,11 @@ impl Model {
             crate::builtins::note_native_write(self, t, None, &what);
         }
         if t == TOP {
+            // Another unit passes the same runtime objects: an E6 on ⊤ is
+            // its E6 too (`replay_shared`); before, it reached no other unit.
+            if kind == Hard::E6SetPrototypeOf {
+                self.note_shared(SharedWrite::Hard(Shared::Top, kind));
+            }
             return;
         }
         if let Some(is) = self.contract_recv.get(&t).cloned() {

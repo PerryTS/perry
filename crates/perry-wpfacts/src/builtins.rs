@@ -989,14 +989,20 @@ fn any_written(m: &mut Model, dst: NodeId) {
 }
 
 /// An intrinsic prototype on `origin`'s chain read or called under a key
-/// that names none of its members (a number, DECISIONS 217): only what a
-/// store into ⊤ wrote there, now or later in the solve.
+/// that names none of its members (a number, DECISIONS 217): only a number
+/// key a store into ⊤ wrote there, now or later in the solve
+/// (`native_written` of `NUM_KEY`), as a program prototype gives its
+/// numeric fields (`Model::num_fields`).
 pub fn plain_key(m: &mut Model, origin: Tok, act: ChainAct) {
-    let star = m.atom(crate::STAR_KEY);
+    let num = m.atom(NUM_KEY);
     match act {
-        ChainAct::Load(dst) => any_written(m, dst),
+        ChainAct::Load(dst) => {
+            if !intrinsic_miss(m, num, NativeMiss::Load(dst)) {
+                opaque_member(m, dst);
+            }
+        }
         ChainAct::Call(call) => {
-            if !intrinsic_miss(m, star, NativeMiss::Call(origin, call)) {
+            if !intrinsic_miss(m, num, NativeMiss::Call(origin, call)) {
                 let prev = m.cur_this.replace(origin);
                 unknown_method(m, call, "argument of a written intrinsic key");
                 m.cur_this = prev;
@@ -1008,13 +1014,13 @@ pub fn plain_key(m: &mut Model, origin: Tok, act: ChainAct) {
 
 /// `p[n](...)` on primitives of kinds `prim` under a number key: an index
 /// of a string is a one-character string, of anything else absent; only a
-/// key a store into ⊤ wrote on the prototype is a method (DECISIONS 217).
+/// number key a store into ⊤ wrote on the prototype is a method (DECISIONS 217).
 pub fn prim_plain_key(m: &mut Model, prim: u16, call: CallId) {
     if prim & (prim::NULL | prim::UNDEF) == prim {
         return;
     }
-    let star = m.atom(crate::STAR_KEY);
-    if !intrinsic_miss(m, star, NativeMiss::PrimCall(prim, call)) {
+    let num = m.atom(NUM_KEY);
+    if !intrinsic_miss(m, num, NativeMiss::PrimCall(prim, call)) {
         unknown_method(m, call, "argument of a written primitive method");
     }
 }

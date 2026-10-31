@@ -1089,13 +1089,16 @@ pub(super) fn replay_is_own(w: &crate::model::SharedWrite) -> bool {
 /// ⊤ is one on that object, as the whole-program solve sees it on the
 /// object's own token. A store under a computed key covers every key of its
 /// object: the stores under one key beside it are dropped, so a write that
-/// says nothing new solves no unit again.
+/// says nothing new solves no unit again. The builtin prototypes are not
+/// such an object: a store or accessor into ⊤ already writes its key on
+/// each of them (`builtins::native_written`), as in the whole program; it
+/// installs no accessor on `Object.prototype` (E23) and stores no value.
 pub(super) fn shared_closure(shared: &mut std::collections::BTreeSet<crate::model::SharedWrite>) {
     use crate::model::{Shared, SharedWrite};
     let handed: Vec<Shared> = shared
         .iter()
         .filter_map(|w| match w {
-            SharedWrite::Handed(s) => Some(s.clone()),
+            SharedWrite::Handed(s) if *s != Shared::ObjectProto => Some(s.clone()),
             _ => None,
         })
         .collect();
