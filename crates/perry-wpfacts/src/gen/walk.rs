@@ -138,7 +138,9 @@ impl<'a> Gen<'a> {
         }
         let mut eager = vec![false; n];
         let mut work: Vec<u32> = (0..n as u32)
-            .filter(|&m| !entered[m as usize] || self.roots.iter().any(|r| r == self.modules[m as usize].0))
+            .filter(|&m| {
+                !entered[m as usize] || self.roots.iter().any(|r| r == self.modules[m as usize].0)
+            })
             .collect();
         for &m in &work {
             eager[m as usize] = true;

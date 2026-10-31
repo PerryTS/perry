@@ -59,7 +59,12 @@ pub(crate) fn contracts_requested() -> bool {
 pub(crate) fn module_roots(ctx: &super::CompilationContext) -> Vec<String> {
     ctx.worker_url_entries
         .iter()
-        .flat_map(|(lexical, canonical)| [lexical.display().to_string(), canonical.display().to_string()])
+        .flat_map(|(lexical, canonical)| {
+            [
+                lexical.display().to_string(),
+                canonical.display().to_string(),
+            ]
+        })
         .collect()
 }
 

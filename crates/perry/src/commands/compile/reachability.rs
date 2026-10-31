@@ -810,7 +810,10 @@ mod tests {
 }
 
 /// The graph module a resolved import path names, if any (no resolver call).
-pub(super) fn resolve_edge_cached(key_set: &HashSet<PathBuf>, resolved_path: Option<&str>) -> Option<PathBuf> {
+pub(super) fn resolve_edge_cached(
+    key_set: &HashSet<PathBuf>,
+    resolved_path: Option<&str>,
+) -> Option<PathBuf> {
     let rp = resolved_path?;
     let canon = PathBuf::from(rp);
     let canon = canon.canonicalize().unwrap_or(canon);
