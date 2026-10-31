@@ -385,6 +385,7 @@ struct State {
     realm_starts: *mut u64,
     free_space: u64,
     reborn: u64,
+    silent_stores: u64,
     noprotect: bool,
     /// Global root slots on no tracked page (the thread pointer's page,
     /// or not a binding: a root slot elsewhere): not watched.
@@ -412,6 +413,9 @@ struct State {
     /// Pages opened for the current instruction (the handler's own state is
     /// never in TLS: a TLS page may be protected).
     pending: [usize; 8],
+    /// Stores the faulting instruction is about to make: (word, value
+    /// before, pc). Classified once it has run (see `on_trap`).
+    stores: [(usize, u64, usize); 4],
     rset_word: usize,
     /// Handler depth: a fault inside the handler is reported, not hidden.
     in_handler: u32,
@@ -525,6 +529,7 @@ unsafe fn start(out: String) {
         realm_starts: map_zeroed::<u64>(((realm.1 - realm.0) / 8).div_ceil(64).max(1)),
         free_space: 0,
         reborn: 0,
+        silent_stores: 0,
         noprotect: std::env::var("PERRY_SNAP_NOPROTECT").is_ok_and(|v| v == "1"),
         untracked_slots: 0,
         top_mode: std::env::var("PERRY_SNAP_MODE").is_ok_and(|v| v == "top"),
@@ -541,6 +546,7 @@ unsafe fn start(out: String) {
         bin: PageMap::new(bin_lo, bin_hi),
         tls: PageMap::new(tls_lo, tls_hi),
         pending: [0; 8],
+        stores: [(0, 0, 0); 4],
         rset_word: 0,
         in_handler: 0,
         main_tid: libc::syscall(libc::SYS_gettid),
@@ -1394,7 +1400,11 @@ unsafe fn on_segv_inner(
             *slot = page;
         }
         libc::mprotect(page as *mut _, PAGE, libc::PROT_READ | libc::PROT_WRITE);
-        note_access(st, addr & !7, write, pc);
+        let word = addr & !7;
+        match st.stores.iter_mut().find(|s| s.0 == 0) {
+            Some(slot) if write => *slot = (word, *(word as *const u64), pc),
+            _ => note_access(st, word, write, pc),
+        }
         gregs[libc::REG_EFL as usize] |= EFLAGS_TF;
     }
 }
@@ -1442,6 +1452,16 @@ extern "C" fn on_trap(sig: libc::c_int, _info: *mut libc::siginfo_t, ctx: *mut l
                 libc::mprotect(page as *mut _, PAGE, libc::PROT_READ);
             }
         } else {
+            // A store that left the word's value as it was is no write
+            // (nothing anyone reads changed); it still read the word.
+            let stores = std::mem::replace(&mut st.stores, [(0, 0, 0); 4]);
+            for &(word, before, pc) in stores.iter().take_while(|s| s.0 != 0) {
+                let changed = *(word as *const u64) != before;
+                if !changed {
+                    st.silent_stores += 1;
+                }
+                note_access(st, word, changed, pc);
+            }
             for &page in pending.iter().take_while(|p| **p != 0) {
                 libc::mprotect(page as *mut _, PAGE, policy(st, page));
             }
@@ -1957,6 +1977,7 @@ fn write_report(st: &mut State) {
     let _ = writeln!(f, "#excluded\t{}", st.excluded);
     let _ = writeln!(f, "#free_space\t{}", st.free_space);
     let _ = writeln!(f, "#reborn\t{}", st.reborn);
+    let _ = writeln!(f, "#silent_stores\t{}", st.silent_stores);
     let _ = writeln!(f, "#foreign_thread_faults\t{}", st.foreign_faults);
     let _ = writeln!(f, "#untracked_slots\t{}\tof\t{}", st.untracked_slots, st.globals.len);
     for (what, pcs) in &st.realm_hosts {
