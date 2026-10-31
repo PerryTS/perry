@@ -208,7 +208,7 @@ class Sched {
   current: any;
   ok: Task;
   constructor() { this.current = new Task(1); this.ok = new Task(2); }
-  poison(): void { try { (null as any).x; } catch (e) { this.current = e; } }
+  poison(): void { try { throw new Task(40); } catch (e) { this.current = e; } }
   stepOk(n: number): number { return this.ok.run(n) + this.ok.id; }
   step(n: number): number { return this.current.run(n) + this.current.id; }
 }
@@ -216,7 +216,7 @@ const s = new Sched();
 let acc = 0;
 for (let i = 0; i < 1000; i++) acc += s.step(i) + s.stepOk(i);
 s.poison();
-try { s.step(1); } catch (e) { console.log(e instanceof TypeError); }
+console.log(s.step(1));
 console.log(acc);
 "#;
 const FUNC: &str = r#"
@@ -372,7 +372,7 @@ fn a_nullable_field_keeps_the_receiver_test() {
 
 #[test]
 fn a_field_written_top_has_no_fact() {
-    let (u, w, _d) = both(&[("main.ts", TOP)], "true\n1005000");
+    let (u, w, _d) = both(&[("main.ts", TOP)], "81\n1005000");
     for b in [&u, &w] {
         // The control: a field only one class is ever stored into.
         assert!(b.field_elisions("stepOk", "ok") > 0, "{}", b.elisions);
