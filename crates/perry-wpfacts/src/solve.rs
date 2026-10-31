@@ -1816,6 +1816,7 @@ impl Model {
                 format!("chainunion {n} {} {dst} {of}", self.key_name(*key))
             }
             Cons::ProtoGiven { protos } => format!("protogiven {n} {protos}"),
+            Cons::ParentGiven { of } => format!("parentgiven {n} {of}"),
             Cons::ProtoClosure { dst } => format!("protoclosure {n} {dst}"),
             Cons::ProtoMethods { origin, key, call } => {
                 format!("protomethods {n} {origin} {} {call}", self.key_name(*key))

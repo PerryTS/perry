@@ -39,6 +39,7 @@ fn body(with_facts: bool, checked: bool, interp: bool, kind: u16) -> String {
                     ta_stable: false,
                     ta_kind: None,
                     declared: false,
+                    reserved: false,
                     fns: Vec::new(),
                 }],
             },

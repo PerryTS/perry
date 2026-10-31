@@ -1632,6 +1632,12 @@ jobs:
               # Match the PR lane: Blaze cannot unwind through the naked ABI
               # trampoline. Keep the full unit/integration/doc test inventory.
               MBX_BLAZE=0 RUST_TEST_THREADS=1 python3 scripts/runtime_test_batches.py
+              # The batches above are the dev profile. Release builds drop the
+              # debug-only GC instruments and change inlining, so a unit test
+              # can pass in dev and fail in release (59 did, unseen for weeks).
+              # Default thread count on purpose: a test that needs exclusive
+              # process state must serialize itself (`test_isolation`).
+              MBX_BLAZE=0 cargo test --locked --release -p perry-runtime --lib
             fi
             # `cargo test` only builds lib/bin/test targets — NOT the `staticlib`
             # crate-type — so libperry_runtime.a / libperry_stdlib.a are never

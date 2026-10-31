@@ -61,6 +61,11 @@ pub struct FactsField {
     /// known, presence is not. A read pairs the load with the hole compare;
     /// stores stay on the checked route (an add orders the key).
     pub declared: bool,
+    /// A constructor-store reservation code can observe before the
+    /// constructor stores it: the slot is the class's own (codegen's layout),
+    /// presence is not. A read pairs the load with the hole compare; stores
+    /// stay on the checked route (filling the hole adds the key).
+    pub reserved: bool,
     /// The field holds only these bodies of this module (FVA): a call
     /// through it is a call of them. Empty when it may hold anything else.
     pub fns: Vec<FactsBody>,

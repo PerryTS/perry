@@ -460,7 +460,7 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
         let fields = t
             .fields
             .iter()
-            .filter(|f| (f.definite || f.declared) && f.data_field)
+            .filter(|f| (f.definite || f.declared || f.reserved) && f.data_field)
             .filter_map(|f| {
                 let (classes, nullable) = holder_classes(f).unwrap_or_default();
                 Some(FactsField {
@@ -474,6 +474,7 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
                     ta_stable: f.ta_stable,
                     ta_kind: f.ta_kind,
                     declared: f.declared,
+                    reserved: f.reserved,
                 })
             })
             .collect();
