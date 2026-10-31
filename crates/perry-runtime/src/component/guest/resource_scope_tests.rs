@@ -49,25 +49,27 @@ fn canonical_return_expires_only_its_borrows_while_task_values_remain_rooted() {
 
 #[test]
 fn canonical_borrow_cleanup_preserves_an_earlier_error_and_drops_each_handle_once() {
-    crate::gc::gc_init();
-    let scope = RuntimeHandleScope::new();
-    let _registry = Registry::new(&scope);
-    let _ops = TestOps::new(record_borrow_drop);
-    unsafe {
-        let task = abi::perry_component_frame_task_new();
-        for _ in 0..2 {
-            perry_component_frame_resource_lift(task, 4, 1, 0, 0);
+    crate::test_isolation::in_own_process(|| {
+        crate::gc::gc_init();
+        let scope = RuntimeHandleScope::new();
+        let _registry = Registry::new(&scope);
+        let _ops = TestOps::new(record_borrow_drop);
+        unsafe {
+            let task = abi::perry_component_frame_task_new();
+            for _ in 0..2 {
+                perry_component_frame_resource_lift(task, 4, 1, 0, 0);
+            }
+            let error = scope.root_nanbox_f64(crate::value::js_nanbox_string(
+                crate::string::js_string_from_bytes(b"original".as_ptr(), 8) as i64,
+            ));
+            abi::frame(task).guard::<()>(|_| crate::exception::js_throw(error.get_nanbox_f64()));
+            assert_eq!(abi::perry_component_frame_resource_scope_end(task), -1);
+            assert_eq!(
+                abi::frame(task).error().unwrap().to_bits(),
+                error.get_nanbox_f64().to_bits()
+            );
+            abi::perry_component_frame_drop(task);
+            assert_eq!(COLLECTED.load(Ordering::SeqCst), 1 << 8);
         }
-        let error = scope.root_nanbox_f64(crate::value::js_nanbox_string(
-            crate::string::js_string_from_bytes(b"original".as_ptr(), 8) as i64,
-        ));
-        abi::frame(task).guard::<()>(|_| crate::exception::js_throw(error.get_nanbox_f64()));
-        assert_eq!(abi::perry_component_frame_resource_scope_end(task), -1);
-        assert_eq!(
-            abi::frame(task).error().unwrap().to_bits(),
-            error.get_nanbox_f64().to_bits()
-        );
-        abi::perry_component_frame_drop(task);
-        assert_eq!(COLLECTED.load(Ordering::SeqCst), 1 << 8);
-    }
+    });
 }
