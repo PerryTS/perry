@@ -299,3 +299,22 @@ fn a_root_runs_whatever_imports_it() {
         assert_eq!(init, runs);
     }
 }
+
+/// `X.prototype.method` read as a value is a builtin function (the token
+/// stands for every builtin prototype): a callback given to it through
+/// `call`, `bind` or a call-bound helper runs (get-intrinsic's
+/// `stringToPath`: `$replace = callBind(String.prototype.replace)`).
+#[test]
+fn a_callback_given_through_a_builtin_prototype_method_value_runs() {
+    for src in [
+        "const $replace: any = Function.prototype.call.bind(String.prototype.replace);\nconst r: any[] = [];\n$replace(\"aa\", /a/g, (m: any) => { r[r.length] = d; return m; });\nconsole.log(r[0](\"x\"));",
+        "const $call: any = Function.prototype.call;\nconst r: any[] = [];\n$call.call(String.prototype.replace, \"aa\", /a/g, (m: any) => { r[r.length] = d; return m; });\nconsole.log(r[0](\"x\"));",
+        "const t: any = String.prototype.replace;\nt.call(\"aa\", /a/g, d);",
+        "const $replace: any = String.prototype.replace.bind(\"aa\");\n$replace(/a/g, d);",
+        // The callback's parameters are the native's: a guard over them
+        // lets either branch through.
+        "const $replace: any = Function.prototype.call.bind(String.prototype.replace);\nconst r: any[] = [];\n$replace(\"aa\", /a/g, (m: any, n: any) => { r[r.length] = n ? d : d; return m; });\nconsole.log(r[0](\"x\"));",
+    ] {
+        assert!(oxmark_runs(src), "{src}");
+    }
+}
