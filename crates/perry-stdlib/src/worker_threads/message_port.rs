@@ -479,7 +479,20 @@ pub(crate) unsafe extern "C" fn dispatch_core_operation(
     *result = match operation {
         MessagePortOperation::PostMessage => port_post_message(id, value, transfer),
         MessagePortOperation::Start => port_start(id),
-        MessagePortOperation::Close => close_port(id),
+        MessagePortOperation::Close => {
+            if callback_bits_from_value(value).is_some() {
+                let scope = perry_runtime::gc::RuntimeHandleScope::new();
+                let callback = scope.root_nanbox_f64(value);
+                let event = js_string_from_bytes(b"close".as_ptr(), 5);
+                add_node_listener(
+                    id,
+                    f64::from_bits(JSValue::string_ptr(event).bits()),
+                    callback.get_nanbox_f64(),
+                    true,
+                );
+            }
+            close_port(id)
+        }
         MessagePortOperation::Ref => set_port_ref(id, true),
         MessagePortOperation::Unref => set_port_ref(id, false),
         MessagePortOperation::HasRef => js_bool(port_is_refed(id)),
