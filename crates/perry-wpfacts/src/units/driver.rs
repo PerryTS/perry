@@ -19,6 +19,10 @@ pub(super) struct Solve<'a> {
     /// the contracts must exist in; ordering by whole modules made cycles
     /// the names do not have, and a back edge's importer sees ⊤.
     after: Vec<usize>,
+    /// The `after` units only parameter types name (§11.4, the entry
+    /// guard's contracts): where a cycle must have a back edge, it is one
+    /// of these (`dependency_order`).
+    weak: Vec<usize>,
 }
 
 /// The unit of module range `t` exporting `name`; a re-export goes with
@@ -74,6 +78,7 @@ pub(super) fn solves<'a>(
             .enumerate()
         {
             let deps: Vec<usize> = deps.into_iter().map(|d| base + d).collect();
+            let weak: Vec<usize> = view.type_deps.iter().map(|&d| base + d).collect();
             out.push(Solve {
                 mi,
                 key: crate::decl_units::unit_path(path, k),
@@ -83,6 +88,7 @@ pub(super) fn solves<'a>(
                     ..view
                 },
                 after: deps.clone(),
+                weak,
                 deps,
             });
         }
@@ -93,6 +99,8 @@ pub(super) fn solves<'a>(
         let (path, module) = sorted[out[si].mi];
         let mut after: Vec<usize> = Vec::new();
         let mut deps: Vec<usize> = Vec::new();
+        let mut strong: FxHashSet<usize> = FxHashSet::default();
+        let mut weak: Vec<usize> = Vec::new();
         for imp in &module.imports {
             let Some(&t) = imp
                 .resolved_path
@@ -114,6 +122,7 @@ pub(super) fn solves<'a>(
                 });
             if reexports {
                 after.extend(range[t].clone());
+                strong.extend(range[t].clone());
             }
             for sp in &imp.specifiers {
                 let (local, name) = match sp {
@@ -139,18 +148,58 @@ pub(super) fn solves<'a>(
                 }
                 // A namespace's keys are read where they are declared: its
                 // unit is ordered after those modules too.
+                // Its order: after the units declaring the keys it reads
+                // (`ns.k`, `ns.a.b` through a nested namespace); every other
+                // unit the namespace reaches is a weak edge (a back edge of a
+                // cycle sees ⊤ there, as any back edge does).
                 if name.is_none() {
                     for &r in ns_reach.entry(d).or_insert_with(|| ex.reach(d)).iter() {
                         if r != out[si].mi {
                             deps.extend(range[r].clone());
                             after.extend(range[r].clone());
+                            weak.extend(range[r].clone());
+                        }
+                    }
+                    for (_, keys) in out[si].view.ns_paths.iter().filter(|(l, _)| l == local) {
+                        let mut m = d;
+                        for (i, k) in keys.iter().enumerate() {
+                            match ex.resolve(sorted[m].0, k.as_str()) {
+                                Some(Resolved::Binding(p, n)) => {
+                                    let p = index[p];
+                                    match owner_of(&out, &range[p], n) {
+                                        Some(w) => {
+                                            after.push(w);
+                                            strong.insert(w);
+                                        }
+                                        None => {
+                                            after.extend(range[p].clone());
+                                            strong.extend(range[p].clone());
+                                        }
+                                    }
+                                }
+                                Some(Resolved::Namespace(p)) if i + 1 < keys.len() => {
+                                    m = index[p];
+                                    continue;
+                                }
+                                Some(Resolved::Namespace(_)) => {}
+                                _ => {
+                                    after.extend(range[m].clone());
+                                    strong.extend(range[m].clone());
+                                }
+                            }
+                            break;
                         }
                     }
                 }
-                match name.and_then(|n| owner_of(&out, &range[d], n)) {
-                    Some(w) => after.push(w),
-                    None => after.extend(range[d].clone()),
+                let ws: Vec<usize> = match name.and_then(|n| owner_of(&out, &range[d], n)) {
+                    Some(w) => vec![w],
+                    None => range[d].clone().collect(),
+                };
+                match name.is_none() || out[si].view.type_names.contains(local) {
+                    true => weak.extend(&ws),
+                    false => strong.extend(&ws),
                 }
+                after.extend(ws);
             }
         }
         // A re-export whose source the module does not import (resolved
@@ -177,11 +226,20 @@ pub(super) fn solves<'a>(
                 };
                 out[si].deps.extend(range[t].clone());
                 after.extend(range[t].clone());
+                strong.extend(range[t].clone());
             }
         }
         // Each once, in first-named order (the order's DFS follows it).
         let mut once: FxHashSet<usize> = FxHashSet::default();
         after.retain(|&w| once.insert(w));
+        weak.retain(|w| !strong.contains(w));
+        weak.sort_unstable();
+        weak.dedup();
+        out[si].weak.retain(|w| !strong.contains(w));
+        let own = &mut out[si].weak;
+        own.extend(weak);
+        own.sort_unstable();
+        own.dedup();
         out[si].after.extend(after);
         deps.sort_unstable();
         deps.dedup();
@@ -192,33 +250,101 @@ pub(super) fn solves<'a>(
 
 /// Solves in dependency order (a solve after the ones it depends on), so a
 /// contract is computed before a unit consumes it. In an import cycle the
-/// back edge has no contract yet: that import is ⊤, as in P1.
+/// back edge has no contract yet: that import is ⊤, as in P1. Which edge of
+/// a cycle is the back edge decides what is ⊤: a strong edge (a name whose
+/// value the unit uses: `extends C`, `new C`, a call) makes the importer
+/// see ⊤ for that value, while a weak edge (a name only a parameter type
+/// names, `Solve::weak`) only leaves the entry guard without a contract.
+/// So the units of a cycle (a strongly connected component of `after`) are
+/// ordered by their strong edges alone: a back edge is weak wherever the
+/// strong edges have no cycle of their own. The components stay in the
+/// order a depth-first post-order of `after` gives (each after the ones it
+/// depends on); a component without weak edges keeps that order exactly.
 pub(super) fn dependency_order(solves: &[Solve]) -> Vec<usize> {
-    let mut state = vec![0u8; solves.len()];
-    let mut out = Vec::with_capacity(solves.len());
-    for root in 0..solves.len() {
-        if state[root] != 0 {
+    let n = solves.len();
+    // Depth-first post-order of `after`, with Tarjan's low links: a
+    // component is complete when its root finishes.
+    let mut index = vec![usize::MAX; n];
+    let mut low = vec![0usize; n];
+    let mut on_stack = vec![false; n];
+    let mut comp_stack: Vec<usize> = Vec::new();
+    let mut next_index = 0usize;
+    let mut out = Vec::with_capacity(n);
+    for root in 0..n {
+        if index[root] != usize::MAX {
             continue;
         }
-        // Iterative DFS, post-order.
         let mut stack: Vec<(usize, usize)> = vec![(root, 0)];
-        state[root] = 1;
+        index[root] = next_index;
+        low[root] = next_index;
+        next_index += 1;
+        comp_stack.push(root);
+        on_stack[root] = true;
         while let Some(&mut (v, ref mut next)) = stack.last_mut() {
             if *next < solves[v].after.len() {
                 let w = solves[v].after[*next];
                 *next += 1;
-                if state[w] == 0 {
-                    state[w] = 1;
+                if index[w] == usize::MAX {
+                    index[w] = next_index;
+                    low[w] = next_index;
+                    next_index += 1;
+                    comp_stack.push(w);
+                    on_stack[w] = true;
                     stack.push((w, 0));
+                } else if on_stack[w] {
+                    low[v] = low[v].min(index[w]);
                 }
-            } else {
-                state[v] = 2;
-                out.push(v);
-                stack.pop();
+                continue;
             }
+            stack.pop();
+            if let Some(&(u, _)) = stack.last() {
+                low[u] = low[u].min(low[v]);
+            }
+            if low[v] != index[v] {
+                continue;
+            }
+            // `v` is the root of a component: its members, the stack above it.
+            let at = comp_stack.iter().rposition(|&x| x == v).expect("root on stack");
+            let mut members: Vec<usize> = comp_stack.split_off(at);
+            for &m in &members {
+                on_stack[m] = false;
+            }
+            if members.len() == 1 {
+                out.push(v);
+                continue;
+            }
+            // Discovery order: the root first, as the post-order found them.
+            members.sort_by_key(|&m| index[m]);
+            strong_post_order(solves, &members, &mut out);
         }
     }
     out
+}
+
+/// The post-order of `members` (one component, in discovery order) by their
+/// strong edges within it (`after` less `weak`), appended to `out`.
+fn strong_post_order(solves: &[Solve], members: &[usize], out: &mut Vec<usize>) {
+    let inside: FxHashSet<usize> = members.iter().copied().collect();
+    let mut done: FxHashSet<usize> = FxHashSet::default();
+    for &root in members {
+        if !done.insert(root) {
+            continue;
+        }
+        let mut stack: Vec<(usize, usize)> = vec![(root, 0)];
+        while let Some(&mut (v, ref mut next)) = stack.last_mut() {
+            let after = &solves[v].after;
+            if *next < after.len() {
+                let w = after[*next];
+                *next += 1;
+                if inside.contains(&w) && !solves[v].weak.contains(&w) && done.insert(w) {
+                    stack.push((w, 0));
+                }
+                continue;
+            }
+            out.push(v);
+            stack.pop();
+        }
+    }
 }
 
 /// The per-unit driver (decision 151, design §7, §11 and §12): one solve

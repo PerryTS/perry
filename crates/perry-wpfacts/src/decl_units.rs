@@ -54,6 +54,14 @@ pub(crate) struct UnitView<'a> {
     /// (and globals). The driver orders it after the units owning them
     /// (decision 21).
     pub ext_names: FxHashSet<String>,
+    /// The `ext_names` that only parameter types name (§11.4): the entry guard
+    /// reads their contracts, no value of theirs is used.
+    pub type_names: FxHashSet<String>,
+    /// The units of this module only its parameter types name.
+    pub type_deps: Vec<usize>,
+    /// The member paths read off imported names (`ns.k`, `ns.a.b`): for a
+    /// namespace import, the keys whose declaring units it reads.
+    pub ns_paths: Vec<(String, Vec<String>)>,
     /// Its items, as indices into the one module it is cut from: a view
     /// borrows the module, it copies nothing of it (phase 03m, CWN3M: the
     /// per-unit module clones were 16.4 GB of tscwork's 23 GB). `classes`
@@ -118,6 +126,8 @@ struct Refs {
     declared: Vec<u32>,
     /// The closures inside the item.
     closures: Vec<u32>,
+    /// The member paths read off external names (`ns.a.b`: `("ns", [a, b])`).
+    ns_paths: Vec<(String, Vec<String>)>,
     /// The named types of its parameters (an entry guard's class, §11.4).
     param_types: Vec<String>,
     /// The locals it writes (also in `locals`).
@@ -286,6 +296,19 @@ fn expr_refs(e: &Expr, r: &mut Refs) {
                 o = object;
             }
             direct_ref(o, r)
+        }
+        Expr::PropertyGet { .. } => {
+            let mut path: Vec<String> = Vec::new();
+            let mut o: &Expr = e;
+            while let Expr::PropertyGet { object, property, .. } = o {
+                path.push(property.clone());
+                o = object;
+            }
+            if let Expr::ExternFuncRef { name, .. } = o {
+                path.reverse();
+                r.ns_paths.push((name.clone(), path));
+            }
+            class_name_refs(e, r)
         }
         _ => class_name_refs(e, r),
     }
@@ -1761,6 +1784,22 @@ pub(crate) fn views<'a>(
             .filter(|nm| ref_owner(nm.as_str()).is_none())
             .cloned()
             .collect();
+        view.type_names = r
+            .param_types
+            .iter()
+            .filter(|nm| ref_owner(nm.as_str()).is_none())
+            .filter(|nm| !r.names.contains(nm) && !r.join_names.contains(nm))
+            .cloned()
+            .collect();
+        let mut ns_paths: Vec<(String, Vec<String>)> = r
+            .ns_paths
+            .iter()
+            .filter(|(nm, _)| ref_owner(nm.as_str()).is_none())
+            .cloned()
+            .collect();
+        ns_paths.sort();
+        ns_paths.dedup();
+        view.ns_paths = ns_paths;
         let mut deps: FxHashSet<usize> = FxHashSet::default();
         let imp = &mut imports_of[u];
         // The local name is the export name, unless this unit already
@@ -1789,9 +1828,10 @@ pub(crate) fn views<'a>(
         // against that class's contract (§11.4), so the unit imports the
         // class and depends on its unit. A type reference reads no state:
         // no join, no SCC edge.
+        let mut type_deps: FxHashSet<usize> = FxHashSet::default();
         for nm in &r.param_types {
             if let Some(&w) = owner_class.get(nm.as_str()).filter(|&&w| w != u) {
-                want(nm, w, &mut deps);
+                want(nm, w, &mut type_deps);
             }
         }
         for id in r.locals.iter().chain(&r.join_locals) {
@@ -1835,6 +1875,10 @@ pub(crate) fn views<'a>(
             .filter(|(_, id)| own_fn(id))
             .cloned()
             .collect();
+        let mut weak: Vec<usize> = type_deps.difference(&deps).copied().collect();
+        weak.sort_unstable();
+        view.type_deps = weak;
+        deps.extend(type_deps);
         let mut deps: Vec<usize> = deps.into_iter().collect();
         deps.sort_unstable();
         out.push((view, deps));
