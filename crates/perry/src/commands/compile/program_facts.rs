@@ -428,7 +428,8 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             out.this_of.insert(*id, r);
         }
     }
-    // Holder facts: the prefix-stable classes a definite data field holds,
+    // Holder facts: the prefix-stable classes a definite data field holds
+    // (a reserved key may still be absent: no field-class fact),
     // when it holds nothing else but null/undefined (no ⊤, function,
     // builtin, other primitive, literal or class without stable facts).
     // The field kind is the join over every unit's stores, so per unit it
@@ -437,6 +438,7 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
         let k = &f.kind;
         if interp
             || f.declared
+            || f.reserved
             || !f.definite
             || !f.data_field
             || k.top

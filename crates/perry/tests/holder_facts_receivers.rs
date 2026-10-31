@@ -7,7 +7,7 @@
 //! No fact when the field can hold anything else: ⊤ (a thrown value), a
 //! function, or when interpreted code can run. A nullable field keeps the
 //! receiver test (null throws). A key the constructor assigns after code
-//! that observes `this` can be read unset: it is nullable. Per unit never
+//! that observes `this` can be read unset (reserved): no field-class fact. Per unit never
 //! proves more than the whole program.
 
 use std::path::{Path, PathBuf};
@@ -386,19 +386,15 @@ fn interpreted_code_leaves_no_fact() {
 }
 
 #[test]
-fn a_key_observed_before_the_constructor_assigns_it_is_nullable() {
+fn a_reserved_key_gives_no_field_class_fact() {
+    // `current` is stored after `this.peek()` ran: it can be read unset
+    // (reserved: known slot, presence unknown), so no read of it is a proven
+    // receiver, in any method.
     let (u, w, _d) = both(&[("main.ts", EARLY)], "505500\ntrue");
     for b in [&u, &w] {
         assert!(
-            b.elisions.lines().any(|l| l.contains("__Sched__step")
-                && l.contains("recv=field current ")
-                && l.contains("nullable=1")),
-            "{}",
-            b.elisions
-        );
-        assert!(
-            !b.elisions.lines().any(|l| l.contains("recv=field current ") && l.contains("nullable=0")),
-            "{}",
+            !b.elisions.lines().any(|l| l.contains("recv=field current ")),
+            "a reserved key is a proven receiver:\n{}",
             b.elisions
         );
     }

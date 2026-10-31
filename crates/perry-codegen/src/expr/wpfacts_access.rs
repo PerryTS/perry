@@ -188,7 +188,7 @@ fn receiver(ctx: &FnCtx<'_>, object: &Expr) -> Option<(crate::codegen::FactsRecv
             let mut nullable = false;
             for &cid in &r.class_ids {
                 let f = ctx.wpfacts.field(cid, property)?;
-                if f.classes.is_empty() {
+                if f.reserved || f.classes.is_empty() {
                     return None;
                 }
                 class_ids.extend_from_slice(&f.classes);
