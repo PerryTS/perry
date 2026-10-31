@@ -200,7 +200,7 @@ fn index_for(state: &State, with_inner: bool) -> StackMapIndex {
     let origin = functions[0].0 as usize;
     let blob = super::lazy::test_blob_multi_at(origin as u64, &functions);
     let mut index = super::build_index_from_sections(
-        vec![Box::leak(blob.into_boxed_slice())],
+        vec![blob],
         &[origin],
         super::IndexMode::Lazy,
     );

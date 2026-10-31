@@ -30,12 +30,17 @@ use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{OnceLock, RwLock, RwLockReadGuard};
 
-/// Magic and version of the compact map the compiler emits
+/// Version of the compact map the compiler emits
 /// (`perry-codegen/src/gc_map.rs`). LLVM's own stack-map section is rewritten
 /// at assembly time and never reaches the binary: >50% of it was the
 /// statepoint constant preamble and base/derived duplicates that this parser
 /// discarded anyway, and shipping it cost 3.9 MB on a real application.
-const GC_MAP_MAGIC: &[u8; 4] = b"PGCM";
+///
+/// v9 (DCE layer 0): one entry per FUNCTION in this section and one records
+/// blob per function, each tied by the linker to its function's section, so
+/// the map of a function the link removed is removed with it. The entry
+/// carries the version (top byte of its record count); there is no header.
+///
 /// v8: each blob is a DIRECTORY (header + one entry per function) in this
 /// section, and its records (instruction offsets + varint stream) live in a
 /// records section the directory names by a link-time self-relative offset.
@@ -62,7 +67,7 @@ const GC_MAP_MAGIC: &[u8; 4] = b"PGCM";
 /// after a move. Version mismatch still fails closed (the parser returns
 /// None and `stack_maps()` panics), so an older binary cannot run on this
 /// runtime half-understood.
-const GC_MAP_VERSION: u8 = 8;
+const GC_MAP_VERSION: u8 = 9;
 const MAX_SAFEPOINT_RETURN_DELTA: usize = 16;
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct StackMapLocation {
@@ -127,11 +132,8 @@ struct StackMapIndex {
     /// on whether it has an oracle to check itself against, and a test can
     /// build one without racing a process-wide `OnceLock`.
     mode: IndexMode,
-    /// The loaded map (directory) sections, one per image.
+    /// The loaded map (entry) sections, one per image.
     sections: Vec<&'static [u8]>,
-    /// One records blob per directory, indexed by `FunctionEntry::blob`. Held
-    /// so a function's records are reachable without a pointer per function.
-    records: Vec<&'static [u8]>,
     /// Sorted by address. Duplicates are kept, not deduplicated: two entries
     /// can share a relocated address and each brings its own records.
     functions: Vec<lazy::FunctionEntry>,
@@ -895,18 +897,13 @@ fn build_index_from_sections(
     // Sized exactly before the build: the table lives for the process, and a
     // doubling Vec would leave up to half of it (and the copies it made on the
     // way) resident for nothing.
-    let mut capacity = 0usize;
-    for section in &sections {
-        capacity = capacity.saturating_add(
-            decode::directory_function_count(section)
-                .unwrap_or_else(|| undecodable_section(section.len())),
-        );
-    }
+    let capacity = sections
+        .iter()
+        .fold(0usize, |sum, section| sum.saturating_add(decode::entry_count(section)));
     let mut functions = Vec::with_capacity(capacity);
-    let mut records = Vec::new();
     for (index, section) in sections.iter().enumerate() {
         let origin = origins[index];
-        if lazy::parse_function_table(section, origin, &mut functions, &mut records).is_none() {
+        if lazy::parse_function_table(section, origin, &mut functions).is_none() {
             undecodable_section(section.len());
         }
     }
@@ -927,7 +924,6 @@ fn build_index_from_sections(
     StackMapIndex {
         mode,
         sections,
-        records,
         functions,
         eager,
         #[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
@@ -960,10 +956,9 @@ fn build_eager_index(sections: &[&'static [u8]], origins: &[usize]) -> EagerInde
 fn undecodable_section(len: usize) -> ! {
     panic!(
         "perry: a GC map section (__perry_gcmap / .perry_gcmap, {len} bytes) is \
-         present but could not be decoded — expected format {:?} v{}. This binary's \
+         present but could not be decoded — expected format v{}. This binary's \
          compiler and runtime disagree about the map layout; continuing would run \
          the collector with missing roots and corrupt the heap silently.",
-        std::str::from_utf8(GC_MAP_MAGIC).unwrap_or("PGCM"),
         GC_MAP_VERSION,
     );
 }

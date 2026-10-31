@@ -299,12 +299,21 @@ def anchored(pads, mk_m, mk_h, st_m, st_h):
     return False
 
 
+def comparable_names(secs_m, secs_h):
+    """Section names of both arms, in order, for the layout comparison. A perry_* records section that only one
+    arm has (an arm that adds one) is never padded: like the size difference of any records section, its bytes
+    are taken up by the next padded section, so it is left out of the order check."""
+    m, h = [s[0] for s in secs_m], [s[0] for s in secs_h]
+    one_arm = {n for n in set(m) ^ set(h) if n.startswith("perry_")}
+    return [n for n in m if n not in one_arm], [n for n in h if n not in one_arm]
+
+
 def plan(main_bin, head_bin, pads_json, pad_dir):
     empty = lambda: {"mid": {}, "end": {}}
     pads = json.load(open(pads_json)) if os.path.exists(pads_json) else {"main": empty(), "head": empty()}
     secs_m, mk_m, cnt_m = marks(main_bin)
     secs_h, mk_h, cnt_h = marks(head_bin)
-    names_m, names_h = [s[0] for s in secs_m], [s[0] for s in secs_h]
+    names_m, names_h = comparable_names(secs_m, secs_h)
     if names_m != names_h:
         sys.exit(f"section order differs:\n main {names_m}\n head {names_h}")
     missing = [n for n in list(PADDABLE) + [EH] if n in names_m and n not in mk_m or n in names_h and n not in mk_h]
@@ -358,7 +367,7 @@ def check(main_bin, head_bin, rt_lib=None):
     ok = True
     secs_m, mk_m, cnt_m = marks(main_bin)
     secs_h, mk_h, cnt_h = marks(head_bin)
-    names_m, names_h = [s[0] for s in secs_m], [s[0] for s in secs_h]
+    names_m, names_h = comparable_names(secs_m, secs_h)
     if names_m != names_h:
         print(f"section order differs:\n main {names_m}\n head {names_h}")
         print("LAYOUT-DIFFERS")
