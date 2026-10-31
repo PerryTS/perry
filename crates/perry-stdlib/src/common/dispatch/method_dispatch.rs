@@ -317,13 +317,13 @@ unsafe fn arm_node_sqlite(handle: i64, method_name: &str, args: &[f64]) -> Optio
 
 #[cfg(feature = "crypto")]
 unsafe fn arm_crypto(handle: i64, method_name: &str, args: &[f64]) -> Option<f64> {
-    if matches!(method_name, "update" | "sign")
+    if matches!(method_name, "update" | "write" | "end" | "sign")
         && with_handle::<crate::crypto::SignHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
         return Some(crate::crypto::dispatch_sign(handle, method_name, &args));
     }
 
-    if matches!(method_name, "update" | "verify")
+    if matches!(method_name, "update" | "write" | "end" | "verify")
         && with_handle::<crate::crypto::VerifyHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
         return Some(crate::crypto::dispatch_verify(handle, method_name, &args));
@@ -395,7 +395,7 @@ unsafe fn arm_crypto(handle: i64, method_name: &str, args: &[f64]) -> Option<f64
     // .update(...).sign(key) / .verify(key, sig) — issue #1364. Method-gated
     // like the Hash/Cipher handles. `sign`/`verify` are distinctive enough to
     // disambiguate from other registries sharing a handle id.
-    if matches!(method_name, "update" | "sign" | "verify")
+    if matches!(method_name, "update" | "write" | "end" | "sign" | "verify")
         && with_handle::<crate::crypto::SignHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
         return Some(crate::crypto::dispatch_sign(handle, method_name, &args));
