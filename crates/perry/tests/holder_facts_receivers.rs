@@ -7,7 +7,7 @@
 //! No fact when the field can hold anything else: ⊤ (a thrown value), a
 //! function, or when interpreted code can run. A nullable field keeps the
 //! receiver test (null throws). A key the constructor assigns after code
-//! that observes `this` can be read unset (reserved): no field-class fact. Per unit never
+//! that observes `this` can be read unset (reserved): no field-class fact; a declared field reads undefined: nullable. Per unit never
 //! proves more than the whole program.
 
 use std::path::{Path, PathBuf};
@@ -278,6 +278,22 @@ for (let i = 0; i < 1000; i++) acc += s.step(i);
 console.log(acc);
 try { new Sched(true); } catch (e) { console.log(e instanceof TypeError); }
 "#;
+const RESERVED: &str = r#"
+class Task {
+  constructor(id) { this.id = id; }
+  run(n) { return this.id + n; }
+}
+class Sched {
+  constructor(early) { if (early) this.peek(); this.current = new Task(3); }
+  peek() { return this.current.run(1) + this.current.id; }
+  step(n) { return this.current.run(n) + this.current.id; }
+}
+const s = new Sched(false);
+let acc = 0;
+for (let i = 0; i < 1000; i++) acc += s.step(i);
+console.log(acc);
+try { new Sched(true); } catch (e) { console.log(e instanceof TypeError); }
+"#;
 const XMOD_HOLDER: &str = r#"
 export class Task {
   id: number;
@@ -386,11 +402,32 @@ fn interpreted_code_leaves_no_fact() {
 }
 
 #[test]
-fn a_reserved_key_gives_no_field_class_fact() {
-    // `current` is stored after `this.peek()` ran: it can be read unset
-    // (reserved: known slot, presence unknown), so no read of it is a proven
-    // receiver, in any method.
+fn a_declared_field_observed_before_the_constructor_assigns_it_is_nullable() {
+    // `current: Task;` is declared: the key exists (undefined) from the
+    // start, so a read before the assignment sees undefined: nullable.
     let (u, w, _d) = both(&[("main.ts", EARLY)], "505500\ntrue");
+    for b in [&u, &w] {
+        assert!(
+            b.elisions.lines().any(|l| l.contains("__Sched__step")
+                && l.contains("recv=field current ")
+                && l.contains("nullable=1")),
+            "{}",
+            b.elisions
+        );
+        assert!(
+            !b.elisions.lines().any(|l| l.contains("recv=field current ") && l.contains("nullable=0")),
+            "{}",
+            b.elisions
+        );
+    }
+}
+
+#[test]
+fn a_reserved_key_gives_no_field_class_fact() {
+    // No declaration: `current` is stored after `this.peek()` ran, so it can
+    // be read unset (reserved: known slot, presence unknown, the read goes on
+    // to the prototype chain). No read of it is a proven receiver.
+    let (u, w, _d) = both(&[("main.js", RESERVED)], "505500\ntrue");
     for b in [&u, &w] {
         assert!(
             !b.elisions.lines().any(|l| l.contains("recv=field current ")),
