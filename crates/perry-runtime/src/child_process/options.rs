@@ -287,23 +287,28 @@ pub(crate) fn cp_apply_live_stdio(
         for (fd, kind) in stdio.iter().copied().enumerate().skip(3) {
             match kind {
                 CpStdio::Pipe => {
-                    let mut pipe = [0; 2];
-                    if unsafe { libc::pipe(pipe.as_mut_ptr()) } != 0 {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                    let read = unsafe { std::fs::File::from_raw_fd(pipe[0]) };
-                    let write = unsafe { std::fs::File::from_raw_fd(pipe[1]) };
-                    if unsafe { libc::fcntl(read.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) } < 0
+                    // Node backs `stdio[n]` (n >= 3) with a socketpair so the child
+                    // can both read and write the descriptor.
+                    let mut pair = [0; 2];
+                    if unsafe {
+                        libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, pair.as_mut_ptr())
+                    } != 0
                     {
                         return Err(std::io::Error::last_os_error());
                     }
-                    let write_fd = write.as_raw_fd();
-                    if unsafe { libc::fcntl(write_fd, libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
+                    let parent = unsafe { std::fs::File::from_raw_fd(pair[0]) };
+                    let child = unsafe { std::fs::File::from_raw_fd(pair[1]) };
+                    if unsafe { libc::fcntl(parent.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) }
+                        < 0
+                        || unsafe {
+                            libc::fcntl(child.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC)
+                        } < 0
+                    {
                         return Err(std::io::Error::last_os_error());
                     }
                     unsafe {
                         command.pre_exec(move || {
-                            if libc::dup2(write.as_raw_fd(), fd as i32) < 0
+                            if libc::dup2(child.as_raw_fd(), fd as i32) < 0
                                 || libc::fcntl(fd as i32, libc::F_SETFD, 0) < 0
                             {
                                 return Err(std::io::Error::last_os_error());
@@ -311,7 +316,7 @@ pub(crate) fn cp_apply_live_stdio(
                             Ok(())
                         });
                     }
-                    readers.push((fd, read));
+                    readers.push((fd, parent));
                 }
                 CpStdio::Ignore => {
                     let null = std::fs::OpenOptions::new()

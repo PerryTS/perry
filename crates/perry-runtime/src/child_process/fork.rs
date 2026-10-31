@@ -175,7 +175,7 @@ pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr
     let mut extra_streams = Vec::new();
     for (fd, kind) in stdio_kinds.iter().copied().enumerate().skip(3) {
         let stream = if fd != ipc_fd && kind == CpStdio::Pipe {
-            cp_build_readable()
+            cp_build_duplex()
         } else {
             TAG_NULL_F64
         };
