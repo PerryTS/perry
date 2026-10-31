@@ -466,11 +466,39 @@ extern "C" fn buffer_constructor_thunk(
     crate::value::js_nanbox_pointer(buf as i64)
 }
 
+/// `Buffer.prototype.<method>` as a first-class function value: runs the same
+/// implementation as a direct `buf.<method>(...)` call on the `this` the
+/// function is invoked with (`.call`, `.apply`, or an extracted reference),
+/// which may be a `Buffer` or any `Uint8Array`.
 extern "C" fn buffer_prototype_method_thunk(
-    _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+    rest: f64,
 ) -> f64 {
-    f64::from_bits(crate::value::TAG_UNDEFINED)
+    unsafe {
+        let name_value = crate::closure::closure_get_dynamic_prop(closure as usize, "name");
+        let name_header = crate::builtins::js_string_coerce(name_value);
+        let name =
+            crate::object::has_own_helpers::str_from_string_header(name_header).unwrap_or("");
+        let addr = crate::value::addr_class::object_ref_addr(this.as_f64());
+        if addr == 0 || crate::buffer::js_buffer_is_buffer(addr as i64) == 0 {
+            let message = format!("Method Buffer.prototype.{name} called on incompatible receiver");
+            let message =
+                crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+            let error = crate::error::js_typeerror_new(message);
+            crate::exception::js_throw(crate::value::js_nanbox_pointer(error as i64));
+        }
+        let args = crate::object::typed_array_proto_thunks::rest_values(rest);
+        // `Buffer.prototype.toString` decodes any receiver; a direct call on a
+        // plain `Uint8Array` reaches `%TypedArray%.prototype.toString` instead.
+        if name == "toString" {
+            return crate::object::buffer_to_encoded_string(
+                addr as *mut crate::buffer::BufferHeader,
+                &args,
+            );
+        }
+        crate::object::dispatch_buffer_method(addr, name, args.as_ptr(), args.len())
+    }
 }
 
 /// `this` for a `Buffer.prototype.offset`/`.parent` accessor read, resolved
