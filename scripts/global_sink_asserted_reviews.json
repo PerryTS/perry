@@ -6,14 +6,14 @@
       "crates/perry-runtime/src/buffer/adopted_backing_tests.rs": "48df7dd79b7301517a5d04d6e06ab5718514e54960bf8c4e110e39e2365a26c1",
       "crates/perry-runtime/src/buffer/store_tests.rs": "0a6ed4adbb40ff906cb54a0bfd571663a110db81239392cb4e8dd324d9e052a0",
       "crates/perry-runtime/src/gc/tests/buffer_bytes.rs": "e7bf2457497c86a32b371be0678eb952988ea0b411b1a8ac34836a745223e051",
-      "crates/perry-runtime/src/test_support.rs": "fad16754c572eef842c567ec3c08d1a5ab1860dd8cc3bdfae595161cda8d742a"
+      "crates/perry-runtime/src/test_support.rs": "eda6b41d7531bbf515d3b34ed133285ead5fed492accd5ad8aee966bb4210cb2"
     }
   },
   "crates/perry-runtime/src/loop_interrupt.rs::PERRY_LOOP_INTERRUPT_ARMED": {
     "claim": "Exported compiled-poll ABI counts cross-worker requests; its exact before/after witness runs in an isolated child process.",
     "source_sha256": {
       "crates/perry-runtime/src/loop_interrupt.rs": "15c91f29ecf1504a3cb110da6e360162207e87459bd5761c524a872b729bcaa3",
-      "crates/perry-runtime/src/test_support.rs": "fad16754c572eef842c567ec3c08d1a5ab1860dd8cc3bdfae595161cda8d742a"
+      "crates/perry-runtime/src/test_support.rs": "eda6b41d7531bbf515d3b34ed133285ead5fed492accd5ad8aee966bb4210cb2"
     }
   },
   "crates/perry-runtime/src/object/class_family_birth.rs::LAYOUT": {
@@ -40,7 +40,7 @@
     "claim": "Exported monotonic ABI latch is intentionally process-wide; the fixture forcing it runs in an isolated child process. Rechecked the current interned_key_abi_tests fixture: isolated_process_guard still re-execs the assertion in a fresh process; prototype modifications only set the monotonic flag.",
     "source_sha256": {
       "crates/perry-runtime/src/object/own_override.rs": "6c112095932e32ce0d165850b73813bf530adbf494c22c17e2ad12d36b49f8b0",
-      "crates/perry-runtime/src/test_support.rs": "fad16754c572eef842c567ec3c08d1a5ab1860dd8cc3bdfae595161cda8d742a"
+      "crates/perry-runtime/src/test_support.rs": "eda6b41d7531bbf515d3b34ed133285ead5fed492accd5ad8aee966bb4210cb2"
     }
   },
   "crates/perry-runtime/src/object/runtime_layouts.rs::READABLE_STATE": {
