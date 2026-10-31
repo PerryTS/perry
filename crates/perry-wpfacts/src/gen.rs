@@ -715,8 +715,9 @@ impl<'a> Gen<'a> {
                 why.push(format!("{d}: {}", rs.join("; ")));
             }
             why.sort();
+            let unit = self.view.map_or("", |v| v.key.as_str());
             for w in why {
-                eprintln!("perry: wpfacts explain: unit reports {w}");
+                eprintln!("perry: wpfacts explain: unit {unit} reports {w}");
             }
         }
         for ((name, _), &(_, t)) in &self.stand_in_fns {
@@ -757,7 +758,8 @@ impl<'a> Gen<'a> {
                         .get(t)
                         .map(|&(_, r)| self.m.reasons[r as usize].clone());
                     eprintln!(
-                        "perry: wpfacts explain: unit reports {rep}: written {written} escaped {esc:?} hard {hard:?}"
+                        "perry: wpfacts explain: unit {} reports {rep}: written {written} escaped {esc:?} hard {hard:?}",
+                        self.view.map_or("", |v| v.key.as_str())
                     );
                 }
                 out.push(rep.clone());
