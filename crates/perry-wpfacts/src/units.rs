@@ -485,12 +485,22 @@ pub(crate) struct ValueContract {
     /// runtime object for the whole program, the same token in every unit.
     pub builtins: Vec<crate::model::BuiltinNs>,
     /// The arrays of other units it may hold (DECISIONS 94), by template
-    /// display: their elements are cell `arr:<display>`.
+    /// display: their elements are cell `arr:<display>`. Each is an Array
+    /// exotic object (ECMA-262 10.4.2), as its publisher proves
+    /// (`derive::exact_array`).
     pub arrays: Vec<String>,
+    /// ARU D6 (CWN 2026-11-01): the arrays made through a constructor
+    /// (ArraySpeciesCreate) that their publisher does not prove to be
+    /// Arrays, named and celled as `arrays`: a reader's stand-in of one is
+    /// no Array for it. A name in both lists is one of these.
+    pub made_arrays: Vec<String>,
     /// DECISIONS 184: the primitive method containers (`primbox`) it may
     /// hold, by name as `arrays`: their elements are cell `arr:<name>`; a
     /// reader's stand-in is a container of its own kind.
     pub boxes: Vec<String>,
+    /// ARU D3/D6: the containers among them that are Arrays (`arraybox`:
+    /// own-keys results), named and celled as `boxes`.
+    pub arrayboxes: Vec<String>,
     pub indexed_owners: Vec<crate::bindings::IndexedOwner>,
 }
 
@@ -1032,12 +1042,16 @@ impl ValueContract {
         // Builtins and arrays (DECISIONS 94): by identity.
         union_into(&mut self.builtins, &o.builtins);
         union_into(&mut self.arrays, &o.arrays);
+        union_into(&mut self.made_arrays, &o.made_arrays);
         union_into(&mut self.boxes, &o.boxes);
+        union_into(&mut self.arrayboxes, &o.arrayboxes);
         union_into(&mut self.indexed_owners, &o.indexed_owners);
         self.indexed_owners.sort();
         self.builtins.sort();
         self.arrays.sort();
+        self.made_arrays.sort();
         self.boxes.sort();
+        self.arrayboxes.sort();
         self.layouts.sort_by(|x, y| x.display.cmp(&y.display));
         self.classes.sort_by(|x, y| x.display.cmp(&y.display));
         self.fns.sort_by(|x, y| x.name.cmp(&y.name));

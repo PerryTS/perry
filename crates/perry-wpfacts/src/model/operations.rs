@@ -633,15 +633,16 @@ impl Model {
     }
 
     /// DECISIONS 94/184: an array, or a primitive method's container of
-    /// primitives (`primbox`, array-like: split/match results): its
-    /// elements leave through cell `arr:<name>` (`Gen::arr_leaves`).
+    /// primitives (`primbox`, array-like: split/match results; `arraybox`,
+    /// one that is an Array: own-keys results): its elements leave through
+    /// cell `arr:<name>` (`Gen::arr_leaves`).
     pub fn is_cell_arr(&self, t: Tok) -> bool {
         match self.toks[t as usize] {
             TokKind::Obj(tm, _) => matches!(
                 self.tmpls[tm as usize].kind,
                 TmplKind::Arr { .. }
                     | TmplKind::BObj {
-                        what: "primbox",
+                        what: "primbox" | "arraybox",
                         ..
                     }
             ),
@@ -652,7 +653,8 @@ impl Model {
     /// DECISIONS 184: a primitive method's container (`is_cell_arr`).
     pub fn is_box(&self, t: Tok) -> bool {
         matches!(self.toks[t as usize], TokKind::Obj(tm, _)
-            if matches!(self.tmpls[tm as usize].kind, TmplKind::BObj { what: "primbox", .. }))
+            if matches!(self.tmpls[tm as usize].kind,
+                TmplKind::BObj { what: "primbox" | "arraybox", .. }))
     }
 
     pub fn tmpl_of(&self, t: Tok) -> Option<TmplId> {
@@ -1627,6 +1629,7 @@ impl Model {
             parent_value: None,
             parent_links: Vec::new(),
             null_proto: false,
+            species: None,
         });
         tm
     }
@@ -1663,6 +1666,7 @@ impl Model {
             parent_value: None,
             parent_links: Vec::new(),
             null_proto: false,
+            species: None,
         });
         let t = self.tok(TokKind::Obj(tm, NO_CTX));
         // What the argument reaches has its own marker (fields of fields

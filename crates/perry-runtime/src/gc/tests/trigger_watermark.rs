@@ -234,3 +234,35 @@ fn small_allocation_crosses_the_leaf_window_before_the_copying_cap() {
         Some(BudgetedGcTrigger::YoungScavengeCap)
     );
 }
+
+/// The Supabase `--version` shape: a 3.17 MB survivor cohort under a
+/// 14.45 MB cap, from-space 0.2 MB short of the cap, one 64 KB leaf. The
+/// copying arm is not due, so a leaf service runs; it can only retire or
+/// promote the leaf. The leaf arm must therefore be false once the leaves are
+/// gone, or every later leaf birth repeats a census that retires nothing
+/// (measured: four in a row, 48 M instructions each, 0 bytes retired).
+#[test]
+fn the_leaf_arm_does_not_count_the_survivor_space_twice() {
+    use crate::gc::policy::leaf_window_due;
+    let cap = 14_445_182;
+    let survivor = 3_173_624;
+    let small = cap - 200_000;
+    let leaf = 64 * 1024;
+    assert!(small < cap, "fixture: the copying arm is not due");
+    assert!(
+        !leaf_window_due(cap, small, survivor, leaf).0,
+        "Eden plus the leaf is below the Eden window: nothing for a leaf service to do"
+    );
+    // After a service that retired or promoted every leaf, a reading just
+    // under the copying cap is never due through the leaf arm.
+    for survivor in [0, 1 << 20, survivor, cap / 2] {
+        let small = cap - 2;
+        let (due, limit) = leaf_window_due(cap, small, survivor, 1);
+        assert!(!due, "survivor {survivor}: the leaf arm fires below the copying cap");
+        assert_eq!(due, small >= limit, "the bound and the answer agree");
+    }
+    // Leaves that do fill Eden's window still make it due.
+    let window = crate::gc::tenuring::eden_allocation_window_bytes(cap, survivor);
+    let eden = small - survivor;
+    assert!(leaf_window_due(cap, small, survivor, window - eden).0);
+}
