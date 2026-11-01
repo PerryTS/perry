@@ -427,6 +427,28 @@ fn plan(
                 roots.extend(b.holders.iter().copied());
             }
         }
+        // RLC mask (measurement only): a call whose result a closure
+        // captures from this frame ( in memoizeOne) is a value of
+        // the slice: each instance makes its own (rule C, design §9).
+        if std::env::var("RLC_MASK").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) & 1 != 0 {
+            for (x, _) in caps {
+                if m.node_fn[*x as usize] != f || pinned.contains(x) {
+                    continue;
+                }
+                for &y in ix.preds.get(x).map(|v| v.as_slice()).unwrap_or(&[]) {
+                    for &k in ix.calls_of.get(&y).map(|v| v.as_slice()).unwrap_or(&[]) {
+                        if m.calls[k as usize].ret != y {
+                            continue;
+                        }
+                        for &(h, _) in ix.call_refs.get(&k).map(|v| v.as_slice()).unwrap_or(&[]) {
+                            if m.node_fn[h as usize] == f {
+                                roots.push(h);
+                            }
+                        }
+                    }
+                }
+            }
+        }
         let d = loop {
             let d = slice(m, ix, f, &roots, &through, pinned);
             let dset: FxHashSet<NodeId> = d.iter().copied().collect();
