@@ -19,6 +19,14 @@
 //! the sentinel guarantees the section exists in an image whose every record
 //! was removed, and readers skip a zero record (also COFF's `$a` marker and
 //! any alignment padding).
+//!
+//! On ELF the sentinel is tied too, to the bounds descriptor, the one thing
+//! that names it, so every input section called `perry_fnrec` is
+//! `SHF_LINK_ORDER`. GNU ld before 2.36 fails a link whose output section
+//! mixes ordered and unordered inputs ("has both ordered and unordered
+//! sections"), and the glibc 2.31 release floor is a binutils 2.35 floor.
+//! Tied, the link keeps a sentinel exactly when it keeps its object's
+//! descriptor: one per image, on every ELF linker.
 
 /// The records section's object-format flavour.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -162,11 +170,24 @@ pub(crate) fn image_lines(format: RecordFormat) -> Vec<(String, String)> {
                 "__stop_perry_fnrec".into(),
                 "@__stop_perry_fnrec = external hidden global i8".into(),
             ),
+            // The descriptor comes first: globals are emitted in module
+            // order, and an assembler resolves the sentinel's linked-to
+            // symbol (`.section perry_fnrec,"ao",@progbits,perry_fnrec_bounds`)
+            // where the directive stands, so the descriptor must already be
+            // defined there ("linked-to symbol is not in a section").
+            bounds("@__start_perry_fnrec", "@__stop_perry_fnrec"),
             (
                 SENTINEL_SYMBOL.into(),
-                format!("@{SENTINEL_SYMBOL} = linkonce_odr hidden constant i32 0, section \"{section}\", align 4"),
+                format!(
+                    "@{SENTINEL_SYMBOL} = linkonce_odr hidden constant i32 0, section \"{section}\", align 4{}",
+                    // wasm-ld has no tied sections (see the module doc).
+                    if format == RecordFormat::Elf {
+                        format!(", !associated !{{ptr @{BOUNDS_SYMBOL}}}")
+                    } else {
+                        String::new()
+                    }
+                ),
             ),
-            bounds("@__start_perry_fnrec", "@__stop_perry_fnrec"),
         ],
         // ld64 synthesizes `section$start$SEG$SECT` only under that exact
         // name (the leading \01 stops the `_` prefix).
@@ -231,5 +252,29 @@ mod tests {
         assert!(macho.contains("ptrtoint (ptr @b to i64), i64 ptrtoint (ptr getelementptr inbounds ({ i32, i32 }, ptr @\"\\01l_b$fnrec\", i32 0, i32 1) to i64)"), "{macho}");
         let coff = record_line(RecordFormat::Coff, "b");
         assert!(coff.contains("section \".perryfn$m\""), "{coff}");
+    }
+
+    /// GNU ld < 2.36 (the glibc 2.31 release floor ships 2.35) fails the link
+    /// when one output section has both `SHF_LINK_ORDER` and plain inputs, so
+    /// on ELF every line placed in `perry_fnrec` must be tied to something.
+    #[test]
+    fn every_elf_line_in_the_records_section_is_tied() {
+        let mut lines: Vec<String> =
+            image_lines(RecordFormat::Elf).into_iter().map(|(_, line)| line).collect();
+        lines.push(record_line(RecordFormat::Elf, "b"));
+        let in_section: Vec<&String> =
+            lines.iter().filter(|line| line.contains("section \"perry_fnrec\"")).collect();
+        assert_eq!(in_section.len(), 2, "{lines:#?}");
+        for line in in_section {
+            assert!(line.contains(", !associated !{ptr @"), "untied ELF record-section line: {line}");
+        }
+        let sentinel = lines.iter().position(|line| line.starts_with("@perry_fnrec_sentinel = ")).unwrap();
+        assert!(lines[sentinel].ends_with(&format!("!associated !{{ptr @{BOUNDS_SYMBOL}}}")), "{}", lines[sentinel]);
+        // Emitted in this order, the descriptor is defined before the
+        // sentinel's section directive names it.
+        let bounds = lines.iter().position(|line| line.starts_with(&format!("@{BOUNDS_SYMBOL} = "))).unwrap();
+        assert!(bounds < sentinel, "{lines:#?}");
+        let wasm = image_lines(RecordFormat::Wasm);
+        assert!(wasm.iter().all(|(_, line)| !line.contains("!associated")), "{wasm:#?}");
     }
 }
