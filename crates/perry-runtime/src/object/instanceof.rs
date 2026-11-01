@@ -119,7 +119,7 @@ fn recorded_prototype_instanceof_builtin(
     constructor: Option<&crate::gc::RuntimeHandle<'_>>,
 ) -> Option<bool> {
     let addr = value_addr(value.get_nanbox_f64());
-    if addr == 0 || super::prototype_chain::object_static_prototype(addr).is_none() {
+    if addr == 0 || !super::prototype_chain::has_recorded_prototype(addr) {
         return None;
     }
     prototype_instanceof_builtin(value, name, constructor)
