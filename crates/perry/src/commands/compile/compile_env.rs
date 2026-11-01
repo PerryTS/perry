@@ -214,6 +214,7 @@ pub(super) const COMPILE_ENV_VARS: &[&str] = &[
     "PKG_CONFIG_PATH",
     "PKG_CONFIG_SYSROOT_DIR",
     "SDKROOT",
+    "WASI_SDK_PATH",
 ];
 
 /// Lossless OS-value encoding shared by both cache keys. None denotes absence;

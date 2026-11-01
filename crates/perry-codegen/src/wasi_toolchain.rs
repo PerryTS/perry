@@ -1,6 +1,7 @@
 //! WASI native EH requires LLVM's EHPadStack fix before any code generation.
 
 use anyhow::{anyhow, bail, Result};
+pub mod p3;
 
 const MINIMUM: (u32, u32, u32) = (22, 1, 5);
 const REQUIREMENT: &str = "--target wasi requires LLVM >= 22.1.5: LLVM issue #194184 \

@@ -1,0 +1,4 @@
+caught true p3-error
+finally
+survived
+exit 0

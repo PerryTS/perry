@@ -84,7 +84,9 @@ def main():
         run('encode-' + name, [args.wat_encoder.resolve(), out / (name + '.wat'), out / (name + '.wasm')])
     compiled = []
     if args.p3_runtime_dir:
-        for source in sorted((root / 'scripts/wasi_smoke').glob('*.ts')):
+        sources = list((root / 'scripts/wasi_smoke').glob('*.ts'))
+        sources += list((root / 'test-wasi/components/p3-command/compiled').glob('*.ts'))
+        for source in sorted(sources):
             guest = out / (source.stem + '.component.wasm')
             run('guest-compile-' + source.stem, [args.perry.resolve(), 'compile', source,
                 '--target', 'wasip3', '--no-cache', '--no-auto-optimize', '-o', guest],

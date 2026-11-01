@@ -250,6 +250,13 @@ pub(super) fn optimize_and_emit(
     };
     let emit_started = std::time::Instant::now();
     let emit = |tm: &TargetMachine, m: &inkwell::module::Module<'_>| -> Result<Vec<u8>> {
+        #[cfg(feature = "target-wasi")]
+        if effective_target.ends_with("wasip3") {
+            if native_roots {
+                anyhow::bail!("WASIp3 SDK emission requires the wasm32 shadow-root lowering");
+            }
+            return crate::wasi_toolchain::p3::emit(m, emit_asm);
+        }
         tm.write_to_memory_buffer(m, kind)
             .map(copy_emission_bytes)
             .map_err(|e| anyhow!("{kind:?} emission failed:\n{}", e.to_string()))

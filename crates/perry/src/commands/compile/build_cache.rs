@@ -596,6 +596,11 @@ fn eligibility(args: &CompileArgs, project_root: &Path) -> Result<(), String> {
     if args.no_cache {
         return Err("no-cache".to_string());
     }
+    if args.target.as_deref() == Some("wasip3") {
+        // P3 objects fingerprint the SDK emitter. Whole-output reuse also
+        // needs the SDK sysroot/linker identity before it can be enabled.
+        return Err("p3-sdk-link".to_string());
+    }
     if args.no_link {
         return Err("no-link".to_string());
     }

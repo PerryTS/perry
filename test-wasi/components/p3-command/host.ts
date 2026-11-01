@@ -6,6 +6,7 @@ if (process.argv[2] === "compiled") {
   const bytes = readFileSync(process.argv[3]);
   gc();
   const status = runComponentCommand(bytes, {
+    fuel: 1000000000,
     wasi: { inheritStdout: true, inheritStderr: true },
   });
   gc();
