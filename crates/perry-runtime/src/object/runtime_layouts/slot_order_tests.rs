@@ -393,13 +393,6 @@ fn static_layout_slot_order_rejects_slots_that_are_not_a_permutation() {
     }
 }
 
-// Reuse main's atom and its exact StaticAtom kind/index encoding.
-#[allow(non_snake_case)]
-mod ATOM_SYMBOL_ITERATOR {
-    pub const HASH: u64 = crate::codegen_abi::well_known_symbol_atom_hash(
-        crate::codegen_abi::WELL_KNOWN_SYMBOL_ITERATOR,
-    );
-}
 runtime_layout!(
     SYMBOL_PERMUTED,
     0x7f000004,

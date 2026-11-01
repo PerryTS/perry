@@ -1661,6 +1661,14 @@ impl<'a> Gen<'a> {
     /// contents leave once (accessors run with unknown receivers). True when
     /// this added constraints.
     ///
+    /// What its accessors return leaves beyond any contract (DECISIONS
+    /// 203/212): a reader's read under an accessor key runs the owner's
+    /// code and finds an unknown value (a stand-in's getter,
+    /// `Gen::stand_in_getter`; an accessor field of a literal layout is ⊤
+    /// there), so nothing it reaches is read through a contract. Another
+    /// unit's stand-in a getter returns is this unit's report, not a value
+    /// forwarded with its owner's contract.
+    ///
     /// A literal of this unit (`nested_ok`) leaves key by key instead
     /// (design §18.7, `nested_fields`): what it holds under a computed key
     /// leaves here, each named field once `contract_check` decided it.
@@ -1677,7 +1685,8 @@ impl<'a> Gen<'a> {
             _ => self.sink_all_fields(t, r),
         }
         let rl = self.m.node_l("contract-ret-load");
-        self.m.sink_node(rl, r);
+        let ra = self.m.beyond_contract(r);
+        self.m.sink_node(rl, ra);
         self.m.accessor_walk(
             t,
             t,

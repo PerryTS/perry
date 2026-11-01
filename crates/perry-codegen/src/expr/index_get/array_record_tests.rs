@@ -629,6 +629,18 @@ fn array_stack_record_fuses_only_the_generated_next_value() {
     // the counted-loop tiers' guards, exactly as `a[i]` does); its Get still
     // completes through the record's cold dispatcher.
     assert!(ll.contains("record.next.cold") && ll.contains("i32 6"));
+    let guards: Vec<_> = ll
+        .split("\nrecord.next.guard.")
+        .skip(1)
+        .map(|block| block.split("\n\n").next().unwrap())
+        .collect();
+    assert!(!guards.is_empty(), "exercise the fused helper: {ll}");
+    for guard in guards {
+        assert!(
+            guard.contains(", 64") && guard.contains("@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED"),
+            "fused hole canonicalization needs both prototype proofs: {guard}"
+        );
+    }
     assert!(ll.contains("record.indexed.") && ll.contains("record.protocol."), "{ll}");
     assert!(ll.contains("record.read.cold"), "the array arm's Get: {ll}");
     assert!(
@@ -719,6 +731,62 @@ fn array_stack_record_uses_one_range_and_one_cold_dispatch() {
         "a safepoint cannot cache a record field across a collection"
     );
     crate::testing::verify_ir(&ll, "array_stack_record").unwrap();
+}
+
+#[test]
+fn array_stack_record_reads_use_live_own_prefix_and_raw_hole_fallback() {
+    let ll = stack_record_ir(false);
+    let mut hits = 0;
+    let mut raw_hole_tests = 0;
+    for block in ll.split("\nrecord.read.").skip(1) {
+        let block = block.split("\n\n").next().unwrap();
+        if block.starts_with("prefix.hit.") {
+            hits += 1;
+            assert!(
+                block.contains("load double"),
+                "own slot must load directly: {block}"
+            );
+            assert!(
+                !block.contains("icmp") && !block.contains("select"),
+                "P already proves bounds, absence of descriptors and holes: {block}"
+            );
+        }
+        if block.starts_with("hole.") {
+            assert!(
+                block.contains(", 64"),
+                "absence needs the receiver's custom-prototype bit: {block}"
+            );
+            assert!(
+                block.contains("@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED"),
+                "absence needs the global protector: {block}"
+            );
+        }
+        if block.starts_with("load.") {
+            raw_hole_tests += 1;
+            assert!(
+                block.contains(crate::nanbox::TAG_HOLE_I64),
+                "test the raw hole: {block}"
+            );
+            assert!(
+                !block.contains("select"),
+                "never canonicalize a hole before its cold edge: {block}"
+            );
+            assert!(
+                block.contains("record.read.hole."),
+                "a hole must check prototype absence: {block}"
+            );
+        }
+        assert!(
+            block.starts_with("hole.")
+                || !block.contains("@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED"),
+            "only holes depend on prototype invalidation: {block}"
+        );
+    }
+    assert!(
+        hits > 0 && raw_hole_tests == hits,
+        "exercise prefix and residual read: {ll}"
+    );
+    crate::testing::verify_ir(&ll, "array_record_own_prefix").unwrap();
 }
 
 #[test]

@@ -909,6 +909,7 @@ fn compute_act<'a>(
                         literal_shape,
                         facts,
                         methods,
+                        getters: contracts::proto_getters(&g, tm),
                         native_parent,
                         parent: foreign_parent(&g, tm),
                         field_fns: Vec::new(),

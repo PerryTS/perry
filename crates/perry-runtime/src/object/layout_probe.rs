@@ -1065,8 +1065,10 @@ unsafe fn exotic_get<const ABSENT: bool>(
         crate::gc::GC_TYPE_CLOSURE => {
             let c = obj as *const crate::closure::ClosureHeader;
             let plain = crate::closure::shape::closure_on_plain_function_shape(c);
-            // A plain function's [[Prototype]] is its shape's identity
-            // (`%Function.prototype%` until a link moves it).
+            // A plain or bound function's [[Prototype]] is its shape's
+            // identity (`%Function.prototype%` until a link moves it).
+            // A bound function's intrinsic `name` and `length` are its
+            // target's, not static data of a body: those keys decline.
             (
                 (*c).props as *const ObjectHeader,
                 plain
@@ -1095,6 +1097,18 @@ unsafe fn exotic_get<const ABSENT: bool>(
             Err(false) => return hole(),
         }
     }
+    // A bound function is asked only after its bag missed (an own key is
+    // the common read).
+    let proto = match proto {
+        None if (*header).obj_type == crate::gc::GC_TYPE_CLOSURE
+            && bound_on_described_shape(obj.cast(), hash) =>
+        {
+            crate::object::shapes::shape_proto_id(
+                (*obj.cast::<crate::closure::ClosureHeader>()).shape_id,
+            )
+        }
+        proto => proto,
+    };
     let Some(serial) = proto else {
         return hole();
     };
@@ -1135,6 +1149,26 @@ unsafe fn exotic_get<const ABSENT: bool>(
         };
     }
     exotic_chain::<ABSENT>(dir, p, key_bits, hash)
+}
+
+/// Is `c` a bound function on a described Function shape (its own keys are
+/// its bag's, its [[Prototype]] its shape's identity), read for a key other
+/// than the intrinsic `name`, `length` and `prototype`, which a bound
+/// function answers from its target or not at all?
+///
+/// # Safety
+/// `c` is a live closure cell.
+#[inline(never)]
+unsafe fn bound_on_described_shape(c: *const crate::closure::ClosureHeader, hash: u64) -> bool {
+    use crate::object::runtime_layouts::atom_hash as h;
+    const NAME: u64 = h(b"name");
+    const LENGTH: u64 = h(b"length");
+    const PROTOTYPE: u64 = h(b"prototype");
+    let info = (*c).info;
+    !info.is_null()
+        && (*info).code == crate::closure::BOUND_FUNCTION_FUNC_PTR
+        && (*c).shape_id != crate::closure::shape::function_dictionary_shape()
+        && !matches!(hash, NAME | LENGTH | PROTOTYPE)
 }
 
 /// [`chain_from`] from an exotic receiver's builtin prototype `next`: there
@@ -1827,6 +1861,7 @@ mod write;
 use write::hole_fill_admitted;
 pub(crate) use write::layouts_admit_add;
 use write::probe_add;
+pub(crate) use write::{function_link_admits_add, function_put_plan, FunctionPut};
 
 #[path = "layout_probe/computed.rs"]
 mod computed;
