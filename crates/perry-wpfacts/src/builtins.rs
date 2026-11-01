@@ -1182,7 +1182,9 @@ fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
             TmplKind::BObj { what, .. } => {
                 members::bobj_family(what) != Family::Opaque
                     || (*what == "RegExp"
-                        && name.as_deref().is_some_and(collections::regexp_runs_exec))
+                        && name.as_deref().is_some_and(|n| {
+                            collections::regexp_runs_exec(n) || collections::regexp_species(n)
+                        }))
             }
             _ => false,
         },

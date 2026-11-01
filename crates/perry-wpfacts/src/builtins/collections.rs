@@ -192,6 +192,37 @@ pub(super) fn regexp_runs_exec(name: &str) -> bool {
             .is_some_and(|s| matches!(s, "replace" | "match" | "search"))
 }
 
+/// `@@split` and `@@matchAll` (22.2.6.14, 22.2.6.11) build their splitter or
+/// matcher with SpeciesConstructor(rx, %RegExp%): `constructor` (and its
+/// `@@species`) is read from the regexp and the result constructed from
+/// `(rx, flags)`, so a constructor the program stored runs with any arguments.
+pub(super) fn regexp_species(name: &str) -> bool {
+    name.strip_prefix(WK_PREFIX)
+        .is_some_and(|s| matches!(s, "split" | "matchAll"))
+}
+
+fn regexp_species_constructor(m: &mut Model, t: Tok) {
+    let recv = m.node_l("regexp");
+    m.add_tok(recv, t);
+    let k = m.atom("constructor");
+    let cn = m.node_l("species-constructor");
+    m.cons(
+        recv,
+        Cons::Load {
+            key: Key::Named(k),
+            dst: cn,
+        },
+    );
+    let r = m.reason("argument of builtin species constructor of the RegExp");
+    m.cons(
+        cn,
+        Cons::Implicit {
+            reason: r,
+            proto: Protocol::Any,
+        },
+    );
+}
+
 /// RegExpExec: `exec` is read from the regexp as a property and called with
 /// the string, so an `exec` the program stored on it (or on `RegExp.prototype`)
 /// runs with the regexp as `this`.
@@ -714,6 +745,9 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             implicit_args(m, call, "builtin method argument", Protocol::Any);
             if what == "RegExp" && regexp_runs_exec(n) {
                 regexp_exec(m, t, call);
+            }
+            if what == "RegExp" && regexp_species(n) {
+                regexp_species_constructor(m, t);
             }
             ret_prim(m, call, prim::ALL);
             let pb = site_tmpl(m, call, "primbox");
