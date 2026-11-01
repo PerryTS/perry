@@ -93,6 +93,16 @@ impl<'a> Gen<'a> {
         self.call_with(fx, callee, a, vec![], byte_offset)
     }
 
+    /// The key of member access `object.property`: a guarded private
+    /// field access (`obj.#x`, lowered with the field's storage key) names
+    /// the private field, any other the public key of that spelling.
+    pub(crate) fn member_atom(&mut self, object: &Expr, property: &str) -> Atom {
+        match object {
+            Expr::PrivateGuard { kind: 0, .. } => self.m.private_atom(property),
+            _ => self.m.atom(property),
+        }
+    }
+
     pub(crate) fn call_with(
         &mut self,
         fx: &Fx,
@@ -113,7 +123,7 @@ impl<'a> Gen<'a> {
                     Some(o) => o,
                     None => self.expr(fx, object),
                 };
-                let a = self.m.atom(property);
+                let a = self.member_atom(object, property);
                 let off = if *pb != 0 { *pb } else { byte_offset };
                 if off != 0 {
                     self.read_sites.push(ReadSite {
