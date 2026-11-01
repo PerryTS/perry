@@ -367,7 +367,8 @@ impl Model {
         if !theirs {
             builtins::note_native_write(self, t, Some(wkey), &what);
         }
-        if matches!(key, Key::Any)
+        // An element store's key is a number: it never names `__proto__`.
+        if matches!(key, Key::Any) && !elem
             || matches!(key, Key::Named(a) if self.atoms[a as usize] == "__proto__")
         {
             self.super_relink.insert(t);

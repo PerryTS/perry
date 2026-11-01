@@ -42,6 +42,7 @@ mod ledger;
 mod named_accessors;
 mod native_fs;
 mod native_proto;
+mod native_member;
 mod own_length;
 mod unknown_accessor_key;
 mod parent_value;

@@ -822,6 +822,11 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
 
     let c = m.calls[call as usize].clone();
     let elems = m.field_any(t);
+    // The four collection kinds share one model of their contents.
+    let what = match members::bobj_family(what) {
+        Family::Collection => "Collection",
+        _ => what,
+    };
     match (what, name) {
         ("Iterator", _) => iterator_method(m, t, name, call),
         // Iterables or plain results, not iterators: no `next`/`return`/

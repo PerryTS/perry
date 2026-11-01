@@ -103,6 +103,14 @@ pub fn native_proto_keys(name: &str) -> &'static [&'static str] {
 
 /// May native prototype `np`'s key `a` be written ([`Model::native_writes`])?
 pub fn native_written(m: &Model, np: Tok, a: Atom) -> bool {
+    let (top, own) = native_written_by(m, np, a);
+    top || own
+}
+
+/// [`native_written`], by its writer: `.0` a store into ⊤ (which may be any
+/// builtin prototype), `.1` a write onto `np` itself (for the global object
+/// or a global's native prototype, onto `Object.prototype` too).
+pub fn native_written_by(m: &Model, np: Tok, a: Atom) -> (bool, bool) {
     // An element store's write (`NUM_KEY`) is one of every numeric key and
     // of `length` (`push` on an array-like moves it).
     let num = m
@@ -139,12 +147,14 @@ pub fn native_written(m: &Model, np: Tok, a: Atom) -> bool {
     // reaches every one of them without being handed one (the chain of any
     // object or function it holds, the globals interpreted code reads), and
     // gives them to compiled code as ⊤.
-    (hit(TOP) && (!is_global || m.global_in_top))
-        || hit(np)
-        || (global
-            && m.tok_index
-                .get(&TokKind::ObjectProto)
-                .is_some_and(|&op| hit(op)))
+    (
+        hit(TOP) && (!is_global || m.global_in_top),
+        hit(np)
+            || (global
+                && m.tok_index
+                    .get(&TokKind::ObjectProto)
+                    .is_some_and(|&op| hit(op))),
+    )
 }
 
 /// Does a lookup of `key` pass native prototype `np` (a key it does not

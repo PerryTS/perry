@@ -1614,14 +1614,15 @@ impl<'a> Gen<'a> {
             }
 
             // ---------------------------------------------- maps and sets
-            Expr::MapNew | Expr::SetNew => self.bobj(mi, "Collection").1,
+            Expr::MapNew => self.bobj(mi, "Map").1,
+            Expr::SetNew => self.bobj(mi, "Set").1,
             Expr::MapNewFromArray(x) => {
                 // Entries `[key, value]`: the map holds their contents.
                 let v = self.expr(fx, x);
                 let it = self.iterate(v);
                 let ek = self.m.elem_key();
                 let inner = self.load(it, ek);
-                let (t, n) = self.bobj(mi, "Collection");
+                let (t, n) = self.bobj(mi, "Map");
                 let fa = self.m.field_any(t);
                 self.m.edge(inner, fa);
                 n
@@ -1629,7 +1630,7 @@ impl<'a> Gen<'a> {
             Expr::SetNewFromArray(x) => {
                 let v = self.expr(fx, x);
                 let it = self.iterate(v);
-                let (t, n) = self.bobj(mi, "Collection");
+                let (t, n) = self.bobj(mi, "Set");
                 let fa = self.m.field_any(t);
                 self.m.edge(it, fa);
                 n
