@@ -727,11 +727,35 @@ fn own_instances(c: &ClassContract, f: &crate::derive::FieldFacts) -> bool {
         && k.objs.iter().all(|d| *d == c.display)
 }
 
+/// A key the defining unit's layout never holds: no birth key, no store
+/// into it, its kind only the `undefined` of a key not yet present
+/// (`derive::field_kind`): a read names it (`this.status()` on the
+/// layout's own instance), nothing writes it. It has no own value: a read
+/// of it is the chain's, as in the defining unit (`derive::lookup`).
+pub(crate) fn unheld(c: &ClassContract, f: &crate::derive::FieldFacts) -> bool {
+    use crate::model::prim;
+    let k = &f.kind;
+    f.data_field
+        && !f.definite
+        && !f.declared
+        && !f.reserved
+        && f.writers_ctor + f.writers_post == 0
+        && !c.birth_keys.contains(&f.key)
+        && !k.top
+        && k.objs.is_empty()
+        && k.funcs == 0
+        && k.builtin_objs == 0
+        && k.prims == prim::UNDEF
+}
+
 /// A field described by its facts alone, as a value contract: the
 /// primitives a data field holds (DECISIONS 74; `undefined` before a field
 /// not definite exists), else an unknown value (its owner sank it).
-fn plain_value(f: &crate::derive::FieldFacts) -> ValueContract {
+fn plain_value(c: &ClassContract, f: &crate::derive::FieldFacts) -> ValueContract {
     use crate::model::prim;
+    if unheld(c, f) {
+        return ValueContract::default();
+    }
     let k = &f.kind;
     if f.data_field
         && !k.top
@@ -842,7 +866,7 @@ impl ClassContract {
                                 fns: fs.clone(),
                                 ..Default::default()
                             },
-                            FieldView::Plain(f) => plain_value(f),
+                            FieldView::Plain(f) => plain_value(c, f),
                             _ => unreachable!("handled above"),
                         };
                         match field_values.iter_mut().find(|(q, _)| q == k) {

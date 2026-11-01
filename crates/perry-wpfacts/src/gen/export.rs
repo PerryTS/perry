@@ -1023,6 +1023,23 @@ impl<'a> Gen<'a> {
                 self.handed.push(t);
             }
         }
+        // This unit's literals handed to another unit's closed class's
+        // constructor (`Cons::HandOver` keeps them): the argument contract
+        // describes them (`ctor_args_out`), the owner's constructor runs on
+        // their stand-ins. One the owner's census broke escapes.
+        for t in self.closed_ctor_literals() {
+            match self.m.tmpl_of(t) {
+                Some(tm) if self.literal_ok(tm) && !self.contract_class(tm) => {
+                    if !self.handed.contains(&t) {
+                        self.handed.push(t);
+                    }
+                }
+                _ => {
+                    let rb = self.m.reason(UNDESCRIBED);
+                    changed |= self.m.escape_changed(t, rb);
+                }
+            }
+        }
         changed |= self.nested_fields(r);
         // A literal of this unit passed to another unit's closed function
         // (decision 13) is described by the argument contract as a value
@@ -1037,6 +1054,11 @@ impl<'a> Gen<'a> {
                 continue;
             }
             if !self.field_fns.keys().any(|&(ft, _)| ft == t) {
+                changed |= self.note_field_fns(t);
+            }
+        }
+        for t in self.closed_ctor_literals() {
+            if self.handed.contains(&t) && !self.field_fns.keys().any(|&(ft, _)| ft == t) {
                 changed |= self.note_field_fns(t);
             }
         }
@@ -1255,6 +1277,36 @@ impl<'a> Gen<'a> {
             .filter(|&t| {
                 matches!(self.m.toks[t as usize], TokKind::Func(f, _)
                 if self.m.funcs[f as usize].func_id != u32::MAX)
+            })
+            .collect();
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
+    /// This unit's literal layouts its constructions pass to other units'
+    /// closed classes (`ctor_args_out`): what the stand-in constructors'
+    /// parameters hold that `Cons::HandOver` kept (no stand-in, no marker).
+    fn closed_ctor_literals(&self) -> Vec<Tok> {
+        let mut out: Vec<Tok> = self
+            .closed_ctors
+            .iter()
+            .flat_map(|&(_, _, ft)| self.m.funcs[self.m.tok_fn(ft) as usize].params.clone())
+            .flat_map(|p| self.m.nodes[p as usize].pts.to_sorted())
+            .filter(|&t| match self.m.toks[t as usize] {
+                TokKind::Obj(tm, _) => {
+                    !self.stand_in_cc.contains_key(&tm)
+                        && !self.m.foreign.contains_key(&tm)
+                        && !self.m.is_marker(t)
+                        && matches!(
+                            self.m.tmpls[tm as usize].kind,
+                            TmplKind::Class {
+                                literal_shape: true,
+                                ..
+                            }
+                        )
+                }
+                _ => false,
             })
             .collect();
         out.sort_unstable();

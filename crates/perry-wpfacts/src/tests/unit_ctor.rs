@@ -124,28 +124,29 @@ fn a_read_back_instance_used_beyond_its_contract_breaks_the_class() {
 }
 
 #[test]
-fn a_constructor_argument_no_contract_describes_escapes() {
-    // Soundness of DECISIONS 109: only another unit's stand-in stays in its
-    // contract when handed to the constructor. `leaf`'s unit passes its own
-    // object: it escapes there (the defining unit sees it as a layout it
-    // can write into), and `left` holds more than Node.
+fn a_constructor_argument_of_this_unit_is_handed_by_its_layout() {
+    // Soundness of DECISIONS 109: another unit's stand-in stays in its
+    // contract when handed to the constructor; `leaf`'s unit passes its own
+    // literal: the argument contract describes it (`ctor_args_out`), as one
+    // handed to a closed function, and the defining unit stores its
+    // stand-in: `left` holds more than Node. Per unit proves no site the
+    // whole program does not.
     let src = TREE.replace(
         "console.log(check(bottomUp(4)));",
         "function leaf(): Node { const o: any = { left: null, right: null }; return new Node(o, null); }\n\
          console.log(check(leaf()));",
     );
     let pf = units(&src);
+    assert_merged(&pf, &facts(&src), &[]);
     let o = pf
         .templates
         .iter()
         .find(|t| t.display.contains("__AnonShape") && t.birth_keys == ["left", "right"])
         .unwrap_or_else(|| panic!("the literal in\n{}", pf.dump_text()));
-    assert!(o.escape.is_some(), "{}", pf.dump_text());
-    assert!(
-        !verdicts(&pf, "left").iter().all(|v| v.starts_with("T0")),
-        "{}",
-        pf.dump_text()
-    );
+    assert!(o.escape.is_none(), "{}", pf.dump_text());
+    // `n.left` reads Node or the literal: a set, as whole.
+    assert_eq!(verdicts(&pf, "left"), ["T0Set"], "{}", pf.dump_text());
+    assert_eq!(verdicts(&pf, "left"), verdicts(&facts(&src), "left"));
 }
 
 /// DECISIONS 137: CD's RedBlackTree.put stores `this.root` (what its

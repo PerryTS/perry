@@ -1107,6 +1107,7 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             unique_bindings(&mut b.this_of, path, "this-of FuncId");
         }
         pf.stats.modules = sorted.len();
+        join_site_records(&mut pf);
         typed_param_verdicts(&mut pf);
         pf.rounds = rounds;
         // The cost of the run is every round's.
@@ -1752,6 +1753,22 @@ pub(super) fn merge_unit(
     a.top_calls += s.top_calls;
     a.pts_entries += s.pts_entries;
     pf.units.push((path.to_string(), u.stats));
+}
+
+/// One fact per read site, as one run's (`derive::site_facts`): the records
+/// of a site walked twice (an inlined body is a copy of its own) unite their
+/// receivers. A unit's record no receiver or callee flows into (a dead
+/// site: its body's own unit when the one caller runs an inlined copy)
+/// adds nothing to that union: the other units' records decide the site.
+/// A site only dead records name stays one dead fact.
+pub(super) fn join_site_records(pf: &mut ProgramFacts) {
+    let dead = |s: &SiteFacts| matches!(&s.verdict, crate::Verdict::No(r) if r.starts_with("dead site"));
+    let key = |s: &SiteFacts| (s.module, s.byte_offset, s.key.clone(), s.is_call);
+    let live: FxHashSet<(u32, u32, String, bool)> =
+        pf.sites.iter().filter(|s| !dead(s)).map(key).collect();
+    let mut seen: FxHashSet<(u32, u32, String, bool)> = FxHashSet::default();
+    pf.sites
+        .retain(|s| !dead(s) || (!live.contains(&key(s)) && seen.insert(key(s))));
 }
 
 /// Post-census verdicts for sites on a parameter whose TS type is an

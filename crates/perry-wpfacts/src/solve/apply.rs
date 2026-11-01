@@ -111,7 +111,16 @@ impl Model {
                     // DECISIONS 149e: an array leaves by its element cell,
                     // a primitive method's container too (184).
                     let arr = self.is_cell_arr(t);
-                    if !stand_in && !arr {
+                    // A literal layout of this unit is handed over as one
+                    // handed to a closed function is: the argument contract
+                    // describes it key by key (`ctor_args_out`); it escapes
+                    // once a census report broke its layout
+                    // (`Gen::closed_ctor_literals`).
+                    let lit = !stand_in
+                        && matches!(self.toks[t as usize], TokKind::Obj(tm, _)
+                            if matches!(self.tmpls[tm as usize].kind,
+                                TmplKind::Class { literal_shape: true, .. }));
+                    if !stand_in && !arr && !lit {
                         self.escape(t, reason);
                     }
                 }
