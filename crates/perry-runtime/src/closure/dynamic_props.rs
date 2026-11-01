@@ -361,28 +361,14 @@ pub(crate) fn closure_get_dynamic_prop_keyed(
             );
         }
         {
-            // The proto object's [[Get]](key, Receiver) with the ORIGINAL
-            // closure as receiver: an accessor further up its chain runs on
-            // the closure too, not on the proto that holds the chain. A
-            // callable class instance (`Object.setPrototypeOf(fn.bind(this),
-            // new.target.prototype)`, ArkType's `Callable`) reads its class
-            // getters this way; a getter two levels up returned the
-            // intermediate prototype for `this` (ArkType's `rawIn`).
-            // The thread's canonical interned header: one stable key
-            // identity, no allocation per read.
+            // The thread's canonical interned header: no allocation per read,
+            // and one stable key identity, so the read below can be served by
+            // (and prime) the inherited-read cache instead of minting a fresh
+            // key string that no cache entry can ever match again.
             let key_hdr = crate::string::canonical_key(prop.as_bytes());
-            let this_scope = crate::gc::RuntimeHandleScope::new();
-            let receiver = this_scope.root_nanbox_f64(
-                crate::object::field_get_set::accessor_receiver_override_take()
-                    .unwrap_or_else(|| crate::value::js_nanbox_pointer(ptr as i64)),
-            );
-            let v = crate::value::JSValue::from_bits(
-                crate::proxy::js_reflect_get(
-                    proto_f64,
-                    crate::value::js_nanbox_string(key_hdr as i64),
-                    receiver.get_nanbox_f64(),
-                )
-                .to_bits(),
+            let v = crate::object::js_object_get_field_by_name(
+                proto_ptr as *const crate::object::ObjectHeader,
+                key_hdr as *const crate::StringHeader,
             );
             if !v.is_undefined() && !v.is_null() {
                 return f64::from_bits(v.bits());
