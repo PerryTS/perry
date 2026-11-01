@@ -39,10 +39,8 @@ use crate::object::layout_probe::FunctionPut;
 /// its own materialization and attribute rules?
 #[inline]
 unsafe fn intrinsic_function_key(key: *const crate::StringHeader) -> bool {
-    let bytes = std::slice::from_raw_parts(
-        crate::string::string_data(key),
-        (*key).byte_len as usize,
-    );
+    let bytes =
+        std::slice::from_raw_parts(crate::string::string_data(key), (*key).byte_len as usize);
     matches!(
         bytes,
         b"name" | b"length" | b"prototype" | b"caller" | b"arguments" | b"__proto__"
@@ -74,7 +72,9 @@ pub(crate) unsafe fn function_own_put(
     if header.obj_type != crate::gc::GC_TYPE_CLOSURE
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || header._reserved
-            & (crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND)
+            & (crate::gc::OBJ_FLAG_FROZEN
+                | crate::gc::OBJ_FLAG_SEALED
+                | crate::gc::OBJ_FLAG_NO_EXTEND)
             != 0
     {
         return None;
