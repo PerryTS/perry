@@ -5,5 +5,5 @@ same function count). The loop now has one body and two heads: the entry
 verdict is tested once, the indexed head steps like `i < a.length; a[i]` with
 the source's declared element type, the protocol head runs the record's Step,
 and both enter the same body with the step value bound; the record's update
-and completion state are shared. A binding that is the step value's only
-reader takes the element without a string alias demote on the indexed head.
+and completion state are shared. The loop goes through the region tier like
+an indexed loop, so a per-iteration receiver still gets its guarded split.
