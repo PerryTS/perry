@@ -1,0 +1,204 @@
+{
+  "date": "2026-11-01",
+  "source": "93f99a33566e13aed0e3681c4cd4268885bc8841",
+  "runtimeSource": "c55be7ad8657399e490216ccb7a8f6556d805b85",
+  "scope": "Linux x86_64 actual Perry WASI 0.3 guest reader I/O through experimental generated C/JS adapters and independent Rust host writers",
+  "fullWasi030Qualified": false,
+  "abi": {
+    "guestVersion": 2,
+    "additiveEndpointOperationsVersion": 1,
+    "existingGuestLayoutUnchanged": true,
+    "persistentAgentTlsBridgeCalls": 56,
+    "sdk": "wasi-sdk 34.0",
+    "experimentalThreadingEnabled": false
+  },
+  "build": {
+    "freshCoherentOrdinaryNativePackages": [
+      "perry",
+      "perry-runtime-static",
+      "perry-stdlib-static",
+      "perry-component-host",
+      "perry-wit",
+      "perry-gc-effects"
+    ],
+    "feature": "perry/target-wasi",
+    "nativeInstruments": false,
+    "nativeSidecarsBuilt": true,
+    "p3ArchivesBuiltAt": "c55be7ad8657399e490216ccb7a8f6556d805b85",
+    "p3ProductionInputsUnchangedThrough": "93f99a33566e13aed0e3681c4cd4268885bc8841",
+    "excludedTestOnlyPath": "crates/perry-runtime/src/component/guest/endpoints/io/tests.rs",
+    "rustflagsEnvironmentModified": false
+  },
+  "units": {
+    "runtimeSource": "ff07ed75c2db724c441091127b7431504f264c36",
+    "normalDevComponentRuntimePassed": 122,
+    "debugAssertionsEnabled": true,
+    "serial": true,
+    "fullRuntimeSuiteQualified": false,
+    "witPassed": 33,
+    "witIgnoredFixtureProducers": 2,
+    "nativeAsanUbsanReadCustodyCases": 26,
+    "incorrectOwnerDropMutationRejected": true,
+    "invalidFutureResultControlsTrapped": 2,
+    "collectingPromiseInitDisposalAndAlsCancellationCovered": true,
+    "resourcePayloadCustodyInNativeSanitizerOnly": true
+  },
+  "acceptance": {
+    "script": "scripts/component_endpoint_transport_acceptance.py",
+    "phasesPassed": 15,
+    "phases": [
+      {
+        "phase": "build-probes",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "public-guard",
+        "exitCode": 1,
+        "passed": true
+      },
+      {
+        "phase": "generate",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "plain-compile",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "plain-link",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "reject-undeclared-types",
+        "exitCode": 1,
+        "passed": true
+      },
+      {
+        "phase": "plain-contract",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "plain-execute",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "c-task-context-link",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "c-task-context-execute",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "instrumented-compile",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "instrumented-link",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "instrumented-contract",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "instrumented-execute",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "moving",
+        "exitCode": 0,
+        "passed": true
+      }
+    ],
+    "externalWasiInterfaces": 18,
+    "externalWasiVersions": [
+      "0.3.0"
+    ],
+    "declaredApplicationTypeImports": [
+      "payload",
+      "pending",
+      "values",
+      "pair"
+    ],
+    "undeclaredTypeImportsRejected": true,
+    "publicAsyncGuardPreserved": true,
+    "payloadProfiles": [
+      "future<record(string,u64,char,list<u8>)>",
+      "stream<record(string,u64,char,list<u8>)>",
+      "future<char>",
+      "future<void>",
+      "stream<void>",
+      "stream<u8>",
+      "future<future<u32>>"
+    ],
+    "independentHostWriters": true,
+    "guestActuallyBlockedBeforeHostWrites": true,
+    "siblingSyncCollectionWhileReadBlocked": true,
+    "partialChunksAndEof": true,
+    "explicitPendingReadDisposal": true,
+    "abandonedReadCancellationAndRetainedReaderRetry": true,
+    "separateMaintainedCCanonicalWaitResumeControl": true,
+    "storeReuse": true,
+    "guestHasNoArtificialBigIntExpression": true,
+    "explicitFuelGrant": 3000000000,
+    "memoryLimitBytes": 268435456
+  },
+  "gc": {
+    "nativeHostControlsOff": true,
+    "plainAndInstrumentedGuestOffControlsPassed": true,
+    "guestOnlyEnvironmentGrants": true,
+    "guestCopiedObjectsInMinorLogs": 8799,
+    "guestEvacuationVerified": true,
+    "movingGuestStderrCaptureBytes": 16777216,
+    "physicalWasmPageProtectionClaimed": false
+  },
+  "fixes": {
+    "futureReadResultIsUncounted": true,
+    "futureCancelledCode": 2,
+    "completedFutureInitializesOnePayload": true,
+    "componentS64U64ProducersSelectBigIntInstaller": true,
+    "canonicalReference": "https://github.com/WebAssembly/component-model/blob/main/design/mvp/Explainer.md#-futureread-and-futurewrite"
+  },
+  "runtimeArchives": {
+    "plain": {
+      "bytes": 46123296,
+      "sha256": "42b1d0ed59aa1b5fe7aadd9ab735250f9edd2d9cd44b481bec413b3e7df08f9a"
+    },
+    "instrumented": {
+      "bytes": 46929202,
+      "sha256": "7c3150e582504562834bff0dff39ec9481b006d1c2730a367440f48fce529a88"
+    }
+  },
+  "noTokio": {
+    "offlineInventoryPassed": true,
+    "newDependencies": false
+  },
+  "evidence": {
+    "archive": "wasi-030-v103-evidence.tar.gz",
+    "bytes": 76735406,
+    "sha256": "efce86ecb35e67a3ba7fdbd26491e9df907c1cc8485170e045b6a1283ca190d8",
+    "indexedFiles": 196,
+    "archiveAndEveryIndexedMemberVerifiedLocally": true,
+    "exactRegularFileSetVerified": true
+  },
+  "notQualifiedByThisReceipt": [
+    "Guest writes, writer factories, private producer actor, or public async generation",
+    "Actual resource-bearing read payloads and the full generic payload/lifecycle matrix",
+    "General blocking I/O scheduling from synchronous canonical exports",
+    "The complete current provider/HTTP/shared-provider ALS matrix",
+    "All nine command regressions on these later runtime sources, current instrumented native release artifacts, macOS/Windows installed packages, required CI, full lint, or merge"
+  ]
+}
