@@ -522,6 +522,10 @@ pub extern "C" fn js_node_http_im_remote_port(handle: i64) -> f64 {
 /// `'data'` event until the next `resume()` or `read()`).
 #[no_mangle]
 pub extern "C" fn js_node_http_im_pause(handle: i64) {
+    if crate::client_surface::js_http_is_incoming_message(handle) != 0 {
+        crate::client_incoming_read::pause(handle);
+        return;
+    }
     if let Some(im) = get_handle_mut::<IncomingMessage>(handle) {
         im.paused = true;
     }
@@ -542,6 +546,10 @@ pub extern "C" fn js_node_http_im_pause_self(handle: i64) -> i64 {
 /// the event-loop iterator will pick the request up on its next pass.
 #[no_mangle]
 pub extern "C" fn js_node_http_im_resume(handle: i64) {
+    if crate::client_surface::js_http_is_incoming_message(handle) != 0 {
+        crate::client_incoming_read::resume(handle);
+        return;
+    }
     let mut should_emit_data = false;
     let mut should_emit_end = false;
     let body_bytes;
@@ -600,6 +608,11 @@ pub extern "C" fn js_node_http_im_resume_self(handle: i64) -> i64 {
 /// Destroy a request handle, or the transport behind an accepted socket.
 #[no_mangle]
 pub extern "C" fn js_node_http_im_destroy(handle: i64) {
+    if crate::client_surface::js_http_is_incoming_message(handle) != 0 {
+        // SAFETY: `handle` is a live client IncomingMessage (checked above).
+        unsafe { crate::client_incoming_read::destroy(handle, None) };
+        return;
+    }
     let socket = if let Some(im) = get_handle_mut::<IncomingMessage>(handle) {
         im.destroyed = true;
         im.socket_value
@@ -924,6 +937,9 @@ pub extern "C" fn js_node_http_im_set_timeout(handle: i64, _msecs: f64, _callbac
 /// `null` thereafter.
 #[no_mangle]
 pub extern "C" fn js_node_http_im_read(handle: i64) -> f64 {
+    if crate::client_surface::js_http_is_incoming_message(handle) != 0 {
+        return crate::client_incoming_read::read(handle, None);
+    }
     let (bytes, encoding) = match get_handle_mut::<IncomingMessage>(handle) {
         Some(im) => {
             if im.data_emitted {

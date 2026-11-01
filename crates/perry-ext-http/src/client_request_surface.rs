@@ -122,6 +122,9 @@ extern "C" fn client_once_wrapper(
                     return false;
                 };
                 listeners.remove(position);
+                if event == "readable" && listeners.is_empty() {
+                    response.read.readable_listening = false;
+                }
                 true
             })
         })
