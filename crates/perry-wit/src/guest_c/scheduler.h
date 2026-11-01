@@ -1,5 +1,16 @@
 /* Private generated async scheduler. No JS addresses live in C. */
 typedef struct perry_task perry_task;
+/* SDK libcall task hooks own canonical context 0 (stack/TLS). Ordinary C TLS
+   follows the SDK task across WAIT/resume; the frame bridge separately selects
+   the persistent JS agent only during finite Rust calls. P2 keeps its ABI. */
+#ifdef __wasm_libcall_thread_context__
+static _Thread_local void *perry_canonical_task;
+static void *perry_task_context_get(void) { return perry_canonical_task; }
+static void perry_task_context_set(void *task) { perry_canonical_task = task; }
+#else
+static void *perry_task_context_get(void) { return $W_context_get_0(); }
+static void perry_task_context_set(void *task) { $W_context_set_0(task); }
+#endif
 typedef struct perry_child {
     void *frame;
     struct perry_child *next;
@@ -207,7 +218,7 @@ static $W_callback_code_t perry_task_cancel(perry_task *t) {
     perry_task_reap(t);
     perry_require(perry_component_frame_resource_scope_end(t->frame) == 0);
     $W_task_cancel();
-    $W_context_set_0(NULL);
+    perry_task_context_set(NULL);
     perry_task_drop(t);
     return $U_CALLBACK_CODE_EXIT;
 }
@@ -236,7 +247,7 @@ static $W_callback_code_t perry_task_wait(perry_task *t) {
         perry_require($S_read(t->reader, 1) == $U_WAITABLE_STATUS_BLOCKED);
         t->read_pending = t->armed = true;
     }
-    $W_context_set_0(t);
+    perry_task_context_set(t);
     perry_wake_all();
     return $U_CALLBACK_CODE_WAIT(t->set);
 }

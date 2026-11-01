@@ -61,16 +61,21 @@ def main():
     run("compile", [args.perry.resolve(), "compile", guest / "guest.ts", "--target", "wasip3",
                     "--output-type", "staticlib", "--no-auto-optimize", "--no-cache", "-o", library])
     components = []
+    control_files = []
     marker = "PASS: actual Perry P3 endpoint transport, compound/char/void/unit/byte/nested values, partial chunks, explicit/GC cleanup and Store reuse"
+
+    def link(directory, archive, component):
+        return [args.wasi_sdk.resolve() / "bin" / ("clang" + suffix),
+                "--target=wasm32-wasip3", "-mexec-model=reactor", "-O1", "-g",
+                "-Wall", "-Werror", "-Wno-unused-function", "-I", directory,
+                directory / "plugin.c", directory / "perry_adapter.c",
+                directory / "plugin_component_type.o", "-Wl,--whole-archive", library,
+                "-Wl,--no-whole-archive", archive, "-lsetjmp", "-Wl,--export=cabi_realloc",
+                "-Wl,--stack-first", "-Wl,-z,stack-size=8388608", "-Wl,--fatal-warnings", "-o", component]
+
     for kind, archive in [("plain", args.plain_runtime.resolve()), ("instrumented", args.runtime.resolve())]:
         component = guest / (kind + ".component.wasm")
-        run(kind + "-link", [args.wasi_sdk.resolve() / "bin" / ("clang" + suffix),
-                             "--target=wasm32-wasip3", "-mexec-model=reactor", "-O1", "-g",
-                             "-Wall", "-Werror", "-Wno-unused-function", "-I", generated,
-                             generated / "plugin.c", generated / "perry_adapter.c",
-                             generated / "plugin_component_type.o", "-Wl,--whole-archive", library,
-                             "-Wl,--no-whole-archive", archive, "-lsetjmp", "-Wl,--export=cabi_realloc",
-                             "-Wl,--stack-first", "-Wl,-z,stack-size=8388608", "-Wl,--fatal-warnings", "-o", component])
+        run(kind + "-link", link(generated, archive, component))
         components.append(component)
         if kind == "plain":
             run("reject-undeclared-types", [args.p3_contract.resolve(), "--reactor", component,
@@ -83,6 +88,22 @@ def main():
                                  "--type-import=values", "--type-import=pair"])
         run(kind + "-execute", [binaries / ("guest_endpoint_transport" + suffix), guest / "world.wit", component])
         assert marker in (out / (kind + "-execute.log")).read_text()
+        if kind == "plain":
+            control = out / "task-context-control"
+            shutil.copytree(generated, control)
+            adapter = control / "perry_adapter.c"
+            text = adapter.read_text()
+            start = text.index("plugin_callback_code_t exports_plugin_pass_stream_callback(")
+            end = text.index("typedef struct {", start)
+            body = (fixture / "task-context.c").read_text()
+            adapter.write_text(text[:start] + body + text[end:])
+            controlled_component = control / "control.component.wasm"
+            run("c-task-context-link", link(control, archive, controlled_component))
+            run("c-task-context-execute", [binaries / ("guest_endpoint_transport" + suffix),
+                                            guest / "world.wit", controlled_component])
+            assert marker in (out / "c-task-context-execute.log").read_text()
+            components.append(controlled_component)
+            control_files = [p for p in control.iterdir() if p.is_file()]
         if kind == "instrumented":
             run("moving", [binaries / ("guest_endpoint_transport" + suffix), guest / "world.wit", component, "--moving"])
             log = (out / "moving.log").read_text()
@@ -90,7 +111,7 @@ def main():
             assert marker in log and copied > 0 and "evacuation_ok" in log
             (out / "moving.json").write_text(json.dumps(dict(guestCopiedObjects=copied, guestEvacuationVerified=True), indent=2) + "\n")
     paths = [args.perry.resolve(), args.wit.resolve(), args.plain_runtime.resolve(), args.runtime.resolve(),
-             library, *components, *binaries.iterdir(), *generated.iterdir()]
+             library, *components, *binaries.iterdir(), *generated.iterdir(), *control_files]
     identities = {str(p): dict(bytes=p.stat().st_size, sha256=hashlib.sha256(p.read_bytes()).hexdigest())
                   for p in paths if p.is_file()}
     (out / "artifact-identities.json").write_text(json.dumps(identities, indent=2) + "\n")

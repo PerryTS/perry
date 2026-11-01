@@ -106,6 +106,8 @@ int32_t perry_component_frame_endpoint_pop(void *, uint32_t *, uint32_t *);
 int32_t perry_component_frame_resource_scope_end(void *);
 void perry_component_frame_resource_destroy(void *, uint32_t, uint32_t);
 
+#include "perry_component_agent.h"
+
 /* Only native C allocations live here. Every JS value is a rooted frame slot. */
 typedef struct perry_allocation {
     void *pointer;

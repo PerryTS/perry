@@ -1,5 +1,7 @@
 //! The maintained C backend owns the canonical ABI. This module connects its
 //! typed C functions to Perry's rooted frame API; it never invents Wasm layouts.
+#[cfg(test)]
+mod agent_tests;
 mod asynchronous;
 mod endpoints;
 mod values;
@@ -113,6 +115,10 @@ fn generate_resolved(
     output.insert(
         "perry_component_frame.h".into(),
         include_bytes!("guest_frame.h").to_vec(),
+    );
+    output.insert(
+        "perry_component_agent.h".into(),
+        include_bytes!("guest_agent.h").to_vec(),
     );
     Ok(output)
 }

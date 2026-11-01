@@ -1,0 +1,1 @@
+WASI 0.3 library adapters keep Perry's registered exports, heap and Promise state in the component's persistent agent TLS across canonical tasks. Finite frame calls restore the SDK task's TLS before returning to C, and the async scheduler uses SDK task-local storage without overwriting its reserved stack context.
