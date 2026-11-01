@@ -8,6 +8,7 @@ import {
   existsSync,
   readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs'
 import path from 'node:path'
@@ -25,6 +26,16 @@ import { packTarball } from './npm/proof.mts'
 async function main(): Promise<void> {
   const version = readCargoVersion()
   if (!version) throw new Error('could not read the workspace version from Cargo.toml')
+
+  // Packed-size budget (bytes), set once in the workflow env. Unset = no check
+  // (local runs). Every tarball is sized and printed first, so one failure
+  // lists ALL the oversize packages, not just the first.
+  const budgetText = process.env.NPM_PACKED_SIZE_BUDGET ?? ''
+  const budget = budgetText === '' ? undefined : Number(budgetText)
+  if (budget !== undefined && !(budget > 0)) {
+    throw new Error(`NPM_PACKED_SIZE_BUDGET is not a positive number: ${budgetText}`)
+  }
+  const oversize: string[] = []
 
   const packages: CiPackageProof[] = []
   for (const name of ALL_PACKAGES) {
@@ -54,7 +65,16 @@ async function main(): Promise<void> {
       path: path.relative(rootPath, packed.path),
       sha1: packed.sha1,
     })
-    console.log(`packed ${name}@${version}: ${packed.sha1}  ${path.relative(rootPath, packed.path)}`)
+    const size = statSync(packed.path).size
+    console.log(
+      `packed ${name}@${version}: ${packed.sha1}  ${path.relative(rootPath, packed.path)}  ${size} bytes (${(size / 1e6).toFixed(1)} MB)`,
+    )
+    if (budget !== undefined && size > budget) oversize.push(`${name}@${version} ${size}`)
+  }
+  if (oversize.length > 0) {
+    throw new Error(
+      `packed tarball(s) over the ${budget}-byte budget (npm rejects oversize uploads with 413): ${oversize.join(', ')}`,
+    )
   }
 
   if (packages.length !== ALL_PACKAGES.length) {
