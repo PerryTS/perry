@@ -124,6 +124,20 @@ resolve_artifact() {
   echo "$workdir"
 }
 
+# Strip embedded LLVM bitcode (.llvmbc/.llvmcmd) from an archive's members
+# before it is compressed. The UI and wasm-host archives bundle the Rust
+# standard library from rustup's precompiled rlibs, whose objects carry their
+# bitcode (about 10 MB raw, 2.5-3 MB compressed per archive); a native link
+# never reads it, and no cargo flag removes it. llvm-objcopy rejects a whole
+# Windows .lib (import members), so every platform takes the same path: member
+# by member, original order and names, symbol table rebuilt, no other byte of
+# any object touched (scripts/strip-archive-members.py). Extra args pass
+# through (--strip-debug). Darwin archives (BSD layout) are not handled and
+# stay as built. Args: [--strip-debug] archive...
+strip_archive_bitcode() {
+  python3 "$REPO_ROOT/scripts/strip-archive-members.py" "$@"
+}
+
 # GC effects sidecars: `<archive>.gc-effects` is staged beside every runtime
 # archive (and, once the archive is compressed, beside its .a.zst). perry
 # re-hashes the decompressed archive against it at compile time. A runtime
@@ -197,6 +211,7 @@ stage_android_cross_libs() {
       continue
     fi
     cp "$src" "$dest/$lib"
+    [ "$lib" = libperry_ui_android.a ] && strip_archive_bitcode "$dest/$lib"
     if [ "$lib" = libperry_runtime.a ]; then
       if [ ! -f "$src.gc-effects" ]; then
         echo "  error: $src has no .gc-effects sidecar (scripts/gc_call_effects/sidecars.sh)" >&2
@@ -283,6 +298,15 @@ for entry in "${PLATFORMS[@]}"; do
     for lib in "${WIN_CORE_LIBS[@]}" perry_wasm_host.lib "$ui_lib"; do
       [ -f "$src_dir/$lib" ] && cp "$src_dir/$lib" "$pkg_dir/lib/"
     done
+    for lib in perry_wasm_host.lib "$ui_lib"; do
+      [ -f "$pkg_dir/lib/$lib" ] && strip_archive_bitcode "$pkg_dir/lib/$lib"
+    done
+    # The vendored OpenSSL (openssl-src) is compiled by OpenSSL's own MSVC
+    # Configure target, which hardcodes `/Zi /Fdossl_static.pdb` for every
+    # library object and has no switch to turn it off; the CodeView records
+    # (about 37 MB raw) point at a PDB that is not shipped. Drop them with the
+    # bitcode.
+    [ -f "$pkg_dir/lib/perry_stdlib.lib" ] && strip_archive_bitcode --strip-debug "$pkg_dir/lib/perry_stdlib.lib"
     stage_sidecars "$src_dir" "$pkg_dir/lib" "${WIN_CORE_LIBS[@]}"
     # #4823: the Windows package also carries the android cross-libs so
     # `perry --target android` works from an npm install (parity with the zip).
@@ -293,6 +317,14 @@ for entry in "${PLATFORMS[@]}"; do
     for lib in "${UNIX_CORE_LIBS[@]}" libperry_wasm_host.a "$ui_lib"; do
       [ -f "$src_dir/$lib" ] && cp "$src_dir/$lib" "$pkg_dir/lib/"
     done
+    case "$pkg_suffix" in
+      darwin-*) ;; # BSD-layout archives: see strip_archive_bitcode
+      *)
+        for lib in libperry_wasm_host.a "$ui_lib"; do
+          [ -f "$pkg_dir/lib/$lib" ] && strip_archive_bitcode "$pkg_dir/lib/$lib"
+        done
+        ;;
+    esac
     stage_sidecars "$src_dir" "$pkg_dir/lib" "${UNIX_CORE_LIBS[@]}"
   fi
 
