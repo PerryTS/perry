@@ -1065,9 +1065,13 @@ unsafe fn exotic_get<const ABSENT: bool>(
         crate::gc::GC_TYPE_CLOSURE => {
             let c = obj as *const crate::closure::ClosureHeader;
             let plain = crate::closure::shape::closure_on_plain_function_shape(c);
+            // A plain function's [[Prototype]] is its shape's identity
+            // (`%Function.prototype%` until a link moves it).
             (
                 (*c).props as *const ObjectHeader,
-                plain.then_some(crate::closure::shape::INTRINSIC_SERIAL_FUNCTION),
+                plain
+                    .then(|| crate::object::shapes::shape_proto_id((*c).shape_id))
+                    .flatten(),
                 plain,
             )
         }

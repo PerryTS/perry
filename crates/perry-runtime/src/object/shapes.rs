@@ -5153,6 +5153,13 @@ pub(crate) unsafe fn stable_declared_linked_proto_id(class_id: u32, bits: u64) -
     stable_linked_proto_id_for_class(class, bits)
 }
 
+/// The [[Prototype]] identity a function's shape names for a link to `bits`
+/// (null, or a prototype that already has its stable serial): the class-less
+/// rule an ordinary receiver's link takes.
+pub(crate) fn stable_function_link_identity(bits: u64) -> Option<u64> {
+    stable_linked_proto_id_for_class(0, bits)
+}
+
 fn stable_linked_proto_id_for_class(class: u32, bits: u64) -> Option<u64> {
     if bits == crate::value::TAG_NULL {
         return Some(PROTO_ID_NULL);

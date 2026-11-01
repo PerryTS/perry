@@ -626,6 +626,31 @@ pub fn object_static_prototype(obj_ptr: usize) -> Option<u64> {
                 return crate::buffer::store::bag_get(obj_ptr, crate::buffer::store::PROTOTYPE_KEY)
                     .map(f64::to_bits);
             }
+            // A function's link is its own (its shape's identity, or its
+            // record once a dictionary), never its property bag's: the bag's
+            // record slot below is an exotic owner's, and the bag itself is
+            // born null. A class constructor keeps its holder answer.
+            // `receiver_header_type` proved the cell and read its type.
+            Some(crate::gc::GC_TYPE_CLOSURE)
+                if (*crate::gc::header_from_trusted_user_ptr(obj_ptr as *const u8)).gc_flags
+                    & crate::gc::GC_FLAG_FORWARDED
+                    == 0
+                    && !crate::closure::shape::is_class_info(
+                        (*(obj_ptr as *const crate::closure::ClosureHeader)).info,
+                    ) =>
+            {
+                if let Some(bits) = crate::closure::closure_static_prototype_proven(obj_ptr) {
+                    return Some(bits);
+                }
+                // A legacy holder record on its bag (`object_set_static_prototype`
+                // of a function): read the bag's record directly.
+                let bag = (*(obj_ptr as *const crate::closure::ClosureHeader)).props;
+                if bag.is_null() {
+                    return None;
+                }
+                let meta = crate::meta_read!(crate::meta_obj_runtime_born!(bag as *mut _));
+                return (!meta.is_null() && (*meta).prototype != 0).then(|| (*meta).prototype);
+            }
             Some(kind)
                 if !owned_prototype_receiver_type(kind)
                     && crate::value::addr_class::try_read_tracked_gc_header(obj_ptr).is_some() =>
