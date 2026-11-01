@@ -300,6 +300,12 @@ pub enum TmplKind {
     ObjCreate { module: u32, site: SiteId },
     /// An array literal / array-producing site (flow only).
     Arr { module: u32, site: SiteId },
+    /// A function's `arguments` object (ECMA-262 10.4.4, flow only). It is
+    /// no Array: its prototype is `%Object.prototype%`, and `length` and
+    /// `callee` are ordinary own data properties (writable, configurable:
+    /// a store or `defineProperty` gives them any value). Its indices are
+    /// elements, as an array's are, and it iterates them.
+    Args { module: u32, site: SiteId },
     /// A builtin object created at a site (Map, Set, Promise, Date, Error,
     /// RegExp, typed array, ArrayBuffer, iterator …). Flow only.
     BObj {
@@ -919,6 +925,15 @@ pub enum Cons {
         src: NodeId,
         site: SiteId,
     },
+    /// The node is the key of a computed store `o[key] = src`: a key that
+    /// may be a Number stores at an index (the element key), one that may be
+    /// anything else (a string, a symbol, an object's ToPrimitive result)
+    /// stores under `Key::Any`.
+    StoreIndexed {
+        o: NodeId,
+        src: NodeId,
+        site: SiteId,
+    },
     /// The node is the key of a definition whose descriptor's get (set) is
     /// `f`, on the objects of `holder`: a run's one key installs it under
     /// that key, any other under the computed-key star.
@@ -1054,6 +1069,7 @@ impl Cons {
             Cons::ForInKeys { .. } => "forinkeys",
             Cons::DefineKeyed { .. } => "definekeyed",
             Cons::StoreKeyed { .. } => "storekeyed",
+            Cons::StoreIndexed { .. } => "storeindexed",
             Cons::AccessorKeyed { .. } => "accessorkeyed",
             Cons::ShareBuffer { .. } => "sharebuffer",
             Cons::ThisTo { .. } => "thisto",
@@ -1459,6 +1475,20 @@ pub struct Model {
     /// them. `None` after the solve: compiled code never writes them
     /// ([`Model::note_fnproto_write`]).
     pub fnproto_write: Option<u32>,
+    /// #13645: why iterating an array may not read the builtin
+    /// `%Array.prototype%[@@iterator]`: the first write under
+    /// `Symbol.iterator`, `__proto__` or a computed key, definition or
+    /// prototype change on a value that may be an array (or a prototype on
+    /// an Array subclass's chain), or a `Reflect.construct` with a new
+    /// target ([`Model::note_array_member_write`]). Writes that may reach a
+    /// builtin prototype are in [`Model::native_writes`]
+    /// ([`Model::array_iteration_writes`]).
+    pub array_member_write: Option<u32>,
+    /// #13645: computed-key stores (site, reason) on a value that may be an
+    /// array: a write of `@@iterator` or `__proto__` only if the site's key
+    /// can hold a string, a symbol or an object once the solve is done
+    /// ([`Model::array_iteration_writes`]); a number key is an element.
+    pub array_keyed_stores: Vec<(SiteId, u32)>,
     /// Native parent prototypes (`EventEmitter.prototype`, `Error.prototype`
     /// …) are runtime-owned, like `Object.prototype`: sealed static layouts
     /// whose keys the analysis knows ([`crate::builtins::native_proto_keys`]),
@@ -1496,6 +1526,10 @@ pub struct Model {
     /// (key node, operand, kind) a keyed rule (`DefineKeyed`, `StoreKeyed`,
     /// `AccessorKeyed`) has applied once.
     pub keyed_done: crate::pts::FxHashSet<(NodeId, NodeId, u8)>,
+    /// (key node, store site, index) a `StoreIndexed` store has been added
+    /// for: `true` the index store, `false` the computed-key one. A shared
+    /// body's replay has its own key node.
+    pub index_store_done: crate::pts::FxHashSet<(NodeId, SiteId, bool)>,
     /// For-in bodies that define a property under their key.
     pub for_in_defines: crate::pts::FxHashSet<FnIdx>,
     /// The key variable of every for-in body: a run's copy of it holds the

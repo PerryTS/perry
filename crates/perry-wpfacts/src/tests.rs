@@ -1,12 +1,16 @@
 //! Unit tests: small programs lowered from source, facts checked directly.
 
 mod accessor_keys;
+mod arguments_object;
 mod array_ctor;
 mod array_elements;
+mod array_index_store;
+mod array_iteration;
 mod array_length;
 mod array_named_keys;
 mod array_numeric;
 mod array_record;
+mod array_search;
 mod binding_write_gap;
 mod birth_site;
 mod body_activation;
@@ -50,8 +54,11 @@ mod receiver_this;
 mod relinked_parent;
 mod rest_element;
 mod run_once_closed;
+mod regexp_exec;
 mod runtime_helpers;
 mod summary;
+mod bound_in_summary;
+mod typed_array_exact;
 mod super_heritage;
 mod unit_alias;
 mod unit_cjs;
@@ -64,6 +71,10 @@ mod unit_namespace;
 mod unit_shared;
 mod unit_this;
 mod own_key_shadow;
+mod top_element_key;
+mod unheld_key;
+mod unrun_param_call;
+mod field_array_push;
 
 use crate::{compute, FactsConfig, ProgramFacts, Verdict};
 

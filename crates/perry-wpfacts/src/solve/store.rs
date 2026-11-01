@@ -339,7 +339,12 @@ impl Model {
             true => Key::Named(self.atom(NUM_KEY)),
             false => key,
         };
-        self.note_fnproto_write(t, Some(wkey), "store");
+        // The boundary's store for other units' code is theirs: they note
+        // (and publish) what they write, as for `note_native_write` below.
+        if !theirs {
+            self.note_fnproto_write(t, Some(wkey), "store");
+            self.note_array_member_write(t, Some(wkey), Some(site), "store");
+        }
         // Explain: the first store into ⊤ under a key names its site and why
         // the receiver is ⊤.
         let what = match (self.explain && t == TOP, self.store_at) {

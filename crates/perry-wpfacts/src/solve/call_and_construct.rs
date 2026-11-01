@@ -170,16 +170,34 @@ impl Model {
     /// Records a call through the parameters `own` (`key`: a method of
     /// theirs; a path: of the receiver's field, DECISIONS 236) for the
     /// caller's unit to run (DECISIONS 140/144); its result is that
-    /// unknown code's.
-    fn marker_call(&mut self, own: Vec<(FnIdx, u32, Option<Atom>)>, key: Option<Atom>, call: CallId) {
+    /// unknown code's. DECISIONS 165: a parameter of a published method no
+    /// unit runs (`unrun_param`) stands for no value of another unit, so
+    /// a call through it runs nowhere and has no result; the call stays
+    /// recorded for a unit that will run the method, whose run solves this
+    /// unit again with the parameter described or bare.
+    fn marker_call(
+        &mut self,
+        own: Vec<(FnIdx, u32, Option<Atom>)>,
+        key: Option<Atom>,
+        call: CallId,
+    ) {
+        let mut runs = false;
         for (f, i, path) in own {
+            runs |= path.is_some()
+                || i == u32::MAX
+                || !self
+                    .marker_of
+                    .get(&(f, i))
+                    .is_some_and(|&m| self.unrun_param(m));
             if !self.marker_calls.contains(&(f, i, path, key, call)) {
                 self.marker_calls.push((f, i, path, key, call));
             }
         }
-        let ret = self.calls[call as usize].ret;
-        self.add_tok(ret, TOP);
-        self.add_prim(ret, prim::ALL);
+        if runs {
+            let ret = self.calls[call as usize].ret;
+            self.add_tok(ret, TOP);
+            self.add_prim(ret, prim::ALL);
+        }
     }
 
     /// Unknown callee (⊤ or an opaque builtin function value): arguments
@@ -1045,6 +1063,14 @@ impl Model {
         // callbacks are not that: they never write the intrinsics, and a
         // compiled function called from unknown code sees ⊤ parameters, whose
         // writes `store_into` records.
+        if self.array_member_write.is_none()
+            && t != TOP
+            && self.tok_on_array_chain(t)
+            && self.reasons[reason as usize].starts_with(crate::gen_expr::UNMODELED_OPERAND)
+        {
+            let what = format!("reaches unmodeled code ({})", self.reasons[reason as usize]);
+            self.note_array_member_write(t, None, None, &what);
+        }
         if self.fnproto_write.is_none()
             && matches!(self.toks[t as usize], TokKind::ObjectProto)
             && self.reasons[reason as usize].starts_with(crate::gen_expr::UNMODELED_OPERAND)
@@ -1877,6 +1903,12 @@ impl Model {
         }
         if kind == Hard::E6SetPrototypeOf {
             self.super_relink.insert(t);
+        }
+        if matches!(
+            kind,
+            Hard::E5DefineProperty | Hard::E6SetPrototypeOf | Hard::E15With
+        ) {
+            self.note_array_member_write(t, None, None, kind.code());
         }
         if matches!(
             kind,
