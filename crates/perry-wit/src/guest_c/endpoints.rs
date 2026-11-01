@@ -10,6 +10,11 @@ impl Generator<'_> {
         }
         self.source.push_str("static void perry_endpoint_flush(void) {\nvoid *f = perry_component_frame_new();\nuint32_t type = 0, handle = 0;\nint32_t status;\nwhile ((status = perry_component_frame_endpoint_pop(f, &type, &handle)) > 0) {\nswitch (type) {\n");
         for (ty, name) in &self.endpoint_operations {
+            let key = format!("{}{}", if ty & 1 == 0 { 't' } else { 'e' }, ty / 2);
+            ensure!(
+                self.world.types.contains_key(&key),
+                "Endpoint {name} is outside the immutable manifest: {key}"
+            );
             let stem = name.strip_suffix("_t").unwrap();
             writeln!(
                 self.source,

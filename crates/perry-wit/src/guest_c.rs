@@ -172,8 +172,11 @@ impl Generator<'_> {
                 self.resolve.types[id].kind,
                 TypeDefKind::Future(_) | TypeDefKind::Stream(_)
             ) {
-                let ty =
-                    u32::try_from(id.index() * 2 + usize::from(!import)).expect("async type index");
+                // Root exports, like root imports, use the manifest's tN
+                // namespace. Only exported interfaces introduce eN types.
+                let exported = !import && interface.is_some();
+                let ty = u32::try_from(id.index() * 2 + usize::from(exported))
+                    .expect("async type index");
                 self.endpoints.insert(id, ty);
             }
             if matches!(self.resolve.types[id].kind, TypeDefKind::Resource) {

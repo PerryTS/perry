@@ -1,0 +1,19 @@
+package perry:guest-endpoint-transport@1.0.0;
+
+world plugin {
+    record payload { text: string, wide: u64, letter: char, bytes: list<u8> }
+    type pending = future<payload>;
+    type values = stream<payload>;
+    record pair { first: pending, second: values }
+    export pass-future: func(value: pending) -> pending;
+    export pass-stream: async func(value: values) -> values;
+    export pass-pair: func(value: pair) -> pair;
+    export character: async func(value: future<char>) -> future<char>;
+    export empty: async func(value: future) -> future;
+    export units: async func(value: stream) -> stream;
+    export bytes: async func(value: stream<u8>) -> stream<u8>;
+    export nested-value: async func(value: future<future<u32>>) -> future<future<u32>>;
+    export dispose: func(value: future<u32>);
+    export forget: func(value: stream<u32>);
+    export checkpoint: func() -> u32;
+}
