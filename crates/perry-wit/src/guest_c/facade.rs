@@ -1,6 +1,7 @@
 //! A sibling facade preserves synchronous signatures while kicking a private
 //! asynchronous actor. Every payload layout still comes from wit-bindgen-c.
 use super::*;
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 #[cfg(test)]
 mod tests;
