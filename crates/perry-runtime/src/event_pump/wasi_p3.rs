@@ -6,7 +6,8 @@ use std::time::Duration;
 pub(crate) fn sleep(duration: Duration) {
     let mut requested = libc::timespec {
         tv_sec: duration.as_secs().try_into().expect("WASIp3 sleep seconds"),
-        tv_nsec: duration.subsec_nanos().into(),
+        // Duration guarantees this is below 1e9, which fits WASI's c_long.
+        tv_nsec: duration.subsec_nanos() as libc::c_long,
     };
     loop {
         let mut remaining = libc::timespec {
