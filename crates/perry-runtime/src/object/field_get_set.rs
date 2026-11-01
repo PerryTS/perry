@@ -23,6 +23,17 @@ pub(crate) type HeapKeyBytes = crate::string::OwnedStringBytes;
 /// chain, so a subclass instance can only reach those members via the handle.
 pub(crate) const FETCH_SUBCLASS_HANDLE_FIELD: &[u8] = b"__perry_fetch_handle__";
 
+crate::perry_thread_local! {
+    static FETCH_SUBCLASS_HANDLE_ELEMENT: RuntimePrivateElement =
+        RuntimePrivateElement::new(&String::from_utf8_lossy(FETCH_SUBCLASS_HANDLE_FIELD));
+}
+
+/// The private element (`RuntimePrivateElement`) a `class X extends
+/// Request/Response/Headers/Blob` instance keeps its native Fetch handle in.
+pub(crate) fn fetch_subclass_handle_element<R>(f: impl FnOnce(&RuntimePrivateElement) -> R) -> R {
+    FETCH_SUBCLASS_HANDLE_ELEMENT.with(f)
+}
+
 /// Has any fetch-subclass instance EVER stashed a native handle in this
 /// process? `fetch_subclass_handle_id` costs a key-string alloc + a full
 /// property read per call; the `in`-operator fast path (#6748) gates on this
@@ -66,19 +77,12 @@ pub(crate) unsafe fn fetch_subclass_handle_id(obj: usize) -> Option<i64> {
     if crate::gc_type_is_not_object!(gc_header.obj_type) {
         return None;
     }
-    // #7498: the key allocation below can trigger a copying minor, which moves
-    // `obj` and rewrites only the slots it can see — a bare `usize` is not one.
-    // This frame is on the `[...obj.arr]` prototype-walk stack that
-    // `PERRY_GC_PROTECT_FROMSPACE=1` faults in. Root the receiver first, then
-    // read its post-collection address for the field read.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let obj_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(obj as i64));
-    let key = crate::string::js_string_from_bytes(
-        FETCH_SUBCLASS_HANDLE_FIELD.as_ptr(),
-        FETCH_SUBCLASS_HANDLE_FIELD.len() as u32,
+    // The handle is the instance's own private element (allocation-free:
+    // a shape compare and a slot load on a hit).
+    let v = JSValue::from_bits(
+        fetch_subclass_handle_element(|e| e.get(crate::value::js_nanbox_pointer(obj as i64)))?
+            .to_bits(),
     );
-    let obj = crate::value::js_nanbox_get_pointer(obj_h.get_nanbox_f64()) as *const ObjectHeader;
-    let v = js_object_get_field_by_name(obj, key);
     if v.is_undefined() {
         return None;
     }
@@ -340,6 +344,7 @@ pub(crate) use ic_miss::intrinsic_private_set;
 pub(crate) use ic_miss::private_lexical_brand_depth;
 #[cfg(any(test, target_os = "wasi"))]
 pub(crate) use ic_miss::private_member_access_hints_depth;
+pub(crate) use ic_miss::RuntimePrivateElement;
 pub(crate) use ic_miss::{
     bind_primitive_proto_method_static, cannot_be_private_member_name, class_evaluation_of,
     current_private_lexical_brand_value, define_static_private_field, is_array_method_value_name,

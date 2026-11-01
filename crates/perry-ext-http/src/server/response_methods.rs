@@ -56,6 +56,16 @@ method!(write_body, write, 1, false);
 method!(end_body, end, 0, false);
 #[rustfmt::skip] perry_ffi::realm_decl! { info perry_ffi::fn_info!(export static END = crate::server::response_methods::end_body, 3; with_declared(3)); realm { "node:http.OutgoingMessage.prototype.end", capture = property_key, constructible = true; } }
 
+/// Whether `value` is the intrinsic `ServerResponse.prototype.writeHead` body
+/// (a closure whose info is [`WRITE_HEAD`]), not a program's replacement.
+pub(super) unsafe fn is_intrinsic_write_head(value: f64) -> bool {
+    if super::types::js_value_is_closure(value.to_bits() as i64) == 0 {
+        return false;
+    }
+    let closure = (value.to_bits() & super::types::PTR_MASK) as *const perry_ffi::ClosureHeader;
+    (*closure).info as usize == &WRITE_HEAD as *const JsFunctionInfo as usize
+}
+
 /// Cold prototype construction protocol of the existing HTTP export provider.
 /// The result is immutable image metadata, never a JS value or a heap edge.
 pub(super) fn info(name: &str) -> f64 {

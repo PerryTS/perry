@@ -385,12 +385,10 @@ unsafe fn attach_fetch_handle_to_this(this_box: f64, handle_box: f64) {
         let scope = crate::gc::RuntimeHandleScope::new();
         let owner = scope.root_nanbox_f64(this_box);
         let _handle = scope.root_nanbox_f64(handle_box);
-        let key = crate::string::js_string_from_bytes(
-            FETCH_SUBCLASS_HANDLE_FIELD.as_ptr(),
-            FETCH_SUBCLASS_HANDLE_FIELD.len() as u32,
-        );
-        let obj = crate::value::js_nanbox_get_pointer(owner.get_nanbox_f64()) as *mut ObjectHeader;
-        crate::object::js_object_set_field_by_name(obj, key, handle_box);
+        // A private element, not a property: reflection never sees it.
+        crate::object::field_get_set::fetch_subclass_handle_element(|e| {
+            e.set(owner.get_nanbox_f64(), _handle.get_nanbox_f64())
+        });
     }
 }
 
@@ -464,13 +462,7 @@ pub(crate) unsafe fn temporal_subclass_super(
 /// `undefined` (the super-call value).
 #[no_mangle]
 pub extern "C" fn js_request_subclass_init(this_box: f64, input: f64, init: f64) -> f64 {
-    let handle = global_this_request_thunk(
-        std::ptr::null(),
-        crate::closure::JsThis::UNDEFINED,
-        input,
-        init,
-    );
-    unsafe { attach_fetch_handle_to_this(this_box, handle) };
+    unsafe { init_fetch_backed_receiver("Request", this_box, input, init) };
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
@@ -478,14 +470,36 @@ pub extern "C" fn js_request_subclass_init(this_box: f64, input: f64, init: f64)
 /// `js_request_subclass_init` for the Response handle.
 #[no_mangle]
 pub extern "C" fn js_response_subclass_init(this_box: f64, body: f64, init: f64) -> f64 {
-    let handle = global_this_response_thunk(
-        std::ptr::null(),
-        crate::closure::JsThis::UNDEFINED,
-        body,
-        init,
-    );
-    unsafe { attach_fetch_handle_to_this(this_box, handle) };
+    unsafe { init_fetch_backed_receiver("Response", this_box, body, init) };
     f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// `super(a, b)` of a WHATWG Fetch base (`Request`, `Response`, `Headers`,
+/// `Blob`). Their values are registry handles, which carry neither a shape nor
+/// a [[Prototype]] of their own, so a handle can never BE a subclass instance.
+/// The receiver the derived `new` already allocated (its shape names the
+/// subclass prototype) stays `this`: the base builds its native storage and
+/// the receiver keeps it under the hidden backing field, which the inherited
+/// getters, methods and `instanceof` read. Returns whether `name` is such a
+/// base.
+pub(crate) unsafe fn init_fetch_backed_receiver(
+    name: &str,
+    this_box: f64,
+    arg0: f64,
+    arg1: f64,
+) -> bool {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this_h = scope.root_nanbox_f64(this_box);
+    let this = crate::closure::JsThis::UNDEFINED;
+    let handle = match name {
+        "Request" => global_this_request_thunk(std::ptr::null(), this, arg0, arg1),
+        "Response" => global_this_response_thunk(std::ptr::null(), this, arg0, arg1),
+        "Headers" => global_this_headers_thunk(std::ptr::null(), this, arg0),
+        "Blob" => global_this_blob_thunk(std::ptr::null(), this, arg0, arg1),
+        _ => return false,
+    };
+    attach_fetch_handle_to_this(this_h.get_nanbox_f64(), handle);
+    true
 }
 
 // The two shims above are reached only from codegen-emitted IR (the
@@ -1132,7 +1146,7 @@ pub unsafe extern "C-unwind" fn js_fetch_or_value_super(
         }
     }
     match kind {
-        Some("Request") | Some("Response") => {
+        Some(name @ ("Request" | "Response" | "Headers" | "Blob")) => {
             let arg0 = if args_len >= 1 && !args_ptr.is_null() {
                 *args_ptr
             } else {
@@ -1143,22 +1157,7 @@ pub unsafe extern "C-unwind" fn js_fetch_or_value_super(
             } else {
                 undef
             };
-            let handle = if kind == Some("Request") {
-                global_this_request_thunk(
-                    std::ptr::null(),
-                    crate::closure::JsThis::UNDEFINED,
-                    arg0,
-                    arg1,
-                )
-            } else {
-                global_this_response_thunk(
-                    std::ptr::null(),
-                    crate::closure::JsThis::UNDEFINED,
-                    arg0,
-                    arg1,
-                )
-            };
-            attach_fetch_handle_to_this(this_box, handle);
+            init_fetch_backed_receiver(name, this_box, arg0, arg1);
             undef
         }
         _ => {
