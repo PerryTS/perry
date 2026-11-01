@@ -67,6 +67,83 @@ fn discarded_signal_arrow_listeners_do_not_select_ipc() {
 }
 
 #[test]
+fn assigned_signal_arrows_preserve_identity_without_selecting_ipc() {
+    for method in [
+        "on",
+        "once",
+        "addListener",
+        "prependListener",
+        "prependOnceListener",
+    ] {
+        for event in ["SIGINT", "SIGTERM", "beforeExit", "exit"] {
+            for handler in ["callback = () => {}", "callback = other = () => {}"] {
+                let source = format!(
+                    "let callback: () => void; let other: () => void; \
+                     process.{method}('{event}', {handler}); \
+                     process.removeListener('{event}', callback);"
+                );
+                for source in [
+                    source.clone(),
+                    format!("function setup() {{ {source} }} setup();"),
+                ] {
+                    let ctx = detect_for_source(&source);
+                    assert!(!ctx.uses_proc_ipc, "{source}");
+                    assert!(!ctx.uses_regex, "{source}");
+                    assert!(ctx.uses_os, "signal hooks must stay available: {source}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn assigned_listeners_keep_unproven_callbacks_and_escapes() {
+    for source in [
+        r#"process.on('SIGINT', callback = function () {});"#,
+        r#"process.on('SIGINT', callback = function () { return this; });"#,
+        r#"process.on('SIGINT', callback = unknown);"#,
+        r#"process.on('SIGINT', callback = makeCallback());"#,
+        r#"process.on('SIGINT', callback = flag ? () => {} : unknown);"#,
+        r#"process.on(event, callback = () => {});"#,
+        r#"process.on('unknown-event', callback = () => {});"#,
+        r#"process.on('message', callback = () => {});"#,
+        r#"process.once('disconnect', callback = () => {});"#,
+        r#"const p = process.on('SIGINT', callback = () => {}); console.log(p);"#,
+        r#"process.on('SIGINT', callback = () => {}).on('message', () => {});"#,
+        r#"consume(process.on('SIGINT', callback = () => {}));"#,
+        r#"function f() { return process.once('SIGTERM', callback = () => {}); }"#,
+        r#"process.on('SIGINT', holder.callback = () => {});"#,
+        r#"process.on('SIGINT', holder[key] = () => {});"#,
+        r#"process.on('SIGINT', callback = holder.callback = () => {});"#,
+        r#"const holder = { set callback(value: any) { consume(value); } }; process.on('SIGINT', holder.callback = () => {});"#,
+        r#"const p = process; p.on('SIGINT', callback = () => {});"#,
+        r#"process.on('SIGINT', callback = () => { const p = process; consume(p); });"#,
+        r#"process.on('SIGINT', callback = () => { process.on('message', () => {}); });"#,
+        r#"process.on('SIGINT', callback = () => { process.send('hello'); });"#,
+        r#"process.on('SIGINT', callback = (p = process) => consume(p));"#,
+        r#"process.on('SIGINT', callback = () => process);"#,
+        r#"process.on('SIGINT', callback = () => { consume(globalThis); });"#,
+    ] {
+        let source = format!("let callback: any; {source}");
+        let ctx = detect_for_source(&source);
+        assert!(ctx.uses_proc_ipc, "{source}");
+    }
+}
+
+#[test]
+fn assigned_signal_callback_bodies_and_defaults_still_select_regex() {
+    for handler in [
+        r#"() => { console.log('abc'.search('b')); }"#,
+        r#"(value = 'abc'.search('b')) => console.log(value)"#,
+    ] {
+        let source = format!("let callback: any; process.on('SIGINT', callback = {handler});");
+        let ctx = detect_for_source(&source);
+        assert!(!ctx.uses_proc_ipc, "{source}");
+        assert!(ctx.uses_regex, "{source}");
+    }
+}
+
+#[test]
 fn discarded_listener_context_reaches_nested_statements() {
     for source in [
         r#"function f() { process.on('SIGINT', () => {}); } f();"#,
