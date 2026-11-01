@@ -63,7 +63,9 @@ impl<'a> Gen<'a> {
                 && vc.fns.is_empty()
                 && vc.builtins.is_empty()
                 && vc.arrays.is_empty()
+                && vc.made_arrays.is_empty()
                 && vc.boxes.is_empty()
+                && vc.arrayboxes.is_empty()
                 && vc.indexed_owners.is_empty()
                 && vc.layouts.iter().all(|c| !unit_in.broken(&c.display));
             if !described {
@@ -410,9 +412,39 @@ impl<'a> Gen<'a> {
             let t = self.stand_in_arr(mi, d, false);
             self.m.add_tok(n, t);
         }
+        // ARU D6: one made through a constructor its owner does not prove
+        // to be an Array. Its stand-in's constructor is ⊤
+        // (`Template::species`), so no description of the same array makes
+        // it exact again.
+        for d in &c.made_arrays {
+            let t = self.stand_in_arr(mi, d, false);
+            let tm = self.m.tmpl_of(t).expect("array template");
+            let src = match self.m.tmpls[tm as usize].species {
+                Some(s) => s,
+                None => {
+                    let s = self.m.node_l("array-species");
+                    self.m.tmpls[tm as usize].species = Some(s);
+                    s
+                }
+            };
+            self.m
+                .add_top(src, |_| "made by another unit through a constructor".into());
+            self.m.add_tok(n, t);
+        }
         // DECISIONS 184: another unit's primitive method container.
         for d in &c.boxes {
             let t = self.stand_in_arr(mi, d, true);
+            self.m.add_tok(n, t);
+        }
+        // ARU D3: one that is an Array (an own-keys result). A stand-in a
+        // `box:` cell key made first (`primbox`, the key does not say which)
+        // takes the kind its description gives.
+        for d in &c.arrayboxes {
+            let t = self.stand_in_arr(mi, d, true);
+            let tm = self.m.tmpl_of(t).expect("container template");
+            if let TmplKind::BObj { what, .. } = &mut self.m.tmpls[tm as usize].kind {
+                *what = "arraybox";
+            }
             self.m.add_tok(n, t);
         }
         n
@@ -492,6 +524,7 @@ impl<'a> Gen<'a> {
             parent_value: None,
             parent_links: Vec::new(),
             null_proto: false,
+            species: None,
             declared: vec![],
             reserved: Vec::new(),
         });
@@ -571,6 +604,15 @@ impl<'a> Gen<'a> {
             let t = self.m.funcs[f as usize].token;
             self.m.add_tok(n, t);
         }
+        for (key, fname) in &joined.getters {
+            if old.getters.iter().any(|(k, f)| k == key && f == fname) {
+                continue;
+            }
+            let t = self.stand_in_getter(mi, tm, proto, key, fname, c, r);
+            if let Some(e) = self.stand_ins.get_mut(&joined.display) {
+                e.2.push(t);
+            }
+        }
         let cobj = self.m.tok(TokKind::ClassObj(tm));
         if joined.statics != old.statics || joined.static_fns != old.static_fns {
             for (key, _) in &joined.statics {
@@ -591,6 +633,43 @@ impl<'a> Gen<'a> {
         for (n, k) in wire {
             self.wire_field(mi, tm, n, c, &k);
         }
+    }
+
+    /// A getter of another unit's class (`ClassContract::getters`) on its
+    /// stand-in's prototype: a read under `key` runs it, as the defining
+    /// unit's own read does, and finds an unknown value (its owner lets
+    /// what the getter returns leave beyond any contract,
+    /// `Gen::fields_leave`). Without it the stand-in had no member under
+    /// the key and a read found `undefined` only.
+    #[allow(clippy::too_many_arguments)]
+    fn stand_in_getter(
+        &mut self,
+        mi: u32,
+        tm: TmplId,
+        proto: Tok,
+        key: &str,
+        fname: &str,
+        c: &crate::units::ClassContract,
+        r: u32,
+    ) -> Tok {
+        let f = self.stub_fn(
+            mi,
+            fname,
+            tm,
+            true,
+            false,
+            c.closed.is_none() || c.forwards,
+            r,
+        );
+        let t = self.m.funcs[f as usize].token;
+        let a = self.m.atom(key);
+        self.m.add_accessor_atom(a);
+        self.m.accessors.entry((proto, a)).or_default().0.push(t);
+        let ks = self.m.accessor_keys.entry(proto).or_default();
+        if !ks.contains(&a) {
+            ks.push(a);
+        }
+        t
     }
 
     /// What `c` describes field `k` of stand-in `tm` to hold, into its node
@@ -786,6 +865,7 @@ impl<'a> Gen<'a> {
             parent_value: None,
             parent_links: Vec::new(),
             null_proto: false,
+            species: None,
         });
         self.m.funcs[ctor as usize].ctor_of = Some(tm);
         self.m.foreign.insert(tm, c.facts.clone());
@@ -916,6 +996,10 @@ impl<'a> Gen<'a> {
             let n = self.m.field(proto, a);
             let t = self.m.funcs[f as usize].token;
             self.m.add_tok(n, t);
+            toks.push(t);
+        }
+        for (key, fname) in &c.getters {
+            let t = self.stand_in_getter(mi, tm, proto, key, fname, c, r);
             toks.push(t);
         }
         let mut nested: Vec<(NodeId, &'a (String, Vec<String>, bool))> = Vec::new();

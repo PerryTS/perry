@@ -16,6 +16,11 @@ pub(crate) struct ClassContract {
     pub literal_shape: bool,
     pub facts: TemplateFacts,
     pub methods: Vec<(String, String)>,
+    /// Its prototype getters (key, function name) along the same chain as
+    /// `methods`. A read under the key runs the getter: the reader sees the
+    /// owner's code returning an unknown value, and the owner lets what its
+    /// getters return leave beyond any contract (`Gen::fields_leave`).
+    pub getters: Vec<(String, String)>,
     pub native_parent: Option<(String, String)>,
     /// Its parent class when that class is another unit's (DECISIONS 104):
     /// the parent's display, its contract published beside this one. The
@@ -485,12 +490,22 @@ pub(crate) struct ValueContract {
     /// runtime object for the whole program, the same token in every unit.
     pub builtins: Vec<crate::model::BuiltinNs>,
     /// The arrays of other units it may hold (DECISIONS 94), by template
-    /// display: their elements are cell `arr:<display>`.
+    /// display: their elements are cell `arr:<display>`. Each is an Array
+    /// exotic object (ECMA-262 10.4.2), as its publisher proves
+    /// (`derive::exact_array`).
     pub arrays: Vec<String>,
+    /// ARU D6 (CWN 2026-11-01): the arrays made through a constructor
+    /// (ArraySpeciesCreate) that their publisher does not prove to be
+    /// Arrays, named and celled as `arrays`: a reader's stand-in of one is
+    /// no Array for it. A name in both lists is one of these.
+    pub made_arrays: Vec<String>,
     /// DECISIONS 184: the primitive method containers (`primbox`) it may
     /// hold, by name as `arrays`: their elements are cell `arr:<name>`; a
     /// reader's stand-in is a container of its own kind.
     pub boxes: Vec<String>,
+    /// ARU D3/D6: the containers among them that are Arrays (`arraybox`:
+    /// own-keys results), named and celled as `boxes`.
+    pub arrayboxes: Vec<String>,
     pub indexed_owners: Vec<crate::bindings::IndexedOwner>,
 }
 
@@ -971,6 +986,7 @@ impl ClassContract {
         }
         self.facts.join(&o.facts);
         union_into(&mut self.methods, &o.methods);
+        union_into(&mut self.getters, &o.getters);
         self.field_fns = field_fns;
         self.field_layouts = field_layouts;
         self.open_keys |= o.open_keys;
@@ -1032,12 +1048,16 @@ impl ValueContract {
         // Builtins and arrays (DECISIONS 94): by identity.
         union_into(&mut self.builtins, &o.builtins);
         union_into(&mut self.arrays, &o.arrays);
+        union_into(&mut self.made_arrays, &o.made_arrays);
         union_into(&mut self.boxes, &o.boxes);
+        union_into(&mut self.arrayboxes, &o.arrayboxes);
         union_into(&mut self.indexed_owners, &o.indexed_owners);
         self.indexed_owners.sort();
         self.builtins.sort();
         self.arrays.sort();
+        self.made_arrays.sort();
         self.boxes.sort();
+        self.arrayboxes.sort();
         self.layouts.sort_by(|x, y| x.display.cmp(&y.display));
         self.classes.sort_by(|x, y| x.display.cmp(&y.display));
         self.fns.sort_by(|x, y| x.name.cmp(&y.name));

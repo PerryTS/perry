@@ -1030,7 +1030,13 @@ pub(crate) fn value_brief(c: &crate::units::ValueContract) -> String {
         why_json(c),
         c.prim,
         strings(c.fns.iter().map(|f| f.name.clone())),
-        strings(c.arrays.iter().cloned())
+        strings(
+            c.arrays
+                .iter()
+                .chain(&c.made_arrays)
+                .chain(&c.arrayboxes)
+                .cloned()
+        )
     )
 }
 

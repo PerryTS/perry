@@ -126,8 +126,11 @@ pub struct TemplateFacts {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Verdict {
-    /// Immutable own length of an exclusively primitive String receiver.
-    StringLength,
+    /// `length` of receivers that are each an Array exotic object or a
+    /// primitive String: an own data property that is never configurable
+    /// (ECMA-262 10.4.2, 10.4.3), so neither a delete, `defineProperty`
+    /// nor a prototype makes it an accessor or removes it.
+    OwnLength,
     T0Mono,
     T0Set,
     /// Proven in the typed body behind the entry guard on the receiver
@@ -937,6 +940,70 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
 /// is a compiled body. Several bodies are fine: each runs in its own form.
 /// A call through a value has the callee node's values as its set.
 #[allow(clippy::too_many_arguments)]
+/// The receivers of an `OwnLength` read: every token an Array exotic
+/// ([`exact_array`]) or a closed marker (its callers' values are beside
+/// it), every primitive a String, and at least one receiver.
+fn own_length(m: &Model, toks: &[Tok], prim: u16) -> Option<Vec<String>> {
+    if prim != 0 && prim != crate::model::prim::STR {
+        return None;
+    }
+    let mut receivers = Vec::new();
+    for &t in toks {
+        if m.closed_marker(t) {
+            continue;
+        }
+        if !exact_array(m, t) {
+            return None;
+        }
+        receivers.push(m.tmpls[m.tmpl_of(t)? as usize].display.clone());
+    }
+    if prim != 0 {
+        receivers.push("primitive:string".into());
+    }
+    receivers.sort();
+    receivers.dedup();
+    (!receivers.is_empty()).then_some(receivers)
+}
+
+/// Is every value of token `t` an Array exotic object (ECMA-262 10.4.2)?
+/// An array site of this unit (a literal, a rest parameter, an ArrayCreate
+/// result), an own-keys result (`keys`, `arraybox`), or another unit's
+/// array its owner publishes as an Array (`ValueContract::arrays`,
+/// `arrayboxes`; one it publishes as made, `made_arrays`, has ⊤ for its
+/// constructor). Not the
+/// `arguments` object (`TmplKind::Args`), not a container of primitives,
+/// not a marker. An array made with ArraySpeciesCreate (10.4.2.3) is one
+/// only while the constructor the algorithm takes (`Template::species`: the
+/// receivers' `constructor` and its `@@species`, as the solve looked them
+/// up) is `%Array%` or no object: `undefined` (or a `null` species) is an
+/// ArrayCreate, any other primitive throws before an array is made.
+pub(crate) fn exact_array(m: &Model, t: Tok) -> bool {
+    if m.is_marker(t) {
+        return false;
+    }
+    let TokKind::Obj(tm, _) = m.toks[t as usize] else {
+        return false;
+    };
+    let tpl = &m.tmpls[tm as usize];
+    match tpl.kind {
+        TmplKind::Arr { .. } => {}
+        TmplKind::BObj {
+            what: "keys" | "arraybox",
+            ..
+        } => return true,
+        _ => return false,
+    }
+    let Some(c) = tpl.species else {
+        return true;
+    };
+    let nd = &m.nodes[c as usize];
+    let array = m
+        .tok_index
+        .get(&TokKind::Builtin(crate::model::BuiltinNs::Array))
+        .copied();
+    nd.pts.to_sorted().into_iter().all(|v| Some(v) == array)
+}
+
 fn judge(
     m: &Model,
     by_id: &FxHashMap<TmplId, &TemplateFacts>,
@@ -961,21 +1028,19 @@ fn judge(
             ),
         };
     }
-    // String boxing creates a non-configurable own length property. Its
-    // value is the published UTF-16 count; prototypes cannot override it.
-    // Keep this native primitive certificate distinct from layout/body T0.
-    if !s.is_call
-        && key == "length"
-        && prim == crate::model::prim::STR
-        && toks.iter().all(|&t| m.closed_marker(t))
-    {
-        return (
-            vec!["primitive:string".into()],
-            false,
-            Verdict::StringLength,
-            true,
-            FxHashMap::default(),
-        );
+    // An Array's and a String's `length` is a non-configurable own data
+    // property (a String's is its UTF-16 count): no prototype or
+    // definition can override it. Unlike T0 it names no layout slot or body.
+    if !s.is_call && key == "length" {
+        if let Some(receivers) = own_length(m, toks, prim) {
+            return (
+                receivers,
+                false,
+                Verdict::OwnLength,
+                true,
+                FxHashMap::default(),
+            );
+        }
     }
     let mut receivers = Vec::new();
     let mut top = false;

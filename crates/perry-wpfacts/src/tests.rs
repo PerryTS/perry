@@ -42,6 +42,7 @@ mod ledger;
 mod named_accessors;
 mod native_fs;
 mod native_proto;
+mod own_length;
 mod unknown_accessor_key;
 mod parent_value;
 mod prim_result;
@@ -75,6 +76,8 @@ mod call_shadow;
 mod top_element_key;
 mod unheld_key;
 mod unrun_param_call;
+mod reach_accessor;
+mod accessor_receiver;
 mod field_array_push;
 
 use crate::{compute, FactsConfig, ProgramFacts, Verdict};
