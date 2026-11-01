@@ -28,21 +28,43 @@
 //!   name declared as one), and any `x.constructor(…)` call — calling a
 //!   constructor without `new` only produces a value for a plain function,
 //!   whose `constructor` is `Function`.
+//!
+//! The walk above goes by name. When it finds a reach, a second walk over the
+//! module with its bindings resolved (swc `resolver`) decides it, so these are
+//! no reach:
+//!
+//! - the bare name of a member inside its TypeScript enum's initializers
+//!   (`Value = Function | Class` in `enum SymbolFlags`): that is the member;
+//! - `E.Function` where `E` is the module's own enum: an enum object holds
+//!   its members' values (the initializers, walked here) and nothing else;
+//!   where `E` is an import binding it is no reach if the driver finds `E`
+//!   bound to another module's enum
+//!   (`eval_classifier::resolve_enum_member_receivers`);
+//! - `x[k]` / `x.constructor` where `x` is a parameter or local that only
+//!   shares its name with a function declared elsewhere in the module.
 
 use std::collections::HashSet;
+use swc_common::{Globals, Mark, GLOBALS};
 use swc_ecma_ast as ast;
-use swc_ecma_visit::{Visit, VisitWith};
+use swc_ecma_visit::{Visit, VisitMutWith, VisitWith};
 
 /// Record the module for the auto-optimize `dyn-eval` decision when it can
 /// reach the `Function` constructor through a value.
-pub(crate) fn pre_scan_function_ctor_reach(ast_module: &ast::Module) {
-    // Once any module needs the interpreter the answer cannot change.
-    if crate::eval_classifier::has_deferred_dynamic_code_sites() {
+pub(crate) fn pre_scan_function_ctor_reach(ast_module: &ast::Module, path: &str) {
+    // Once any module reaches the constructor the answer cannot change.
+    // (A module's deferred enum receivers are no such answer.)
+    if crate::eval_classifier::function_ctor_reach_found() {
         return;
     }
-    if module_reaches_function_ctor_value(ast_module) {
-        crate::eval_classifier::note_dynamic_function_reachable();
-        return;
+    match module_reach(ast_module) {
+        Reach::No => {}
+        Reach::Yes => {
+            crate::eval_classifier::note_dynamic_function_reachable();
+            return;
+        }
+        Reach::ImportReceivers(names) => {
+            crate::eval_classifier::defer_enum_member_receivers(path, names)
+        }
     }
     // Constant `Function`/`eval` source is compiled as program code
     // (get-intrinsic's `(async function () {}).constructor`), so its value
@@ -60,36 +82,109 @@ pub(crate) fn pre_scan_function_ctor_reach(ast_module: &ast::Module) {
 pub(crate) fn module_reaches_function_ctor_value(ast_module: &ast::Module) -> bool {
     let mut scan = Scan::default();
     ast_module.visit_with(&mut scan);
-    // Aliases may precede their declaration or be assigned later. Keep every
-    // possible function source; a reassignment only makes this conservative.
-    loop {
-        let before = scan.function_names.len();
-        for (binding, source) in &scan.function_aliases {
-            if scan.function_names.contains(source) {
-                scan.function_names.insert(binding.clone());
+    scan.reached()
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Reach {
+    No,
+    Yes,
+    /// Only `X.Function` reads on these import bindings: a reach unless each
+    /// is bound to another module's enum.
+    ImportReceivers(Vec<String>),
+}
+
+fn module_reach(ast_module: &ast::Module) -> Reach {
+    if !module_reaches_function_ctor_value(ast_module) {
+        return Reach::No;
+    }
+    // The walk by name found a reach: decide it with the bindings resolved.
+    GLOBALS.set(&Globals::new(), || {
+        let mut module = ast_module.clone();
+        module.visit_mut_with(&mut swc_ecma_transforms_base::resolver(
+            Mark::new(),
+            Mark::new(),
+            true,
+        ));
+        let mut scan = Scan {
+            resolved: true,
+            ..Scan::default()
+        };
+        module.visit_with(&mut scan);
+        if scan.reached() {
+            return Reach::Yes;
+        }
+        let mut names = Vec::new();
+        for r in &scan.member_receivers {
+            if scan.enum_ids.contains(r) {
+                continue;
+            }
+            if !scan.import_ids.contains(r) {
+                return Reach::Yes;
+            }
+            let name = r.0.to_string();
+            if !names.contains(&name) {
+                names.push(name);
             }
         }
-        if scan.function_names.len() == before {
-            break;
+        if names.is_empty() {
+            Reach::No
+        } else {
+            Reach::ImportReceivers(names)
         }
-    }
-    scan.found
-        || scan
-            .constructor_receivers
-            .iter()
-            .any(|name| scan.function_names.contains(name))
+    })
 }
 
 #[derive(Default)]
 struct Scan {
     found: bool,
-    /// Names declared as a function / class, or initialized with a function,
-    /// arrow or class expression.
-    function_names: HashSet<String>,
+    /// Bindings are resolved (`module_reach`): an identifier is its binding
+    /// (name and syntax context), not its name.
+    resolved: bool,
+    /// Bindings declared as a function / class, or initialized with a
+    /// function, arrow or class expression.
+    function_names: HashSet<ast::Id>,
     /// Identifiers whose `.constructor` is read. Resolved against
     /// `function_names` after the walk, since declarations hoist.
-    constructor_receivers: Vec<String>,
-    function_aliases: Vec<(String, String)>,
+    constructor_receivers: Vec<ast::Id>,
+    function_aliases: Vec<(ast::Id, ast::Id)>,
+    /// Member names of the enclosing TypeScript enums, innermost last.
+    enum_members: Vec<HashSet<String>>,
+    /// The module's enum bindings.
+    enum_ids: HashSet<ast::Id>,
+    /// The module's value import bindings (named and default).
+    import_ids: HashSet<ast::Id>,
+    /// Receivers of `X.Function` / `X.eval` (resolved walk only).
+    member_receivers: Vec<ast::Id>,
+}
+
+impl Scan {
+    fn reached(&mut self) -> bool {
+        // Aliases may precede their declaration or be assigned later. Keep
+        // every possible function source; a reassignment only makes this
+        // conservative.
+        loop {
+            let before = self.function_names.len();
+            for (binding, source) in &self.function_aliases {
+                if self.function_names.contains(source) {
+                    self.function_names.insert(binding.clone());
+                }
+            }
+            if self.function_names.len() == before {
+                break;
+            }
+        }
+        self.found
+            || self
+                .constructor_receivers
+                .iter()
+                .any(|id| self.function_names.contains(id))
+    }
+
+    /// The bare name of a member of an enclosing enum, inside its body.
+    fn is_enum_member(&self, name: &str) -> bool {
+        self.enum_members.last().is_some_and(|m| m.contains(name))
+    }
 }
 
 fn peel(mut e: &ast::Expr) -> &ast::Expr {
@@ -163,7 +258,7 @@ impl Visit for Scan {
             return;
         }
         if let ast::Expr::Ident(id) = expr {
-            if matches!(id.sym.as_ref(), "Function" | "eval") {
+            if matches!(id.sym.as_ref(), "Function" | "eval") && !self.is_enum_member(&id.sym) {
                 self.found = true;
             }
             return;
@@ -204,6 +299,12 @@ impl Visit for Scan {
     fn visit_member_expr(&mut self, m: &ast::MemberExpr) {
         match member_prop_name(m) {
             Some("Function" | "eval") => {
+                if self.resolved {
+                    if let ast::Expr::Ident(id) = peel(&m.obj) {
+                        self.member_receivers.push(id.to_id());
+                        return;
+                    }
+                }
                 self.found = true;
                 return;
             }
@@ -213,7 +314,7 @@ impl Visit for Scan {
                     return;
                 }
                 if let ast::Expr::Ident(id) = peel(&m.obj) {
-                    self.constructor_receivers.push(id.sym.to_string());
+                    self.constructor_receivers.push(id.to_id());
                 }
             }
             Some("prototype" | "name" | "length") if is_ident(&m.obj, "Function") => return,
@@ -240,7 +341,7 @@ impl Visit for Scan {
                     return;
                 }
                 if let ast::Expr::Ident(id) = peel(&m.obj) {
-                    self.constructor_receivers.push(id.sym.to_string());
+                    self.constructor_receivers.push(id.to_id());
                 }
             }
         }
@@ -308,13 +409,45 @@ impl Visit for Scan {
         p.visit_children_with(self);
     }
 
+    fn visit_ts_enum_decl(&mut self, e: &ast::TsEnumDecl) {
+        self.enum_ids.insert(e.id.to_id());
+        let members = e
+            .members
+            .iter()
+            .filter_map(|m| match &m.id {
+                ast::TsEnumMemberId::Ident(i) => Some(i.sym.to_string()),
+                ast::TsEnumMemberId::Str(s) => s.value.as_str().map(str::to_string),
+            })
+            .collect();
+        self.enum_members.push(members);
+        e.visit_children_with(self);
+        self.enum_members.pop();
+    }
+
+    fn visit_import_decl(&mut self, d: &ast::ImportDecl) {
+        if d.type_only {
+            return;
+        }
+        for spec in &d.specifiers {
+            match spec {
+                ast::ImportSpecifier::Named(n) if !n.is_type_only => {
+                    self.import_ids.insert(n.local.to_id());
+                }
+                ast::ImportSpecifier::Default(d) => {
+                    self.import_ids.insert(d.local.to_id());
+                }
+                _ => {}
+            }
+        }
+    }
+
     fn visit_fn_decl(&mut self, f: &ast::FnDecl) {
-        self.function_names.insert(f.ident.sym.to_string());
+        self.function_names.insert(f.ident.to_id());
         f.visit_children_with(self);
     }
 
     fn visit_class_decl(&mut self, c: &ast::ClassDecl) {
-        self.function_names.insert(c.ident.sym.to_string());
+        self.function_names.insert(c.ident.to_id());
         c.visit_children_with(self);
     }
 
@@ -324,11 +457,11 @@ impl Visit for Scan {
                 peel(init),
                 ast::Expr::Fn(_) | ast::Expr::Arrow(_) | ast::Expr::Class(_)
             ) {
-                self.function_names.insert(binding.id.sym.to_string());
+                self.function_names.insert(binding.id.to_id());
             }
             if let ast::Expr::Ident(source) = peel(init) {
                 self.function_aliases
-                    .push((binding.id.sym.to_string(), source.sym.to_string()));
+                    .push((binding.id.to_id(), source.to_id()));
             }
         }
         d.visit_children_with(self);
@@ -338,11 +471,11 @@ impl Visit for Scan {
         if let ast::AssignTarget::Simple(ast::SimpleAssignTarget::Ident(binding)) = &a.left {
             match peel(&a.right) {
                 ast::Expr::Fn(_) | ast::Expr::Arrow(_) | ast::Expr::Class(_) => {
-                    self.function_names.insert(binding.id.sym.to_string());
+                    self.function_names.insert(binding.id.to_id());
                 }
                 ast::Expr::Ident(source) => self
                     .function_aliases
-                    .push((binding.id.sym.to_string(), source.sym.to_string())),
+                    .push((binding.id.to_id(), source.to_id())),
                 _ => {}
             }
         }
@@ -437,5 +570,76 @@ mod tests {
     fn literal_constructor_arguments_are_still_scanned() {
         assert!(reaches("new Function(Function.bind(null), 'return 1');"));
         assert!(reaches("Function('a', (globalThis as any).Function);"));
+    }
+
+    fn reach(source: &str) -> super::Reach {
+        let module = perry_parser::parse_typescript(source, "function-ctor-reach.ts")
+            .unwrap_or_else(|e| panic!("fixture must parse: {e}\n{source}"));
+        super::module_reach(&module)
+    }
+
+    /// The resolved walk decides every reach the walk by name finds: the
+    /// positives above stay reaches.
+    #[test]
+    fn resolved_walk_keeps_every_value_use() {
+        for source in [
+            "const F = Function; new F('a', 'return a');",
+            "function lodash(context: any) { var Function = context.Function; }",
+            "const { Function: F } = globalThis;",
+            "new (globalThis.Function)('return 1');",
+            "const k = 'Function'; global[k];",
+            "declare const x: any; x.constructor('return 1');",
+            "function f() {} const F = f.constructor;",
+            "declare const k: string; function f() {} const alias = f; alias[k];",
+            "declare const root: any; const F = root.Function;",
+        ] {
+            assert_eq!(reach(source), super::Reach::Yes, "{source}");
+        }
+    }
+
+    /// tssrc (TypeScript's own sources): `SymbolFlags.Function`, the
+    /// `Value = Function | Class` initializer inside `enum SymbolFlags`, and
+    /// core.ts's `map[key]` on a parameter named like `function map`.
+    #[test]
+    fn enum_members_and_shadowing_names_are_no_reach() {
+        for source in [
+            "enum F { Function = 1, Class = 2, Value = Function | Class }",
+            "enum F { Function = 'f' } const x = F.Function;",
+            "const enum K { Function } const x = K.Function, y = K['Function'];",
+            "export function map() {} function get(map: any, key: string) { return map[key]; }",
+            "function map() {} function g(map: any) { return map.constructor; }",
+        ] {
+            assert_eq!(reach(source), super::Reach::No, "{source}");
+        }
+        // `function g(map)`'s receiver is the parameter, `map` here the function.
+        assert_eq!(
+            reach("function map() {} declare const k: string; map[k];"),
+            super::Reach::Yes
+        );
+    }
+
+    /// An import binding's `X.Function` is the driver's question (is `X`
+    /// another module's enum?); anything that may be the global object or
+    /// a context holding the constructor stays a reach.
+    #[test]
+    fn import_receivers_are_deferred_and_shadows_are_not() {
+        assert_eq!(
+            reach("import { SymbolFlags, X } from './types'; SymbolFlags.Function; X.Function; SymbolFlags.Function;"),
+            super::Reach::ImportReceivers(vec!["SymbolFlags".into(), "X".into()])
+        );
+        for source in [
+            // A parameter shadows the import / the enum.
+            "import { E } from './e'; function f(E: any) { return E.Function; }",
+            "enum E { Function } function f(E: any) { return E.Function; }",
+            // A namespace import's member is no enum binding of this module.
+            "import * as ts from './ts'; ts.SymbolFlags.Function;",
+            "import * as ns from './ns'; ns.Function;",
+            // A member that is not the enum's: `Function` is the global here.
+            "enum E { A = [Function].length }",
+            "enum E { Function = 1 } const g: any = globalThis; g.Function;",
+            "import { E } from './e'; E.Function; declare const o: any; o.Function;",
+        ] {
+            assert_eq!(reach(source), super::Reach::Yes, "{source}");
+        }
     }
 }
