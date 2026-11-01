@@ -212,8 +212,12 @@ impl<'a> Gen<'a> {
         src: NodeId,
         desc: String,
         owner: Option<TmplId>,
+        key_value: Option<NodeId>,
     ) -> SiteId {
         let site = self.store_site(fx.module, fx.f, desc, owner, false);
+        // The key node is on the site before its constraint exists: the
+        // solve is online, so the store may fire inside `cons`.
+        self.m.stores[site as usize].key_value = key_value;
         self.mark_fn_phase(fx, e, object, site);
         self.mark_rooted(e, site);
         self.m.cons(recv, Cons::Store { key, src, site });
@@ -810,6 +814,7 @@ impl<'a> Gen<'a> {
                     v,
                     format!(".{property}="),
                     owner,
+                    None,
                 );
                 v
             }
@@ -845,17 +850,14 @@ impl<'a> Gen<'a> {
                     for s in ks {
                         let key = Key::Named(self.m.atom(&s));
                         for (o, what) in [(t, "putvalue"), (rv, "putvalue-receiver")] {
-                            let site = self.store_phased(fx, e, target, o, key, v, what.into(), owner);
-                            self.m.stores[site as usize].key_value = Some(k);
+                            self.store_phased(fx, e, target, o, key, v, what.into(), owner, Some(k));
                         }
                     }
                 } else {
                     let key = self.key_of(key);
-                    let site =
-                        self.store_phased(fx, e, target, t, key, v, "putvalue".into(), owner);
-                    self.m.stores[site as usize].key_value = Some(k);
+                    self.store_phased(fx, e, target, t, key, v, "putvalue".into(), owner, Some(k));
                     // A receiver other than the target gets the own data store.
-                    let site = self.store_phased(
+                    self.store_phased(
                         fx,
                         e,
                         target,
@@ -864,8 +866,8 @@ impl<'a> Gen<'a> {
                         v,
                         "putvalue-receiver".into(),
                         owner,
+                        Some(k),
                     );
-                    self.m.stores[site as usize].key_value = Some(k);
                 }
                 v
             }
@@ -901,6 +903,7 @@ impl<'a> Gen<'a> {
                     nv2,
                     format!(".{property}++"),
                     owner,
+                    None,
                 );
                 nv2
             }
