@@ -508,7 +508,7 @@ fn experimental_async_exports_compile_without_changing_the_public_contract() {
 }
 
 #[test]
-fn experimental_async_exports_reject_unqualified_async_values() {
+fn public_async_exports_reject_unqualified_async_values() {
     for (source, expected) in [
         (
             "package test:profile; world plugin { export run: async func() -> future<u32>; }",
@@ -522,10 +522,11 @@ fn experimental_async_exports_reject_unqualified_async_values() {
         let dir = tempfile::tempdir().unwrap();
         let input = dir.path().join("world.wit");
         std::fs::write(&input, source).unwrap();
-        assert!(experimental_async_guest(&input, None)
+        assert!(canonical_guest(&input, None)
             .unwrap_err()
             .to_string()
             .contains(expected));
+        assert!(experimental_async_guest(&input, None).is_ok());
     }
 }
 

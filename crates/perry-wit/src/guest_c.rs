@@ -175,7 +175,6 @@ impl Generator<'_> {
                 let ty =
                     u32::try_from(id.index() * 2 + usize::from(!import)).expect("async type index");
                 self.endpoints.insert(id, ty);
-                self.endpoint_operations.insert(ty, name.clone());
             }
             if matches!(self.resolve.types[id].kind, TypeDefKind::Resource) {
                 let resource = Resource {
@@ -340,6 +339,17 @@ static void *perry_initialize(void) {
         function: &Function,
         import: bool,
     ) -> Result<()> {
+        // Interfaces can declare unused endpoint types for which the maintained
+        // backend emits no canonical helpers. Only reachable function types
+        // belong in the dispatcher; the private wake stream isn't a JS value.
+        let mut live = LiveTypes::default();
+        live.add_func(self.resolve, function);
+        for id in live.iter() {
+            if let Some(ty) = self.endpoints.get(&id) {
+                self.endpoint_operations
+                    .insert(*ty, self.names[&id].clone());
+            }
+        }
         let name = key
             .map(|key| self.resolve.name_world_key(key))
             .unwrap_or_default();
