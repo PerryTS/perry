@@ -1,0 +1,1 @@
+Combine guarded inline growth control, exact retained shape-body sharing, and unused fixed-record ABI dead stripping; clarify the local inlining bound and install diagnostic hooks in the GC smoke fixture.
