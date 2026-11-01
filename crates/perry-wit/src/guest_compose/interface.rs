@@ -3,7 +3,48 @@
 //! context, even when it also contains the corresponding resource type.
 use super::*;
 use wac_graph::types::InterfaceId;
+use wac_graph::types::{Type, Types};
 mod names;
+
+/// Rename all value types together with their public resource aliases.
+pub(super) fn shape(types: &Types, api: InterfaceId) -> Result<Vec<u8>> {
+    let mut graph = CompositionGraph::new();
+    *graph.types_mut() = types.clone();
+    let resources = graph.types()[api]
+        .exports
+        .values()
+        .filter_map(|kind| {
+            if let ItemKind::Type(Type::Resource(id)) = kind {
+                Some(*id)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    for resource in resources {
+        graph.types_mut()[resource].alias = None;
+    }
+    graph.define_type("public-interface", Type::Interface(api))?;
+    let bytes = graph.encode(EncodeOptions::default())?;
+    let mut shape = None;
+    for payload in Parser::new(0).parse_all(&bytes) {
+        match payload? {
+            Payload::ComponentTypeSection(section) => {
+                ensure!(
+                    section.count() == 1 && shape.is_none(),
+                    "Public interface type is not closed"
+                );
+                shape = Some(bytes[section.range()].to_vec());
+            }
+            Payload::Version { .. }
+            | Payload::End(_)
+            | Payload::CustomSection(_)
+            | Payload::ComponentExportSection(_) => {}
+            _ => anyhow::bail!("Public interface type requires external type bindings"),
+        }
+    }
+    shape.context("Missing closed public interface type")
+}
 
 pub(super) fn compose(
     outer: &mut CompositionGraph,
