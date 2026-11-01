@@ -100,7 +100,9 @@ def main():
         if kind == "plain":
             run("reject-missing-interface", [args.p3_contract.resolve(), "--reactor", component,
                                               "--instance-export=perry:missing/api@1.0.0"], expected=1)
-            assert "missing_instances=[\"perry:missing/api@1.0.0\"]" in (out / "reject-missing-interface.log").read_text()
+            diagnostic = (out / "reject-missing-interface.log").read_text()
+            diagnostic = json.loads(diagnostic.rsplit("Error: ", 1)[1])
+            assert "missing_instances=[\"perry:missing/api@1.0.0\"]" in diagnostic
         run(kind + "-contract", [args.p3_contract.resolve(), "--reactor", component,
                                  "--instance-export=" + interface])
         imports = [line for line in (out / (kind + "-contract.log")).read_text().splitlines()
