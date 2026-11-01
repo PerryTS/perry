@@ -1,0 +1,4 @@
+prefix 1 65
+registry stdout
+standard streams retained
+exit 0

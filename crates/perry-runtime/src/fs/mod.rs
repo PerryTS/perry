@@ -76,24 +76,31 @@ pub(crate) const CLASS_ID_FS_FILEHANDLE: u32 = 0xFFFF_008C;
 /// The duplicate shares the open file description, so reads and writes land on
 /// the same terminal/pipe.
 fn std_fd_registry() -> StdHashMap<i32, fs::File> {
-    #[allow(unused_mut)] // populated only by the Unix descriptor-duplication arm
+    #[allow(unused_mut)] // populated only on hosts with standard descriptors
     let mut map = StdHashMap::new();
-    #[cfg(unix)]
+    #[cfg(any(unix, all(target_os = "wasi", any(target_env = "p2", target_env = "p3"))))]
     {
         use std::os::fd::FromRawFd;
+        // wasi-sdk 34 implements dup for P2/P3 in its descriptor table, but
+        // Rust's WASI libc bindings do not declare it yet. Keep the declaration
+        // local to the targets whose SDK implements descriptor duplication.
+        unsafe extern "C" {
+            fn dup(fd: i32) -> i32;
+        }
         for fd in 0..=2 {
             // SAFETY: `dup` returns a fresh descriptor we exclusively own, so
             // handing it to `File` (which closes on drop) cannot double-close.
-            let duped = unsafe { libc::dup(fd) };
+            let duped = unsafe { dup(fd) };
             if duped >= 0 {
                 map.insert(fd, unsafe { fs::File::from_raw_fd(duped) });
             }
         }
     }
-    // WASI has no `dup`: the registry entry wraps the descriptor itself, so
-    // `closeSync(1)` closes stdout, as it does in Node. The single-threaded
-    // module runs no thread-local destructors, so nothing else closes it.
-    #[cfg(target_os = "wasi")]
+    // Preview 1 has no descriptor duplication. Its command owns these streams
+    // for the lifetime of the instance. P2/P3 must use the duplicates above:
+    // their task-local destructors run when a component task returns, while
+    // libc's standard descriptors belong to the whole component instance.
+    #[cfg(all(target_os = "wasi", not(any(target_env = "p2", target_env = "p3"))))]
     {
         use std::os::fd::FromRawFd;
         for fd in 0..=2 {
@@ -104,6 +111,9 @@ fn std_fd_registry() -> StdHashMap<i32, fs::File> {
     }
     map
 }
+
+#[cfg(all(test, unix))]
+mod std_fd_tests;
 
 thread_local! {
     static FD_REGISTRY: RefCell<StdHashMap<i32, fs::File>> = RefCell::new(std_fd_registry());

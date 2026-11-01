@@ -113,8 +113,10 @@ def main():
             # A nonzero command exit is data, so compare it to the fixture's
             # expected exit rather than requiring subprocess success.
             phase = source.stem + '-' + name
+            input_path = source.with_suffix('.input')
             result = subprocess.run([str(executable), 'compiled', str(guest)], cwd=out,
-                env=env | instruments, capture_output=True, timeout=180)
+                env=env | instruments, input=input_path.read_bytes() if input_path.exists() else b'',
+                capture_output=True, timeout=180)
             (out / (phase + '.stdout')).write_bytes(result.stdout)
             (out / (phase + '.stderr')).write_bytes(result.stderr)
             actual = result.stdout.decode().replace('\r\n', '\n') + f'exit {result.returncode}\n'

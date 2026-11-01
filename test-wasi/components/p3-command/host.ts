@@ -7,7 +7,7 @@ if (process.argv[2] === "compiled") {
   gc();
   const status = runComponentCommand(bytes, {
     fuel: 1000000000,
-    wasi: { inheritStdout: true, inheritStderr: true },
+    wasi: { inheritStdin: true, inheritStdout: true, inheritStderr: true },
   });
   gc();
   process.exit(status);
