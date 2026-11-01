@@ -30,12 +30,42 @@ export const PLATFORM_PACKAGES = [
   '@perryts/perry-win32-arm64',
 ] as const
 
+/**
+ * Cross targets that ship as their own host-independent npm package, one per
+ * Rust triple (the triple perry's `rust_target_triple` returns). Each is
+ * staged by scripts/stage-npm.sh from the `perry-cross-<triple>.tar.gz`
+ * bundle; perry finds an installed one next to its own binary. stage-npm.sh
+ * reads this list (`--print-targets`), so it is written down only here.
+ */
+export const TARGET_TRIPLES = [
+  'aarch64-linux-android',
+  'x86_64-linux-android',
+  'aarch64-apple-ios',
+  'aarch64-apple-ios-sim',
+  'wasm32-wasip2',
+  'wasm32-wasip1',
+] as const
+
+/** `@perryts/perry-target-<triple>`: the name is derived, never tabulated. */
+export function targetPackageName(triple: string): string {
+  return `@perryts/perry-target-${triple}`
+}
+
+/** The target packages, published with the platforms, before the wrapper. */
+export const TARGET_PACKAGES: readonly string[] = TARGET_TRIPLES.map(targetPackageName)
+
 /** The launcher wrapper — published LAST. */
 export const WRAPPER_PACKAGE = '@perryts/perry'
 
-/** All 9, in publish order: platforms first, wrapper last. */
+/**
+ * Every package, in publish order: platforms, then targets, then the wrapper.
+ * The wrapper does not depend on the targets, but it must not become visible
+ * before them: platform-visibility.mjs waits on every non-wrapper entry of
+ * the publish manifest before the wrapper is published.
+ */
 export const ALL_PACKAGES: readonly string[] = [
   ...PLATFORM_PACKAGES,
+  ...TARGET_PACKAGES,
   WRAPPER_PACKAGE,
 ]
 
@@ -69,10 +99,12 @@ export const SOCKET_SCAN_REPO = 'perry-npm-publish-gate'
 
 /**
  * npm package directories under npm/, in stage order. The launcher lives at
- * npm/perry; each platform package at npm/perry-<suffix>.
+ * npm/perry; each platform package at npm/perry-<suffix>; each target package
+ * at npm/perry-target-<triple> (generated whole from npm/perry-target/).
  */
 export function npmPackageDir(name: string): string {
   // @perryts/perry-darwin-arm64 → npm/perry-darwin-arm64
+  // @perryts/perry-target-wasm32-wasip2 → npm/perry-target-wasm32-wasip2
   // @perryts/perry              → npm/perry
   return `npm/${name.replace(/^@perryts\//, '')}`
 }
@@ -99,3 +131,18 @@ export const LONG_LIVED_NPM_TOKEN_ENV_VARS = [
  * cryptic Trusted Publisher failure.
  */
 export const NPM_MIN_VERSION = '11.17.0'
+
+// --- CLI entry: `node scripts/publish/constants.mts --print-targets` --------
+// One triple per line, for scripts/stage-npm.sh.
+import { fileURLToPath } from 'node:url'
+
+const isMainModule =
+  process.argv[1] === fileURLToPath(new URL(import.meta.url))
+
+if (isMainModule) {
+  if (process.argv[2] !== '--print-targets' || process.argv.length !== 3) {
+    console.error('usage: constants.mts --print-targets')
+    process.exit(2)
+  }
+  for (const triple of TARGET_TRIPLES) console.log(triple)
+}

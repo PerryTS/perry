@@ -75,6 +75,8 @@ npx -y @perryts/perry compile src/main.ts -o myapp
 | Linux arm64 (musl / Alpine) | `@perryts/perry-linux-arm64-musl` |
 | Windows x64 | `@perryts/perry-win32-x64` |
 
+Cross-target libraries (`--target android`, `ios`, `wasi`, ...) are separate packages, one per target, at the same version as perry: `npm install -g @perryts/perry-target-<triple>@<perry version>`, for example `@perryts/perry-target-aarch64-linux-android`. `perry compile --target` prints the exact command when one is missing; `perry target add <target>` installs the same package without npm.
+
 #### Linux glibc requirement
 
 The Linux **glibc** binaries are built against a glibc 2.31 sysroot, so they require **glibc ≥ 2.31**. This includes Ubuntu 20.04+, Debian 11+, RHEL 9+ and Amazon Linux 2023. Release CI checks the compiler's imported glibc symbol versions and exercises a compiled program inside that environment.

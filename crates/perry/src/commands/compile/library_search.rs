@@ -936,7 +936,14 @@ pub(super) fn locate_library(
     name: &str,
     target: Option<&str>,
 ) -> Result<LocatedLibrary, Vec<PathBuf>> {
-    let candidates = collect_library_candidates(name, target);
+    locate_among(collect_library_candidates(name, target), name)
+}
+
+/// The first of `candidates` that exists, raw or as an npm `*.a.zst`.
+pub(super) fn locate_among(
+    candidates: Vec<PathBuf>,
+    name: &str,
+) -> Result<LocatedLibrary, Vec<PathBuf>> {
     for path in &candidates {
         if path.exists() {
             return Ok(LocatedLibrary {
@@ -1081,6 +1088,19 @@ fn push_executable_relative_host_candidates(
 }
 
 pub(super) fn collect_library_candidates(name: &str, target: Option<&str>) -> Vec<PathBuf> {
+    let exe = std::env::current_exe().ok();
+    let home = dirs::home_dir();
+    collect_library_candidates_from(name, target, exe.as_deref(), home.as_deref())
+}
+
+/// [`collect_library_candidates`] for a given perry binary path and home
+/// directory (the tests inject both).
+pub(super) fn collect_library_candidates_from(
+    name: &str,
+    target: Option<&str>,
+    exe: Option<&Path>,
+    home: Option<&Path>,
+) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
 
     // Env-var overrides: users can point at an out-of-tree build dir (e.g. when
@@ -1126,7 +1146,7 @@ pub(super) fn collect_library_candidates(name: &str, target: Option<&str>) -> Ve
             candidates.push(PathBuf::from(format!("target/debug/{}", name)));
         }
         // Also check directories relative to the perry executable.
-        if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe) = exe {
             if let Some(dir) = exe.parent() {
                 // #872: WinGet extracts the package zip into a single
                 // `PerryTS.Perry_<hash>` directory under
@@ -1164,7 +1184,7 @@ pub(super) fn collect_library_candidates(name: &str, target: Option<&str>) -> Ve
                 // used to omit it and lose every bundled archive (#9953).
                 #[cfg(target_os = "linux")]
                 if is_native_linux_target(target) {
-                    push_executable_relative_host_candidates(&mut candidates, &exe, name);
+                    push_executable_relative_host_candidates(&mut candidates, exe, name);
                 }
 
                 // For Apple / HarmonyOS cross-compile targets, check the exe
@@ -1210,12 +1230,25 @@ pub(super) fn collect_library_candidates(name: &str, target: Option<&str>) -> Ve
                 }
             }
         }
+        // Target packages last (`@perryts/perry-target-<triple>` beside the
+        // binary, then `~/.perry/targets`), so every install layout above
+        // keeps precedence. A root whose target.json names another perry
+        // version, revision or triple adds nothing. The host's own triple
+        // ships with perry and never resolves through one.
+        if triple != super::target_packages::HOST_TRIPLE {
+            let me = super::target_packages::PerryIdentity::current();
+            for root in super::target_packages::discover(triple, exe, home, me) {
+                if root.is_accepted() {
+                    candidates.push(root.path.join("lib").join(name));
+                }
+            }
+        }
     } else {
         // Host build: search host directories
         candidates.push(PathBuf::from(format!("target/release/{}", name)));
         candidates.push(PathBuf::from(format!("target/debug/{}", name)));
-        if let Ok(exe) = std::env::current_exe() {
-            push_executable_relative_host_candidates(&mut candidates, &exe, name);
+        if let Some(exe) = exe {
+            push_executable_relative_host_candidates(&mut candidates, exe, name);
         }
         // When cargo install'd, check the original source tree's target dir
         let source_target = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1256,6 +1289,29 @@ pub(super) fn locate_runtime_library(target: Option<&str>) -> Result<LocatedLibr
         ""
     };
     locate_library(lib_name, target).map_err(|searched| {
+        let searched_list = searched
+            .iter()
+            .map(|p| format!("  - {}", p.display()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        // A cross target with nothing installed: say which package to
+        // install, pinned to this exact perry, before the search list.
+        if let (Some(target_name), Some(triple)) = (target, rust_target_triple(target)) {
+            if triple != super::target_packages::HOST_TRIPLE {
+                let exe = std::env::current_exe().ok();
+                let home = dirs::home_dir();
+                return anyhow!(
+                    "{}\nSearched for {lib_name}:\n{searched_list}{instr_hint}",
+                    super::target_packages::missing_target_message(
+                        target_name,
+                        triple,
+                        exe.as_deref(),
+                        home.as_deref(),
+                        super::target_packages::PerryIdentity::current(),
+                    ),
+                );
+            }
+        }
         let extra = if target.is_some() {
             format!(" (for target {:?})", target.unwrap())
         } else {
@@ -1264,11 +1320,6 @@ pub(super) fn locate_runtime_library(target: Option<&str>) -> Result<LocatedLibr
         let target_flag = rust_target_triple(target)
             .map(|t| format!(" --target {}", t))
             .unwrap_or_default();
-        let searched_list = searched
-            .iter()
-            .map(|p| format!("  - {}", p.display()))
-            .collect::<Vec<_>>()
-            .join("\n");
         anyhow!(
             "Could not find {lib}{extra}.\n\
              Searched:\n{list}\n\n\
@@ -1582,6 +1633,9 @@ pub(super) fn harmonyos_cross_env(
 
 #[cfg(test)]
 mod apple_lib_name_tests;
+
+#[cfg(test)]
+mod target_package_candidate_tests;
 
 #[cfg(test)]
 mod native_lib_artifact_tests;
