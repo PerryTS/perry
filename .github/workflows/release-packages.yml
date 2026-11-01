@@ -309,12 +309,12 @@ jobs:
           TEST_GATE_REASON: ${{ inputs.test_gate_reason }}
         run: |
           set -euo pipefail
-          if [ "$SKIP_TEST_GATE" = "true" ]; then
+          if [ "${SKIP_TEST_GATE:-}" = "true" ]; then
             if [ "$MODE" != "cut-release" ]; then
               echo "::error::skip_test_gate only applies to cut_release runs (mode is $MODE)."
               exit 1
             fi
-            reason=$(printf '%s' "$TEST_GATE_REASON" | tr -d '\r' | head -c 500)
+            reason=$(printf '%s' "${TEST_GATE_REASON:-}" | tr -d '\r' | head -c 500)
             if [ -z "${reason//[[:space:]]/}" ]; then
               echo "::error::skip_test_gate requires test_gate_reason."
               exit 1
@@ -2336,12 +2336,12 @@ jobs:
           else
             cp /tmp/release-notes-full.md /tmp/release-notes.md
           fi
-          if [ "$SKIP_TEST_GATE" = "true" ]; then
+          if [ "${SKIP_TEST_GATE:-}" = "true" ]; then
             {
               echo
               echo '---'
               echo
-              echo "**CI test gate skipped by the maintainer:** $(printf '%s' "$TEST_GATE_REASON" | tr -d '\r' | head -c 500)"
+              echo "**CI test gate skipped by the maintainer:** $(printf '%s' "${TEST_GATE_REASON:-}" | tr -d '\r' | head -c 500)"
             } >> /tmp/release-notes.md
           fi
           # Created with GITHUB_TOKEN: GitHub suppresses events triggered by a
