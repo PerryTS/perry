@@ -115,6 +115,7 @@ pub(super) fn rebind(bytes: &[u8]) -> Result<Vec<u8>> {
                 result = Some(match &types[id] {
                     ComponentDefinedType::Own(_) => EncVal::Type(handle),
                     ComponentDefinedType::Result {
+                        info: _,
                         ok: Some(ComponentValType::Type(own)),
                         err,
                     } if matches!(types[*own], ComponentDefinedType::Own(_)) => {
