@@ -114,12 +114,7 @@ pub(crate) unsafe fn function_own_put(
         }
         let name = crate::string::header_str_checked(key)?;
         let prev = (*c).shape_id;
-        if !crate::closure::props::bag_born_with_room(
-            ptr,
-            &[(name, value)],
-            &[],
-            crate::closure::props::BAG_ROOM,
-        ) {
+        if !crate::closure::props::bag_born_with_room(ptr, &[(name, value)], &[]) {
             return None;
         }
         // The born bag lists the intrinsic slots and `key`: the closure's
