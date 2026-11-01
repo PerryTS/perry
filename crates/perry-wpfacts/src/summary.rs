@@ -38,6 +38,15 @@ const LAY_BIRTH: u32 = 6 << 28;
 /// token (`recv_lay`), the kind `layout_of` gives one-value tokens.
 const LAY_TOK: u32 = 4 << 28;
 const LAY_MASK: u32 = (1 << 28) - 1;
+/// The lexical context of a kind-7 instance (rule C): a closure maker's run
+/// for one call site (the call's program template).
+const LAY_CALL: u32 = 7 << 28;
+
+/// RLC price mask (measurement only): RLC_MASK bit 1 turns rule C on.
+fn rlc_mask() -> u32 {
+    static M: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *M.get_or_init(|| std::env::var("RLC_MASK").ok().and_then(|v| v.parse().ok()).unwrap_or(0))
+}
 /// A closure context key for a closure whose captured cells are its
 /// creator's context's (`CAP_OUTER`): the creator's context id with this
 /// bit. Lexical contexts never set it (kinds stop at 7 << 28).
@@ -718,6 +727,19 @@ impl Model {
     /// `site`, the birth is that object's context again (a recursive maker
     /// folds onto its ancestor).
     pub(crate) fn made_ctx(&mut self, site: CallId, lay: u32) -> CallId {
+        if lay & !LAY_MASK == LAY_CALL {
+            // Rule C: a birth in a closure maker's run for call site `cs` is
+            // per (birth site, call site). The entry has no maker object (TOP
+            // ends every maker walk).
+            let key = (site, CALL | (lay & LAY_MASK));
+            if let Some(&c) = self.sum.made_of.get(&key) {
+                return c;
+            }
+            let c = BORN - 1 - self.sum.made.len() as CallId;
+            self.sum.made.push((site, TOP, false));
+            self.sum.made_of.insert(key, c);
+            return c;
+        }
         let Some((o, by_method)) = self.lay_object(lay) else {
             return site;
         };
@@ -908,6 +930,7 @@ impl Model {
         let lay = match key.0 {
             0 => LAY_SITE | key.1,
             5 => LAY_BIRTH | key.1,
+            7 => LAY_CALL | key.1,
             1 if this != NO_NODE => key.1,
             2 if this != NO_NODE => self.layout_of(TOP),
             _ if ctx == NO_CTX => LAY_NONE,
@@ -947,6 +970,10 @@ impl Model {
             _ => LAY_NONE,
         };
         let key = match x {
+            _ if rlc_mask() & 1 != 0 && call != NO_NODE && self.closure_maker(f, x) => {
+                let site = self.sum.tmpl_of.get(&call).copied().unwrap_or(call);
+                (7, site, ft)
+            }
             _ if self.sum.site_calls.contains(&call) => (0, call, ft),
             Some(t) if self.constructs(f, t) => (5, t, ft),
             _ => (1, lay, ft),
@@ -964,6 +991,15 @@ impl Model {
         if call != NO_NODE && self.sum.bound.insert((call, inst)) {
             self.wire_args(call, inst);
         }
+    }
+
+    /// Rule C: `f` has no `this` term (or no receiver) and creates a closure
+    /// over its own frame: each call site's run has its own environment.
+    fn closure_maker(&self, f: FnIdx, x: Option<Tok>) -> bool {
+        let Some(s) = self.sum.of.get(&f) else {
+            return false;
+        };
+        (x.is_none() || s.this == NO_NODE) && s.closures.iter().any(|c| c.3 == CAP_OWN)
     }
 
     /// The `this` term of summarized `f`'s instances, if it has one.
