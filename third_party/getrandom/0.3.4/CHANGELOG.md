@@ -138,7 +138,7 @@ For more information, see the discussions in [#671], [#675], and [#730].
 - Remove separate codepath for Node.js in the `wasm_js` backend
   (bumps minimum supported Node.js version to v19) [#557]
 - Use `js_namespace` in the `wasm_js` backend [#559]
- 
+
 ### Added
 - `wasm32-wasip1` and `wasm32-wasip2` support [#499]
 - `getrandom_backend` configuration flag for selection of opt-in backends [#504]

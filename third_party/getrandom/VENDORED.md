@@ -5,6 +5,8 @@ Registry archive hashes are recorded in `upstream.json` and checked against
 Perry's original lockfile before extraction. Upstream MIT and Apache licenses,
 published manifests, tests and source provenance are retained. Registry status
 files and package lockfiles are omitted; Perry's workspace owns resolution.
+Two upstream prose lines have trailing whitespace removed so the repository's
+diff checks can run without exempting vendored files.
 
 The only library changes select a new backend on `wasm32-wasip3`. It imports
 `wasi:random/random@0.3.0::get-random-u64` and retains the existing alignment,
