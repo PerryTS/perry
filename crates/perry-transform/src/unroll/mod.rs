@@ -7,7 +7,8 @@
 //! ```
 //!
 //! where `LO` and `HI` are integer literals and the resulting trip count is
-//! small (≤ `MAX_TRIP_COUNT`). Replaces the entire `Stmt::For` with N copies
+//! small (≤ `MAX_TRIP_COUNT`) and the expanded body fits a size budget.
+//! Replaces the entire `Stmt::For` with N copies
 //! of the body, with every `Expr::LocalGet(i)` substituted by
 //! `Expr::Integer(LO + n)` for the n-th copy.
 //!
@@ -25,13 +26,14 @@
 //! ```
 //!
 //! With the kx loop unrolled (`kx` substituted with -2, -1, 0, 1, 2), the
-//! `KERNEL[ky + 2][kx + 2]` access folds to `KERNEL[ky + 2][0..4]`. With
-//! the ky loop also unrolled, both indices are compile-time integers and
+//! `KERNEL[ky + 2][kx + 2]` access folds to `KERNEL[ky + 2][0..4]`. If
+//! the expanded nest fits the size budget, ky can also be unrolled: both
+//! indices are then compile-time integers and
 //! Perry's existing flat-const machinery (`Expr::IndexGet` on a flat
 //! `[25 x i32]` global with literal indices) replaces the load with a
 //! constant. LLVM then specializes mul-by-1 to no-op, mul-by-4 to a
-//! 2-bit shift, and mul-by-16 to a 4-bit shift — matching Zig's
-//! ~130 ms scalar blur kernel instead of Perry's SIMD-bound ~240 ms.
+//! 2-bit shift, and mul-by-16 to a 4-bit shift. Kernels with more surrounding
+//! work may remain partly rolled to keep code growth bounded.
 //!
 //! ## Safety guards (rejected shapes)
 //!
@@ -63,13 +65,15 @@
 //!   would need each unrolled iteration to share the same `catch` /
 //!   `finally`. Conservative: reject.
 //!
-//! ## Trip count bound
+//! ## Expansion bounds
 //!
-//! `MAX_TRIP_COUNT = 8`. Image_convolution's kernels are 5 trips each;
-//! at 5×5 = 25 total inlined stmts per pixel and ~150 byte body per
-//! statement, the unrolled module init is bounded at ~5KB extra IR per
-//! kernel-bearing function. Larger trips would inflate code size faster
-//! than LLVM constant-folding can claw back.
+//! `MAX_TRIP_COUNT = 8` bounds iterations, not code size. Before duplicating
+//! a body, `cost` also bounds its expanded statement/expression count. Inner
+//! loops are processed first, so outer loops are charged for any expansion
+//! already performed inside them. This conservative cap applies at every
+//! optimization level, including the default size-oriented native pipeline.
+//! Large bodies remain loops for LLVM to optimize instead of forcing it to
+//! recover compact code from unconditional HIR expansion (#13649).
 
 use perry_hir::types::{FuncId, LocalId};
 use perry_hir::walker::{walk_expr_children, walk_expr_children_mut};
@@ -78,13 +82,14 @@ use std::collections::HashMap;
 
 pub(crate) mod escape_analysis;
 use escape_analysis::compute_loop_escaping_ids;
+mod cost;
 
 // #5293: the max-LocalId / max-FuncId scans were copy-pasted here; route through
 // the canonical exhaustive-walker implementations in `generator::id_scan`.
 use crate::generator::{compute_max_func_id, compute_max_local_id};
 
 /// Maximum trip count we'll fully unroll. 8 covers the canonical
-/// image-kernel shapes (3×3, 5×5, 7×7) without blowing up code size.
+/// image-kernel trip counts (3×3, 5×5, 7×7); `cost` separately bounds size.
 const MAX_TRIP_COUNT: i64 = 8;
 
 /// Apply the unroll pass to every function in `module` (including methods,
@@ -210,9 +215,8 @@ pub fn unroll_static_loops(module: &mut Module) {
 
 /// Walk `stmts` and unroll any qualifying `Stmt::For` in place. Recurses
 /// into nested control flow (if/while/for/switch/try) so inner loops also
-/// get a shot at unrolling. Outer loops are unrolled FIRST — once the
-/// outer is gone, the inner loop appears N times in the unrolled output
-/// and each copy is then walked again to unroll the inner if it qualifies.
+/// get a shot at unrolling. Inner loops are unrolled FIRST, so an outer
+/// loop's cost check includes all copies already emitted for its children.
 ///
 /// `changed` is set to `true` whenever any `Stmt::For` in `stmts` (or
 /// recursively inside its children) gets unrolled. The caller uses this
@@ -491,7 +495,14 @@ fn try_unroll_for(
         return None;
     }
 
-    // 6. Emit N copies. For each iteration, clone the body and substitute
+    // 6. Bound the total copied HIR, including expanded inner loops and
+    //    expression trees hidden inside a single statement. Do this before
+    //    cloning or allocating fresh IDs/source-span mappings.
+    if !cost::fits_expansion_budget(body, trips as usize) {
+        return None;
+    }
+
+    // 7. Emit N copies. For each iteration, clone the body and substitute
     //    every Expr::LocalGet(iv_id) with Expr::Integer(lo + n). The IV's
     //    own `Stmt::Let` from the for's init is dropped — it doesn't
     //    appear in the unrolled output. `update` is dropped likewise (it
@@ -1660,6 +1671,93 @@ mod tests {
             try_unroll(&f).is_none(),
             "a function literal must not be cloned"
         );
+    }
+
+    #[test]
+    fn bounds_total_expansion_at_eight_trips() {
+        // Each expression statement contributes two nodes. 32 * 2 * 8
+        // fits the 512-node cap; one more statement must keep the loop.
+        let small = make_for(1, 0, 8, vec![Stmt::Expr(ivar(1)); 32], CompareOp::Lt);
+        assert_eq!(try_unroll(&small).unwrap().len(), 256);
+        let large = make_for(1, 0, 8, vec![Stmt::Expr(ivar(1)); 33], CompareOp::Lt);
+        assert!(try_unroll(&large).is_none());
+    }
+
+    #[test]
+    fn counts_expression_trees_inside_one_statement() {
+        let mut expression = ivar(1);
+        for _ in 0..40 {
+            expression = Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(expression),
+                right: Box::new(integer(1)),
+            };
+        }
+        let loop_stmt = make_for(1, 0, 8, vec![Stmt::Expr(expression)], CompareOp::Lt);
+        assert!(try_unroll(&loop_stmt).is_none());
+    }
+
+    #[test]
+    fn counts_statements_nested_in_branches() {
+        let branch = Stmt::If {
+            condition: Expr::Bool(true),
+            then_branch: vec![Stmt::Expr(ivar(1)); 20],
+            else_branch: Some(vec![Stmt::Expr(ivar(1)); 20]),
+        };
+        let loop_stmt = make_for(1, 0, 8, vec![branch], CompareOp::Lt);
+        assert!(try_unroll(&loop_stmt).is_none());
+    }
+
+    #[test]
+    fn charges_inner_expansion_to_the_outer_loop() {
+        // Each original body fits by itself, but expanding both levels
+        // would produce 640 nodes. Keep the outer loop after expanding
+        // the inner one (80 nodes).
+        let accumulate = Stmt::Expr(Expr::LocalSet(
+            100,
+            Box::new(Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(ivar(100)),
+                right: Box::new(ivar(2)),
+            }),
+        ));
+        let inner = make_for(2, 0, 8, vec![accumulate; 2], CompareOp::Lt);
+        let outer = make_for(1, 0, 8, vec![inner], CompareOp::Lt);
+        let mut module = Module::new("nested-cost.ts");
+        module.init = vec![outer];
+        unroll_static_loops(&mut module);
+        assert!(
+            module.init_was_unrolled,
+            "the inner loop must actually expand"
+        );
+        assert_eq!(module.init.len(), 1);
+        let Stmt::For { body, .. } = &module.init[0] else {
+            panic!("outer loop must remain within the expansion budget");
+        };
+        assert_eq!(body.len(), 16);
+        assert!(body.iter().all(|stmt| matches!(stmt, Stmt::Expr(_))));
+    }
+
+    #[test]
+    fn rejected_expansion_preserves_body_and_unroll_flag() {
+        let loop_stmt = make_for(1, 0, 8, vec![Stmt::Expr(ivar(1)); 40], CompareOp::Lt);
+        let before = format!("{loop_stmt:?}");
+        let mut module = Module::new("large-cost.ts");
+        module.init = vec![loop_stmt];
+        unroll_static_loops(&mut module);
+        assert!(!module.init_was_unrolled);
+        assert_eq!(module.init.len(), 1);
+        assert_eq!(format!("{:?}", module.init[0]), before);
+    }
+
+    #[test]
+    fn single_iteration_does_not_duplicate_a_large_body() {
+        let loop_stmt = make_for(1, 0, 1, vec![Stmt::Expr(ivar(1)); 300], CompareOp::Lt);
+        let unrolled = try_unroll(&loop_stmt).expect("one copy has no code growth");
+        assert_eq!(unrolled.len(), 300);
+        assert!(unrolled
+            .iter()
+            .all(|stmt| matches!(stmt, Stmt::Expr(Expr::Integer(0)))));
     }
 
     #[test]

@@ -3,6 +3,7 @@
 mod accessor_keys;
 mod array_ctor;
 mod array_elements;
+mod array_iteration;
 mod array_length;
 mod array_named_keys;
 mod array_numeric;
@@ -53,6 +54,7 @@ mod run_once_closed;
 mod regexp_exec;
 mod runtime_helpers;
 mod summary;
+mod typed_array_exact;
 mod super_heritage;
 mod unit_alias;
 mod unit_cjs;

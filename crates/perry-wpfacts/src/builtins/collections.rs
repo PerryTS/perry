@@ -121,8 +121,7 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
             }
         }
         // An async generator's step: the function runs with this = itself.
-        Some("next" | "return" | "throw") | None
-            if matches!(m.toks[t as usize], TokKind::Func(f, _) if m.funcs[f as usize].gen_async) =>
+        Some("next" | "return" | "throw") | None if matches!(m.toks[t as usize], TokKind::Func(f, _) if m.funcs[f as usize].gen_async) =>
         {
             m.call_tok(call, t, Some(t));
         }
@@ -153,7 +152,8 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
             let d = m.field(r, da);
             m.add_prim(d, prim::BOOL);
             ret_tok(m, call, r);
-            if matches!(m.toks[t as usize], TokKind::Func(f, _) if m.funcs[f as usize].gen_reyields) {
+            if matches!(m.toks[t as usize], TokKind::Func(f, _) if m.funcs[f as usize].gen_reyields)
+            {
                 m.edge(raw, c.ret);
             }
         }
@@ -181,6 +181,18 @@ fn cb_call(m: &mut Model, by: CallId, cb: NodeId, this: ThisArg, args: Vec<NodeI
     );
     m.cons(cb, Cons::Call { call: call2 });
     ret
+}
+
+/// ToPrimitive on `v`: its `@@toPrimitive`, `valueOf` and `toString` run.
+pub(crate) fn to_prim(m: &mut Model, v: NodeId, why: &str) {
+    let r = m.reason(why);
+    m.cons(
+        v,
+        Cons::Implicit {
+            reason: r,
+            proto: Protocol::ToPrimitive,
+        },
+    );
 }
 
 /// The `RegExp.prototype` methods that run RegExpExec (22.2.7.1) on the
@@ -223,22 +235,25 @@ fn regexp_species_constructor(m: &mut Model, t: Tok) {
     );
 }
 
-/// RegExpExec: `exec` is read from the regexp as a property and called with
-/// the string, so an `exec` the program stored on it (or on `RegExp.prototype`)
-/// runs with the regexp as `this`.
-fn regexp_exec(m: &mut Model, t: Tok, call: CallId) {
-    let c = m.calls[call as usize].clone();
-    let recv = m.node_l("regexp");
-    m.add_tok(recv, t);
-    let a = m.atom("exec");
-    let ret = m.node_l("exec-ret");
+/// `recv[name](...args)` where the algorithm looks the method up as a
+/// property: a method the program stored on the receiver runs, with the
+/// receiver as `this`.
+pub(crate) fn method_call(
+    m: &mut Model,
+    call: CallId,
+    recv: NodeId,
+    name: &str,
+    args: Vec<NodeId>,
+) -> NodeId {
+    let a = m.atom(name);
+    let ret = m.node_l("method-ret");
     m.nodes[ret as usize].frame = m.call_run(call);
     let site = m.calls.len() as CallId;
     m.solver_call(
         call,
         CallSite {
             this: ThisArg::Node(recv),
-            args: c.args.first().copied().into_iter().collect(),
+            args,
             spread: vec![],
             ret,
             site,
@@ -250,6 +265,77 @@ fn regexp_exec(m: &mut Model, t: Tok, call: CallId) {
             key: Key::Named(a),
             call: site,
         },
+    );
+    ret
+}
+
+/// TypedArraySpeciesCreate (23.2.4.1): `constructor` and its `@@species` are
+/// read from the receiver and the result constructed from them with
+/// arguments of the algorithm, so a constructor the program stored runs
+/// with any arguments.
+fn species_constructor(m: &mut Model, recv: NodeId) {
+    let k = m.atom("constructor");
+    let cn = m.node_l("species-constructor");
+    m.cons(
+        recv,
+        Cons::Load {
+            key: Key::Named(k),
+            dst: cn,
+        },
+    );
+    let sp = m.atom("@@__perry_wk_species");
+    let sc = m.node_l("species");
+    m.cons(
+        cn,
+        Cons::Load {
+            key: Key::Named(sp),
+            dst: sc,
+        },
+    );
+    for (n, why) in [
+        (cn, "argument of the species constructor lookup"),
+        (sc, "argument of the species constructor"),
+    ] {
+        let r = m.reason(why);
+        m.cons(
+            n,
+            Cons::Implicit {
+                reason: r,
+                proto: Protocol::Any,
+            },
+        );
+    }
+}
+
+/// `new TypedArray(src)` (23.2.5.1): an object source is iterated, else read
+/// as an array-like; each element is ToNumber'd.
+pub(crate) fn typed_array_source_elements(m: &mut Model, call: CallId, src: NodeId) {
+    let it = iterate(m, call, src);
+    to_prim(m, it, "typed array element ToNumber");
+    let el = m.node_l("array-like-element");
+    m.cons(
+        src,
+        Cons::Load {
+            key: Key::Any,
+            dst: el,
+        },
+    );
+    to_prim(m, el, "typed array element ToNumber");
+}
+
+/// RegExpExec: `exec` is read from the regexp as a property and called with
+/// the string, so an `exec` the program stored on it (or on `RegExp.prototype`)
+/// runs with the regexp as `this`.
+fn regexp_exec(m: &mut Model, t: Tok, call: CallId) {
+    let c = m.calls[call as usize].clone();
+    let recv = m.node_l("regexp");
+    m.add_tok(recv, t);
+    method_call(
+        m,
+        call,
+        recv,
+        "exec",
+        c.args.first().copied().into_iter().collect(),
     );
 }
 
@@ -743,6 +829,13 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             Some(n),
         ) if !n.starts_with("on") && n != "addEventListener" => {
             implicit_args(m, call, "builtin method argument", Protocol::Any);
+            if what == "Date" && n == "toJSON" {
+                // 21.4.4.37: ToPrimitive(this), then Invoke(this, "toISOString").
+                let recv = m.node_l("date");
+                m.add_tok(recv, t);
+                to_prim(m, recv, "Date toJSON ToPrimitive");
+                method_call(m, call, recv, "toISOString", vec![]);
+            }
             if what == "RegExp" && regexp_runs_exec(n) {
                 regexp_exec(m, t, call);
             }
@@ -758,12 +851,38 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         }
         (
             "TypedArray",
-            Some("subarray" | "slice" | "fill" | "reverse" | "sort" | "map" | "filter"),
+            Some(n @ ("subarray" | "slice" | "fill" | "reverse" | "sort" | "map" | "filter")),
         ) => {
-            if let Some(&cb) = c.args.first() {
-                let num = m.node_l("num");
-                m.add_prim(num, prim::NUM);
-                let _ = cb_call(m, call, cb, ThisArg::Undef, vec![num, num]);
+            let recv = m.node_l("typed-array");
+            m.add_tok(recv, t);
+            let num = m.node_l("num");
+            m.add_prim(num, prim::NUM);
+            if matches!(n, "sort" | "map" | "filter") {
+                // A comparator or callback gets (element, index, array) and
+                // thisArg; `map` and `sort` ToNumber its result.
+                if let Some(&cb) = c.args.first() {
+                    let (this, cargs) = if n == "sort" {
+                        (ThisArg::Undef, vec![num, num])
+                    } else {
+                        (
+                            c.args.get(1).map_or(ThisArg::Undef, |&x| ThisArg::Node(x)),
+                            vec![num, num, recv],
+                        )
+                    };
+                    let r = cb_call(m, call, cb, this, cargs);
+                    if n != "filter" {
+                        to_prim(m, r, "typed array callback result ToNumber");
+                    }
+                }
+            } else {
+                // The value and index arguments are ToNumber'd /
+                // ToIntegerOrInfinity'd.
+                for &a in &c.args {
+                    to_prim(m, a, "typed array method argument ToNumber");
+                }
+            }
+            if matches!(n, "subarray" | "slice" | "map" | "filter") {
+                species_constructor(m, recv);
             }
             ret_tok(m, call, t);
         }
@@ -775,6 +894,12 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         }
         ("TypedArray", Some(_)) => {
             implicit_args(m, call, "typed array method argument", Protocol::Any);
+            if name == Some("toString") {
+                // Array.prototype.toString calls the receiver's `join`.
+                let recv = m.node_l("typed-array");
+                m.add_tok(recv, t);
+                method_call(m, call, recv, "join", vec![]);
+            }
             ret_prim(m, call, prim::ALL);
             let pb = site_tmpl(m, call, "primbox");
             ret_tok(m, call, pb);

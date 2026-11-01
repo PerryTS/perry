@@ -885,7 +885,15 @@ impl<'a> Gen<'a> {
             | Expr::WebAssemblyInstantiate { .. }
             | Expr::WebAssemblyCallExport { .. } => self.fail_closed(fx, e, "WebAssembly"),
             Expr::TextEncoderNew | Expr::TextDecoderNew { .. } => {
-                let _ = kids(e).into_iter().map(|k| self.expr(fx, k)).count();
+                let mut ks = kids(e).into_iter();
+                if let Expr::TextDecoderNew { .. } = e {
+                    // The label is ToString'd (WHATWG Encoding: DOMString).
+                    if let Some(k) = ks.next() {
+                        let l = self.expr(fx, k);
+                        crate::builtins::to_prim(&mut self.m, l, "TextDecoder label DOMString");
+                    }
+                }
+                let _ = ks.map(|k| self.expr(fx, k)).count();
                 self.bobj(mi, "TextCodec").1
             }
             Expr::TextEncoderEncode(..)
@@ -901,6 +909,7 @@ impl<'a> Gen<'a> {
                 let ks = kids(e);
                 let (t, n) = self.bobj(mi, "TypedArray");
                 let owner = self.begin_indexed_owner(mi, t, e);
+                let mut first = true;
                 for k in ks {
                     let v = self.expr(fx, k);
                     if owner {
@@ -917,6 +926,15 @@ impl<'a> Gen<'a> {
                         },
                     );
                     self.m.cons(v, Cons::ShareBuffer { ta: t });
+                    if first && matches!(e, Expr::Uint8ArrayNew(_) | Expr::TypedArrayNew { .. }) {
+                        // 23.2.5.1: an object source is iterated, else read
+                        // as an array-like; each element is ToNumber'd.
+                        let it = self.iterate(v);
+                        crate::builtins::to_prim(&mut self.m, it, "typed array element ToNumber");
+                        let el = self.load(v, Key::Any);
+                        crate::builtins::to_prim(&mut self.m, el, "typed array element ToNumber");
+                    }
+                    first = false;
                 }
                 let fa = self.m.field_any(t);
                 self.m.add_prim(fa, prim::NUM);
@@ -1806,6 +1824,9 @@ impl<'a> Gen<'a> {
                 let nt = self.expr(fx, new_target);
                 let r = self.m.reason("E11 Reflect.construct newTarget");
                 self.m.cons(nt, Cons::NewTargetHard { reason: r });
+                // A new target picks the prototype of whatever the target
+                // constructs, an Array exotic object included (#13645).
+                self.m.array_member_write.get_or_insert(r);
                 let (call, ret) = self.new_call(ThisArg::Undef, vec![], vec![a]);
                 self.m.cons(t, Cons::New { call });
                 ret
