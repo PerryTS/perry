@@ -82,6 +82,7 @@ PERRY_AGENT_RETURN(int32_t, perry_component_frame_task_ready, (void * a0), (a0))
 PERRY_AGENT_RETURN(int32_t, perry_component_frame_task_cancel, (void * a0), (a0))
 PERRY_AGENT_RETURN(int32_t, perry_component_frame_task_resume, (void * a0, void (*a1)(void *), void * a2), (a0, a1, a2))
 PERRY_AGENT_RETURN(uint32_t, perry_component_frame_import_begin, (void * a0), (a0))
+PERRY_AGENT_RETURN(uint32_t, perry_component_frame_import_begin_after_return, (void * a0), (a0))
 PERRY_AGENT_RETURN(int32_t, perry_component_frame_import_resolve, (void * a0, uint32_t a1), (a0, a1))
 PERRY_AGENT_RETURN(int32_t, perry_component_frame_import_reject, (void * a0, uint32_t a1), (a0, a1))
 PERRY_AGENT_RETURN(uint32_t, perry_component_frame_resource_lift, (void * a0, uint32_t a1, uint32_t a2, uint32_t a3, int32_t a4), (a0, a1, a2, a3, a4))
@@ -145,6 +146,7 @@ PERRY_AGENT_RETURN(void *, perry_component_frame_task_new, (void), ())
 #define perry_component_frame_task_cancel perry_agent_perry_component_frame_task_cancel
 #define perry_component_frame_task_resume perry_agent_perry_component_frame_task_resume
 #define perry_component_frame_import_begin perry_agent_perry_component_frame_import_begin
+#define perry_component_frame_import_begin_after_return perry_agent_perry_component_frame_import_begin_after_return
 #define perry_component_frame_import_resolve perry_agent_perry_component_frame_import_resolve
 #define perry_component_frame_import_reject perry_agent_perry_component_frame_import_reject
 #define perry_component_frame_resource_lift perry_agent_perry_component_frame_resource_lift

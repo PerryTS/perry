@@ -5168,6 +5168,7 @@ perry_component_frame_get_number	f64	ptr,i32u
 perry_component_frame_get_s64	i64	ptr,i32u
 perry_component_frame_get_u64	i64	ptr,i32u
 perry_component_frame_import_begin	i32u	ptr
+perry_component_frame_import_begin_after_return	i32u	ptr
 perry_component_frame_import_reject	i32s	ptr,i32u
 perry_component_frame_import_resolve	i32s	ptr,i32u
 perry_component_frame_initialize	void	ptr,ptr

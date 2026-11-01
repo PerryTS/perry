@@ -544,8 +544,9 @@ fn experimental_async_imports_compile_with_the_backends_indirect_and_flat_signat
         assert!(canonical_guest(&input, None).is_err());
         let files = experimental_async_guest(&input, None).unwrap();
         let adapter = String::from_utf8(files["perry_adapter.c"].clone()).unwrap();
-        assert!(adapter.contains("Async import requires an async export task"));
+        assert!(adapter.contains("Async import requires a live export task"));
         assert!(adapter.contains("perry_component_frame_import_begin(f)"));
+        assert!(adapter.contains("perry_component_frame_import_begin_after_return(f)"));
         assert!(adapter.contains("perry_component_frame_import_resolve(f,"));
         assert!(!adapter.contains("CALLBACK_CODE_YIELD"));
         for (name, bytes) in files { std::fs::write(dir.path().join(name), bytes).unwrap(); }

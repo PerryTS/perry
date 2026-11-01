@@ -257,6 +257,23 @@ fn unborrowed(fields: f64) {
     }
 }
 
+/// A synchronous call's incoming canonical borrow expires before a staged
+/// async import starts. Validate after Promise-init hooks and before committing
+/// any owner or loan. Guest-owned wrappers and their .borrow() aliases have no
+/// incoming call lifetime and may retain a loan through the import frame.
+pub(super) fn validate_after_return_borrows(frame: &Frame) {
+    for slot in frame
+        .borrows
+        .iter()
+        .chain(frame.committed_borrows.iter().map(|(slot, _)| slot))
+    {
+        let fields = live(frame.get(*slot));
+        if !JSValue::from_bits(get(fields, LIFETIME).to_bits()).is_undefined() {
+            fail("Cannot defer an incoming resource borrow beyond its synchronous call");
+        }
+    }
+}
+
 pub(super) fn commit(frame: &mut Frame) {
     super::endpoints::validate_transfers(frame);
     // Revalidate all owners before mutation. A property getter used by later

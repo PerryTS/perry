@@ -16,6 +16,23 @@ pub(super) struct SuspendedImport {
 /// owner. It is not a task frame and must not have begun another import.
 #[no_mangle]
 pub unsafe extern "C" fn perry_component_frame_import_begin(pointer: *mut c_void) -> u32 {
+    begin(pointer, false)
+}
+
+/// Publish an import that C will start after the current synchronous return.
+/// Incoming canonical borrows cannot outlive that return; guest-owned loans
+/// remain rooted and block disposal until the retained import frame retires.
+/// # Safety
+/// The frame and agent requirements match import_begin. C must not start this
+/// import until the synchronous call and its incoming borrow scopes have ended.
+#[no_mangle]
+pub unsafe extern "C" fn perry_component_frame_import_begin_after_return(
+    pointer: *mut c_void,
+) -> u32 {
+    begin(pointer, true)
+}
+
+unsafe fn begin(pointer: *mut c_void, after_return: bool) -> u32 {
     frame(pointer).guard(|owner| {
         if owner.task.is_some() || owner.suspended.is_some() {
             fail("Expected a fresh component import frame");
@@ -35,6 +52,9 @@ pub unsafe extern "C" fn perry_component_frame_import_begin(pointer: *mut c_void
         // before publishing deferral or letting C issue canonical I/O.
         if !job_domain::current().is_some_and(|token| token.is_current_live()) {
             fail("Async component import requires a live canonical task");
+        }
+        if after_return {
+            super::super::resources::validate_after_return_borrows(owner);
         }
         super::super::resources::commit(owner);
         owner.suspended = Some(SuspendedImport {

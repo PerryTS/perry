@@ -109,6 +109,10 @@ int32_t perry_component_frame_task_resume(void *, void (*)(void *), void *);
    Use task_resume for a later callback; immediate completion is already scoped.
    Failed/duplicate completion is inert apart from the recorded frame error. */
 uint32_t perry_component_frame_import_begin(void *);
+/* Additive opt-in for an import staged by a synchronous export. Rejects
+   incoming call-scoped borrows after Promise hooks, before ownership commit;
+   loans from guest-owned resources remain held until C retires the frame. */
+uint32_t perry_component_frame_import_begin_after_return(void *);
 int32_t perry_component_frame_import_resolve(void *, uint32_t);
 int32_t perry_component_frame_import_reject(void *, uint32_t);
 

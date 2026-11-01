@@ -152,7 +152,7 @@ fn canonical_child_ownership_survives_cancel_acknowledgement_and_return_races() 
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(String::from_utf8_lossy(&output.stdout)
-        .contains("PASS: 14 canonical child ownership cases"));
+        .contains("PASS: 17 canonical child ownership and staged import cases"));
     // This invokes the real generated simple-resource finish callback. The
     // native trap is SIGILL; the settlement mock would instead abort (SIGABRT).
     use std::os::unix::process::ExitStatusExt;

@@ -33,6 +33,9 @@ typedef struct perry_child {
        the runtime error/Store-retirement path; C must not drop those owners
        again after some have already been adopted by JS. */
     bool complete, params_consumed, result_ready, result_claimed;
+    /* Non-null until a sync export's private actor starts the canonical call.
+       Its typed storage and committed runtime loan are already retained. */
+    void (*start)(void *);
     void (*finish)(void *);
     void (*destroy)(struct perry_child *);
 } perry_child;
@@ -218,6 +221,7 @@ static void perry_task_drop(perry_task *t) {
     perry_wake_all();
 }
 static void perry_child_start(perry_task *t, perry_child *child, $W_subtask_status_t status) {
+    perry_require(child->start == NULL);
     $W_subtask_state_t state = $U_SUBTASK_STATE(status);
     child->handle = $U_SUBTASK_HANDLE(status);
     perry_require(state == $U_SUBTASK_STARTING || state == $U_SUBTASK_STARTED || state == $U_SUBTASK_RETURNED);
@@ -291,6 +295,14 @@ static $W_callback_code_t perry_task_cancel(perry_task *t) {
         perry_io_cancel(t, t->io);
     }
     for (perry_child *child = t->children; child; child = child->next) {
+        if (child->start) {
+            /* No native call exists to acknowledge. C still owns every
+               committed argument; destroy them before retiring the frame. */
+            perry_require(!child->complete && child->handle == 0 && !child->params_consumed);
+            child->start = NULL;
+            child->complete = true;
+            continue;
+        }
         perry_require(!child->complete && child->handle != 0);
         $W_waitable_join(child->handle, 0);
         $W_subtask_state_t state = $U_SUBTASK_STATE($W_subtask_cancel(child->handle));
@@ -356,10 +368,18 @@ static $W_callback_code_t perry_actor_step(perry_task *t) {
         perry_io *pending = NULL;
         for (perry_io *io = t->io; io; io = io->next)
             if (io->start) { pending = io; break; }
-        if (!pending) break;
-        perry_io_start(t, pending);
-        perry_task_reap(t);
-        perry_endpoint_flush();
+        if (pending) {
+            perry_io_start(t, pending);
+            perry_task_reap(t);
+            perry_endpoint_flush();
+            continue;
+        }
+        perry_child *child = t->children;
+        while (child && !child->start) child = child->next;
+        if (!child) break;
+        void (*start)(void *) = child->start;
+        child->start = NULL;
+        perry_require(perry_task_resume(t, start, child) >= 0);
         /* Starting/resuming may free nodes or publish another operation. */
     }
     perry_require(perry_task_checkpoint(t) >= 0);

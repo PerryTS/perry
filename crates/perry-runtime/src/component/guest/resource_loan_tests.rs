@@ -198,3 +198,5 @@ fn a_full_loan_counter_rejects_the_whole_commit_before_consuming_an_owner() {
 
 #[path = "resource_loan_tests/publication.rs"]
 mod publication;
+#[path = "resource_loan_tests/after_return.rs"]
+mod after_return;

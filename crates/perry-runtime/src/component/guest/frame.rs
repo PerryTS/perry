@@ -18,7 +18,8 @@ use std::{
     },
 };
 pub use suspended::{
-    perry_component_frame_import_begin, perry_component_frame_import_reject,
+    perry_component_frame_import_begin, perry_component_frame_import_begin_after_return,
+    perry_component_frame_import_reject,
     perry_component_frame_import_resolve,
 };
 pub use task::{
@@ -761,7 +762,7 @@ const fn adapter_entry(code: *const ()) -> AdapterEntry {
 }
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
-static KEEP_ADAPTER_ENTRIES: [AdapterEntry; 58] = [
+static KEEP_ADAPTER_ENTRIES: [AdapterEntry; 59] = [
     adapter_entry(super::endpoints::producer::perry_component_frame_endpoint_pair as *const ()),
     adapter_entry(super::endpoints::io::perry_component_frame_endpoint_write_commit as *const ()),
     adapter_entry(super::endpoints::io::perry_component_frame_endpoint_status as *const ()),
@@ -818,6 +819,7 @@ static KEEP_ADAPTER_ENTRIES: [AdapterEntry; 58] = [
     adapter_entry(perry_component_frame_task_resume as *const ()),
     adapter_entry(perry_component_frame_task_cancel as *const ()),
     adapter_entry(perry_component_frame_import_begin as *const ()),
+    adapter_entry(perry_component_frame_import_begin_after_return as *const ()),
     adapter_entry(perry_component_frame_import_resolve as *const ()),
     adapter_entry(perry_component_frame_import_reject as *const ()),
 ];

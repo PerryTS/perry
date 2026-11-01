@@ -1,6 +1,6 @@
 use super::*;
 
-struct Hook<'a>(crate::gc::RuntimeHandle<'a>);
+pub(super) struct Hook<'a>(crate::gc::RuntimeHandle<'a>);
 impl Drop for Hook<'_> {
     fn drop(&mut self) {
         crate::async_hooks::js_async_hook_disable(crate::value::js_nanbox_get_pointer(
@@ -26,13 +26,20 @@ extern "C-unwind" fn canonical_loan_promise_init(
     if mode == 1.0 {
         method(value.get_nanbox_f64(), b"dispose");
     }
+    if mode == 3.0 {
+        set(value.get_nanbox_f64(), 0, 0.0);
+    }
     crate::gc::gc_collect_minor();
     if mode == 0.0 {
         crate::exception::js_throw(value.get_nanbox_f64());
     }
     undefined()
 }
-fn install_loan_init_hook<'a>(scope: &'a RuntimeHandleScope, mode: f64, value: f64) -> Hook<'a> {
+pub(super) fn install_loan_init_hook<'a>(
+    scope: &'a RuntimeHandleScope,
+    mode: f64,
+    value: f64,
+) -> Hook<'a> {
     let value = scope.root_nanbox_f64(value);
     let callback = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
         crate::fn_info!(unwind canonical_loan_promise_init, 4),

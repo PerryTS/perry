@@ -10,6 +10,8 @@ static unsigned finished, cancelled, freed_results, begin_calls, native_calls;
 static uint32_t joined;
 static plugin_subtask_state_t cancel_state;
 static bool acknowledged, lifting_failed;
+static unsigned native_mode;
+static bool unstarted_cancellation;
 static void *const child_frame = (void *)(uintptr_t)1;
 static void *const parent_frame = (void *)(uintptr_t)2;
 
@@ -41,14 +43,17 @@ void perry_component_frame_drop(void *f) {
     else { assert(f == parent_frame); ++parent_frames; }
 }
 int32_t perry_component_frame_task_cancel(void *f) {
-    assert(f == parent_frame && !acknowledged); ++cancelled; return 0;
+    assert(f == parent_frame && !acknowledged); ++cancelled;
+    if (unstarted_cancellation) acknowledged = true;
+    return 0;
 }
 int32_t perry_component_frame_task_ready(void *f) { (void)f; return 0; }
+int32_t perry_component_frame_task_checkpoint(void *f) { assert(f == parent_frame); return 0; }
 int32_t perry_component_frame_resource_scope_end(void *f) {
     assert(f == parent_frame && acknowledged && child_frames == 1); return 0;
 }
 int32_t perry_component_frame_task_resume(void *f, void (*cb)(void *), void *data) {
-    assert(f == parent_frame && acknowledged); cb(data); return 0;
+    assert(f == parent_frame && (acknowledged || native_mode)); cb(data); return 0;
 }
 void plugin_waitable_join(uint32_t handle, plugin_waitable_set_t set) {
     assert(handle == 42 || handle == 0); joined = set;
@@ -63,7 +68,11 @@ void plugin_subtask_drop(plugin_subtask_t h) { assert(h == 42 && acknowledged); 
 plugin_waitable_set_t plugin_waitable_set_new(void) { return 71; }
 void plugin_waitable_set_drop(plugin_waitable_set_t set) { assert(set == 71); }
 plugin_waitable_status_t plugin_stream_void_cancel_read(plugin_stream_void_t h) {
-    (void)h; assert(0); return 0;
+    assert(native_mode && h == 0); return PLUGIN_WAITABLE_COMPLETED;
+}
+plugin_stream_void_t plugin_stream_void_new(plugin_stream_void_writer_t *w) { *w = 0; return 0; }
+plugin_waitable_status_t plugin_stream_void_read(plugin_stream_void_t h, size_t n) {
+    assert(native_mode == 2 && h == 0 && n == 1); return PLUGIN_WAITABLE_STATUS_BLOCKED;
 }
 void plugin_stream_void_drop_readable(plugin_stream_void_t h) { assert(h == 0); }
 void plugin_stream_void_drop_writable(plugin_stream_void_writer_t h) { assert(h == 0); }
@@ -71,7 +80,7 @@ plugin_waitable_status_t plugin_stream_void_write(plugin_stream_void_writer_t h,
     (void)h; (void)n; assert(0); return 0;
 }
 void plugin_task_cancel(void) { assert(acknowledged && child_frames == 1); }
-void plugin_context_set_0(void *p) { assert(p == NULL); }
+void plugin_context_set_0(void *p) { assert(p == NULL || native_mode); }
 
 /* The rejected-before-begin case executes the real simple import adapter.
    Its staged handle still belongs to JS, so neither native I/O nor drop runs. */
@@ -84,14 +93,26 @@ uint32_t perry_component_frame_resource_lower(void *f, uint32_t s, uint32_t t, i
 uint32_t perry_component_frame_import_begin(void *f) {
     assert(f == child_frame); ++begin_calls; return 0;
 }
+uint32_t perry_component_frame_import_begin_after_return(void *f) {
+    assert(f == child_frame && perry_active_task && !perry_active_task->asynchronous);
+    assert(native_calls == 0); ++begin_calls; return native_mode ? 77 : 0;
+}
 plugin_subtask_status_t test_custody_api_one(test_custody_api_own_item_t v, test_custody_api_own_item_t *r) {
-    (void)v; (void)r; ++native_calls; assert(0); return 0;
+    assert(native_mode && v.__handle == 11 && perry_active_task);
+    assert(perry_active_task->asynchronous && perry_active_task->returned && !perry_active_task->parked);
+    assert(begin_calls == 1 && native_calls++ == 0);
+    r->__handle = 12;
+    acknowledged = native_mode == 1;
+    return (42 << 4) | (native_mode == 1 ? PLUGIN_SUBTASK_RETURNED : PLUGIN_SUBTASK_STARTING);
 }
 uint32_t perry_component_frame_resource_lift(void *f, uint32_t t, uint32_t h, uint32_t r, int32_t own) {
-    (void)t; (void)r; assert(f == child_frame && h == 12 && own && lifting_failed); return 0;
+    (void)t; (void)r; assert(f == child_frame && h == 12 && own);
+    if (lifting_failed) return 0;
+    assert(native_mode && acknowledged); ++adopted[12]; return 13;
 }
 int32_t perry_component_frame_import_resolve(void *f, uint32_t s) {
-    (void)f; (void)s; assert(0); return -1;
+    assert(native_mode && f == child_frame && s == 13 && acknowledged);
+    ++finished; return 0;
 }
 
 static void claim_result(void *p) {
@@ -113,6 +134,7 @@ static perry_task *new_parent(void) {
     child_frames = parent_frames = finished = cancelled = freed_results = 0;
     begin_calls = native_calls = joined = 0;
     acknowledged = lifting_failed = false;
+    native_mode = 0; unstarted_cancellation = false;
     perry_task *t = calloc(1, sizeof(*t)); assert(t);
     t->frame = parent_frame; t->asynchronous = true; t->waiting = true;
     perry_tasks = t; return t;
@@ -204,6 +226,43 @@ static void success_case(bool immediate, unsigned result) {
     assert(finished == 1 && t->children == NULL);
     perry_task_drop(t); assert(parent_frames == 1 && perry_tasks == NULL);
 }
+static void never_start(void *p) { (void)p; assert(0); }
+static void unstarted_cancel_case(void) {
+    perry_task *t = new_parent();
+    perry_import_0_0_state *data = new_child(t);
+    data->base.start = never_start;
+    unstarted_cancellation = true;
+    assert(perry_task_cancel(t) == PLUGIN_CALLBACK_CODE_EXIT);
+    check_counts(6, 0, 0, 0);
+    assert(cancelled == 1 && native_calls == 0 && parent_frames == 1 && perry_tasks == NULL);
+}
+static void staged_import_case(bool immediate) {
+    perry_task *t = new_parent();
+    t->asynchronous = t->waiting = false;
+    native_mode = immediate ? 1 : 2;
+    perry_active_task = t;
+    assert(perry_import_0_1(child_frame, 0) == 77);
+    perry_active_task = NULL;
+    assert(begin_calls == 1 && native_calls == 0 && child_frames == 0 && finished == 0);
+    assert(t->children && t->children->start && !t->children->params_consumed);
+    perry_task_finish_sync(t);
+    assert(t->parked && native_calls == 0);
+    /* The actor calls task.return before installing this original JS task. */
+    t->parked = false; t->asynchronous = t->returned = true;
+    plugin_callback_code_t status = perry_actor_step(t);
+    if (!immediate) {
+        assert(status == PLUGIN_CALLBACK_CODE_WAIT(t->set));
+        assert(child_frames == 0 && finished == 0 && native_calls == 1);
+        acknowledged = true;
+        plugin_event_t event = { .event = PLUGIN_EVENT_SUBTASK, .waitable = 42, .code = PLUGIN_SUBTASK_RETURNED };
+        perry_task_event(t, &event);
+        assert(t->children == NULL && child_frames == 1);
+        status = perry_actor_step(t);
+    }
+    assert(status == PLUGIN_CALLBACK_CODE_EXIT && perry_tasks == NULL);
+    assert(native_calls == 1 && adopted[12] == 1 && dropped[11] == 0 && dropped[12] == 0);
+    assert(child_frames == 1 && parent_frames == 1 && finished == 1);
+}
 int main(int argc, char **argv) {
     if (argc == 2 && !strcmp(argv[1], "--failed-owned-lift")) {
         lifting_failed = true;
@@ -219,6 +278,8 @@ int main(int argc, char **argv) {
     for (unsigned result = 0; result <= 4; ++result)
         cancellation_case(PLUGIN_SUBTASK_STARTING, PLUGIN_SUBTASK_RETURNED, false, result);
     success_case(true, 1); success_case(false, 3); success_case(false, 4);
+    unstarted_cancel_case();
+    staged_import_case(true); staged_import_case(false);
     for (unsigned failed = 0; failed < 2; ++failed) {
         perry_task *t = new_parent(); perry_active_task = t; lifting_failed = failed;
         assert(perry_import_0_1(child_frame, 0) == 0);
@@ -227,5 +288,5 @@ int main(int argc, char **argv) {
         for (unsigned i = 0; i < 128; ++i) assert(dropped[i] == 0);
         acknowledged = true; perry_task_drop(t);
     }
-    puts("PASS: 14 canonical child ownership cases");
+    puts("PASS: 17 canonical child ownership and staged import cases");
 }

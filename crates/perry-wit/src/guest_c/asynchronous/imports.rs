@@ -74,23 +74,6 @@ impl Generator<'_> {
             emitter.source.push_str("}\n");
         }
         emitter.source.push_str("perry_allocations_end(&data->arena, false);\nperry_component_frame_drop(child->frame);\nfree(data);\n}\n");
-        writeln!(emitter.source, "static uint32_t {stem}(void *f, uint32_t args) {{\nperry_task *parent = perry_active_task;\nif (!parent || !parent->asynchronous) {{ perry_bad(f, \"Async import requires an async export task\"); return 0; }}\n{stem}_state *data = calloc(1, sizeof(*data));\nif (!data) {{ perry_bad(f, \"Component allocation failed\"); return 0; }}\nperry_allocations arena = {{0}};\n(void)args;\ndata->base.frame = f;\ndata->base.finish = {stem}_finish;\ndata->base.destroy = {stem}_destroy;")?;
-        for (n, param) in function.params.iter().enumerate() {
-            let input = emitter.slot(&format!("perry_component_frame_array_get(f, args, {n})"));
-            let destination = if aggregate {
-                format!("data->args.{}", wit_bindgen_c::to_c_ident(&param.name))
-            } else {
-                format!("data->arg{n}")
-            };
-            emitter.lower(param.ty, &input, &destination)?;
-        }
-        emitter.source.push_str("data->arena = arena;\n");
-        // Publish only after typed parameter allocation/conversion succeeds.
-        // An error before begin leaves the frame owned by the runtime.
-        emitter.source.push_str("uint32_t promise = perry_component_frame_import_begin(f);\nif (!promise) { perry_allocations_end(&data->arena, false); free(data); return 0; }\n");
-        emitter
-            .source
-            .push_str("data->base.next = parent->children;\nparent->children = &data->base;\n");
         let mut args: Vec<String> = if aggregate {
             vec!["&data->args".into()]
         } else {
@@ -104,7 +87,25 @@ impl Generator<'_> {
         if function.result.is_some() {
             args.push("&data->result".into());
         }
-        writeln!(emitter.source, "{snake}_subtask_status_t status = {cname}({});\nperry_child_start(parent, &data->base, status);\nreturn promise;\n}}", args.join(", "))?;
+        writeln!(emitter.source, "static void {stem}_start(void *pointer) {{\n{stem}_state *data = pointer;\nperry_task *parent = perry_active_task;\nperry_require(parent && parent->asynchronous && !parent->cancelled);\n{snake}_subtask_status_t status = {cname}({});\nperry_child_start(parent, &data->base, status);\n}}", args.join(", "))?;
+        writeln!(emitter.source, "static uint32_t {stem}(void *f, uint32_t args) {{\nperry_task *parent = perry_active_task;\nif (!parent || parent->cancelled) {{ perry_bad(f, \"Async import requires a live export task\"); return 0; }}\n{stem}_state *data = calloc(1, sizeof(*data));\nif (!data) {{ perry_bad(f, \"Component allocation failed\"); return 0; }}\nperry_allocations arena = {{0}};\n(void)args;\ndata->base.frame = f;\ndata->base.finish = {stem}_finish;\ndata->base.destroy = {stem}_destroy;\ndata->base.start = {stem}_start;")?;
+        for (n, param) in function.params.iter().enumerate() {
+            let input = emitter.slot(&format!("perry_component_frame_array_get(f, args, {n})"));
+            let destination = if aggregate {
+                format!("data->args.{}", wit_bindgen_c::to_c_ident(&param.name))
+            } else {
+                format!("data->arg{n}")
+            };
+            emitter.lower(param.ty, &input, &destination)?;
+        }
+        emitter.source.push_str("data->arena = arena;\n");
+        // Publish only after typed parameter allocation/conversion succeeds.
+        // An error before begin leaves the frame owned by the runtime.
+        emitter.source.push_str("uint32_t promise = parent->asynchronous ? perry_component_frame_import_begin(f) : perry_component_frame_import_begin_after_return(f);\nif (!promise) { perry_allocations_end(&data->arena, false); free(data); return 0; }\n");
+        emitter
+            .source
+            .push_str("data->base.next = parent->children;\nparent->children = &data->base;\n");
+        writeln!(emitter.source, "if (parent->asynchronous) {{\ndata->base.start = NULL;\n{stem}_start(data);\n}}\nreturn promise;\n}}")?;
         self.source.push_str(&emitter.source);
         Ok(())
     }
