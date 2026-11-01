@@ -63,6 +63,25 @@ fn requests_asset_path(attributes: &swc_ecma_ast::ObjectLit) -> bool {
         .is_some_and(|kind| matches!(kind, "file" | "wasm"))
 }
 
+/// Static imports read as text: `import s from "./Dockerfile" with { type: "text" }`.
+pub(super) fn text_loader_import_sources(module: &swc_ecma_ast::Module) -> HashSet<String> {
+    use swc_ecma_ast::{ModuleDecl, ModuleItem};
+    module
+        .body
+        .iter()
+        .filter_map(|item| {
+            let ModuleItem::ModuleDecl(ModuleDecl::Import(import)) = item else {
+                return None;
+            };
+            object_string_property(import.with.as_deref()?, "type")
+                .and_then(|value| value.value.as_str())
+                .is_some_and(|kind| kind == "text")
+                .then(|| import.src.value.as_str().map(str::to_owned))
+                .flatten()
+        })
+        .collect()
+}
+
 /// Return imports that request an embedded asset path. This includes static
 /// Bun file-loader imports and dynamic import options used by OpenCode:
 ///

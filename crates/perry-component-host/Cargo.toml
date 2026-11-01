@@ -26,7 +26,7 @@ perry-wit = { path = "../perry-wit" }
 perry-abi.workspace = true
 # Compile independent guest functions in parallel. This is Wasmtime's Rayon
 # compiler pool; all asynchronous guest I/O still runs through Turnloop.
-wasmtime = { version = "48.0.7", default-features = false, features = ["anyhow", "std", "runtime", "cranelift", "parallel-compilation", "component-model", "gc-drc"] }
+wasmtime = { version = "48.0.8", default-features = false, features = ["anyhow", "std", "runtime", "cranelift", "parallel-compilation", "component-model", "gc-drc"] }
 
 
 # Reuse the OS randomness provider already selected by the workspace.

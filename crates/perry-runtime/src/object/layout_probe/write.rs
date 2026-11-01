@@ -161,6 +161,72 @@ pub(super) const PROTO_KEY_HASH: u64 = {
     h
 };
 
+/// One prototype hop `next` of [`chain_admits_add`]'s walk: `Err(answer)`
+/// when `next`'s own layout (or overflow) decides the add (a plain writable
+/// data property of the name is shadowed: admitted; an accessor or a
+/// non-writable one intercepts), `Ok(record)` to continue at `next`'s
+/// [[Prototype]]. GC leaf.
+#[inline(always)]
+unsafe fn hop_admits_add(
+    dir: *const u8,
+    next: *const ObjectHeader,
+    key_bits: u64,
+    hash: u64,
+) -> Result<*mut ShapeRecord, bool> {
+    let w = (*next).parent_class_id;
+    // An unwritten `%Object.prototype%` ends the chain, and its one
+    // accessor is `__proto__` (a key of that hash takes the walk).
+    if hash != PROTO_KEY_HASH
+        && w < crate::object::layout_desc::UNSHADOWED_WORD_END
+        && object_prototype(dir) == Some(next)
+    {
+        return Err(true);
+    }
+    let rn = record_of(dir, LayoutWord(w));
+    if rn.is_null() {
+        return Err(false);
+    }
+    // A layout that holds no accessor, no non-writable and no private
+    // key cannot intercept the add whatever it holds (a plain writable
+    // data property of the name is shadowed by it): its key list is not
+    // asked. Its overflow, below, still is.
+    let blocks = (*rn).summary()
+        & (crate::object::key_attrs::SUMMARY_BLOCKS_STORE
+            | crate::object::key_attrs::SUMMARY_PRIVATE)
+        != 0;
+    match if blocks {
+        own_position(rn, key_bits, hash)
+    } else {
+        Err(true)
+    } {
+        Ok(pos) => {
+            let keys = (*rn).keys as usize as *const crate::array::ArrayHeader;
+            let entry = crate::object::key_attrs::keys_entry(keys, pos);
+            if !crate::object::key_attrs::entry_is_plain_writable_data(entry) {
+                return Err(false);
+            }
+            if value_at(next, rn, pos).to_bits() != TAG_HOLE {
+                return Err(true);
+            }
+        }
+        Err(false) => return Err(false),
+        Err(true) => {}
+    }
+    if w & crate::object::overflow::SHADOW_BIT != 0 {
+        // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(next as *mut _));
+        if !meta.is_null() && (*meta).overflow != 0 {
+            let t = (*meta).overflow as usize as *const crate::object::overflow::Table;
+            if let Some(i) = crate::object::overflow::find_hashed(t, key_bits, hash) {
+                return Err(crate::object::key_attrs::entry_is_plain_writable_data(
+                    *crate::object::overflow::attrs_at(t, i) as u8,
+                ));
+            }
+        }
+    }
+    Ok(rn)
+}
+
 /// Does `obj`'s prototype chain let `[[Set]]` add `key` as an own data
 /// property of `obj` (record `r`)? No accessor and no non-writable property
 /// of that name on any prototype before one that holds it as plain writable
@@ -191,59 +257,114 @@ pub(super) unsafe fn chain_admits_add(
                     && !crate::object::descriptor_state::object_proto_may_intercept_any();
             }
         };
-        let w = (*next).parent_class_id;
-        // An unwritten `%Object.prototype%` ends the chain, and its one
-        // accessor is `__proto__` (a key of that hash takes the walk).
-        if hash != PROTO_KEY_HASH
-            && w < crate::object::layout_desc::UNSHADOWED_WORD_END
-            && object_prototype(dir) == Some(next)
-        {
-            return true;
-        }
-        let rn = record_of(dir, LayoutWord(w));
-        if rn.is_null() {
-            return false;
-        }
-        // A layout that holds no accessor, no non-writable and no private
-        // key cannot intercept the add whatever it holds (a plain writable
-        // data property of the name is shadowed by it): its key list is not
-        // asked. Its overflow, below, still is.
-        let blocks = (*rn).summary()
-            & (crate::object::key_attrs::SUMMARY_BLOCKS_STORE
-                | crate::object::key_attrs::SUMMARY_PRIVATE)
-            != 0;
-        match if blocks {
-            own_position(rn, key_bits, hash)
-        } else {
-            Err(true)
-        } {
-            Ok(pos) => {
-                let keys = (*rn).keys as usize as *const crate::array::ArrayHeader;
-                let entry = crate::object::key_attrs::keys_entry(keys, pos);
-                if !crate::object::key_attrs::entry_is_plain_writable_data(entry) {
-                    return false;
-                }
-                if value_at(next, rn, pos).to_bits() != TAG_HOLE {
-                    return true;
-                }
-            }
-            Err(false) => return false,
-            Err(true) => {}
-        }
-        if w & crate::object::overflow::SHADOW_BIT != 0 {
-            // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
-            let meta = crate::meta_read!(crate::meta_obj_runtime_born!(next as *mut _));
-            if !meta.is_null() && (*meta).overflow != 0 {
-                let t = (*meta).overflow as usize as *const crate::object::overflow::Table;
-                if let Some(i) = crate::object::overflow::find_hashed(t, key_bits, hash) {
-                    return crate::object::key_attrs::entry_is_plain_writable_data(
-                        *crate::object::overflow::attrs_at(t, i) as u8,
-                    );
-                }
-            }
-        }
+        let rn = match hop_admits_add(dir, next, key_bits, hash) {
+            Ok(rn) => rn,
+            Err(answer) => return answer,
+        };
         cur = next;
         rc = rn;
     }
     false
+}
+
+/// What a function object's own data put of `key` may do, from the layouts
+/// alone (GPP4: a function's own keys are its bag's layout, which is its
+/// keyed Function shape's key list).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum FunctionPut {
+    /// `key` is an own data property the put may overwrite in place.
+    Overwrite,
+    /// `key` is absent from the complete own list, and (for `[[Set]]`)
+    /// nothing on the function's chain intercepts the add.
+    Add,
+    /// The layouts cannot say: the general put runs.
+    Decline,
+}
+
+/// [`FunctionPut`] for the function whose bag is `bag` (non-null) and whose
+/// [[Prototype]] is `link` (`TAG_NULL` or the prototype's pointer bits, read
+/// from the function's shape), for the interned key `key`. `define` is
+/// CreateDataProperty (the chain is never asked; an existing key must carry
+/// default attributes), else `[[Set]]` (an existing key must be writable
+/// data; an absent key needs the chain's admission, [`chain_admits_add`]
+/// starting at `link`). GC leaf: reads layouts and slots only.
+///
+/// # Safety
+/// `bag` is a live function bag; `key` a live interned heap string.
+pub(crate) unsafe fn function_put_plan(
+    bag: *const ObjectHeader,
+    link: u64,
+    key: *const crate::StringHeader,
+    define: bool,
+) -> FunctionPut {
+    let Some((key_bits, hash)) = computed_key(STRING_TAG | key as u64) else {
+        return FunctionPut::Decline;
+    };
+    let dir = super::super::ordinary_dir_addr();
+    let w = (*bag).parent_class_id;
+    // An overflow holds keys the layout does not list.
+    if w & crate::object::overflow::SHADOW_BIT != 0 {
+        return FunctionPut::Decline;
+    }
+    let r = record_of(dir, LayoutWord(w));
+    if r.is_null() || !(*r).object_kind().is_ordinary_layout() || (*r).hole_count != 0 {
+        return FunctionPut::Decline;
+    }
+    match own_position(r, key_bits, hash) {
+        Ok(pos) => {
+            let keys = (*r).keys as usize as *const crate::array::ArrayHeader;
+            let entry = crate::object::key_attrs::keys_entry(keys, pos);
+            let admitted = if define {
+                entry == 0
+            } else {
+                crate::object::key_attrs::entry_is_plain_writable_data(entry)
+            };
+            if admitted && value_at(bag, r, pos).to_bits() != TAG_HOLE {
+                FunctionPut::Overwrite
+            } else {
+                FunctionPut::Decline
+            }
+        }
+        Err(false) => FunctionPut::Decline,
+        Err(true) if define || link_admits_add(dir, link, key_bits, hash) => FunctionPut::Add,
+        Err(true) => FunctionPut::Decline,
+    }
+}
+
+/// [`chain_admits_add`] for a receiver that is not an ordinary object (a
+/// function), from its [[Prototype]] `link`: `TAG_NULL` ends the chain, an
+/// ordinary object is the walk's first hop. GC leaf.
+unsafe fn link_admits_add(dir: *const u8, link: u64, key_bits: u64, hash: u64) -> bool {
+    if link == crate::value::TAG_NULL {
+        return true;
+    }
+    if link & TAG_MASK != POINTER_TAG
+        || ((link & POINTER_MASK) as usize) < perry_abi::RECEIVER_HANDLE_FLOOR
+    {
+        return false;
+    }
+    let next = (link & POINTER_MASK) as *const ObjectHeader;
+    let header = crate::gc::header_from_trusted_user_ptr(next.cast());
+    if (*header).obj_type != crate::gc::GC_TYPE_OBJECT
+        || (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+    {
+        return false;
+    }
+    match hop_admits_add(dir, next, key_bits, hash) {
+        Ok(rn) => chain_admits_add(dir, next, rn, key_bits, hash),
+        Err(answer) => answer,
+    }
+}
+
+/// May `[[Set]]` add the interned key `key` to a function whose
+/// [[Prototype]] is `link` and which has no own key of that name
+/// ([`link_admits_add`])? GC leaf.
+///
+/// # Safety
+/// `key` is a live interned heap string; `link` is `TAG_NULL` or live.
+pub(crate) unsafe fn function_link_admits_add(link: u64, key: *const crate::StringHeader) -> bool {
+    let Some((key_bits, hash)) = computed_key(STRING_TAG | key as u64) else {
+        return false;
+    };
+    link_admits_add(super::super::ordinary_dir_addr(), link, key_bits, hash)
 }

@@ -372,6 +372,14 @@ pub struct Template {
     /// stand-in has no members and no prototype, so a lookup through it ends
     /// there and never reaches `Object.prototype`.
     pub null_proto: bool,
+    /// An array a builtin made with ArraySpeciesCreate (ECMA-262 10.4.2.3:
+    /// `slice`, `splice`, `concat`, `map`, `filter`, `flat`, `flatMap`): the
+    /// node of the constructors the algorithm may take, each receiver's
+    /// `constructor` and that value's `@@species`
+    /// (`builtins::array_species`). It is an Array exotic only while no
+    /// object but `%Array%` is among them (`derive::exact_array`). `None`:
+    /// born by ArrayCreate, or no array.
+    pub species: Option<NodeId>,
 }
 
 #[derive(Clone, Debug)]
@@ -1237,6 +1245,9 @@ pub struct Model {
     pub max_nodes: usize,
     pub atoms: Vec<String>,
     pub atom_index: FxHashMap<String, Atom>,
+    /// The atoms of class private names (`Model::private_atom`), by their
+    /// storage key: a key apart from every public key of that spelling.
+    pub private_atoms: FxHashMap<String, Atom>,
     pub calls: Vec<CallSite>,
     pub stores: Vec<StoreSite>,
     /// (target fns node, bound this, bound args)
@@ -1253,6 +1264,9 @@ pub struct Model {
     pub star_from: FxHashMap<Tok, Vec<Tok>>,
     pub ns_own: crate::pts::FxHashSet<(Tok, Atom)>,
     pub all_fields: FxHashMap<Tok, NodeId>,
+    /// `Model::private_field`: what a class private field holds on any
+    /// object the class's code finds it on.
+    pub private_fields: FxHashMap<Atom, NodeId>,
     /// `Model::num_fields`: the fields a number key may name.
     pub num_fields: FxHashMap<Tok, NodeId>,
     pub proto_node: FxHashMap<Tok, NodeId>,

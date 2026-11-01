@@ -195,6 +195,26 @@ impl Model {
         a
     }
 
+    /// The key of a class private field, by its storage key
+    /// (`perry_hir::private_names`): its own atom, never a public key's.
+    /// The runtime keeps the entry apart from a public property of the same
+    /// spelling (`ENTRY_PRIVATE`), only the class body names it (through
+    /// `Expr::PrivateGuard`), and no reflection lists it.
+    pub fn private_atom(&mut self, storage: &str) -> Atom {
+        if let Some(&a) = self.private_atoms.get(storage) {
+            return a;
+        }
+        let a = self.atoms.len() as Atom;
+        self.atoms.push(storage.to_string());
+        self.private_atoms.insert(storage.to_string(), a);
+        a
+    }
+
+    /// `a` is a class private field's key (`private_atom`).
+    pub fn is_private_atom(&self, a: Atom) -> bool {
+        self.private_atoms.get(&self.atoms[a as usize]) == Some(&a)
+    }
+
     /// Record one relation line, tagged with the current phase.
     #[inline]
     pub fn rel(&mut self, line: impl FnOnce() -> String) {
@@ -613,15 +633,16 @@ impl Model {
     }
 
     /// DECISIONS 94/184: an array, or a primitive method's container of
-    /// primitives (`primbox`, array-like: split/match results): its
-    /// elements leave through cell `arr:<name>` (`Gen::arr_leaves`).
+    /// primitives (`primbox`, array-like: split/match results; `arraybox`,
+    /// one that is an Array: own-keys results): its elements leave through
+    /// cell `arr:<name>` (`Gen::arr_leaves`).
     pub fn is_cell_arr(&self, t: Tok) -> bool {
         match self.toks[t as usize] {
             TokKind::Obj(tm, _) => matches!(
                 self.tmpls[tm as usize].kind,
                 TmplKind::Arr { .. }
                     | TmplKind::BObj {
-                        what: "primbox",
+                        what: "primbox" | "arraybox",
                         ..
                     }
             ),
@@ -632,7 +653,8 @@ impl Model {
     /// DECISIONS 184: a primitive method's container (`is_cell_arr`).
     pub fn is_box(&self, t: Tok) -> bool {
         matches!(self.toks[t as usize], TokKind::Obj(tm, _)
-            if matches!(self.tmpls[tm as usize].kind, TmplKind::BObj { what: "primbox", .. }))
+            if matches!(self.tmpls[tm as usize].kind,
+                TmplKind::BObj { what: "primbox" | "arraybox", .. }))
     }
 
     pub fn tmpl_of(&self, t: Tok) -> Option<TmplId> {
@@ -1607,6 +1629,7 @@ impl Model {
             parent_value: None,
             parent_links: Vec::new(),
             null_proto: false,
+            species: None,
         });
         tm
     }
@@ -1643,6 +1666,7 @@ impl Model {
             parent_value: None,
             parent_links: Vec::new(),
             null_proto: false,
+            species: None,
         });
         let t = self.tok(TokKind::Obj(tm, NO_CTX));
         // What the argument reaches has its own marker (fields of fields

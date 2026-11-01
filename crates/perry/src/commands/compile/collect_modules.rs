@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 
 use super::collect_modules_helpers::{
     file_loader_import_sources, imported_file_asset_name, looks_like_generated_module,
+    text_loader_import_sources,
 };
 use crate::commands::progress::{ProgressSnapshot, VerboseProgress};
 use crate::OutputFormat;
@@ -66,7 +67,9 @@ use import_helpers::{
 };
 use import_meta_require::rewrite_import_meta_require_addons;
 pub(super) use native_addon::{collect_declared_addons, package_has_unsupported_node_addon};
-use native_addon::{collect_or_refuse_node_addon, refuse_compile_package_native_addon};
+use native_addon::{
+    collect_or_refuse_node_addon, note_native_addon_wrapper, refuse_compile_package_native_addon,
+};
 use parse_error::annotate_parse_error;
 pub(super) use source_prep::{PreparedSources, WalkSources};
 #[cfg(test)]
@@ -182,7 +185,8 @@ fn collect_module_one(
     // A `.node` member is a sidecar native module, never UTF-8 source. Record
     // an approved entry and stop this discovery frame before any JS/TS parser
     // or source reader sees its bytes.
-    if collect_or_refuse_node_addon(ctx, &canonical)? {
+    note_native_addon_wrapper(ctx, &canonical);
+    if collect_or_refuse_node_addon(ctx, &canonical, target)? {
         return Ok(ModuleDiscovery {
             finish: None,
             children: pending,
@@ -196,7 +200,8 @@ fn collect_module_one(
     // extension is read verbatim and synthesized into a native module whose
     // default export is the file contents as a JS string (see the text branch
     // below, mirroring the JSON-module path).
-    let is_text_asset = is_recognized_text_asset(&canonical);
+    let is_text_asset =
+        is_recognized_text_asset(&canonical) || ctx.text_loader_asset_paths.contains(&canonical);
     // Bun's `{ type: "file" }` loader exposes a virtual path string while
     // keeping the imported bytes out of the TypeScript parser. The importer
     // registers this canonical path before the child frame is visited.
@@ -442,7 +447,8 @@ fn collect_module_one(
             // execution uses only the authenticated sidecar id. Run before the
             // Bun virtual-literal asset scan so a `.node` call target ships once
             // in the sidecar rather than also being embedded as inert data.
-            let raw_source = rewrite_import_meta_require_addons(&raw_source, &canonical, ctx)?;
+            let raw_source =
+                rewrite_import_meta_require_addons(&raw_source, &canonical, ctx, target)?;
             register_bunfs_literal_assets(&raw_source, ctx);
             // CJS wrapping consumes literal `require()` sites and replaces them
             // with generated loader calls. Queue native targets before that
@@ -624,6 +630,7 @@ fn collect_module_one(
     let demand_pruned = super::export_demand::visit(ctx, &canonical, ast_module, was_cjs_wrapped);
     let ast_module = demand_pruned.as_ref().unwrap_or(ast_module);
     let file_loader_sources = file_loader_import_sources(ast_module);
+    let text_loader_sources = text_loader_import_sources(ast_module);
     let source_file_path = canonical.to_string_lossy().to_string();
     if !perry_hir::source_remap::is_covered(&canonical) {
         eprintln!(
@@ -1414,6 +1421,7 @@ fn collect_module_one(
             continue;
         }
         let uses_file_loader = file_loader_sources.contains(&import.source);
+        let uses_text_loader = text_loader_sources.contains(&import.source);
         progress.record(ProgressSnapshot {
             stage: "resolve-import",
             module_path: Some(&canonical),
@@ -1615,6 +1623,9 @@ fn collect_module_one(
         {
             let resolved_path = resolved.canonical_path;
             let source_path = resolved.source_path;
+            if uses_text_loader {
+                ctx.text_loader_asset_paths.insert(resolved_path.clone());
+            }
             if uses_file_loader {
                 let name = ctx
                     .file_loader_asset_names

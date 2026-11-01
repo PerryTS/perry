@@ -774,6 +774,7 @@ impl Model {
             parent_value: None,
             parent_links: Vec::new(),
             null_proto: false,
+            species: None,
         });
         self.fn_inst.insert(f, id);
         // DECISIONS 210: a layout made for a function that already left.
@@ -1326,6 +1327,7 @@ impl Model {
             parent_value: None,
             parent_links: Vec::new(),
             null_proto: false,
+            species: None,
         });
         let recv = self.tok(TokKind::Obj(rt, NO_CTX));
         let any = self.field_any(recv);
@@ -1346,12 +1348,14 @@ impl Model {
         self.recv_class.insert(recv, tm);
         // `this.m()` through the receiver finds the class's `m` (DECISIONS 59).
         self.register_virt(recv, &[tm]);
-        // Static members and the class object's own fields.
+        // Static members and the class object's own fields. A static
+        // private field (`#x`, `Model::private_atom`) is named by the
+        // class body only: it is no member of the published class.
         let pa = self.atom("prototype");
         let mut named: Vec<(Atom, NodeId)> = self
             .fields
             .iter()
-            .filter(|(&(h, a), _)| h == cobj && a != pa)
+            .filter(|(&(h, a), _)| h == cobj && a != pa && !self.is_private_atom(a))
             .map(|(&(_, a), &n)| (a, n))
             .collect();
         named.sort_unstable();

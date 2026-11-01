@@ -442,4 +442,77 @@ mod tests {
             "{ir}"
         );
     }
+    fn literal_choice_index(other: Expr) -> String {
+        let choice = Expr::Conditional {
+            condition: Box::new(Expr::Compare {
+                op: perry_hir::CompareOp::Lt,
+                left: Box::new(Expr::LocalGet(5)),
+                right: Box::new(Expr::Integer(0)),
+            }),
+            then_expr: Box::new(Expr::Integer(1)),
+            else_expr: Box::new(other),
+        };
+        let index = Expr::Binary {
+            op: BinaryOp::Add,
+            left: Box::new(Expr::LocalGet(5)),
+            right: Box::new(Expr::Logical {
+                op: perry_hir::LogicalOp::Coalesce,
+                left: Box::new(choice),
+                right: Box::new(Expr::Integer(0)),
+            }),
+        };
+        read_ir(
+            Expr::LocalGet(4),
+            vec![
+                Stmt::Let {
+                    id: 5,
+                    name: "origin".into(),
+                    ty: Type::Any,
+                    mutable: false,
+                    init: Some(Expr::Binary {
+                        op: BinaryOp::BitAnd,
+                        left: Box::new(Expr::NumberCoerce(Box::new(Expr::LocalGet(2)))),
+                        right: Box::new(Expr::Integer(127)),
+                    }),
+                },
+                Stmt::Let {
+                    id: 4,
+                    name: "square".into(),
+                    ty: Type::Any,
+                    mutable: false,
+                    init: Some(index),
+                },
+            ],
+        )
+    }
+
+    #[test]
+    fn literal_selection_carries_numeric_and_index_proofs_through_a_const_add() {
+        let ir = literal_choice_index(Expr::Integer(17));
+        assert!(
+            !ir.contains("call i32 @perry_array_index_normalize_i32"),
+            "{ir}"
+        );
+        assert!(
+            !ir.contains("call double @js_dynamic_string_or_number_add("),
+            "{ir}"
+        );
+        assert!(ir.contains("fadd double") || ir.contains("add i32"), "{ir}");
+    }
+
+    #[test]
+    fn literal_selection_keeps_fractional_nan_overflow_and_dynamic_key_fallbacks() {
+        for value in [
+            Expr::Number(0.5),
+            Expr::Number(f64::NAN),
+            Expr::Integer(1i64 << 40),
+            Expr::LocalGet(2),
+        ] {
+            let ir = literal_choice_index(value);
+            assert!(
+                ir.contains("call i32 @perry_array_index_normalize_i32"),
+                "{ir}"
+            );
+        }
+    }
 }

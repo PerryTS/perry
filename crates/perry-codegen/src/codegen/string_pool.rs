@@ -26,6 +26,11 @@ pub(super) fn image_pointer(entry: &crate::strings::StringEntry) -> String {
 pub(crate) fn image_record_symbol(entry: &crate::strings::StringEntry) -> String {
     image::name(entry)
 }
+/// The image string record symbol of a string with these bytes (the same
+/// rule as `image_record_symbol`: long strings are named by digest).
+pub(crate) fn image_record_symbol_of(bytes: &[u8], is_wtf8: bool) -> String {
+    image::name_of(bytes, is_wtf8)
+}
 /// Define `entry`'s image string record in `llmod` (WRT step 2): a unit that
 /// emits no pool, such as the static seed unit, still defines the coalesced
 /// record its atoms and key lists name.

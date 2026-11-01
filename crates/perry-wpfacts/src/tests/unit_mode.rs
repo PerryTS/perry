@@ -613,6 +613,8 @@ mod protocol_touch;
 mod unit_cycle_order;
 #[path = "unit_mode/own_key_shadow.rs"]
 mod own_key_shadow;
+#[path = "unit_mode/private_fields.rs"]
+mod private_fields;
 
 mod ctor_receiver_calls;
 
@@ -621,3 +623,6 @@ mod closed_ctor_literal;
 
 #[path = "unit_mode/site_copies.rs"]
 mod site_copies;
+
+#[path = "unit_mode/returned_field_map.rs"]
+mod returned_field_map;

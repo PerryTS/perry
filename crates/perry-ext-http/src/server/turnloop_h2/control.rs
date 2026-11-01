@@ -50,12 +50,7 @@ use crate::server::http2_session_settings::Http2SettingsState;
 use super::conn::{self, H2Conn, PendingControl};
 
 /// SETTINGS identifiers, RFC 9113 §6.5.2.
-const HEADER_TABLE_SIZE: u16 = 1;
 const ENABLE_PUSH: u16 = 2;
-const MAX_CONCURRENT_STREAMS: u16 = 3;
-const INITIAL_WINDOW_SIZE: u16 = 4;
-const MAX_FRAME_SIZE: u16 = 5;
-const MAX_HEADER_LIST_SIZE: u16 = 6;
 
 /// Clamp a requested settings object to what this connection's core can honour.
 ///

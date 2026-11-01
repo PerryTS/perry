@@ -909,6 +909,7 @@ fn compute_act<'a>(
                         literal_shape,
                         facts,
                         methods,
+                        getters: contracts::proto_getters(&g, tm),
                         native_parent,
                         parent: foreign_parent(&g, tm),
                         field_fns: Vec::new(),
@@ -1170,7 +1171,13 @@ fn compute_act<'a>(
             cells_out.retain(|(k, _)| k != key);
             cells_out.push((key.clone(), vc.clone()));
         }
-        if g.m.aborted || g.m.is_escaped(*t) || g.m.arr_named.contains(t) {
+        // ARU D6: a hard mark (a prototype set, a definition or a delete)
+        // may give it another `constructor` as well.
+        if g.m.aborted
+            || g.m.is_escaped(*t)
+            || g.m.arr_named.contains(t)
+            || g.m.hard.contains_key(t)
+        {
             cells_out.push((format!("{key}#named"), vc));
         }
     }

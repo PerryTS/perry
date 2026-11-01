@@ -1165,25 +1165,29 @@ native_fallback_tests!(received_native_data_view_fallback, "DataView");
 native_fallback_tests!(received_native_uint8_fallback, "Uint8Array");
 
 #[test]
-fn received_native_null_born_typed_array() {
-    with_received_intrinsic_constructor("Int16Array", |value, _| {
+fn received_native_null_linked_typed_array() {
+    with_received_intrinsic_constructor("Int16Array", |value, prototype| {
         let scope = crate::gc::RuntimeHandleScope::new();
         let value = scope.root_nanbox_f64(value);
         let addr = crate::value::addr_class::object_ref_addr(value.get_nanbox_f64());
         assert!(crate::object::prototype_chain::object_static_prototype(addr).is_none());
-        let header = unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }
-            .expect("fixture needs a tracked arena header");
-        let original = unsafe { (*header.as_ptr())._reserved };
-        unsafe {
-            (*header.as_ptr())._reserved |= crate::gc::OBJ_FLAG_NULL_PROTO;
-        }
-        let result = describe_received(value.get_nanbox_f64());
+        // A typed array reaches a null [[Prototype]] only by a link, which
+        // records it (`object_static_prototype`).
+        crate::object::js_object_set_prototype_of(
+            value.get_nanbox_f64(),
+            f64::from_bits(crate::value::TAG_NULL),
+        );
         let addr = crate::value::addr_class::object_ref_addr(value.get_nanbox_f64());
-        let header = unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }.unwrap();
-        unsafe {
-            (*header.as_ptr())._reserved = original;
-        }
-        assert_eq!(result, "[Int16Array: null prototype]");
+        assert_eq!(
+            crate::object::prototype_chain::object_static_prototype(addr),
+            Some(crate::value::TAG_NULL)
+        );
+        assert_eq!(
+            describe_received(value.get_nanbox_f64()),
+            "[Int16Array: null prototype]"
+        );
+        // The fixture checks the restored value afterwards.
+        crate::object::js_object_set_prototype_of(value.get_nanbox_f64(), prototype);
     });
 }
 
