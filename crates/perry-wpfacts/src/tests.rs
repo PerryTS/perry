@@ -63,6 +63,7 @@ mod unit_mode;
 mod unit_namespace;
 mod unit_shared;
 mod unit_this;
+mod own_key_shadow;
 
 use crate::{compute, FactsConfig, ProgramFacts, Verdict};
 

@@ -881,7 +881,9 @@ impl<'a> Gen<'a> {
             let proto = m.tok_index.get(&TokKind::Proto(c)).copied();
             let mut keys: Vec<Atom> = tp.proto_members.clone();
             keys.extend(tp.birth_keys.iter().copied());
-            let mut open = tp.has_computed_members;
+            // DECISIONS 234: a key of its instances may disappear or be
+            // redefined (delete, defineProperty): no key of theirs is sure.
+            let mut open = tp.has_computed_members || m.keys_unsure.contains(&c);
             if let Some(pt) = proto {
                 keys.extend(held(pt));
                 open |= open_node(m.field_any.get(&pt));

@@ -318,8 +318,10 @@ pub(super) fn a_broken_namespace_field_function_resolves_only_the_units_that_see
     // below. DCE: a read of a key the object surely holds takes its chain
     // through a relay that drops the chain end's `undefined`
     // (`Cons::Defined`): a relay node for the read's own builtin members
-    // and a rule on the chain node, [758, 1094, 952, 42] -> the pin below.
-    assert_eq!(pf.round_work, [762, 1104, 960, 42], "{:?}", pf.units);
+    // and a rule on the chain node, [758, 1094, 952, 42] -> [762, 1104,
+    // 960, 42]. DECISIONS 234: a read of an own definite key takes the
+    // chain's program values only (a chain node of its own) -> the pin below.
+    assert_eq!(pf.round_work, [763, 1103, 960, 42], "{:?}", pf.units);
 }
 
 #[test]
