@@ -246,7 +246,9 @@ pub fn settle_native_given(m: &mut Model) -> bool {
 }
 
 /// Collect into `out` every key an object of token `u` or of its chain may
-/// hold. False when that set is unknown. `ObjectProto` adds none: it stands
+/// hold. False when that set is unknown. Each key a define (E5) or an
+/// accessor gives it is one of `define_on` / `accessor_keys` (`STAR_KEY`
+/// under a computed key: unknown), so E5 alone keeps the set known. `ObjectProto` adds none: it stands
 /// for every builtin prototype, already on every runtime object's chain. A
 /// write through ⊤ is already a write of its key on every runtime object.
 fn chain_keys(m: &mut Model, u: Tok, seen: &mut Vec<Tok>, out: &mut Vec<Atom>) -> bool {
@@ -265,12 +267,16 @@ fn chain_keys(m: &mut Model, u: Tok, seen: &mut Vec<Tok>, out: &mut Vec<Atom>) -
     if m.is_marker(u)
         || m.foreign.contains_key(&tm)
         || m.any_writers.contains_key(&tm)
-        || m.hard.get(&u).is_some_and(|(k, _)| *k != Hard::E6SetPrototypeOf && *k != Hard::E7Delete)
+        || m.hard.get(&u).is_some_and(|(k, _)| {
+            !matches!(k, Hard::E5DefineProperty | Hard::E6SetPrototypeOf | Hard::E7Delete)
+        })
     {
         return false;
     }
     let tpl = &m.tmpls[tm as usize];
-    if tpl.has_computed_members {
+    // `Object.create` is born with no own key (its layout is open: the flag
+    // says so); every key it gains is a store or a define, collected below.
+    if tpl.has_computed_members && !matches!(tpl.kind, TmplKind::ObjCreate { .. }) {
         return false;
     }
     let mut add = |a: Atom, out: &mut Vec<Atom>| {
@@ -305,8 +311,14 @@ fn chain_keys(m: &mut Model, u: Tok, seen: &mut Vec<Tok>, out: &mut Vec<Atom>) -
         .filter(|(o, _, _)| m.nodes[*o as usize].pts.contains_tok(u))
         .map(|&(_, a, _)| a)
         .collect();
-    for a in defined {
+    let accessors = m.accessor_keys.get(&u).cloned().unwrap_or_default();
+    for a in defined.into_iter().chain(accessors) {
         add(a, out);
+    }
+    // A key defined, or an accessor installed, under a computed key.
+    let star = m.atom(crate::STAR_KEY);
+    if out.contains(&star) {
+        return false;
     }
     let pn = m.proto_node(u);
     let protos: Vec<Tok> = m.nodes[pn as usize].pts.to_sorted();

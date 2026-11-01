@@ -441,8 +441,8 @@ pub fn intrinsic_proto_own(m: &mut Model, key: Key, dst: NodeId) {
     // every one of them; replaced (DECISIONS 234's writes), it is the
     // opaque member.
     if let Key::Named(a) = key {
-        if members::object_proto_own(&m.atoms[a as usize]) {
-            let f = m.tok(TokKind::Builtin(BuiltinNs::ObjectProtoOwn(a)));
+        if let Some(own) = crate::model::ProtoOwn::of_name(&m.atoms[a as usize]) {
+            let f = m.tok(TokKind::Builtin(BuiltinNs::ObjectProtoOwn(own)));
             m.add_tok(dst, f);
             if !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
                 opaque_member(m, dst);
@@ -1348,13 +1348,13 @@ fn object_proto_method_call(m: &mut Model, call: CallId) {
     }
 }
 
-/// A call of `BuiltinNs::ObjectProtoOwn(a)`, whatever its receiver
+/// A call of `BuiltinNs::ObjectProtoOwn(own)`, whatever its receiver
 /// (ToObject(this) throws on `undefined`/`null`, reads nothing else):
 /// `hasOwnProperty` / `propertyIsEnumerable` convert their key and answer
 /// a boolean; `isPrototypeOf` answers a boolean (its argument is only
 /// walked: no conversion).
-fn object_proto_own_call(m: &mut Model, a: Atom, call: CallId) {
-    if m.atoms[a as usize] != "isPrototypeOf" {
+fn object_proto_own_call(m: &mut Model, own: crate::model::ProtoOwn, call: CallId) {
+    if own != crate::model::ProtoOwn::IsPrototypeOf {
         // The key only: further arguments are ignored.
         let c = m.calls[call as usize].clone();
         let r = m.reason("ToPropertyKey");
@@ -1402,6 +1402,12 @@ fn proto_method_inner(m: &mut Model, p: Tok, origin: Tok, key: Key, call: CallId
             "__defineGetter__" | "__defineSetter__" => {
                 let r = m.reason("E5 __defineGetter__/__defineSetter__");
                 m.mark_hard(origin, Hard::E5DefineProperty, r);
+                // An accessor under a key not known here.
+                let star = m.atom(crate::STAR_KEY);
+                let ks = m.accessor_keys.entry(origin).or_default();
+                if !ks.contains(&star) {
+                    ks.push(star);
+                }
                 m.escape(origin, r);
                 // ToPropertyKey of the key; the function becomes an accessor
                 // of the escaped receiver, which unknown code runs.
@@ -1929,7 +1935,7 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             unknown_method(m, call, "E14 dynamic code");
         }
         BuiltinNs::ObjectProtoMethod => object_proto_method_call(m, call),
-        BuiltinNs::ObjectProtoOwn(a) => object_proto_own_call(m, a, call),
+        BuiltinNs::ObjectProtoOwn(own) => object_proto_own_call(m, own, call),
         BuiltinNs::Error | BuiltinNs::AggregateError | BuiltinNs::RegExp => {
             new_builtin_ns(m, ns, call);
             if ns == BuiltinNs::RegExp {

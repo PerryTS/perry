@@ -1047,6 +1047,8 @@ impl Model {
                 accessor,
             } => {
                 if let Some(k) = self.keyed_once(n, o, 0) {
+                    let dk = k.unwrap_or_else(|| self.atom(crate::STAR_KEY));
+                    self.define_on.insert((o, dk, !accessor));
                     match k {
                         Some(key) => self.cons(
                             o,

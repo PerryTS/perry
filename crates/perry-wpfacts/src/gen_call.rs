@@ -564,6 +564,7 @@ impl<'a> Gen<'a> {
                 if k.is_some() {
                     self.m.add_accessor_atom(a);
                 }
+                self.m.define_on.insert((o, a, false));
                 if let Some(tm) = birth_tm {
                     // An accessor is never a data field (E25).
                     crate::gen::push_unique(&mut self.m.tmpls[tm as usize].accessor_keys, a);
@@ -638,6 +639,8 @@ impl<'a> Gen<'a> {
                 // E5 on the target.
                 let r = self.m.reason("E5 defineProperty/__defineGetter__");
                 if let Some(o) = arg(0) {
+                    let star = self.m.atom(crate::STAR_KEY);
+                    self.m.define_on.insert((o, star, false));
                     self.m.cons(
                         o,
                         Cons::Hard {

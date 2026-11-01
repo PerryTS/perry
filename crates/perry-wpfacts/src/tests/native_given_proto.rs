@@ -64,3 +64,51 @@ fn a_computed_store_into_the_given_prototype_writes_every_key() {
     );
     assert!(!proven(&v), "{v:?}");
 }
+
+/// debug.ts `attachFlowNodeDebugInfo`: an `Object.create` prototype whose
+/// keys are all defined under constant names holds exactly those keys.
+const CREATED: &str = "const P: any = Object.create(Object.prototype);
+    Object.defineProperties(P, { greet: { get() { return 1; } }, tag: { value: 2 } });";
+
+#[test]
+fn a_created_prototype_with_defined_keys_writes_only_its_keys() {
+    let v = verdict(CREATED, "size");
+    assert!(proven(&v), "{v:?}");
+}
+
+#[test]
+fn a_defined_key_of_a_created_prototype_is_written() {
+    // node: `a.greet` is the getter of P once the chain of `Array.prototype` holds P.
+    let v = verdict(CREATED, "greet");
+    assert!(!proven(&v), "{v:?}");
+}
+
+#[test]
+fn a_created_prototype_defined_under_a_computed_key_writes_every_key() {
+    let v = verdict(
+        "declare const name: string; const P: any = Object.create(Object.prototype);
+         Object.defineProperty(P, name, { value: 1 });",
+        "size",
+    );
+    assert!(!proven(&v), "{v:?}");
+}
+
+#[test]
+fn a_created_prototype_with_a_computed_accessor_writes_every_key() {
+    // No getter value reaches the define: the key is still unknown.
+    let v = verdict(
+        "declare const name: string; const P: any = Object.create(Object.prototype);
+         Object.defineProperty(P, name, { get: undefined });",
+        "size",
+    );
+    assert!(!proven(&v), "{v:?}");
+}
+
+#[test]
+fn a_created_prototype_from_unknown_descriptors_writes_every_key() {
+    let v = verdict(
+        "const P: any = Object.create(Object.prototype, (globalThis as any).hostDescs());",
+        "size",
+    );
+    assert!(!proven(&v), "{v:?}");
+}

@@ -146,12 +146,38 @@ pub enum BuiltinNs {
     ObjectProtoMethod,
     /// `Object.prototype`'s own method under its own key, read as a value
     /// (`Object.prototype.hasOwnProperty`): one no builtin prototype
-    /// overrides (`members::object_proto_own`), so every builtin prototype
+    /// overrides ([`ProtoOwn`]), so every builtin prototype
     /// reads it there. A call is that method's call on its receiver
     /// (`object_proto_own_call`); `call`/`apply`/`bind` are
     /// `Function.prototype`'s. Not a constructor.
-    ObjectProtoOwn(Atom),
+    ///
+    /// The method is named by [`ProtoOwn`], not by an atom: builtin tokens
+    /// are shared between the units' models, whose atom tables differ.
+    ObjectProtoOwn(ProtoOwn),
     Other,
+}
+
+/// The `Object.prototype` methods no builtin prototype overrides
+/// (`BuiltinNs::ObjectProtoOwn`): under their key every builtin prototype
+/// chain reads `Object.prototype`'s own. Each only reads: `hasOwnProperty` /
+/// `propertyIsEnumerable` convert their key (ToPropertyKey) and test an own
+/// property of ToObject(this); `isPrototypeOf` walks its argument's chain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ProtoOwn {
+    HasOwnProperty,
+    PropertyIsEnumerable,
+    IsPrototypeOf,
+}
+
+impl ProtoOwn {
+    pub fn of_name(name: &str) -> Option<ProtoOwn> {
+        Some(match name {
+            "hasOwnProperty" => ProtoOwn::HasOwnProperty,
+            "propertyIsEnumerable" => ProtoOwn::PropertyIsEnumerable,
+            "isPrototypeOf" => ProtoOwn::IsPrototypeOf,
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -1549,7 +1575,8 @@ pub struct Model {
     pub desc_runs: Vec<(Tok, NodeId, Atom, SiteId, u32)>,
     /// (o, key, descriptor) defined as data.
     pub desc_data: crate::pts::FxHashSet<(NodeId, Atom, Tok)>,
-    /// (o, key, data) whose `DefineKey` is attached.
+    /// (o, key, data): a key defined on `o` (`STAR_KEY`: under a computed
+    /// key); a named key has its `DefineKey` attached.
     pub define_on: crate::pts::FxHashSet<(NodeId, Atom, bool)>,
     /// The node a `Cons::Store` runs on, while it runs.
     pub store_at: Option<NodeId>,

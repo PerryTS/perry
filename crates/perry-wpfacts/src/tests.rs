@@ -1736,6 +1736,7 @@ mod helper_protocols;
 mod delegate_step;
 mod proto_own_call;
 mod host_helpers;
+mod collection_entries;
 mod string_methods;
 mod date_methods;
 mod typed_array_methods;
