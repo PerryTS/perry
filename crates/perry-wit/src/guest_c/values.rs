@@ -1,3 +1,4 @@
+mod borrows;
 mod discard;
 use super::{literal, Endpoints, Names, Resources};
 use anyhow::{bail, Result};

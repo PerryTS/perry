@@ -10,7 +10,7 @@ fn forwarding_frees_consumed_input_buffers_before_kick_and_preserves_the_result(
         interface api { resource item; }
         world plugin {
             import api; use api.{item};
-            record payload { item: own<item>, text: string, values: list<string> }
+            record payload { item: own<item>, loan: borrow<item>, loans: list<borrow<item>>, text: string, values: list<string> }
             export echo: func(value: payload) -> string;
         }"#,
     )
@@ -81,6 +81,27 @@ fn forwarding_frees_consumed_input_buffers_before_kick_and_preserves_the_result(
         })
         .collect::<Vec<_>>();
     assert_eq!(parameters.len(), 2);
+    let borrow_signature = header
+        .lines()
+        .find(|line| line.contains("_drop_borrow("))
+        .unwrap()
+        .trim()
+        .trim_end_matches(';')
+        .trim_start_matches("extern ");
+    let borrower = borrow_signature
+        .strip_prefix("void ")
+        .unwrap()
+        .split('(')
+        .next()
+        .unwrap();
+    let borrow_parameter = borrow_signature
+        .split('(')
+        .nth(1)
+        .unwrap()
+        .trim_end_matches(')')
+        .split_whitespace()
+        .last()
+        .unwrap();
     let mut harness = include_str!("memory.c").to_string();
     for (key, value) in [
         ("$FORWARD", forward),
@@ -90,6 +111,8 @@ fn forwarding_frees_consumed_input_buffers_before_kick_and_preserves_the_result(
         ("$VALUE", &parameters[0]),
         ("$RETURN", &parameters[1]),
         ("$KICK", &kick),
+        ("$BORROW_SIGNATURE", borrow_signature),
+        ("$BORROW_PARAMETER", borrow_parameter),
     ] {
         harness = harness.replace(key, value);
     }
@@ -98,22 +121,26 @@ fn forwarding_frees_consumed_input_buffers_before_kick_and_preserves_the_result(
     }
     let source = dir.path().join("memory.c");
     std::fs::write(&source, harness).unwrap();
-    for negative in [false, true] {
-        if negative {
+    for mode in ["positive", "missing-buffers", "missing-borrow"] {
+        let mut generated = original.clone();
+        if mode == "missing-buffers" {
             let call = format!(
                 "{}_free(&native0);",
                 native_type.strip_suffix("_t").unwrap()
             );
             assert!(original.contains(&call));
-            std::fs::write(
-                dir.path().join("perry_producer_forward.c"),
-                original.replace(&call, ""),
-            )
-            .unwrap();
+            generated = original.replace(&call, "");
+        } else if mode == "missing-borrow" {
+            let call = original
+                .lines()
+                .find(|line| {
+                    line.contains(borrower) && line.contains(".loan)") && !line.contains(".loans")
+                })
+                .unwrap();
+            generated = original.replacen(call, "", 1);
         }
-        let exe = dir
-            .path()
-            .join(if negative { "negative" } else { "positive" });
+        std::fs::write(dir.path().join("perry_producer_forward.c"), generated).unwrap();
+        let exe = dir.path().join(mode);
         let output = std::process::Command::new("clang")
             .args([
                 "-std=c11",
@@ -145,9 +172,14 @@ fn forwarding_frees_consumed_input_buffers_before_kick_and_preserves_the_result(
             .env("UBSAN_OPTIONS", "halt_on_error=1:print_stacktrace=1")
             .output()
             .unwrap();
-        if negative {
+        if mode != "positive" {
             assert!(!output.status.success());
-            assert!(String::from_utf8_lossy(&output.stderr).contains("freed_buffers"));
+            let expected = if mode == "missing-buffers" {
+                "freed_buffers"
+            } else {
+                "borrowed_handles"
+            };
+            assert!(String::from_utf8_lossy(&output.stderr).contains(expected));
         } else {
             assert!(
                 output.status.success(),

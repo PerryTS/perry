@@ -325,6 +325,7 @@ pub(super) fn generate(
             writeln!(source, "{target}({});", args.join(", "))?;
         }
         for (n, param) in original.params.iter().enumerate() {
+            emitter.retire_borrows(param.ty, &format!("native{n}"));
             emitter.free(param.ty, &format!("&native{n}"));
         }
         source.push_str(&std::mem::take(&mut emitter.source));
