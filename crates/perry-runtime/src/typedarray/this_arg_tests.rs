@@ -94,6 +94,10 @@ fn two_argument_entry_points_bind_undefined() {
     js_typed_array_for_each(source, callback);
     js_typed_array_find_last(source, callback);
     let seen = take_seen();
-    assert_eq!(seen.len(), 3, "forEach visits 2, findLast stops at the last");
+    assert_eq!(
+        seen.len(),
+        3,
+        "forEach visits 2, findLast stops at the last"
+    );
     assert!(seen.iter().all(|bits| *bits == crate::value::TAG_UNDEFINED));
 }
