@@ -88,11 +88,13 @@ fn is_typescript_importer(path: &Path) -> bool {
 /// * only importers outside `node_modules`, and never CJS-wrapped
 ///   `require()`s: packages routinely `require` optional peers inside a
 ///   `try` (`debug` → `supports-color`), which must stay non-fatal;
-/// * only bindings the module CALLS directly (see [`called_import_names`]) —
-///   exactly the shape that used to die in the linker. A property read or a
-///   `new` on an unresolved binding still warns and continues as before (it
-///   links, and throws where it is reached), and a type-only use of an
-///   uninstalled `@types`-style import still compiles.
+/// * only bindings the module CALLS or CONSTRUCTS directly (see
+///   [`called_or_constructed_import_names`]). A call used to die in the linker.
+///   A `new` does not: it links, and the constructed value is a plain object
+///   whose every member reads `undefined`, so the program runs to completion
+///   with wrong results instead of throwing where it is reached. A property
+///   read on an unresolved binding still warns and continues, and a type-only
+///   use of an uninstalled `@types`-style import still compiles.
 fn enforce_resolved_bare_imports(ctx: &CompilationContext) -> Result<()> {
     let mut missing = Vec::new();
     for (importer, module) in &ctx.native_modules {
@@ -123,7 +125,7 @@ fn enforce_resolved_bare_imports(ctx: &CompilationContext) -> Result<()> {
                     ImportSpecifier::Namespace { .. } => continue,
                 };
                 if called
-                    .get_or_insert_with(|| called_import_names(module))
+                    .get_or_insert_with(|| called_or_constructed_import_names(module))
                     .contains(local)
                 {
                     missing.push((importer.clone(), import.source.clone(), local.clone()));
@@ -318,17 +320,19 @@ pub(super) fn value_reference_names(module: &Module) -> HashSet<String> {
     collect_refs(module).values
 }
 
-/// Imported bindings `module` CALLS directly (`nanoid()`, `uuidv4()`): the
-/// shape that codegen lowers to a call of an extern symbol named after the
-/// local binding, so an unresolved one fails in the linker (#11576).
-fn called_import_names(module: &Module) -> HashSet<String> {
-    collect_refs(module).called
+/// Imported bindings `module` CALLS (`nanoid()`, `uuidv4()`) or CONSTRUCTS
+/// (`new Simple()`) directly. A call lowers to an extern symbol named after the
+/// local binding, so an unresolved one fails in the linker (#11576). A `new`
+/// links instead and silently yields a plain object, which is worse: the
+/// program keeps running and every member of that object reads `undefined`.
+fn called_or_constructed_import_names(module: &Module) -> HashSet<String> {
+    collect_refs(module).called_or_constructed
 }
 
 #[derive(Default)]
 struct Refs {
     values: HashSet<String>,
-    called: HashSet<String>,
+    called_or_constructed: HashSet<String>,
 }
 
 impl Refs {
@@ -406,16 +410,18 @@ fn visit_function(function: &Function, out: &mut Refs) {
 fn visit_expr(expr: &Expr, out: &mut Refs) {
     if let Expr::Call { callee, .. } = expr {
         if let Expr::ExternFuncRef { name, .. } = callee.as_ref() {
-            out.called.insert(name.clone());
+            out.called_or_constructed.insert(name.clone());
         }
     }
     match expr {
         Expr::ExternFuncRef { name, .. } | Expr::ClassRef(name) => {
             out.insert(name.clone());
         }
-        Expr::New { class_name, .. }
-        | Expr::JsNew { class_name, .. }
-        | Expr::StaticFieldGet { class_name, .. }
+        Expr::New { class_name, .. } | Expr::JsNew { class_name, .. } => {
+            out.insert(class_name.clone());
+            out.called_or_constructed.insert(class_name.clone());
+        }
+        Expr::StaticFieldGet { class_name, .. }
         | Expr::StaticFieldSet { class_name, .. }
         | Expr::StaticMethodCall { class_name, .. } => {
             out.insert(class_name.clone());
