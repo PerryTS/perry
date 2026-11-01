@@ -4,6 +4,7 @@
 mod agent_tests;
 mod asynchronous;
 mod endpoints;
+pub(crate) mod facade;
 mod values;
 
 use anyhow::{ensure, Result};
@@ -72,7 +73,15 @@ fn generate_guest(
     } else {
         None
     };
-    generate_resolved(resolve, id, world, anchor)
+    let facade = anchor
+        .as_deref()
+        .map(|anchor| facade::generate(&resolve, id, &world, anchor))
+        .transpose()?;
+    let mut files = generate_resolved(resolve, id, world, anchor)?;
+    if let Some(facade) = facade {
+        files.extend(facade);
+    }
+    Ok(files)
 }
 
 fn generate_resolved(

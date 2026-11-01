@@ -2,6 +2,7 @@
 //! TypeScript declarations never substitute `any` for an unsupported WIT type.
 pub mod canonical;
 mod guest_c;
+mod guest_compose;
 mod resolve;
 mod typescript;
 
@@ -11,6 +12,8 @@ use std::collections::BTreeMap;
 pub use guest_c::canonical_guest;
 #[doc(hidden)]
 pub use guest_c::experimental_async_guest;
+#[doc(hidden)]
+pub use guest_compose::compose_experimental_guest;
 pub use resolve::{parse, parse_file};
 pub use typescript::{typescript, typescript_guest};
 
