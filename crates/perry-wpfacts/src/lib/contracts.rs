@@ -506,7 +506,7 @@ pub(super) fn fn_contract_of(
     // DECISIONS 140: the calls the body makes through a parameter marker,
     // each argument described as the result is.
     let mut param_calls: Vec<units::ParamCall> = Vec::new();
-    for &(f2, i, key, call) in &g.m.marker_calls {
+    for &(f2, i, path, key, call) in &g.m.marker_calls {
         if f2 != f {
             continue;
         }
@@ -519,10 +519,12 @@ pub(super) fn fn_contract_of(
             })
             .collect();
         let key = key.map(|a| g.m.atoms[a as usize].clone());
+        let path = path.map(|a| g.m.atoms[a as usize].clone());
         units::join_param_calls(
             &mut param_calls,
             &[units::ParamCall {
                 param: i,
+                path,
                 key,
                 args,
             }],

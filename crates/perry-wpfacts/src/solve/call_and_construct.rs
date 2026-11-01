@@ -24,6 +24,7 @@ impl Model {
             if let Some(own) = plain.then(|| self.own_param_members(t)).flatten() {
                 if self.bind_done.insert((call, t, u32::MAX - 3)) {
                     self.mark_use(t, crate::model::MARK_READ);
+                    let own = own.into_iter().map(|(f, i)| (f, i, None)).collect();
                     self.marker_call(own, None, call);
                 }
                 return;
@@ -130,13 +131,50 @@ impl Model {
             .filter(|v| !v.is_empty())
     }
 
+    /// DECISIONS 236: the members a method call on `t` is recorded for:
+    /// `own_param_members`, and a receiver marker's keyed reach (`this.f`,
+    /// a path marker under a named key of an unescaped receiver marker) as
+    /// (function, `u32::MAX`, `Some(f)`): each unit holding a receiver runs
+    /// the call on what its object holds under `f` (its own chain, its own
+    /// stores, ⊤ where its object escaped or `f` was written through ⊤).
+    /// `None`: some member is neither, or none is left.
+    pub(crate) fn mcall_members(&self, t: Tok) -> Option<Vec<(FnIdx, u32, Option<Atom>)>> {
+        self.marker_members(t)
+            .into_iter()
+            .map(|m| match self.param_marker.get(&m) {
+                _ if self.beside_values(m) && !self.unrun_param(m) => Some(None),
+                Some(&(f, i))
+                    if i != u32::MAX
+                        && self.marker_of.get(&(f, i)) == Some(&m)
+                        && !self.marker_is_top(m) =>
+                {
+                    Some(Some((f, i, None)))
+                }
+                Some(&(f, u32::MAX)) => match self.path_parent.get(&m) {
+                    Some(&(rm, Some(k)))
+                        if self.marker_of.get(&(f, u32::MAX)) == Some(&rm)
+                            && !self.marker_is_top(rm)
+                            && !self.marker_is_top(m) =>
+                    {
+                        Some(Some((f, u32::MAX, Some(k))))
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>()
+            .map(|v| v.into_iter().flatten().collect::<Vec<_>>())
+            .filter(|v| !v.is_empty())
+    }
+
     /// Records a call through the parameters `own` (`key`: a method of
-    /// theirs) for the caller's unit to run (DECISIONS 140/144); its
-    /// result is that unknown code's.
-    fn marker_call(&mut self, own: Vec<(FnIdx, u32)>, key: Option<Atom>, call: CallId) {
-        for (f, i) in own {
-            if !self.marker_calls.contains(&(f, i, key, call)) {
-                self.marker_calls.push((f, i, key, call));
+    /// theirs; a path: of the receiver's field, DECISIONS 236) for the
+    /// caller's unit to run (DECISIONS 140/144); its result is that
+    /// unknown code's.
+    fn marker_call(&mut self, own: Vec<(FnIdx, u32, Option<Atom>)>, key: Option<Atom>, call: CallId) {
+        for (f, i, path) in own {
+            if !self.marker_calls.contains(&(f, i, path, key, call)) {
+                self.marker_calls.push((f, i, path, key, call));
             }
         }
         let ret = self.calls[call as usize].ret;
@@ -752,7 +790,7 @@ impl Model {
         // arguments go to the caller's unit described as the result is.
         if let (Key::Named(a), None, false) = (key, virt, self.protocol_calls.contains(&call)) {
             let plain = self.calls[call as usize].spread.is_empty();
-            if let Some(own) = plain.then(|| self.own_param_members(t)).flatten() {
+            if let Some(own) = plain.then(|| self.mcall_members(t)).flatten() {
                 if self.bind_done.insert((call, t, u32::MAX - 4)) {
                     self.mark_use(t, crate::model::MARK_READ);
                     let r = self.keyed_reach_of(t, a);
@@ -1657,7 +1695,7 @@ impl Model {
             Some(o) => format!("{o} / escape: {}", m.reasons[reason as usize]),
             None => format!("escape: {}", m.reasons[reason as usize]),
         });
-        self.virt_revoke(t, None);
+        self.virt_escape(t);
         self.note_inst(t, false);
         if let Some(is) = self.contract_recv.get(&t).cloned() {
             self.recv_log

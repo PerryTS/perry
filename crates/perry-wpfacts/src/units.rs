@@ -189,9 +189,12 @@ impl Described {
 /// the function it passed, runs that call; one entry per (parameter, key,
 /// number of arguments), its arguments joined over the calls. With `key`
 /// the body calls that method of the argument (`p.k(a, b)`, DECISIONS 144).
+/// DECISIONS 236: `param` `u32::MAX` with `path` `Some(f)`: the method of
+/// what the receiver holds under `f` (`this.f.k(a, b)`).
 #[derive(Clone, Debug, PartialEq, Hash)]
 pub(crate) struct ParamCall {
     pub param: u32,
+    pub path: Option<String>,
     pub key: Option<String>,
     pub args: Vec<Described>,
 }
@@ -209,10 +212,12 @@ pub(crate) fn join_param_calls(a: &mut Vec<ParamCall>, b: &[ParamCall]) {
     join_keyed(
         a,
         b,
-        |x| (x.param, x.key.clone(), x.args.len()),
+        |x| (x.param, x.path.clone(), x.key.clone(), x.args.len()),
         |x, y| x.join(y),
     );
-    a.sort_by(|x, y| (x.param, &x.key, x.args.len()).cmp(&(y.param, &y.key, y.args.len())));
+    a.sort_by(|x, y| {
+        (x.param, &x.path, &x.key, x.args.len()).cmp(&(y.param, &y.path, &y.key, y.args.len()))
+    });
 }
 
 /// DECISIONS 152: the body hands parameter `param`'s argument to argument

@@ -39,8 +39,26 @@ impl Model {
     }
 
     pub(crate) fn note_shared(&mut self, w: SharedWrite) {
+        self.top_write(&w);
         if !self.shared_replay {
             self.shared_out.insert(w);
+        }
+    }
+
+    /// DECISIONS 231(c): a write through ⊤ other than a store (which
+    /// `store_into` notes) may give a key of an escaped instance any value
+    /// (`top_store`): an accessor under its key, a hard operation or
+    /// unmodeled code under every key.
+    fn top_write(&mut self, w: &SharedWrite) {
+        match w {
+            SharedWrite::Accessor(Shared::Top, k) if k != crate::STAR_KEY => {
+                let a = self.atom(k);
+                self.top_store(Some(a));
+            }
+            SharedWrite::Accessor(Shared::Top, _)
+            | SharedWrite::Unmodeled(Shared::Top)
+            | SharedWrite::Hard(Shared::Top, _) => self.top_store(None),
+            _ => {}
         }
     }
 
@@ -51,6 +69,7 @@ impl Model {
     /// unit's: only the write's target and key are this unit's to see.
     pub(crate) fn replay_shared(&mut self, w: &SharedWrite) {
         self.shared_replay = true;
+        self.top_write(w);
         match w {
             SharedWrite::Store(s, k) => {
                 let t = self.shared_tok(s);

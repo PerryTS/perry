@@ -1052,9 +1052,28 @@ impl Model {
             self.flush_shadowed(Some(t));
         }
         if let Some(&pn) = self.proto_node.get(&t) {
-            for p in fresh {
+            for &p in &fresh {
                 let pt = self.tok(TokKind::Proto(p));
                 self.add_tok(pn, pt);
+            }
+        }
+        // DECISIONS 231(b): an argument marker `t` joined before it was a
+        // receiver stands for its classes too, if it stands for receivers
+        // only (`virt_member`).
+        if fresh.is_empty() || self.virt_tok_open.contains(&t) {
+            return;
+        }
+        for r in self.virt_member_of.get(&t).cloned().unwrap_or_default() {
+            if self.virt_protos.contains_key(&r) {
+                self.register_virt(r, classes);
+            } else if self.arg_members.get(&r).is_some_and(|ms| {
+                ms.iter().all(|m| self.virt_protos.contains_key(m) && !self.virt_tok_open.contains(m))
+            }) {
+                let mut cs: Vec<TmplId> = Vec::new();
+                for m in self.arg_members[&r].clone() {
+                    cs.extend(self.virt_protos[&m].iter().copied());
+                }
+                self.register_virt(r, &cs);
             }
         }
     }
@@ -1081,8 +1100,31 @@ impl Model {
         if shadow {
             self.note_shadowed(t, a, n, false);
         }
-        let own = shadow || self.virt_own(&classes, a);
-        if own {
+        // DECISIONS 231(c): the receiver token's own field is what this
+        // unit's code stores under `a` into instances and receivers of the
+        // classes and their subclasses (other units' store effects and ⊤
+        // stores into escaped ones arrive as such stores); its field (⊤)
+        // only where the key may hold a value no such store makes
+        // (`virt_own`, a subclass of another unit defining it, a shadowed
+        // key no store of this unit makes). A marker's own field stays its
+        // keyed reach: the caller's own value, which receiver flows carry
+        // relative to each caller (DECISIONS 179); the stored values beside
+        // it would be this unit's tokens on every caller's object.
+        let marker = self.is_marker(t);
+        let mut stored = false;
+        for &p in &classes {
+            if let Some(&s) = self.virt_stored.get(&(p, a)) {
+                if !marker {
+                    self.edge(s, n);
+                }
+                stored = true;
+            }
+        }
+        if self.virt_own(t, &classes, a)
+            || !self.virt_overriders(t, a).is_empty()
+            || (shadow && !stored)
+            || (stored && marker)
+        {
             let f = self.field(t, a);
             self.edge(f, n);
         }
@@ -1093,8 +1135,8 @@ impl Model {
     /// stands for in this unit's view: the class code stores it, uses a
     /// hard operation on one or lets one escape, or an accessor on the
     /// chain may answer it.
-    fn virt_own(&self, classes: &[TmplId], a: Atom) -> bool {
-        classes.iter().any(|&p| {
+    fn virt_own(&self, t: Tok, classes: &[TmplId], a: Atom) -> bool {
+        self.virt_tok_open.contains(&t) || classes.iter().any(|&p| {
             self.virt_open.contains(&p)
                 || self.virt_revoked.contains(&(p, a))
                 || self.chain_accessor_key(p, a)
@@ -1126,7 +1168,7 @@ impl Model {
     /// (`override_node`); else nothing (`virt_load` holds the own field).
     pub(crate) fn virt_call(&mut self, t: Tok, a: Atom) -> Vec<NodeId> {
         let classes = self.virt_protos.get(&t).cloned().unwrap_or_default();
-        if self.virt_own(&classes, a) {
+        if self.virt_own(t, &classes, a) {
             return Vec::new();
         }
         let ps = self.virt_overriders(t, a);
@@ -1209,36 +1251,112 @@ impl Model {
         if self.virt_by_class.is_empty() {
             return;
         }
-        let classes: Vec<TmplId> = match self.virt_protos.get(&t) {
+        for p in self.virt_classes(t) {
+            self.virt_open_class(p, key);
+        }
+    }
+
+    /// The published classes whose receivers may denote what `t` is or
+    /// stands for: its classes (an instance's template, a receiver's
+    /// classes) and their ancestors (a receiver of a class stands for its
+    /// subclasses' instances too).
+    fn virt_classes(&self, t: Tok) -> Vec<TmplId> {
+        let mut work: Vec<TmplId> = match self.virt_protos.get(&t) {
             Some(ps) => ps.clone(),
-            None => {
-                let Some(tm) = self.tmpl_of(t) else { return };
-                let mut out = Vec::new();
-                let mut work = vec![tm];
-                let mut seen: Vec<TmplId> = Vec::new();
-                while let Some(c) = work.pop() {
-                    if seen.contains(&c) {
-                        continue;
-                    }
-                    seen.push(c);
-                    if self.virt_by_class.contains_key(&c) {
-                        out.push(c);
-                    }
-                    let tp = &self.tmpls[c as usize];
-                    work.extend(tp.parent);
-                    work.extend(tp.parent_links.iter().copied());
-                }
-                out
-            }
+            None => match self.tmpl_of(t) {
+                Some(tm) => vec![tm],
+                None => return Vec::new(),
+            },
         };
-        for p in classes {
-            if self.virt_open.contains(&p) {
+        let mut out = Vec::new();
+        let mut seen: Vec<TmplId> = Vec::new();
+        while let Some(c) = work.pop() {
+            if seen.contains(&c) {
                 continue;
+            }
+            seen.push(c);
+            if self.virt_by_class.contains_key(&c) {
+                out.push(c);
+            }
+            let tp = &self.tmpls[c as usize];
+            work.extend(tp.parent);
+            work.extend(tp.parent_links.iter().copied());
+        }
+        out
+    }
+
+    /// DECISIONS 231(c): this unit's code stores `src` under `a` into `t`:
+    /// the receivers of the classes `t` may be an instance of read it as
+    /// their own field (`virt_load`).
+    pub(crate) fn virt_store(&mut self, t: Tok, a: Atom, src: NodeId) {
+        if self.virt_by_class.is_empty() {
+            return;
+        }
+        for p in self.virt_classes(t) {
+            let s = match self.virt_stored.get(&(p, a)) {
+                Some(&s) => s,
+                None => {
+                    let s = self.node_l("virt-stored");
+                    self.virt_stored.insert((p, a), s);
+                    for vt in self.virt_by_class.get(&p).cloned().unwrap_or_default() {
+                        if let Some(&n) = self.virt_nodes.get(&(vt, a)) {
+                            if self.is_marker(vt) {
+                                let f = self.field(vt, a);
+                                self.edge(f, n);
+                            } else {
+                                self.edge(s, n);
+                            }
+                        }
+                    }
+                    s
+                }
+            };
+            self.edge(src, s);
+        }
+    }
+
+    /// An instance or receiver `t` escaped: unknown code holds it, which per
+    /// unit is other units' code too, and its writes through ⊤ reach it
+    /// (`top_store`): each key stored into ⊤ may be any value on it.
+    pub(crate) fn virt_escape(&mut self, t: Tok) {
+        if self.virt_by_class.is_empty() {
+            return;
+        }
+        for p in self.virt_classes(t) {
+            if !self.virt_escaped.insert(p) {
+                continue;
+            }
+            let ks: Vec<Option<Atom>> = self.top_stored.iter().copied().collect();
+            for k in ks {
+                self.virt_open_class(p, k);
+            }
+        }
+    }
+
+    /// A write through ⊤ under key `k` (`None`: computed, or a write of any
+    /// key: a hard operation, an accessor, unmodeled code): on each escaped
+    /// instance the key may hold any value.
+    pub(crate) fn top_store(&mut self, k: Option<Atom>) {
+        if !self.top_stored.insert(k) {
+            return;
+        }
+        let ps: Vec<TmplId> = self.virt_escaped.iter().copied().collect();
+        for p in ps {
+            self.virt_open_class(p, k);
+        }
+    }
+
+    /// Key `key` (`None`: every key) of class `p`'s instances may hold a
+    /// value no store of this unit makes: its receivers read their own field.
+    fn virt_open_class(&mut self, p: TmplId, key: Option<Atom>) {
+        {
+            if self.virt_open.contains(&p) {
+                return;
             }
             let opened: Option<Atom> = match key {
                 Some(a) => {
                     if !self.virt_revoked.insert((p, a)) {
-                        continue;
+                        return;
                     }
                     Some(a)
                 }
