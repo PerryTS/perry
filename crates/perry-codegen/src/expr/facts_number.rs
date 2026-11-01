@@ -118,15 +118,6 @@ pub(crate) fn emit_prim_to_number(ctx: &mut FnCtx<'_>, raw: &str) -> String {
         .phi(DOUBLE, &[(raw, &fast_label), (&coerced, &slow_end)])
 }
 
-/// A primitive-kind field read, lowered as a number operand.
-pub(crate) fn lower_prim_operand(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<Option<String>> {
-    if operand(ctx, e) != Some(Operand::Prim) {
-        return Ok(None);
-    }
-    let raw = lower_expr(ctx, e)?;
-    Ok(Some(emit_prim_to_number(ctx, &raw)))
-}
-
 /// `left + right` over proven Numbers and primitive-kind reads: an `fadd`
 /// of the two `ToNumber` values, no dynamic helper. Both operands are
 /// evaluated left to right; neither conversion can run user code.

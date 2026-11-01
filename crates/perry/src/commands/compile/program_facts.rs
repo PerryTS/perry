@@ -495,7 +495,10 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
         let fields = t
             .fields
             .iter()
-            .filter(|f| (f.definite || f.declared || f.reserved) && f.data_field)
+            // A private field's row is not codegen's: codegen finds a
+            // private field by its completed shape (#11791), and its view
+            // looks a public key up by spelling (`ElisionFacts::field`).
+            .filter(|f| (f.definite || f.declared || f.reserved) && f.data_field && !f.private)
             .filter_map(|f| {
                 let (classes, nullable) = holder_classes(f).unwrap_or_default();
                 Some(FactsField {

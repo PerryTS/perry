@@ -18,10 +18,21 @@ fn local_event(event: &Expr) -> bool {
         | "SIGVTALRM" | "SIGXCPU" | "SIGXFSZ"))
 }
 
+fn lexical_arrow_value(mut expr: &Expr) -> bool {
+    // A local assignment evaluates to its RHS without invoking a setter. Prove
+    // the value in place; do not follow bindings or accept property assignments.
+    // The normal expression walk still visits every assignment and closure body.
+    while let Expr::LocalSet(_, value) = expr {
+        expr = value;
+    }
+    matches!(expr, Expr::Closure { is_arrow: true, .. })
+}
+
 fn isolated_listener(args: &[Expr], discarded: bool) -> bool {
     // Ordinary callbacks receive process as `this`, even with a static signal.
     // Unknown callbacks and observable return values must keep the namespace.
-    discarded && matches!(args, [event, Expr::Closure { is_arrow: true, .. }] if local_event(event))
+    discarded
+        && matches!(args, [event, handler] if local_event(event) && lexical_arrow_value(handler))
 }
 
 fn expression(expr: &Expr, discarded: bool) -> bool {
@@ -49,10 +60,7 @@ fn expression(expr: &Expr, discarded: bool) -> bool {
             }
         }
         Expr::ProcessOn { event, handler } | Expr::ProcessOnce { event, handler } => {
-            if !(discarded
-                && local_event(event)
-                && matches!(handler.as_ref(), Expr::Closure { is_arrow: true, .. }))
-            {
+            if !(discarded && local_event(event) && lexical_arrow_value(handler)) {
                 return true;
             }
         }
