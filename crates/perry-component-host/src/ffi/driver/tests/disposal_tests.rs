@@ -70,6 +70,90 @@ fn ffi_driver_resource_disposal_preserves_nominal_identity_and_ignores_transferr
     }
 }
 #[test]
+fn ffi_driver_disposal_runs_each_live_owned_guest_destructor_once_in_the_dispose_frame() {
+    unsafe {
+        let mut state = State::default();
+        new(
+            &mut state,
+            crate::resource_tests::WORLD,
+            crate::resource_tests::COMPONENT,
+        );
+        let released = guest(&mut state, 31);
+        completed(&mut state, json!({"op":"resource-drop","value":released}));
+        guest(&mut state, 32);
+        assert_eq!(state.guest_drops.len(), 1);
+        // A quiescent component returns its Store before disposal, so the
+        // live owner is destroyed as on a legacy handle, not discarded.
+        for marker in [700, 800] {
+            let frame = Frame {
+                state: &mut state,
+                marker,
+            };
+            let mut out = Buffer::default();
+            let status = perry_component_host_dispose(
+                state.host,
+                &frame as *const Frame as usize as u64,
+                &mut out,
+            );
+            reply(status, out).unwrap();
+        }
+        assert_eq!(state.guest_drops.len(), 2, "{:?}", state.guest_drops);
+        assert_eq!((state.guest_drops[1].0, state.guest_drops[1].2), (32, 700));
+        perry_component_host_drop(state.host);
+        assert_eq!(state.guest_drops.len(), 2);
+    }
+}
+unsafe fn dispose(state: &mut State, marker: u64) -> i32 {
+    let frame = Frame { state, marker };
+    let mut out = Buffer::default();
+    let status = perry_component_host_dispose(
+        (*frame.state).host,
+        &frame as *const Frame as usize as u64,
+        &mut out,
+    );
+    perry_component_host_buffer_drop(out);
+    status
+}
+#[test]
+fn ffi_driver_disposal_destroys_live_owners_while_a_guest_call_is_suspended() {
+    unsafe {
+        let (source, text) = fixture_text(false);
+        let source = source.replace("world plugin {", "interface observe { dropped: func(value: u32); } interface counters { resource counter { constructor(value: u32); read: func() -> u32; } consume: func(value: own<counter>); consume-two: func(first: own<counter>, second: own<counter>); } world plugin { import observe; export counters;");
+        let resources = crate::resource_tests::COMPONENT;
+        let start = resources.find("  (component $implementation").unwrap();
+        let end = resources.find("  (instance $exports").unwrap();
+        let text = text.replacen(
+            "(component",
+            &format!(
+                "(component\n  (import \"test:driver/observe\" (instance $observe (export \"dropped\" (func (param \"value\" u32)))))\n  (alias export $observe \"dropped\" (func $dropped))\n{}  (instance $exports (instantiate $implementation (with \"dropped\" (func $dropped))))\n  (export \"test:driver/counters\" (instance $exports))\n",
+                &resources[start..end]
+            ),
+            1,
+        );
+        let mut state = State::default();
+        new(&mut state, &source, &text);
+        completed(
+            &mut state,
+            json!({"op":"call","interface":"test:driver/counters","function":"[constructor]counter","args":[41]}),
+        );
+        let running = submit(state.host, call(7)).unwrap();
+        assert_eq!(poll(&mut state, 10)["completed"], json!([]));
+        assert!(state.requests.contains_key(&7), "the export is suspended");
+        let queued = submit(state.host, call(8)).unwrap();
+        assert_ne!(running, queued);
+        assert_eq!(dispose(&mut state, 900), OK);
+        assert_eq!(state.guest_drops.len(), 1, "{:?}", state.guest_drops);
+        assert_eq!((state.guest_drops[0].0, state.guest_drops[0].2), (41, 900));
+        assert!(
+            !state.requests.contains_key(&8),
+            "a queued command never starts during disposal"
+        );
+        assert_eq!(dispose(&mut state, 950), OK);
+        perry_component_host_drop(state.host);
+        assert_eq!(state.guest_drops.len(), 1);
+    }
+}
+#[test]
 fn ffi_driver_foreign_disposal_preflight_and_discarded_cleanup_observer_keep_owners_distinct() {
     unsafe {
         let mut left = State::default();

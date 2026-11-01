@@ -122,11 +122,20 @@ impl Actor {
         );
         Ok(id)
     }
-    pub fn dispose(&self) {
-        // Driver Drop first cancels tasks and retires host-owned resources.
-        self.driver.borrow_mut().take();
+    pub fn dispose(&self) -> Result<()> {
+        // Disposal returns the Store before any observer is dropped, since a
+        // dropped started call would request hard retirement. Host::dispose
+        // then destroys every live owner as on a legacy handle. A driver that
+        // already retired its Store has no owners left to destroy.
+        self.client.dispose();
+        let driver = self.driver.borrow_mut().take();
+        let result = match driver.map(futures_lite::future::block_on) {
+            Some(Ok(mut host)) => host.dispose(),
+            Some(Err(_)) | None => Ok(()),
+        };
         self.calls.borrow_mut().clear();
         self.failure.borrow_mut().take();
+        result
     }
     fn poll(&self, wake: WakeCallback, agent: u64) -> Result<Value> {
         let waker = std::task::Waker::from(Arc::new(async_calls::Notify(wake, agent)));
