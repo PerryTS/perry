@@ -8,10 +8,15 @@ use perry_component_host::{
 };
 use perry_wit::{Type, World};
 use serde_json::{json, Value};
-use std::{path::Path, sync::Arc};
+use std::{
+    path::Path,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 fn result(driver: &mut Driver, call: &mut DriverCall) -> Result<Option<Value>> {
-    for _ in 0..1024 {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
         if let Some(reply) = block_on(poll_once(&mut *driver)) {
             if let Some(reply) = block_on(poll_once(&mut *call)) {
                 return reply;
@@ -22,8 +27,14 @@ fn result(driver: &mut Driver, call: &mut DriverCall) -> Result<Option<Value>> {
         if let Some(reply) = block_on(poll_once(&mut *call)) {
             return reply;
         }
+        ensure!(
+            Instant::now() < deadline,
+            "endpoint transport operation did not finish"
+        );
+        // WASI stdio and socket providers use Turnloop workers. Let their
+        // readiness notifications arrive instead of exhausting a CPU loop.
+        std::thread::sleep(Duration::from_millis(1));
     }
-    bail!("endpoint transport operation did not finish")
 }
 fn resolve<'a>(world: &'a World, mut ty: &'a Type) -> &'a Type {
     while let Type::Ref(key) = ty {
@@ -62,6 +73,7 @@ fn pair(
     Ok((pair["value"].clone(), pair["writer"].clone()))
 }
 fn call(driver: &mut Driver, client: &DriverClient, name: &str, args: &[Value]) -> Result<Value> {
+    eprintln!("P3 endpoint case: {name}");
     Ok(result(driver, &mut client.call("", name, args)?)?.unwrap_or(Value::Null))
 }
 fn future(
