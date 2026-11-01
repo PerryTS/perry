@@ -592,11 +592,13 @@ pub(crate) fn live_dynamic_imports(
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(DEFAULT_MAX_WORK * 100),
         ),
+        // Its points-to bound too: with every re-export source walked, the
+        // Supabase CLI converges at ~790M entries.
         max_pts: Some(
             std::env::var("PERRY_FACTS_MAX_PTS")
                 .ok()
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(400_000_000),
+                .unwrap_or(1_000_000_000),
         ),
         export_sources,
         dynamic_code_reach: dynamic_code_reach.clone(),
