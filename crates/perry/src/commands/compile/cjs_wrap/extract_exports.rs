@@ -35,21 +35,31 @@ pub fn extract_single_module_exports_assignment(source: &str) -> Option<String> 
 }
 
 /// True when the module's export names cannot be read from its source: some
-/// `module.exports = …` assignment's value is not an object literal (a call
-/// such as a UMD `factory(…)`, an identifier, a `require`, …). Only `exports.X
-/// = …` writes and `module.exports = { … }` literals list them completely.
-/// The names an importer asks of such a module are then exported from its
-/// `module.exports` object (see `CompilationContext::cjs_demanded_exports`).
+/// `module.exports = …` assignment's value is neither an object literal nor a
+/// bare identifier (a call such as a UMD `factory(…)`, a `require`, a member
+/// expression, …). The names an importer asks of such a module are then
+/// exported from its `module.exports` object (see
+/// `CompilationContext::cjs_demanded_exports`). `exports.X = …` writes and
+/// `module.exports = { … }` literals list the names completely, and
+/// `module.exports = binding` keeps Node's rule: a name its export scan does
+/// not list is a missing export (#10433).
 pub fn module_exports_is_opaque(source: &str) -> bool {
-    // The first character of each assigned value; `==`/`===` comparisons
-    // fail the `[^=\s]` after the single `=`.
+    // Each assigned value up to the end of its statement; `==`/`===`
+    // comparisons fail the `[^=\s]` after the single `=`.
     let Ok(re) = perry_perex::tooling::Regex::new(
-        r#"\bmodule(?:\.exports|\[\s*'exports'\s*\]|\[\s*"exports"\s*\])\s*=\s*([^=\s])"#,
+        r#"\bmodule(?:\.exports|\[\s*'exports'\s*\]|\[\s*"exports"\s*\])\s*=\s*([^=\s][^;\n]*)"#,
     ) else {
         return false;
     };
-    re.captures_iter(source)
-        .any(|cap| cap.get(1).is_some_and(|first| first.as_str() != "{"))
+    let Ok(binding) = perry_perex::tooling::Regex::new(r#"^[A-Za-z_$][A-Za-z0-9_$]*$"#) else {
+        return false;
+    };
+    re.captures_iter(source).any(|cap| {
+        cap.get(1).is_some_and(|value| {
+            let value = value.as_str().trim();
+            !value.starts_with('{') && !binding.is_match(value)
+        })
+    })
 }
 
 /// Return the set of specs `SPEC` for which this module is a *trivial
