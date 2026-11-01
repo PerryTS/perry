@@ -20,6 +20,7 @@ pub(crate) mod eh_mode;
 pub mod expr;
 pub mod ext_registry;
 pub mod facts_consumed;
+pub mod verify_facts;
 pub mod fallback_diag;
 pub(crate) mod fn_info;
 pub(crate) mod fn_record;

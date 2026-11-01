@@ -6330,6 +6330,7 @@ pub fn run_with_parse_cache(
             module_source: if args.debug_symbols
                 || opt_report_format == Some(OptReportFormat::Text)
                 || perry_codegen::fallback_diag::enabled()
+                || perry_codegen::verify_facts::enabled()
             {
                 match ctx.cjs_wrap_debug_sources.get(path) {
                     Some(w) => Some(w.wrapped_source.clone()),

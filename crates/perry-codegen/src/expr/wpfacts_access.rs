@@ -33,10 +33,11 @@
 //! (`class_field_global_index`): a disagreement means no elision.
 //!
 //! Every elision records its proof: with `PERRY_FACTS_DUMP` set, one line per
-//! elided site goes to `<dump>.elisions`; in a `PERRY_CHECK_CONTRACTS=1`
-//! build each elided site calls `perry_wpfacts_check_field` (perry-runtime
-//! `wpfacts_check.rs`), which re-derives class, slot and kind from the
-//! object and aborts on a mismatch.
+//! elided site goes to `<dump>.elisions`; in a `PERRY_CHECK_CONTRACTS=1` or
+//! `PERRY_VERIFY_FACTS=1` build (`verify_facts`) each elided site calls
+//! `perry_wpfacts_check_field` (perry-runtime `wpfacts_check.rs`), which
+//! re-derives class, slot and kind from the object and aborts, naming the
+//! site, on a mismatch.
 
 use anyhow::Result;
 use perry_hir::Expr;
@@ -583,9 +584,17 @@ pub(crate) fn emit_witness(
     flags: u32,
     site: u64,
 ) {
-    if !crate::codegen::helpers::check_contracts() {
+    if !crate::verify_facts::witnesses() {
         return;
     }
+    let what = format!(
+        "{site:#018x} {} .{property} classes={:?} class_ids={:?} slots={:?}",
+        if flags & WPF_STORE != 0 { "store" } else { "read" },
+        p.class_names,
+        p.class_ids,
+        p.slots
+    );
+    let site_arg = crate::verify_facts::site_arg(ctx, &what);
     let key_idx = ctx.strings.intern(property);
     let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
     let (c01, c23) = pack_cids(&p.class_ids);
@@ -631,7 +640,7 @@ pub(crate) fn emit_witness(
             (I32, &off),
             (I32, &(p.kind_mask as i32).to_string()),
             (I32, &flags.to_string()),
-            (I64, &(site as i64).to_string()),
+            (I64, &site_arg),
         ],
     );
 }
