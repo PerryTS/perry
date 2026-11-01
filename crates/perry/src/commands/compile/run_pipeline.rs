@@ -569,6 +569,16 @@ pub fn run_with_parse_cache(
     use_color: bool,
     verbose: u8,
 ) -> Result<CompileResult> {
+    #[cfg(not(feature = "target-wasi"))]
+    if let Some(target) = args
+        .target
+        .as_deref()
+        .filter(|target| super::wasi_flavour::Flavour::from_target(target).is_some())
+    {
+        return Err(anyhow!(
+            "--target {target} requires Perry built with the target-wasi feature"
+        ));
+    }
     #[cfg(feature = "target-wasi")]
     if args.target.as_deref() == Some("wasi") {
         perry_codegen::wasi_toolchain::check()?;
