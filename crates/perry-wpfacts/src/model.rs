@@ -395,6 +395,11 @@ pub struct FuncInfo {
     /// (`LinkGeneratorPrototype`); `next`/`return`/`throw` and the
     /// iteration protocol on it run the closure.
     pub gen_step: bool,
+    /// An async generator's step closure (its `next` settles a Promise).
+    pub gen_async: bool,
+    /// A sync step closure with a `yield*`: a step may hand back its
+    /// delegate's inner result object as-is (step kind 2).
+    pub gen_reyields: bool,
     /// A class constructor of the shape `constructor(...a) { super(...a) }`
     /// (the spec default a derived class gets): the `new` call's own
     /// arguments construct the parent, position by position, not through

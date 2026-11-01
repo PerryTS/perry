@@ -964,6 +964,7 @@ impl<'a> Gen<'a> {
             }
             Expr::LinkGeneratorPrototype {
                 obj,
+                is_async,
                 i32_controls,
                 i1_controls,
                 ..
@@ -973,6 +974,7 @@ impl<'a> Gen<'a> {
                 for t in self.m.nodes[o as usize].pts.to_sorted() {
                     if let TokKind::Func(f, _) = self.m.toks[t as usize] {
                         self.m.funcs[f as usize].gen_step = true;
+                        self.m.funcs[f as usize].gen_async = *is_async;
                     }
                 }
                 for id in i32_controls.iter().chain(i1_controls.iter()) {
