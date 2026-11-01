@@ -1,5 +1,6 @@
 //! WASI I/O resources with fallible native readiness. A driver failure is a
 //! host trap, never a successful timer expiry or stream-readiness notification.
+pub use wasmtime_wasi_io::streams;
 pub mod bindings;
 mod impls;
 pub mod poll;

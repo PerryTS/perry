@@ -172,7 +172,7 @@ impl streams::HostOutputStream for State {
             return c.check_write(self.io);
         }
         if let Output::Captured(buffer) = self.table.get_mut(&stream)? {
-            return wasmtime_wasi_io::streams::OutputStream::check_write(buffer)
+            return perry_wasi::io::streams::OutputStream::check_write(buffer)
                 .map(|size| (size as u64).min(PERMIT))
                 .map_err(captured_error);
         }
@@ -191,7 +191,7 @@ impl streams::HostOutputStream for State {
             Output::Closed => return Err(StreamError::Closed),
             Output::Tcp(c) => return c.write(self.io, contents),
             Output::Captured(buffer) => {
-                return wasmtime_wasi_io::streams::OutputStream::write(buffer, contents.into())
+                return perry_wasi::io::streams::OutputStream::write(buffer, contents.into())
                     .map_err(captured_error);
             }
             Output::Sink => Ok(()),
@@ -515,11 +515,11 @@ impl cli::stderr::Host for State {
     }
 }
 
-fn captured_error(error: wasmtime_wasi_io::streams::StreamError) -> StreamError {
+fn captured_error(error: perry_wasi::io::streams::StreamError) -> StreamError {
     match error {
-        wasmtime_wasi_io::streams::StreamError::Closed => StreamError::Closed,
-        wasmtime_wasi_io::streams::StreamError::Trap(error) => StreamError::Trap(error),
-        wasmtime_wasi_io::streams::StreamError::LastOperationFailed(error) => {
+        perry_wasi::io::streams::StreamError::Closed => StreamError::Closed,
+        perry_wasi::io::streams::StreamError::Trap(error) => StreamError::Trap(error),
+        perry_wasi::io::streams::StreamError::LastOperationFailed(error) => {
             StreamError::Failed(io::Error::other(error.to_string()))
         }
     }
