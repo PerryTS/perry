@@ -12,31 +12,37 @@ fn concrete_resource_future_payload_is_exported_with_its_enclosing_interface() {
         (export "pending" (type $pending (eq $future)))
         (export "[constructor]item" (func (result $own)))
         (export "make" (func (result $pending)))))"#;
-    let producer = wat::parse_str(r#"(component
+    let producer = wat::parse_str(
+        r#"(component
         (import "kick" (func $kick async))
-        (type $item (resource (rep i32)))
-        (type $own (own $item))
-        (type $payload (record (field "owner" $own) (field "text" string)))
-        (type $pending (future $payload))
-        (core module $m
-            (memory (export "memory") 1)
-            (func (export "make") (result i32) i32.const 0)
-            (func (export "realloc") (param i32 i32 i32 i32) (result i32) i32.const 0))
-        (core instance $m (instantiate $m))
-        (alias core export $m "memory" (core memory $memory))
-        (alias core export $m "make" (core func $make))
-        (alias core export $m "realloc" (core func $realloc))
-        (func $make (result $pending) (canon lift (core func $make) (memory $memory) (realloc $realloc)))
-        (func $ctor (result $own) (canon lift (core func $make)))
-        (instance $api
-            (export "item" (type $item))
-            (export "payload" (type $payload))
-            (export "pending" (type $pending))
-            (export "[constructor]item" (func $ctor))
-            (export "make" (func $make)))
+        (component $implementation
+            (type $rep (resource (rep i32)))
+            (export $item "item" (type $rep))
+            (type $own (own $item))
+            (type $record (record (field "owner" $own) (field "text" string)))
+            (export $payload "payload" (type $record))
+            (type $future (future $payload))
+            (export $pending "pending" (type $future))
+            (core module $m
+                (memory (export "memory") 1)
+                (func (export "make") (result i32) i32.const 0)
+                (func (export "realloc") (param i32 i32 i32 i32) (result i32) i32.const 0))
+            (core instance $m (instantiate $m))
+            (alias core export $m "memory" (core memory $memory))
+            (alias core export $m "make" (core func $make))
+            (alias core export $m "realloc" (core func $realloc))
+            (func (export "make") (result $pending)
+                (canon lift (core func $make) (memory $memory) (realloc $realloc)))
+            (func (export "[constructor]item") (result $own) (canon lift (core func $make))))
+        (instance $api (instantiate $implementation))
         (export "api" (instance $api))
         (export "actor" (func $kick))
-        (export "signal" (func $kick)))"#).unwrap();
+        (export "signal" (func $kick)))"#,
+    )
+    .unwrap();
+    Validator::new_with_features(WasmFeatures::all())
+        .validate_all(&producer)
+        .expect("valid concrete-resource fixture");
     let facade = wat::parse_str(format!(
         r#"(component {api}
         (import "source" (instance $source (type $api)))
