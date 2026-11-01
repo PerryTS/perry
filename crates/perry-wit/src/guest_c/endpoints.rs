@@ -1,5 +1,6 @@
 //! Typed canonical cleanup stays in the maintained C ABI, outside Rust scopes.
 use super::*;
+mod read;
 
 impl Generator<'_> {
     pub(super) fn endpoint_adapters(&mut self) -> Result<()> {
@@ -8,7 +9,24 @@ impl Generator<'_> {
                 .push_str("static void perry_endpoint_flush(void) {}\n");
             return Ok(());
         }
-        self.source.push_str("static void perry_endpoint_flush(void) {\nvoid *f = perry_component_frame_new();\nuint32_t type = 0, handle = 0;\nint32_t status;\nwhile ((status = perry_component_frame_endpoint_pop(f, &type, &handle)) > 0) {\nswitch (type) {\n");
+        for (ty, name) in self.endpoint_operations.clone() {
+            let id = self
+                .resolve
+                .types
+                .iter()
+                .find_map(|(id, _)| (id.index() == (ty / 2) as usize).then_some(id))
+                .expect("manifest endpoint TypeId");
+            self.reader_adapter(ty, id, &name)?;
+        }
+        self.source.push_str("static int32_t perry_endpoint_operation(void *f, uint32_t type, uint32_t reader, uint32_t operation, uint32_t argument) {\nif (operation != 0) { perry_bad(f, \"Unsupported guest endpoint operation\"); return -1; }\nswitch (type) {\n");
+        for ty in self.endpoint_operations.keys() {
+            writeln!(
+                self.source,
+                "case {ty}: return perry_read_{ty}_start(f, reader, argument);"
+            )?;
+        }
+        self.source.push_str("default: perry_bad(f, \"Unknown guest endpoint type\"); return -1;\n}\n}\nstatic const perry_guest_endpoint_ops perry_endpoint_ops = {1, sizeof(perry_guest_endpoint_ops), perry_endpoint_operation};\n");
+        self.source.push_str("static bool perry_endpoint_flushing;\nstatic void perry_endpoint_flush(void) {\nif (perry_endpoint_flushing) return;\nperry_endpoint_flushing = true;\nfor (perry_task *t = perry_tasks; t; t = t->next) perry_io_sweep(t);\nvoid *f = perry_component_frame_new();\nuint32_t type = 0, handle = 0;\nint32_t status;\nwhile ((status = perry_component_frame_endpoint_pop(f, &type, &handle)) > 0) {\nperry_io_close(type, handle);\nswitch (type) {\n");
         for (ty, name) in &self.endpoint_operations {
             let key = format!("{}{}", if ty & 1 == 0 { 't' } else { 'e' }, ty / 2);
             ensure!(
@@ -21,7 +39,7 @@ impl Generator<'_> {
                 "case {ty}: {stem}_drop_readable(handle); break;"
             )?;
         }
-        self.source.push_str("default: __builtin_trap();\n}\n}\nperry_component_frame_drop(f);\nif (status < 0) __builtin_trap();\n}\n");
+        self.source.push_str("default: __builtin_trap();\n}\n}\nperry_component_frame_drop(f);\nif (status < 0) __builtin_trap();\nperry_endpoint_flushing = false;\n}\n");
         Ok(())
     }
 }

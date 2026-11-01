@@ -305,6 +305,12 @@ impl Generator<'_> {
                 .join(",")
         )?;
         self.source.push_str("static const perry_guest_ops perry_ops = {2, sizeof(perry_guest_ops), perry_contract, sizeof(perry_contract), perry_import, perry_resource};\n");
+        if !self.endpoint_operations.is_empty() {
+            self.source.push_str("static void perry_endpoint_install(void) { if (!js_component_set_guest_endpoint_ops(&perry_endpoint_ops)) __builtin_trap(); }\n");
+        } else {
+            self.source
+                .push_str("static void perry_endpoint_install(void) {}\n");
+        }
         self.source.push_str(
             r#"
 extern void perry_module_init(void);
@@ -319,6 +325,7 @@ static void *perry_initialize(void) {
     }
     perry_initialized = 1;
     if (!js_component_set_guest_ops(&perry_ops)) __builtin_trap();
+    perry_endpoint_install();
     void *f = perry_component_frame_bootstrap((const void *)perry_module_start, NULL);
     if (f == NULL) __builtin_trap();
     perry_initialized = perry_component_frame_failed(f) ? 3 : 2;

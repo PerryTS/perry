@@ -63,7 +63,7 @@ fn settled_eof() -> f64 {
     set_field(
         result.get_nanbox_f64(),
         b"done",
-        JSValue::bool(true).as_f64(),
+        f64::from_bits(JSValue::bool(true).bits()),
     );
     let promise = scope.root_raw_mut_ptr(crate::promise::js_promise_new());
     crate::promise::js_promise_resolve(promise.get_raw_mut_ptr(), result.get_nanbox_f64());
