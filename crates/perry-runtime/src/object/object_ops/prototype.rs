@@ -249,7 +249,11 @@ unsafe fn shape_link_prototype(obj: *const ObjectHeader, default_only: bool) -> 
     }
     if pid != s::PROTO_ID_DEFAULT {
         if pid >= s::PROTO_ID_CLASS {
-            return None;
+            return if pid < s::PROTO_ID_MIXED {
+                class_link_prototype(obj, record)
+            } else {
+                None
+            };
         }
         let word = s::object_prototype_word(obj);
         return (word != 0).then_some(f64::from_bits(word));
@@ -257,6 +261,32 @@ unsafe fn shape_link_prototype(obj: *const ObjectHeader, default_only: bool) -> 
     let proto = crate::array::object_prototype_addr_if_resolved();
     (proto != 0 && proto != obj as usize)
         .then(|| f64::from_bits(crate::value::js_nanbox_pointer(proto as i64).to_bits()))
+}
+
+/// [`shape_link_prototype`] of a CLASS identity `pid`: a recorded prototype
+/// first, else the identity's word, which names the class's prototype holder
+/// once it is built (the prototype funnel publishes it before any shape names
+/// the identity), the rule the layout probe's `link_of` reads. The record
+/// already holds that word's cell (`prototype_word`). A declared but unbuilt
+/// holder (`undefined`) keeps the lazy resolution. Out of line, so the other
+/// identities' answers stay as they were.
+///
+/// # Safety
+/// As [`shape_link_prototype`]; `record` is `obj`'s live record, of a CLASS
+/// identity.
+#[inline(never)]
+unsafe fn class_link_prototype(
+    obj: *const ObjectHeader,
+    record: crate::object::shapes::ShapeRecordRef,
+) -> Option<f64> {
+    let holder = record.prototype_word();
+    if !crate::value::JSValue::from_bits(holder).is_pointer() {
+        // Unbuilt: the lazy resolution builds it (and reads any recorded
+        // prototype itself).
+        return None;
+    }
+    let word = crate::object::shapes::object_prototype_word(obj);
+    Some(f64::from_bits(if word != 0 { word } else { holder }))
 }
 
 // Only the realm default may bypass js_object_get_prototype_of's exposure
@@ -655,9 +685,11 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
             unsafe {
                 let obj = raw_addr as *const ObjectHeader;
                 let gc = gc_header_for(obj);
-                // #1175: objects allocated with a null prototype
-                // (Object.create(null), querystring.parse) report null here.
-                if (*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
+                // #1175: objects with a null prototype (Object.create(null),
+                // querystring.parse, linked to null): their shape says so.
+                if (*gc).obj_type == crate::gc::GC_TYPE_OBJECT
+                    && crate::object::shapes::object_prototype_is_null(obj)
+                {
                     return f64::from_bits(TAG_NULL);
                 }
                 // A RegExp's internal prototype does not depend on its
@@ -919,7 +951,9 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
         unsafe {
             let obj = bits as *const ObjectHeader;
             let gc = gc_header_for(obj);
-            if (*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
+            if (*gc).obj_type == crate::gc::GC_TYPE_OBJECT
+                && crate::object::shapes::object_prototype_is_null(obj)
+            {
                 return f64::from_bits(TAG_NULL);
             }
 

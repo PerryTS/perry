@@ -1073,6 +1073,19 @@ pub fn run_with_parse_cache(
                 .unwrap_or_else(|_| args.input.clone())
         });
         reachability::tree_shake(&mut ctx, &entry_canonical)?;
+        // DCE layer 2: modules only unreachable `import()` sites load.
+        let mut roots = vec![entry_canonical.clone()];
+        roots.extend(
+            ctx.worker_url_entries
+                .iter()
+                .flat_map(|(l, c)| [l.clone(), c.clone()]),
+        );
+        if let Some(ext_dir) = &args.bundle_extensions {
+            for (entry_path, _) in super::resolve::discover_extension_entries(ext_dir)? {
+                roots.push(entry_path.canonicalize().unwrap_or(entry_path));
+            }
+        }
+        super::dynamic_reach::prune(&mut ctx, &roots)?;
     }
 
     // --- Web/WASM target: emit WASM binary + JS runtime bridge ---
@@ -3088,6 +3101,30 @@ pub fn run_with_parse_cache(
                     dyn_target_paths.insert(PathBuf::from(rp));
                 }
             }
+        }
+    }
+
+    // A module that namespace-imports ITSELF (`import * as Self from
+    // "./this-module.ts"`) is its own namespace consumer: it needs its own
+    // `@__perry_ns_<prefix>` global emitted and populated, which is what
+    // membership in this set means. The populator runs before the module's
+    // top-level body (see `CompileOptions::namespace_self_import`), because
+    // that body may hand the whole namespace to a function that enumerates it
+    // — trails' activesupport does exactly that through `include()`.
+    for (path, hir_module) in &ctx.native_modules {
+        let self_namespace_import = hir_module.imports.iter().any(|import| {
+            !import.type_only
+                && !import.runtime_erased
+                && import.specifiers.iter().any(|spec| {
+                    matches!(spec, perry_hir::ImportSpecifier::Namespace { .. })
+                })
+                && import
+                    .resolved_path
+                    .as_deref()
+                    .is_some_and(|resolved| Path::new(resolved) == path.as_path())
+        });
+        if self_namespace_import {
+            dyn_target_paths.insert(path.clone());
         }
     }
     // #7189: `export * as ns from "./m.ts"` names a member whose VALUE is
@@ -6166,6 +6203,26 @@ pub fn run_with_parse_cache(
             disable_buffer_fast_path,
             namespace_imports,
             namespace_source_prefixes,
+            // A module that namespace-imports ITSELF (`import * as Self from
+            // "./this-module.ts"`) is its own namespace consumer: its
+            // `@__perry_ns_<prefix>` populator must run before its top-level
+            // body, because that body may pass the whole namespace to a
+            // function that enumerates it. Per-member reads already worked,
+            // which is why the undefined value stayed silent.
+            namespace_self_import: ctx.native_modules.get(path).is_some_and(|hir_module| {
+
+                hir_module.imports.iter().any(|import| {
+                    !import.type_only
+                        && !import.runtime_erased
+                        && import.specifiers.iter().any(|spec| {
+                            matches!(spec, perry_hir::ImportSpecifier::Namespace { .. })
+                        })
+                        && import
+                            .resolved_path
+                            .as_deref()
+                            .is_some_and(|resolved| Path::new(resolved) == path.as_path())
+                })
+            }),
             namespace_member_nested: namespace_member_nested.into_iter().collect(),
             cjs_interop_namespaces: cjs_interop_namespaces.into_iter().collect(),
             imported_classes,
@@ -6505,6 +6562,7 @@ pub fn run_with_parse_cache(
             || ctx.uses_data_url_dynamic_import,
         &ctx.patched_builtins.dynamic_code_reach,
         &ctx.cjs_wrap_debug_sources,
+        super::program_facts::module_roots(&ctx),
     );
     program_step("whole-program facts", Some(facts_started));
     #[allow(clippy::type_complexity)]
@@ -8304,6 +8362,7 @@ pub fn run_with_parse_cache(
         for obj_path in &obj_paths {
             cmd.arg(obj_path);
         }
+        cmd.args(link::link_pad_args());
 
         if is_dylib_windows {
             // MSVC link.exe takes the output path as `/OUT:<path>`, not `-o`.

@@ -16,6 +16,7 @@ use perry_hir::{
 
 fn ir_opts() -> CompileOptions {
     CompileOptions {
+        namespace_self_import: false,
         static_shape_ids: Vec::new(),
         program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),

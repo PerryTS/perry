@@ -85,6 +85,9 @@ pub(crate) struct ClassContract {
     /// the same unit does.
     pub birth_keys: Vec<String>,
     pub definite: Vec<String>,
+    /// The birth keys reserved for a constructor store that are not
+    /// definite (`Template::reserved`): known slots, present once stored.
+    pub reserved: Vec<String>,
     pub ctor_leaks: bool,
     /// Its constructor, or one up its chain, may return an object other than
     /// `this` (`return expr`): a reader's `new` then yields that value, not
@@ -186,9 +189,12 @@ impl Described {
 /// the function it passed, runs that call; one entry per (parameter, key,
 /// number of arguments), its arguments joined over the calls. With `key`
 /// the body calls that method of the argument (`p.k(a, b)`, DECISIONS 144).
+/// DECISIONS 236: `param` `u32::MAX` with `path` `Some(f)`: the method of
+/// what the receiver holds under `f` (`this.f.k(a, b)`).
 #[derive(Clone, Debug, PartialEq, Hash)]
 pub(crate) struct ParamCall {
     pub param: u32,
+    pub path: Option<String>,
     pub key: Option<String>,
     pub args: Vec<Described>,
 }
@@ -206,10 +212,12 @@ pub(crate) fn join_param_calls(a: &mut Vec<ParamCall>, b: &[ParamCall]) {
     join_keyed(
         a,
         b,
-        |x| (x.param, x.key.clone(), x.args.len()),
+        |x| (x.param, x.path.clone(), x.key.clone(), x.args.len()),
         |x, y| x.join(y),
     );
-    a.sort_by(|x, y| (x.param, &x.key, x.args.len()).cmp(&(y.param, &y.key, y.args.len())));
+    a.sort_by(|x, y| {
+        (x.param, &x.path, &x.key, x.args.len()).cmp(&(y.param, &y.path, &y.key, y.args.len()))
+    });
 }
 
 /// DECISIONS 152: the body hands parameter `param`'s argument to argument
@@ -312,6 +320,108 @@ pub(crate) struct FnContract {
     /// The binding name of a closed function (decision 19): a unit that
     /// calls it as a value publishes what it passes under this name.
     pub closed: Option<String>,
+}
+
+impl FnContract {
+    /// The function named, not described (DECISIONS 106): its identity,
+    /// and of its body only what makes no claim (every parameter, its
+    /// receiver and its result escape or are unknown). A reader holding it
+    /// calls the function through its owner's entry (`Gen::owner_fn`); with
+    /// no entry it runs this, which is sound.
+    pub(crate) fn named(&self) -> FnContract {
+        use crate::model::MARK_ESCAPE;
+        let n = self.params.len();
+        FnContract {
+            compiled_body: self.compiled_body.clone(),
+            name: self.name.clone(),
+            method: self.method,
+            callable: self.callable,
+            this_class: self.this_class.clone(),
+            params: vec![MARK_ESCAPE; n],
+            reach: vec![MARK_ESCAPE; n],
+            reach_keys: vec![Vec::new(); n],
+            variadic: self.variadic,
+            rest: self.rest,
+            ret: None,
+            ret_params: Vec::new(),
+            ret_reach: Vec::new(),
+            ret_reach_keys: Vec::new(),
+            ret_unknown: true,
+            ret_value: Default::default(),
+            ret_prim: crate::model::prim::ALL,
+            lexical_this: self.lexical_this,
+            this_use: MARK_ESCAPE,
+            this_reach: MARK_ESCAPE,
+            this_stores: None,
+            this_calls: Vec::new(),
+            param_stores: vec![None; n],
+            param_flows: Vec::new(),
+            param_calls: Vec::new(),
+            param_handovers: Vec::new(),
+            param_cells: Vec::new(),
+            closed: self.closed.clone(),
+        }
+    }
+}
+
+/// DECISIONS 106 for what a forwarded copy of another unit's function
+/// holds: every function described inside it whose owner publishes an entry
+/// (`owned`) is named (`FnContract::named`), as the reader takes that entry
+/// by name in any case. Copied whole, a description held the copies its
+/// owner's description held, which held it again: two units whose functions
+/// pass each other's closures (zod's `emitOwnKeys` and the record check it
+/// calls back) nested one more level every round, the contracts grew 4x
+/// per two rounds and the fixpoint never came. Named, a description holds
+/// only its own unit's functions and one level of copies: its size is
+/// bounded by the program's, whatever the rounds.
+pub(crate) fn name_owned_in_fn(fc: &mut FnContract, owned: &dyn Fn(&str) -> bool) {
+    name_owned_in_value(&mut fc.ret_value, owned);
+    for pc in &mut fc.param_calls {
+        for a in &mut pc.args {
+            name_owned_in_value(&mut a.value, owned);
+        }
+    }
+    for fl in &mut fc.param_flows {
+        if let Some(d) = &mut fl.value {
+            name_owned_in_value(&mut d.value, owned);
+        }
+    }
+}
+
+fn name_owned_fns(fns: &mut [FnContract], owned: &dyn Fn(&str) -> bool) {
+    for f in fns {
+        name_owned(f, owned);
+    }
+}
+
+fn name_owned(f: &mut FnContract, owned: &dyn Fn(&str) -> bool) {
+    if owned(&f.name) {
+        *f = f.named();
+    } else {
+        name_owned_in_fn(f, owned);
+    }
+}
+
+fn name_owned_in_value(vc: &mut ValueContract, owned: &dyn Fn(&str) -> bool) {
+    name_owned_fns(&mut vc.fns, owned);
+    for c in vc.layouts.iter_mut().chain(vc.classes.iter_mut()) {
+        name_owned_in_class(c, owned);
+    }
+}
+
+fn name_owned_in_class(c: &mut ClassContract, owned: &dyn Fn(&str) -> bool) {
+    for (_, fs) in &mut c.field_fns {
+        name_owned_fns(fs, owned);
+    }
+    for (_, vc) in c.field_values.iter_mut().chain(c.static_values.iter_mut()) {
+        name_owned_in_value(vc, owned);
+    }
+    for (_, f) in c.static_fns.iter_mut().chain(c.method_fns.iter_mut()) {
+        name_owned(f, owned);
+    }
+    if let Some(f) = &mut c.ctor_fn {
+        name_owned(f, owned);
+    }
 }
 
 /// A published module-scope value binding as its readers see it (design
@@ -607,11 +717,35 @@ fn own_instances(c: &ClassContract, f: &crate::derive::FieldFacts) -> bool {
         && k.objs.iter().all(|d| *d == c.display)
 }
 
+/// A key the defining unit's layout never holds: no birth key, no store
+/// into it, its kind only the `undefined` of a key not yet present
+/// (`derive::field_kind`): a read names it (`this.status()` on the
+/// layout's own instance), nothing writes it. It has no own value: a read
+/// of it is the chain's, as in the defining unit (`derive::lookup`).
+pub(crate) fn unheld(c: &ClassContract, f: &crate::derive::FieldFacts) -> bool {
+    use crate::model::prim;
+    let k = &f.kind;
+    f.data_field
+        && !f.definite
+        && !f.declared
+        && !f.reserved
+        && f.writers_ctor + f.writers_post == 0
+        && !c.birth_keys.contains(&f.key)
+        && !k.top
+        && k.objs.is_empty()
+        && k.funcs == 0
+        && k.builtin_objs == 0
+        && k.prims == prim::UNDEF
+}
+
 /// A field described by its facts alone, as a value contract: the
 /// primitives a data field holds (DECISIONS 74; `undefined` before a field
 /// not definite exists), else an unknown value (its owner sank it).
-fn plain_value(f: &crate::derive::FieldFacts) -> ValueContract {
+fn plain_value(c: &ClassContract, f: &crate::derive::FieldFacts) -> ValueContract {
     use crate::model::prim;
+    if unheld(c, f) {
+        return ValueContract::default();
+    }
     let k = &f.kind;
     if f.data_field
         && !k.top
@@ -722,7 +856,7 @@ impl ClassContract {
                                 fns: fs.clone(),
                                 ..Default::default()
                             },
-                            FieldView::Plain(f) => plain_value(f),
+                            FieldView::Plain(f) => plain_value(c, f),
                             _ => unreachable!("handled above"),
                         };
                         match field_values.iter_mut().find(|(q, _)| q == k) {
@@ -813,7 +947,17 @@ impl ClassContract {
         // The layout prefix a subclass in another unit takes: the common
         // birth keys, definite in both; a leak in either leaks.
         common_prefix(&mut self.birth_keys, &o.birth_keys);
+        // A known slot whose presence one of them does not know.
+        let known = |c: &Self, k: &String| c.definite.contains(k) || c.reserved.contains(k);
+        let reserved: Vec<String> = self
+            .definite
+            .iter()
+            .chain(self.reserved.iter())
+            .filter(|k| known(o, k) && !(self.definite.contains(k) && o.definite.contains(k)))
+            .cloned()
+            .collect();
         self.definite.retain(|k| o.definite.contains(k));
+        self.reserved = reserved;
         self.ctor_leaks |= o.ctor_leaks;
         self.ctor_returns |= o.ctor_returns;
         self.binding_prim |= o.binding_prim;

@@ -24,11 +24,23 @@ impl Model {
             if let Some(own) = plain.then(|| self.own_param_members(t)).flatten() {
                 if self.bind_done.insert((call, t, u32::MAX - 3)) {
                     self.mark_use(t, crate::model::MARK_READ);
+                    let own = own.into_iter().map(|(f, i)| (f, i, None)).collect();
                     self.marker_call(own, None, call);
                 }
                 return;
             }
-            self.mark_use(t, crate::model::MARK_ESCAPE);
+            let spread = !cs.spread.is_empty();
+            self.mark_escape_why(t, &|m: &Self| {
+                if spread {
+                    "call: spread arguments".into()
+                } else if !plain {
+                    "call: with a receiver".into()
+                } else if m.reach_marker.contains(&t) {
+                    "call: of a reach".into()
+                } else {
+                    "call: of a marker that is no own parameter".into()
+                }
+            });
             return self.call_tok(call, TOP, this_tok);
         }
         if matches!(self.toks[t as usize], TokKind::Top | TokKind::BuiltinFn) {
@@ -91,7 +103,7 @@ impl Model {
                 // that is a function (Proxy over a function etc., ⊤ anyway).
                 // A parameter marker stands for the caller's values: one may
                 // be a function.
-                self.mark_use(t, crate::model::MARK_ESCAPE);
+                self.mark_escape_why(t, &|_| "call: of a non-callable".into());
             }
         }
     }
@@ -119,18 +131,73 @@ impl Model {
             .filter(|v| !v.is_empty())
     }
 
+    /// DECISIONS 236: the members a method call on `t` is recorded for:
+    /// `own_param_members`, and a receiver marker's keyed reach (`this.f`,
+    /// a path marker under a named key of an unescaped receiver marker) as
+    /// (function, `u32::MAX`, `Some(f)`): each unit holding a receiver runs
+    /// the call on what its object holds under `f` (its own chain, its own
+    /// stores, ⊤ where its object escaped or `f` was written through ⊤).
+    /// `None`: some member is neither, or none is left.
+    pub(crate) fn mcall_members(&self, t: Tok) -> Option<Vec<(FnIdx, u32, Option<Atom>)>> {
+        self.marker_members(t)
+            .into_iter()
+            .map(|m| match self.param_marker.get(&m) {
+                _ if self.beside_values(m) && !self.unrun_param(m) => Some(None),
+                Some(&(f, i))
+                    if i != u32::MAX
+                        && self.marker_of.get(&(f, i)) == Some(&m)
+                        && !self.marker_is_top(m) =>
+                {
+                    Some(Some((f, i, None)))
+                }
+                Some(&(f, u32::MAX)) => match self.path_parent.get(&m) {
+                    Some(&(rm, Some(k)))
+                        if self.marker_of.get(&(f, u32::MAX)) == Some(&rm)
+                            && !self.marker_is_top(rm)
+                            && !self.marker_is_top(m) =>
+                    {
+                        Some(Some((f, u32::MAX, Some(k))))
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>()
+            .map(|v| v.into_iter().flatten().collect::<Vec<_>>())
+            .filter(|v| !v.is_empty())
+    }
+
     /// Records a call through the parameters `own` (`key`: a method of
-    /// theirs) for the caller's unit to run (DECISIONS 140/144); its
-    /// result is that unknown code's.
-    fn marker_call(&mut self, own: Vec<(FnIdx, u32)>, key: Option<Atom>, call: CallId) {
-        for (f, i) in own {
-            if !self.marker_calls.contains(&(f, i, key, call)) {
-                self.marker_calls.push((f, i, key, call));
+    /// theirs; a path: of the receiver's field, DECISIONS 236) for the
+    /// caller's unit to run (DECISIONS 140/144); its result is that
+    /// unknown code's. DECISIONS 165: a parameter of a published method no
+    /// unit runs (`unrun_param`) stands for no value of another unit, so
+    /// a call through it runs nowhere and has no result; the call stays
+    /// recorded for a unit that will run the method, whose run solves this
+    /// unit again with the parameter described or bare.
+    fn marker_call(
+        &mut self,
+        own: Vec<(FnIdx, u32, Option<Atom>)>,
+        key: Option<Atom>,
+        call: CallId,
+    ) {
+        let mut runs = false;
+        for (f, i, path) in own {
+            runs |= path.is_some()
+                || i == u32::MAX
+                || !self
+                    .marker_of
+                    .get(&(f, i))
+                    .is_some_and(|&m| self.unrun_param(m));
+            if !self.marker_calls.contains(&(f, i, path, key, call)) {
+                self.marker_calls.push((f, i, path, key, call));
             }
         }
-        let ret = self.calls[call as usize].ret;
-        self.add_tok(ret, TOP);
-        self.add_prim(ret, prim::ALL);
+        if runs {
+            let ret = self.calls[call as usize].ret;
+            self.add_tok(ret, TOP);
+            self.add_prim(ret, prim::ALL);
+        }
     }
 
     /// Unknown callee (⊤ or an opaque builtin function value): arguments
@@ -488,7 +555,7 @@ impl Model {
         }
         // `new` of a bare marker: of an unknown constructor (DECISIONS 119).
         if self.bare_marker(t) {
-            self.mark_use(t, crate::model::MARK_ESCAPE);
+            self.mark_escape_why(t, &|_| "new: of a marker".into());
             return self.construct(call, TOP);
         }
         let c = self.calls[call as usize].clone();
@@ -696,6 +763,7 @@ impl Model {
             birth_keys,
             definite,
             declared: Vec::new(),
+            reserved: Vec::new(),
             parent: None,
             ctor: Some(f),
             native_parent: None,
@@ -740,7 +808,7 @@ impl Model {
         // arguments go to the caller's unit described as the result is.
         if let (Key::Named(a), None, false) = (key, virt, self.protocol_calls.contains(&call)) {
             let plain = self.calls[call as usize].spread.is_empty();
-            if let Some(own) = plain.then(|| self.own_param_members(t)).flatten() {
+            if let Some(own) = plain.then(|| self.mcall_members(t)).flatten() {
                 if self.bind_done.insert((call, t, u32::MAX - 4)) {
                     self.mark_use(t, crate::model::MARK_READ);
                     let r = self.keyed_reach_of(t, a);
@@ -749,6 +817,26 @@ impl Model {
                 }
                 return;
             }
+        }
+        // A marker with its callers' values beside it (decision 13,
+        // DECISIONS 107, 148): the call is made on those values (below),
+        // whose contracts carry what it does to them to their units
+        // (DECISIONS 143). Its own use is a read of the method under the key,
+        // as for a parameter's own marker (DECISIONS 144), not an escape:
+        // nothing of the receiver reaches code the solve does not see. A
+        // reach marker is its own reach under every key (`marker_load`).
+        if bits == crate::model::MARK_ESCAPE
+            && t != TOP
+            && self.is_marker(t)
+            && self.beside_values(t)
+        {
+            self.mark_use(t, crate::model::MARK_READ);
+            let r = match key {
+                Key::Named(a) => self.marker_load(t, Some(a)),
+                Key::Any => self.reach_of(t),
+            };
+            self.mark_use(r, crate::model::MARK_READ);
+            return;
         }
         self.mark_use(t, bits);
         if t == TOP {
@@ -770,7 +858,16 @@ impl Model {
                 Key::Named(a) => self.marker_load(t, Some(a)),
                 Key::Any => self.reach_of(t),
             };
-            self.mark_use(m, crate::model::MARK_ESCAPE);
+            self.mark_escape_why(m, &|mm: &Self| match key {
+                Key::Named(a)
+                    if matches!(mm.atoms[a as usize].as_str(), "call" | "apply" | "bind") =>
+                {
+                    format!("method: .{}", mm.atoms[a as usize])
+                }
+                Key::Named(_) if mm.reach_marker.contains(&t) => "method: of a reach".into(),
+                Key::Named(_) => "method: of a marker that is no own parameter".into(),
+                Key::Any => "method: computed key".into(),
+            });
             // That method is an unknown function, as a plain call through a
             // marker is (`call_tok`): the arguments escape, the result is
             // unknown (DECISIONS 202).
@@ -966,6 +1063,14 @@ impl Model {
         // callbacks are not that: they never write the intrinsics, and a
         // compiled function called from unknown code sees ⊤ parameters, whose
         // writes `store_into` records.
+        if self.array_member_write.is_none()
+            && t != TOP
+            && self.tok_on_array_chain(t)
+            && self.reasons[reason as usize].starts_with(crate::gen_expr::UNMODELED_OPERAND)
+        {
+            let what = format!("reaches unmodeled code ({})", self.reasons[reason as usize]);
+            self.note_array_member_write(t, None, None, &what);
+        }
         if self.fnproto_write.is_none()
             && matches!(self.toks[t as usize], TokKind::ObjectProto)
             && self.reasons[reason as usize].starts_with(crate::gen_expr::UNMODELED_OPERAND)
@@ -1210,6 +1315,7 @@ impl Model {
             birth_keys: Vec::new(),
             definite: Vec::new(),
             declared: Vec::new(),
+            reserved: Vec::new(),
             parent: None,
             ctor: None,
             native_parent: None,
@@ -1607,8 +1713,16 @@ impl Model {
         // beyond any contract too (DECISIONS 203), its contract functions
         // included (`escape`).
         let reason = self.beyond_contract(reason);
-        self.mark_use(t, crate::model::MARK_ESCAPE);
-        self.virt_revoke(t, None);
+        self.mark_escape_why(t, &|m: &Self| match m
+            .diagnostic
+            .as_ref()
+            .and_then(|d| d.esc_ctx.last())
+        {
+            Some(o) => format!("{o} / escape: {}", m.reasons[reason as usize]),
+            None => format!("escape: {}", m.reasons[reason as usize]),
+        });
+        self.virt_escape(t);
+        self.note_inst(t, false);
         if let Some(is) = self.contract_recv.get(&t).cloned() {
             self.recv_log
                 .entry(t)
@@ -1623,7 +1737,14 @@ impl Model {
         // it and escape there (DECISIONS 111).
         if self.is_marker(t) {
             let r = self.reach_of(t);
-            self.mark_use(r, crate::model::MARK_ESCAPE);
+            self.mark_escape_why(r, &|m: &Self| match m
+                .diagnostic
+                .as_ref()
+                .and_then(|d| d.esc_ctx.last())
+            {
+                Some(o) => format!("{o} / escape: {}", m.reasons[reason as usize]),
+                None => format!("escape: {}", m.reasons[reason as usize]),
+            });
             self.mark_escaped(t, reason);
             return;
         }
@@ -1746,8 +1867,48 @@ impl Model {
 
     pub fn mark_hard(&mut self, t: Tok, kind: Hard, reason: u32) {
         self.virt_revoke(t, None);
+        // DECISIONS 234: under a computed key, a defineProperty on a
+        // prototype of the runtime, or through ⊤ (which may be one), may
+        // redefine any key there (`reshape`); a delete or `with` through ⊤
+        // may remove any key of an escaped object (`top_reshape`). Every
+        // unit sees it: the other units' objects escape into ⊤ too. On an
+        // object it may remove its own keys; on a receiver marker, those of
+        // the other units' instances of its class, which are ⊤ here.
+        if matches!(
+            kind,
+            Hard::E5DefineProperty | Hard::E7Delete | Hard::E15With
+        ) {
+            if t == TOP {
+                if kind == Hard::E5DefineProperty {
+                    self.reshape(None);
+                    self.note_shared(SharedWrite::Hard(Shared::Top, kind));
+                }
+                self.top_reshape(None);
+                self.note_shared(SharedWrite::Removed(None));
+            } else if self.is_chain_proto(t) {
+                self.reshape(None);
+            } else {
+                self.note_inst(t, true);
+            }
+        }
+        if matches!(
+            kind,
+            Hard::E5DefineProperty | Hard::E7Delete | Hard::E15With
+        ) {
+            if let Some(tm) = self.tmpl_of(t) {
+                if self.keys_unsure.insert(tm) {
+                    self.flush_present_reads(tm);
+                }
+            }
+        }
         if kind == Hard::E6SetPrototypeOf {
             self.super_relink.insert(t);
+        }
+        if matches!(
+            kind,
+            Hard::E5DefineProperty | Hard::E6SetPrototypeOf | Hard::E15With
+        ) {
+            self.note_array_member_write(t, None, None, kind.code());
         }
         if matches!(
             kind,
@@ -1766,6 +1927,11 @@ impl Model {
             crate::builtins::note_native_write(self, t, None, &what);
         }
         if t == TOP {
+            // Another unit passes the same runtime objects: an E6 on ⊤ is
+            // its E6 too (`replay_shared`); before, it reached no other unit.
+            if kind == Hard::E6SetPrototypeOf {
+                self.note_shared(SharedWrite::Hard(Shared::Top, kind));
+            }
             return;
         }
         if let Some(is) = self.contract_recv.get(&t).cloned() {
@@ -1777,7 +1943,7 @@ impl Model {
                 self.mark_hard(i, kind, reason);
             }
         }
-        self.mark_use(t, crate::model::MARK_ESCAPE);
+        self.mark_escape_why(t, &|_| "hard: reflective operation".into());
         // `Object.setPrototypeOf(Object.prototype, p)` throws unless `p` is
         // null (its [[Prototype]] already): nothing changes (immutable
         // prototype exotic object). A ⊤ target that may be it is no E6 on it.

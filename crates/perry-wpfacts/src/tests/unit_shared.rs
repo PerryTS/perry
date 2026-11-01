@@ -412,3 +412,82 @@ fn another_units_accessor_on_a_namespace_is_one_key() {
         pf.shared_out
     );
 }
+
+/// Per unit, another unit's handover of `Object.prototype` is what the
+/// whole program sees: a store or accessor into ⊤ writes its key on every
+/// builtin prototype (`builtins::native_written`), not an accessor installed
+/// on `Object.prototype` (E23, every lookup off) nor a ⊤ value stored there.
+#[test]
+fn another_units_handover_of_object_prototype_writes_only_the_keys_stored_into_top() {
+    let src = r#"
+        class A { a = 1; }
+        class M { m(o: any) { return o.a; } }
+        class N { inner: any; constructor() { this.inner = new M(); } }
+        declare const k: number;
+        declare const unknown: any;
+        function hand(): void { unknown.take(Object.prototype); }
+        function install(): void {
+          Object.defineProperty(unknown.v, "zz", { get() { return 1; } });
+        }
+        hand();
+        install();
+        const v: any = k > 1 ? new N() : "text";
+        const i = v.inner;
+        if (i) console.log(i.m(new A()));
+        "#;
+    for (mode, pf) in [("unit", units(src)), ("whole", whole(src))] {
+        let s: Vec<_> = pf.sites.iter().filter(|s| s.key == "m").collect();
+        assert!(
+            !s.is_empty()
+                && s.iter()
+                    .all(|s| !s.top && matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set)),
+            "{mode}\n{}",
+            pf.dump_text()
+        );
+    }
+}
+
+/// tsc's debug.ts: `Object.setPrototypeOf(unknown.x, p)` in one unit. ⊤ may
+/// be any runtime object, so in the whole program every other unit's reads
+/// through the builtin prototypes may find `p`'s keys. Before, an E6 on ⊤
+/// reached no other unit: the reading unit proved what the whole program
+/// could not.
+#[test]
+fn another_units_e6_on_top_reaches_this_units_reads() {
+    let probe = r#"
+        class A { a = 1; }
+        class M { m(o: any) { return o.a; } }
+        class N { inner: any; constructor() { this.inner = new M(); } }
+        declare const k: number;
+        declare const unknown: any;
+    "#;
+    let helper = format!("{probe}\nObject.setPrototypeOf(unknown.x, {{ q: 1 }});");
+    let main = format!(
+        "{probe}\nimport \"./h\";\nconst v: any = k > 1 ? new N() : \"text\";\nconst i = v.inner;\nif (i) console.log(i.m(new A()));"
+    );
+    let hs: Vec<(String, perry_hir::Module)> = [("h", &helper), ("t", &main)]
+        .iter()
+        .map(|(name, src)| {
+            let path = format!("{name}.ts");
+            let module = perry_parser::parse_typescript(src, &path).expect("parses");
+            let mut hir = perry_hir::lower_module(&module, name, &path).expect("lowers");
+            for imp in &mut hir.imports {
+                if let Some(n) = imp.source.strip_prefix("./") {
+                    imp.resolved_path = Some(format!("{n}.ts"));
+                }
+            }
+            (path, hir)
+        })
+        .collect();
+    let list: Vec<(String, &perry_hir::Module)> = hs.iter().map(|(p, h)| (p.clone(), h)).collect();
+    let cfg = FactsConfig::default();
+    let w = crate::compute(&list, &cfg);
+    let u = crate::compute_units(&list, &cfg);
+    let s = super::body_activation::stronger_sites(&u, &w);
+    assert!(
+        s.is_empty(),
+        "per unit claims more than whole-program: {s:?}\n--- per unit\n{}\n--- whole\n{}",
+        u.dump_text(),
+        w.dump_text()
+    );
+}

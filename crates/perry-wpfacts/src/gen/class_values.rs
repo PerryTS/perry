@@ -493,6 +493,7 @@ impl<'a> Gen<'a> {
             parent_links: Vec::new(),
             null_proto: false,
             declared: vec![],
+            reserved: Vec::new(),
         });
         let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
         self.stand_in_arrs.insert(display.to_string(), t);
@@ -643,6 +644,8 @@ impl<'a> Gen<'a> {
                         self.m.edge(v, n);
                     }
                 }
+                // A key the defining unit never holds is the chain's.
+                FieldView::Plain(f) if crate::units::unheld(c, f) => {}
                 FieldView::Plain(f) => {
                     let kd = &f.kind;
                     let undef = if f.definite { 0 } else { prim::UNDEF };
@@ -754,6 +757,7 @@ impl<'a> Gen<'a> {
         }
         let birth_keys = c.birth_keys.iter().map(|k| self.m.atom(k)).collect();
         let definite = c.definite.iter().map(|k| self.m.atom(k)).collect();
+        let reserved = c.reserved.iter().map(|k| self.m.atom(k)).collect();
         self.m.tmpls.push(Template {
             // DECISIONS 210: a constructor function's instances keep their
             // kind: no class id guards them, and their chain is the
@@ -771,6 +775,7 @@ impl<'a> Gen<'a> {
             birth_keys,
             definite,
             declared: Vec::new(),
+            reserved,
             parent: None,
             ctor: Some(ctor),
             native_parent: c.native_parent.clone(),
@@ -951,6 +956,11 @@ impl<'a> Gen<'a> {
             // made below.
             if let Some((_, fcs)) = c.field_fns.iter().find(|(k, _)| k == &fld.key) {
                 fn_fields.push((n, fcs));
+                continue;
+            }
+            // A key the defining unit never holds (a read names it): no own
+            // value, its read is the chain's (`units::unheld`).
+            if crate::units::unheld(c, fld) {
                 continue;
             }
             // A data field that holds only primitives (DECISIONS 74): their
@@ -1161,6 +1171,8 @@ impl<'a> Gen<'a> {
             lexical_this: false,
             no_summary: true,
             gen_step: false,
+            gen_async: false,
+            gen_reyields: false,
             captures: Vec::new(),
             forwards_super: false,
             parent: NO_FN,

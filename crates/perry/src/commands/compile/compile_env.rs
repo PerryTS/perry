@@ -46,9 +46,12 @@ pub(super) const COMPILE_ENV_VARS: &[&str] = &[
     "PERRY_DISABLE_BUFFER_FAST_PATH",
     "PERRY_DISABLE_WELL_KNOWN",
     "PERRY_DYNAMIC_ADD_PAIR_GUARD",
+    "PERRY_DYNAMIC_REACH",
+    "PERRY_DYNAMIC_REACH_MAX_WORK",
     "PERRY_ENTRY_SYMBOL",
     "PERRY_ENUM_DIAG",
     "PERRY_EVAL_CSP",
+    "PERRY_EXPORT_DEMAND",
     "PERRY_EXTRA_LINK_ARGS",
     "PERRY_FACTS_BUDGET_SECS",
     "PERRY_FACTS_ELIDE",
@@ -108,6 +111,7 @@ pub(super) const COMPILE_ENV_VARS: &[&str] = &[
     "PERRY_LD",
     "PERRY_LD64.LLD",
     "PERRY_LIB_DIR",
+    "PERRY_LINK_PAD",
     "PERRY_LINUX_ARM64_CC",
     "PERRY_LINUX_ARM64_SYSROOT",
     "PERRY_LINUX_MUSL_AARCH64_CC",
@@ -228,6 +232,8 @@ pub(super) fn compile_env_value(name: &str) -> Option<String> {
 
 #[cfg(test)]
 const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
+    ("PERRY_DYNAMIC_REACH_REPORT", "Writes the dynamic-reach report file only; no pruning decision or emitted code depends on it."),
+    ("PERRY_EXPORT_DEMAND_REPORT", "Writes the export-demand report file only; no pruning decision or emitted code depends on it."),
     ("PERRY_REALM_REACH", "Compiler-only diagnostic of source facts; changes no emitted bytes, runtime state or archive selection."),
     ("PERRY_REACH_REPORT", "Compiler-only diagnostic; bypasses object caches and does not change emitted code."),
     ("PERRY_SOURCE_NEED_REPORT", "Compiler-only retained-source census; bypasses object caches and does not change emitted code."),
@@ -389,6 +395,10 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
     (
         "PERRY_EVAL_DIAG",
         "Prints lowering diagnostics; no emitted instructions depend on the report.",
+    ),
+    (
+        "PERRY_FACTS_CONSUMED",
+        "Diagnostics/analysis-only output of the program-facts pass; emitted code does not depend on it.",
     ),
     (
         "PERRY_FACTS_DUMP",

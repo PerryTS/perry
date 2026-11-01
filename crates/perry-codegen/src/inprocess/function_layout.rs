@@ -10,6 +10,72 @@ use inkwell::AddressSpace;
 use crate::function_order::{FunctionLayout, FunctionOrder, RECORD_HOOK};
 
 pub(crate) fn apply(module: &Module<'_>, layout: &FunctionLayout, effective_target: &str) {
+    apply_order(module, layout, effective_target);
+    split_js_text(module);
+    if crate::codegen::target_os_of(effective_target) == Some("windows") {
+        tie_coff_records(module);
+    }
+}
+
+/// COFF: put each function that has a metadata record (`crate::fn_record`)
+/// in a COMDAT it keys, and its record and its info in the same COMDAT, so
+/// both are associative sections of the body's: `/OPT:REF` keeps them exactly
+/// when it keeps the body (or, for the info, when live code names it; the
+/// info names the body, so that keeps the body too). The info matters as much
+/// as the record: a private global cannot lead a COFF COMDAT, so without this
+/// every info of the unit shares one `.rdata` section, and one live info keeps
+/// every body the others name. A body already in a COMDAT keeps that one (the
+/// two then live with the COMDAT's leader, as the body does). Done here, on
+/// the final module, because a COMDAT names a global the unit defines.
+fn tie_coff_records(module: &Module<'_>) {
+    use inkwell::comdat::ComdatSelectionKind;
+    let mut global = module.get_first_global();
+    while let Some(record) = global {
+        global = record.get_next_global();
+        let name = record.get_name().to_string_lossy().into_owned();
+        let Some(body) = crate::fn_record::body_of_record_name(&name) else {
+            continue;
+        };
+        let Some(function) = module.get_function(body) else {
+            continue;
+        };
+        let body_global = function.as_global_value();
+        let comdat = body_global.get_comdat().unwrap_or_else(|| {
+            let comdat = module.get_or_insert_comdat(body);
+            comdat.set_selection_kind(ComdatSelectionKind::NoDuplicates);
+            body_global.set_comdat(comdat);
+            comdat
+        });
+        record.set_comdat(comdat);
+        if let Some(info) = module.get_global(&crate::fn_info::info_symbol(body)) {
+            if info.get_comdat().is_none() && !info.is_declaration() {
+                info.set_comdat(comdat);
+            }
+        }
+    }
+}
+
+/// Give every JS body still in the shared JS text section its own input
+/// section, `perry_js_text.fn.<symbol>`: LLVM keeps one section for an
+/// explicit section name even under function sections, and the link drops
+/// unreferenced code only a whole input section at a time. The link rule
+/// (`JS_TEXT_LINK_RULE`) gathers them back into the `perry_js_text` output
+/// section. Bodies the order list placed already have a section of their own.
+fn split_js_text(module: &Module<'_>) {
+    let js_text = crate::codegen::helpers::JS_TEXT_SECTION_NAME;
+    for f in defined_functions(module) {
+        let global = f.as_global_value();
+        if global.get_section().is_some_and(|s| s.to_bytes() == js_text.as_bytes()) {
+            let name = f.get_name().to_string_lossy();
+            global.set_section(Some(&format!(
+                "{}{name}",
+                crate::function_order::JS_FN_SECTION_PREFIX
+            )));
+        }
+    }
+}
+
+fn apply_order(module: &Module<'_>, layout: &FunctionLayout, effective_target: &str) {
     match layout {
         FunctionLayout::Default => {}
         FunctionLayout::Record => record_first_calls(module),

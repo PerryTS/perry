@@ -12,7 +12,10 @@ fn main() {
 
     println!("cargo:rerun-if-env-changed=LLVM_SYS_221_PREFIX");
     println!("cargo:rerun-if-changed=src/wasm32/target_options.cpp");
-    if std::env::var_os("CARGO_FEATURE_TARGET_WASI").is_some() {
+    println!("cargo:rerun-if-changed=src/inprocess/unique_sections.cpp");
+    let wasi = std::env::var_os("CARGO_FEATURE_TARGET_WASI").is_some();
+    let inprocess = std::env::var_os("CARGO_FEATURE_LLVM_INPROCESS").is_some();
+    if wasi || inprocess {
         let include = if let Some(prefix) = std::env::var_os("LLVM_SYS_221_PREFIX") {
             std::path::PathBuf::from(prefix).join("include")
         } else {
@@ -23,13 +26,19 @@ fn main() {
             assert!(output.status.success(), "llvm-config --includedir failed");
             std::path::PathBuf::from(String::from_utf8(output.stdout).unwrap().trim())
         };
-        cc::Build::new()
+        let mut build = cc::Build::new();
+        build
             .cpp(true)
             .include(include)
-            .file("src/wasm32/target_options.cpp")
             .flag_if_supported("-std=c++17")
-            .flag_if_supported("/std:c++17")
-            .compile("perry_wasm_target_options");
+            .flag_if_supported("/std:c++17");
+        if wasi {
+            build.file("src/wasm32/target_options.cpp");
+        }
+        if inprocess {
+            build.file("src/inprocess/unique_sections.cpp");
+        }
+        build.compile("perry_llvm_target_options");
     }
 
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {

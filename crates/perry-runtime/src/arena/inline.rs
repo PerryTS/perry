@@ -86,8 +86,46 @@ pub(crate) unsafe fn prove_inline_arena_state(state: *const InlineArenaState) ->
 /// Returns the raw pointer (the codegen writes the GcHeader at this
 /// address and the ObjectHeader at +8 — same layout the inline path
 /// produces).
+#[cfg(not(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu")))]
 #[no_mangle]
 pub extern "C" fn js_inline_arena_slow_alloc(
+    state: *mut InlineArenaState,
+    size: usize,
+    align: usize,
+) -> *mut u8 {
+    js_inline_arena_slow_alloc_body(state, size, align)
+}
+
+/// x86-64 Linux: an allocation slow path JS calls directly, entered through a
+/// shim that hands its caller's frame to the collections it can run
+/// (`gc::roots::walk_origin`). Allocation runs no JS, which is what lets it
+/// offer.
+#[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+#[unsafe(naked)]
+#[no_mangle]
+pub extern "C" fn js_inline_arena_slow_alloc(
+    state: *mut InlineArenaState,
+    size: usize,
+    align: usize,
+) -> *mut u8 {
+    crate::gc::offering_entry_asm!(3, js_inline_arena_slow_alloc_from)
+}
+
+#[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+extern "C" fn js_inline_arena_slow_alloc_from(
+    state: *mut InlineArenaState,
+    size: usize,
+    align: usize,
+    pc: usize,
+    sp: usize,
+    fp: usize,
+) -> *mut u8 {
+    let origin = crate::gc::WalkOrigin { pc, sp, fp };
+    let _origin = crate::gc::EntryWalkOrigin::enter(&origin);
+    js_inline_arena_slow_alloc_body(state, size, align)
+}
+
+fn js_inline_arena_slow_alloc_body(
     state: *mut InlineArenaState,
     size: usize,
     align: usize,

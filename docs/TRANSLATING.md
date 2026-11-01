@@ -10,12 +10,15 @@ Site layout:
   Japanese (`ja`), Korean (`ko`), Thai (`th`), Vietnamese (`vi`), and
   Simplified Chinese (`zh-CN`).
 
-The current catalogs contain a translation for every source message. Much of
-that coverage was generated automatically and has not been reviewed by a
-native speaker, so complete coverage is not a guarantee of publication-ready
-language. Review prose for technical meaning and natural phrasing rather than
-treating a non-empty `msgstr` as automatically approved. Future source edits
-can introduce empty, fuzzy, or missing entries; those fall back to English.
+Catalog coverage varies as the English source changes. Empty, fuzzy, or missing
+entries fall back to current English. A synchronized catalog therefore does not
+imply complete translation coverage. The runtime documentation refresh translates
+its changed GC, memory, types, program-facts and compatibility passages in every
+listed language; unrelated existing gaps still need review.
+
+Much of the catalog prose was generated automatically and has not been reviewed
+by a native speaker. Review technical meaning and natural phrasing rather than
+treating a non-empty `msgstr` as automatically approved.
 
 ## Translating an existing language
 

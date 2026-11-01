@@ -1309,6 +1309,17 @@ mod tests {
         }
     }
 
+    /// v9 keeps a function's records in a section of their own.
+    fn compact_gc_records_section_name() -> &'static [u8] {
+        if cfg!(target_os = "macos") {
+            b"__perry_gcrec"
+        } else if cfg!(target_os = "windows") {
+            b".pgcrec"
+        } else {
+            b".perry_gcrec"
+        }
+    }
+
     fn object_contains(object: &[u8], needle: &[u8]) -> bool {
         object.windows(needle.len()).any(|window| window == needle)
     }
@@ -1320,8 +1331,8 @@ mod tests {
             "{label} object has no compact GC-map section"
         );
         assert!(
-            object_contains(object, b"PGCM"),
-            "{label} compact GC-map section has no map payload"
+            object_contains(object, compact_gc_records_section_name()),
+            "{label} compact GC-map section has no records payload"
         );
     }
 
@@ -1331,7 +1342,7 @@ mod tests {
             "{label} shadow-stack object unexpectedly has a compact GC-map section"
         );
         assert!(
-            !object_contains(object, b"PGCM"),
+            !object_contains(object, compact_gc_records_section_name()),
             "{label} shadow-stack object unexpectedly has a compact GC-map payload"
         );
     }

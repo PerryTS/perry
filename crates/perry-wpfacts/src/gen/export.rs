@@ -304,7 +304,10 @@ impl<'a> Gen<'a> {
                 Some(tm)
                     if published.is_some_and(|p| !p.broken(&self.m.tmpls[tm as usize].display)) =>
                 {
-                    let extended = published.is_some_and(|p| p.extended(path_of(self, mi), name));
+                    let extended = published.is_some_and(|p| {
+                        p.extended(path_of(self, mi), name)
+                            || p.broken(&format!("extends {}", self.m.tmpls[tm as usize].display))
+                    });
                     self.publish_contract_class(Some((mi, a)), n, tm, extended, r);
                 }
                 _ => {
@@ -870,7 +873,7 @@ impl<'a> Gen<'a> {
         // the marker escapes (the caller's function is then unknown code),
         // they escape as before.
         let calls = self.m.marker_calls.clone();
-        for (f, i, _, call) in calls {
+        for (f, i, _, _, call) in calls {
             let top = self
                 .m
                 .marker_of
@@ -887,7 +890,16 @@ impl<'a> Gen<'a> {
                         let ru = self
                             .m
                             .reason("passed to a call of an unknown function value");
+                        if let Some(d) = self.m.diagnostic.as_mut() {
+                            d.esc_ctx.push(
+                                "contract: undescribed argument of a call through a parameter"
+                                    .into(),
+                            );
+                        }
                         self.m.sink_node(a, ru);
+                        if let Some(d) = self.m.diagnostic.as_mut() {
+                            d.esc_ctx.pop();
+                        }
                         changed = true;
                     }
                 }
@@ -1006,6 +1018,28 @@ impl<'a> Gen<'a> {
                 self.m.callable_pub.insert(f);
             }
         }
+        for t in self.closed_arg_literals() {
+            if !self.arr_ok(t) && !self.handed.contains(&t) {
+                self.handed.push(t);
+            }
+        }
+        // This unit's literals handed to another unit's closed class's
+        // constructor (`Cons::HandOver` keeps them): the argument contract
+        // describes them (`ctor_args_out`), the owner's constructor runs on
+        // their stand-ins. One the owner's census broke escapes.
+        for t in self.closed_ctor_literals() {
+            match self.m.tmpl_of(t) {
+                Some(tm) if self.literal_ok(tm) && !self.contract_class(tm) => {
+                    if !self.handed.contains(&t) {
+                        self.handed.push(t);
+                    }
+                }
+                _ => {
+                    let rb = self.m.reason(UNDESCRIBED);
+                    changed |= self.m.escape_changed(t, rb);
+                }
+            }
+        }
         changed |= self.nested_fields(r);
         // A literal of this unit passed to another unit's closed function
         // (decision 13) is described by the argument contract as a value
@@ -1020,6 +1054,11 @@ impl<'a> Gen<'a> {
                 continue;
             }
             if !self.field_fns.keys().any(|&(ft, _)| ft == t) {
+                changed |= self.note_field_fns(t);
+            }
+        }
+        for t in self.closed_ctor_literals() {
+            if self.handed.contains(&t) && !self.field_fns.keys().any(|&(ft, _)| ft == t) {
                 changed |= self.note_field_fns(t);
             }
         }
@@ -1238,6 +1277,36 @@ impl<'a> Gen<'a> {
             .filter(|&t| {
                 matches!(self.m.toks[t as usize], TokKind::Func(f, _)
                 if self.m.funcs[f as usize].func_id != u32::MAX)
+            })
+            .collect();
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
+    /// This unit's literal layouts its constructions pass to other units'
+    /// closed classes (`ctor_args_out`): what the stand-in constructors'
+    /// parameters hold that `Cons::HandOver` kept (no stand-in, no marker).
+    fn closed_ctor_literals(&self) -> Vec<Tok> {
+        let mut out: Vec<Tok> = self
+            .closed_ctors
+            .iter()
+            .flat_map(|&(_, _, ft)| self.m.funcs[self.m.tok_fn(ft) as usize].params.clone())
+            .flat_map(|p| self.m.nodes[p as usize].pts.to_sorted())
+            .filter(|&t| match self.m.toks[t as usize] {
+                TokKind::Obj(tm, _) => {
+                    !self.stand_in_cc.contains_key(&tm)
+                        && !self.m.foreign.contains_key(&tm)
+                        && !self.m.is_marker(t)
+                        && matches!(
+                            self.m.tmpls[tm as usize].kind,
+                            TmplKind::Class {
+                                literal_shape: true,
+                                ..
+                            }
+                        )
+                }
+                _ => false,
             })
             .collect();
         out.sort_unstable();
@@ -1684,8 +1753,14 @@ impl<'a> Gen<'a> {
         let mut changed = false;
         loop {
             let n0 = self.leaving.len();
+            let h0 = self.handed.len();
             let mut by: FxHashMap<TmplId, Vec<Tok>> = FxHashMap::default();
-            for &t in &self.leaving {
+            let lv: crate::pts::FxHashSet<Tok> = self.leaving.iter().copied().collect();
+            for &t in self
+                .leaving
+                .iter()
+                .chain(self.handed.iter().filter(|t| !lv.contains(t)))
+            {
                 if let Some(tm) = self.m.tmpl_of(t) {
                     by.entry(tm).or_default().push(t);
                 }
@@ -1694,12 +1769,16 @@ impl<'a> Gen<'a> {
             tms.sort_unstable();
             for tm in tms {
                 let ts = by.remove(&tm).unwrap_or_default();
+                // Only a leaving token's fields are sunk; a handed one's
+                // (`handed`) are described or read as unknown by the callee.
+                let leaves: Vec<Tok> = ts.iter().copied().filter(|t| lv.contains(t)).collect();
+                let handed_only = leaves.is_empty();
                 if !self.keyed_leave(tm) {
                     // Broken by the census: every field leaves as before.
                     self.field_layouts.retain(|&(t2, _), _| t2 != tm);
                     self.field_values.retain(|&(t2, _), _| t2 != tm);
                     self.field_tas.retain(|&(t2, _), _| t2 != tm);
-                    for &t in &ts {
+                    for &t in &leaves {
                         if !self.all_sunk.contains(&t) {
                             self.sink_all_fields(t, r);
                             changed = true;
@@ -1842,6 +1921,11 @@ impl<'a> Gen<'a> {
                             continue;
                         }
                     }
+                    // A handed literal's instance of a contract class would
+                    // leave key by key: not described here.
+                    if handed_only && !cls.is_empty() {
+                        ok = false;
+                    }
                     if ok {
                         for x in std::mem::take(&mut cls) {
                             changed |= self.fields_leave(x, r);
@@ -1861,7 +1945,7 @@ impl<'a> Gen<'a> {
                         self.field_values.insert((tm, a), ns);
                         self.field_layouts.remove(&(tm, a));
                         for (_, x) in inner {
-                            changed |= self.fields_leave(x, r);
+                            changed |= self.inner_leave(x, handed_only, r);
                         }
                         continue;
                     }
@@ -1877,7 +1961,7 @@ impl<'a> Gen<'a> {
                             self.field_prims.insert((tm, a));
                         }
                         for (_, x) in inner {
-                            changed |= self.fields_leave(x, r);
+                            changed |= self.inner_leave(x, handed_only, r);
                         }
                         continue;
                     }
@@ -1891,7 +1975,7 @@ impl<'a> Gen<'a> {
                     self.field_tas.remove(&(tm, a));
                     self.field_prims.remove(&(tm, a));
                     let ru = self.m.reason(UNDESCRIBED);
-                    for &t in &ts {
+                    for &t in &leaves {
                         if let Some(&n) = self.m.fields.get(&(t, a)) {
                             if self.sunk_field_toks.insert((t, a)) {
                                 let rf = match self.field_fns.contains_key(&(t, a)) {
@@ -1905,11 +1989,23 @@ impl<'a> Gen<'a> {
                     }
                 }
             }
-            if self.leaving.len() == n0 {
+            if self.leaving.len() == n0 && self.handed.len() == h0 {
                 break;
             }
         }
         changed
+    }
+
+    /// A literal of this unit a described field holds: it leaves with its
+    /// holder (`fields_leave`), or is handed with it (`handed`).
+    fn inner_leave(&mut self, x: Tok, handed: bool, r: u32) -> bool {
+        if !handed {
+            return self.fields_leave(x, r);
+        }
+        if !self.handed.contains(&x) {
+            self.handed.push(x);
+        }
+        false
     }
 
     /// The module an `export … from source` of module `mi` reads: the

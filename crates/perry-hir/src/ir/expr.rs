@@ -52,8 +52,9 @@ pub enum ClassFreshStaticInit {
     Block(u32),
 }
 
-/// Expression
-#[derive(Debug, Clone)]
+/// Expression. Its `Clone` (`walker/expr_clone.rs`) copies without
+/// recursion per nesting level.
+#[derive(Debug)]
 pub enum Expr {
     // Literals
     Undefined,

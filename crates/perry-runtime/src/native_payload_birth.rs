@@ -141,13 +141,10 @@ unsafe fn family_proto_id(proto: *mut ObjectHeader) -> Option<u64> {
     (!meta.is_null()).then(|| (*meta).proto_serial)
 }
 
-/// An unpublished null-prototype object, as `js_object_alloc_null_proto`
-/// initializes one before publishing its birth shape.
+/// An unpublished state record. Its null [[Prototype]] is the identity of
+/// the filled birth shape its caller stamps (`PROTO_ID_NULL`).
 unsafe fn unpublished_state(count: u32) -> *mut ObjectHeader {
-    let obj = crate::object::object_alloc_unpublished(0, count);
-    let gc = crate::gc::header_from_trusted_user_ptr(obj.cast()).cast_mut();
-    (*gc)._reserved |= crate::gc::OBJ_FLAG_NULL_PROTO;
-    obj
+    crate::object::object_alloc_unpublished(0, count)
 }
 
 /// Stamp a fresh, unobserved object with `id`.

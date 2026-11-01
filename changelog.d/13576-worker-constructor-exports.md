@@ -1,0 +1,1 @@
+Fix worker messaging constructor exports to share their original thread-realm objects across import forms and captured construction. Keep mutable global replacements separate from core-module exports while preserving explicit CommonJS overrides and named-export synchronization.

@@ -280,14 +280,19 @@ impl Model {
         // is a store under a computed key.
         let elem = self.is_elem_key(key);
         let key = if elem { Key::Any } else { key };
-        {
-            self.virt_revoke(
-                t,
-                match key {
-                    Key::Named(a) => Some(a),
-                    Key::Any => None,
-                },
-            );
+        // DECISIONS 231(c): a named store is the value of that key on the
+        // receivers of the classes `t` is or stands for (`virt_store`); a
+        // computed one opens them. A store into ⊤ may be a store into an
+        // escaped instance (`top_store`).
+        match key {
+            Key::Named(a) => self.virt_store(t, a, src),
+            Key::Any => self.virt_revoke(t, None),
+        }
+        if t == TOP {
+            self.top_store(match key {
+                Key::Named(a) => Some(a),
+                Key::Any => None,
+            });
         }
         // DECISIONS 210: a store into another unit's function (a stand-in)
         // under `prototype` (or a key that may be it) replaces the chain its
@@ -334,7 +339,12 @@ impl Model {
             true => Key::Named(self.atom(NUM_KEY)),
             false => key,
         };
-        self.note_fnproto_write(t, Some(wkey), "store");
+        // The boundary's store for other units' code is theirs: they note
+        // (and publish) what they write, as for `note_native_write` below.
+        if !theirs {
+            self.note_fnproto_write(t, Some(wkey), "store");
+            self.note_array_member_write(t, Some(wkey), Some(site), "store");
+        }
         // Explain: the first store into ⊤ under a key names its site and why
         // the receiver is ⊤.
         let what = match (self.explain && t == TOP, self.store_at) {
@@ -362,6 +372,7 @@ impl Model {
         {
             self.super_relink.insert(t);
             if let TokKind::ClassObj(tm) = self.toks[t as usize] {
+                self.cons(src, Cons::ParentGiven { of: t });
                 let parent = self.proto_node(t);
                 self.edge(src, parent);
                 let instance = self.tok(TokKind::Obj(tm, NO_CTX));
@@ -418,7 +429,7 @@ impl Model {
                 return;
             }
             if key == Key::Any {
-                self.mark_use(t, crate::model::MARK_ESCAPE);
+                self.mark_escape_why(t, &|_| "store: under a computed key".into());
             }
             if self.arg_store_done.insert((t, key, src)) {
                 // DECISIONS 187/193: kept on `t` alone, where it was made,
@@ -513,7 +524,7 @@ impl Model {
                 return;
             }
         }
-        self.mark_use(t, crate::model::MARK_ESCAPE);
+        self.mark_escape_why(t, &|_| "store: into a marker".into());
         // A parameter marker stands for another unit's value (design §11.2):
         // it has no fields in this unit. The store is its contract's escape
         // (above), and the stored value goes where the receiver's other
@@ -552,10 +563,9 @@ impl Model {
                         k != "__proto__"
                             && !facts.fields.iter().any(|f| !f.data_field && &f.key == k)
                     }
-                    "class" => facts
-                        .fields
-                        .iter()
-                        .any(|f| f.data_field && &f.key == k && (f.definite || f.declared)),
+                    "class" => facts.fields.iter().any(|f| {
+                        f.data_field && &f.key == k && (f.definite || f.declared || f.reserved)
+                    }),
                     _ => false,
                 }
             }

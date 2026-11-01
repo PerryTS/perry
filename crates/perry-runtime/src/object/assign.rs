@@ -341,10 +341,7 @@ unsafe fn positional_prototype_shape_keys(
 /// `getPrototypeOf` machinery: class-implied/per-object identities have no
 /// shape-owned pointer word and therefore refuse this fast path.
 unsafe fn positional_shape_prototype(obj: *const ObjectHeader) -> Option<Option<usize>> {
-    let header = crate::value::addr_class::try_read_gc_header(obj as usize)?;
-    if header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
-        return Some(None);
-    }
+    crate::value::addr_class::try_read_gc_header(obj as usize)?;
     let shape = super::shapes::object_shape_descriptor(obj)?;
     if shape.proto_id == super::shapes::PROTO_ID_NULL {
         return Some(None);

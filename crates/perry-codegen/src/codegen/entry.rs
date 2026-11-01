@@ -468,7 +468,7 @@ pub(super) fn compile_module_entry(
             blk.call_void("js_gc_init_with_layouts", &[(PTR, "@perry_layout_image")]);
             blk.call_void(
                 "perry_array_iteration_init",
-                &[(I32, &crate::expr::array_program_facts().to_string())],
+                &[(I32, &crate::expr::array_program_facts(&cross_module.wpfacts).to_string())],
             );
             // Design step 4: mint the program's static literal ids in this
             // agent before any module init or user code (the seed unit the
@@ -1187,6 +1187,26 @@ pub(super) fn compile_module_entry(
             if !is_esm_entry {
                 emit_annexb_global_undefined_decls(&mut ctx, hir);
             }
+            // A module that namespace-imports ITSELF is its own namespace
+            // consumer: its namespace object must exist before the body runs,
+            // because the body may hand the whole namespace to a function that
+            // enumerates it (trails' activesupport does this through
+            // `include()`). Populating at the tail left that read seeing the
+            // global's initial NaN-boxed `undefined`.
+            let self_namespace_populated = cross_module.namespace_self_import
+                && (!cross_module.namespace_entries.is_empty()
+                    || cross_module.is_dynamic_import_target)
+                && !ctx.block().is_terminated();
+            if self_namespace_populated {
+                emit_namespace_populator(
+                    &mut ctx,
+                    &cross_module.namespace_entries,
+                    namespace_key_globals,
+                    module_prefix,
+                    output_type,
+                    cross_module.namespace_adopts_cjs_exports,
+                );
+            }
             stmt::lower_top_level_stmts(&mut ctx, main_init)
                 .with_context(|| format!("lowering init statements of module '{}'", hir.name))?;
             init_static_fields_late(&mut ctx, hir)?;
@@ -1204,7 +1224,9 @@ pub(super) fn compile_module_entry(
             // is a target). The populator emits `js_create_namespace(0, ...)`
             // → an empty NaN-boxed object → stored into `@__perry_ns_<prefix>`,
             // satisfying the consumer-side extern reference.
-            if (!cross_module.namespace_entries.is_empty() || cross_module.is_dynamic_import_target)
+            if !self_namespace_populated
+                && (!cross_module.namespace_entries.is_empty()
+                    || cross_module.is_dynamic_import_target)
                 && !ctx.block().is_terminated()
             {
                 emit_namespace_populator(

@@ -68,6 +68,7 @@ const N: u32 = 16;
 
 fn ir_opts() -> CompileOptions {
     CompileOptions {
+        namespace_self_import: false,
         static_shape_ids: Vec::new(),
         program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),
@@ -246,12 +247,12 @@ fn closure_display_module() -> Module {
     m
 }
 
-/// The `func_id` of every closure entry in the name table, in emission order.
+/// The `func_id` of every closure's metadata record (`crate::fn_record`), in
+/// emission order (the order of the owner's ordinals).
 fn registered_closure_ids(ir: &str) -> Vec<u32> {
     ir.lines()
-        .find(|line| line.starts_with("@__perry_function_metadata_") && line.contains("_entries ="))
-        .into_iter()
-        .flat_map(|line| line.split("ptrtoint (ptr @perry_closure_").skip(1))
+        .filter(|line| line.starts_with("@perry_closure_") && line.contains("$fnrec = "))
+        .flat_map(|line| line.split("ptrtoint (ptr @perry_closure_").skip(1).take(1))
         .filter_map(|entry| {
             let symbol = entry.split(" to i64)").next()?;
             symbol
@@ -904,13 +905,13 @@ fn comdat_function_names_reference_images_without_local_aliases() {
     opts.target = Some("x86_64-unknown-linux-gnu".to_string());
     let llvm = String::from_utf8(compile_module(&closure_display_module(), opts).unwrap()).unwrap();
     assert!(!llvm.contains(" = internal alias i8, getelementptr"));
-    let table = llvm
+    let record = llvm
         .lines()
-        .find(|line| line.starts_with("@__perry_function_metadata_") && line.contains("_entries ="))
-        .unwrap();
+        .find(|line| line.contains("$fnrec = "))
+        .expect("a body publishing an info has a metadata record");
     assert!(
-        table.contains("$info to i64)"),
-        "the inventory references canonical infos, not a second name snapshot"
+        record.contains("$info to i64)"),
+        "the record references the canonical info, not a second name snapshot"
     );
     let info = llvm.lines().find(|line| line.contains("$info =") && line.contains("ptrtoint (ptr getelementptr (i8, ptr getelementptr (i8, ptr @perry_image_literal_")).expect("function info name points directly at its COMDAT image");
     assert!(info.contains("i64 20)"));

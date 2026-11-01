@@ -77,7 +77,7 @@ fn with_registered_name<R>(
     read: impl FnOnce(&str) -> R,
 ) -> Option<R> {
     if let Some(record) = Record::for_info(info) {
-        record.with_name(read)
+        record.with_name(info, read)
     } else {
         info_name_bytes(info)
             .and_then(decode_registered_bytes)
@@ -93,18 +93,18 @@ pub(crate) fn registered_name_string(info: &crate::closure::JsFunctionInfo) -> O
 /// precedence. Input need only outlive this call. No code-pointer token or
 /// address routing is accepted.
 pub(crate) fn register_function_name(info: &crate::closure::JsFunctionInfo, bytes: &[u8]) -> bool {
-    Record::for_info(info).is_some_and(|record| record.write_name(bytes, false))
+    Record::for_info(info).is_some_and(|record| record.write_name(info, bytes, false))
 }
 pub(crate) fn register_function_name_if_absent(info: &crate::closure::JsFunctionInfo, name: &str) {
     if let Some(record) = Record::for_info(info) {
-        record.write_name(name.as_bytes(), true);
+        record.write_name(info, name.as_bytes(), true);
     }
 }
 pub(crate) fn function_is_non_strict_ordinary_for_info(
     info: &crate::closure::JsFunctionInfo,
 ) -> bool {
     Record::for_info(info)
-        .map(|r| r.ordinary(info.flags & crate::codegen_abi::FN_NON_STRICT_ORDINARY != 0))
+        .map(|r| r.ordinary(info))
         .unwrap_or(info.flags & crate::codegen_abi::FN_NON_STRICT_ORDINARY != 0)
 }
 /// The image string a compiled body's name range is the text of
@@ -267,7 +267,7 @@ pub fn function_source_for_info_or_native(info: &crate::closure::JsFunctionInfo)
     if let Some(source) = retained_source_for_info(info) {
         return source;
     }
-    if let Some(source) = Record::for_info(info).and_then(|r| r.source()) {
+    if let Some(source) = Record::for_info(info).and_then(|r| r.source(info)) {
         return source;
     }
     let name = registered_name_string(info).unwrap_or_default();

@@ -194,13 +194,13 @@ The importing module:
 
 ## Garbage Collection
 
-Perry includes a mark-sweep garbage collector. It runs automatically when memory pressure is detected (~8MB arena blocks), but you can also trigger it manually:
+Perry uses a tracing generational collector with automatic allocation-pressure and safepoint scheduling. You can also request collection explicitly:
 
 ```typescript
 {{#include ../../examples/language/supported_features.ts:gc}}
 ```
 
-The GC uses conservative stack scanning to find roots and supports arena-allocated objects (arrays, objects) and malloc-allocated objects (strings, closures, promises, BigInts, errors).
+Copying minors, non-moving fallbacks and full sweeps cooperate with precise generated roots and runtime root scanners. Conservative stack scanning is diagnostic-only. See the [memory model](../internals/memory-model.md) for allocation and rooting details.
 
 ## JSX/TSX
 
@@ -242,9 +242,7 @@ perry compile src/main.js -o myapp
 ./myapp
 ```
 
-There are no guarantees for every dynamic JavaScript pattern (the
-[Limitations](limitations.md) still apply — no `eval`, no general dynamic
-`require()`), but most plain JavaScript projects compile and run.
+Dynamic evaluation and CommonJS have supported paths, with limits on interpreter behavior and runtime module loading. See [Limitations](limitations.md) for the current boundaries.
 
 ## Node.js Compatibility
 

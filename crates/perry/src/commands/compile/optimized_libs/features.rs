@@ -77,6 +77,36 @@ pub(crate) fn hot_diag_requested() -> bool {
         })
 }
 
+/// Run-time knobs served only by the GC diagnostics that
+/// `js_runtime_install_diagnostics` installs (perry-runtime
+/// `gc::diagnostic_hooks::install`): the per-collection `[gc-log]` line, the
+/// `PERRY_GC_DIAG` reports, and the evacuation verifier, which runs only in the
+/// diagnostic collector specialization.
+pub(crate) const GC_DIAGNOSTIC_KNOBS: &[&str] = &[
+    "PERRY_GC_DIAG",
+    "PERRY_GC_LOG",
+    "PERRY_GC_VERIFY_EVACUATION",
+];
+
+/// Install the GC diagnostics in this build: one of [`GC_DIAGNOSTIC_KNOBS`]
+/// on while compiling (by the runtime's value rules: `1`/`true`/`on`/`yes`),
+/// or `PERRY_GC_TRACE`, whose JSON is built by the same install. A program
+/// whose installs are selected from its own features (auto-optimized native
+/// links, every WASI link) otherwise installs them only for a diagnostics API,
+/// so `PERRY_GC_LOG=1 perry compile … && PERRY_GC_LOG=1 ./a.out` logs, as the
+/// instrument knobs do.
+pub(crate) fn gc_diagnostics_requested() -> bool {
+    gc_trace_requested()
+        || GC_DIAGNOSTIC_KNOBS.iter().any(|knob| {
+            std::env::var(knob).is_ok_and(|v| {
+                matches!(
+                    v.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "on" | "yes"
+                )
+            })
+        })
+}
+
 /// Whether this compile asks for `PERRY_GC_TRACE` output (the telemetry and
 /// typed-feedback JSON, which only the instrumented archives carry).
 /// Shared with the build-level no-op cache so the cache uses the same decision
@@ -474,10 +504,13 @@ pub(crate) fn auto_optimized_cross_features(
     }
     // Heap snapshots and `process.report` (~95 KB of JSON serializers plus the
     // `serde_json` pulled only by them): user APIs, always compiled into the
-    // archive and installed only for a program that references one. The GC and
+    // archive and installed only for a program that references one. The GC
+    // diagnostics ride this install and are installed when one of their knobs
+    // is set while compiling (`gc_diagnostics_requested`). The GC and
     // typed-feedback instruments are not installs at all: they exist only in
     // the instrumented archives (`instrumented_variant_requested`).
     if ctx.uses_diagnostics
+        || gc_diagnostics_requested()
         || ctx.uses_get_builtin_module
         || needs_dyn_eval
         || !ctx.native_addons.is_empty()

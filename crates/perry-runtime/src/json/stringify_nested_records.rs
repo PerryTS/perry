@@ -35,7 +35,7 @@ unsafe fn ordinary_object(bits: u64) -> Option<(*const crate::ObjectHeader, usiz
         || (header.size as usize)
             < crate::gc::GC_HEADER_SIZE + crate::object::header::meta_form_alloc_bytes(0)
         || !super::stringify_tojson_probe::object_is_plain_record(obj)
-        || crate::object::prototype_chain::object_static_prototype(obj as usize).is_some()
+        || crate::object::prototype_chain::object_static_prototype_is_linked(obj as usize)
     {
         return None;
     }

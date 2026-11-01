@@ -667,7 +667,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - os: macos-15
             target: aarch64-apple-darwin
             artifact: perry-macos-aarch64
             wasi: true
@@ -898,10 +898,16 @@ jobs:
         run: |
           ${{ runner.os == 'Windows' && 'cargo' || 'mbx' }} build --profile prod --target ${{ matrix.target }} -p perry-runtime -p perry-runtime-static
           ${{ runner.os == 'Windows' && 'cargo' || 'mbx' }} build --profile prod --target ${{ matrix.target }} -p perry-stdlib -p perry-stdlib-static
-          # The WebAssembly host archive, co-built with the archives it links
-          # beside: perry links it for a WebAssembly program and never builds
-          # it while compiling one.
-          ${{ runner.os == 'Windows' && 'cargo' || 'mbx' }} build --profile prod --target ${{ matrix.target }} -p perry -p perry-runtime-static -p perry-stdlib-static -p perry-wasm-host ${{ matrix.wasi && needs.build-wasi.outputs.enabled == 'true' && '--features perry/target-wasi' || '' }}
+
+      - name: Build WebAssembly host archive (Windows)
+        # The WebAssembly host archive, co-built with the archives it links
+        # beside: perry links it for a WebAssembly program and never builds
+        # it while compiling one. On Unix the native ext step below builds this
+        # same package set (plus every extension) in its one invocation, which
+        # is the build that ships; doing it here too cost a full second
+        # compile of perry + runtime + stdlib under a different feature union.
+        if: runner.os == 'Windows' && matrix.old_glibc_image == '' && matrix.musl_image == ''
+        run: cargo build --profile prod --target ${{ matrix.target }} -p perry -p perry-runtime-static -p perry-stdlib-static -p perry-wasm-host ${{ matrix.wasi && needs.build-wasi.outputs.enabled == 'true' && '--features perry/target-wasi' || '' }}
 
       - name: Build panic=abort runtime variant (Unix)
         # Out-of-tree installs can't rebuild the runtime, so ship the
@@ -926,24 +932,42 @@ jobs:
         # needs the prebuilt `libperry_ext_*.a` sitting next to
         # libperry_runtime.a so `perry compile` can link them without a
         # workspace checkout (see optimized_libs.rs::resolve_prebuilt_ext_libs).
-        # #7358: keep the compiler and both shipped wrapper archives in each
-        # Cargo invocation. Building an ext staticlib alone gives its bundled
-        # runtime/shared dependencies a different feature union from stdlib;
-        # the link deduper then cannot remove the whole second copy, and the
-        # HTTP accept loop reads a different async reactor from the one the JS
-        # event loop drives.
+        # #7358: build the compiler, both shipped wrapper archives and every
+        # extension in ONE Cargo invocation, so they all share one feature
+        # union. Building an ext staticlib with a different union from stdlib
+        # leaves its bundled runtime/shared dependencies a second copy the
+        # link deduper cannot remove, and the HTTP accept loop reads a
+        # different async reactor from the one the JS event loop drives.
+        # One invocation per extension (the former loop) gave every extension
+        # its own union, so each iteration recompiled perry, the runtime and
+        # stdlib (3+ h of the Intel leg) and the shipped archives came from
+        # whichever iteration wrote them last.
         # #5716: the governance inventory is the explicit shipping set; adding
         # a crate requires a recorded retain/migration decision. Best-effort
         # per crate: a wrapper that can't build on this host must not fail the
-        # whole release — packaging below ships whatever was produced.
+        # whole release — packaging below ships whatever was produced. If the
+        # combined build fails, the core set must still build on its own, and
+        # each extension is then retried alone as before.
         if: runner.os != 'Windows' && matrix.old_glibc_image == '' && matrix.musl_image == ''
         run: |
           set -euo pipefail
           governed_ext_packages=$(./scripts/release_ext_packages.sh)
+          ext_args=""
+          while IFS= read -r name; do
+            ext_args="$ext_args -p $name"
+          done <<< "$governed_ext_packages"
+          core_args="-p perry -p perry-runtime-static -p perry-stdlib-static -p perry-wasm-host ${{ matrix.wasi && needs.build-wasi.outputs.enabled == 'true' && '--features perry/target-wasi' || '' }}"
+          # shellcheck disable=SC2086 # word splitting is the point
+          if mbx build --keep-going --profile prod --target ${{ matrix.target }} $core_args $ext_args; then
+            exit 0
+          fi
+          echo "::warning::combined ext build failed; building the core alone, then each extension on its own"
+          # shellcheck disable=SC2086
+          mbx build --profile prod --target ${{ matrix.target }} $core_args
           while IFS= read -r name; do
             echo "::group::build $name"
-            mbx build --profile prod --target ${{ matrix.target }} \
-              -p perry -p perry-runtime-static -p perry-stdlib-static -p perry-wasm-host -p "$name" ${{ matrix.wasi && needs.build-wasi.outputs.enabled == 'true' && '--features perry/target-wasi' || '' }} \
+            # shellcheck disable=SC2086
+            mbx build --profile prod --target ${{ matrix.target }} $core_args -p "$name" \
               || echo "  (skipped $name — failed to build on this host)"
             echo "::endgroup::"
           done <<< "$governed_ext_packages"
@@ -1742,7 +1766,7 @@ jobs:
   #   manifest.json         (perry_version + target_triple + sha256+size per file)
   #
   # Each matrix entry runs on the natural host runner for its toolchain:
-  #   - Apple targets: macos-14 (real Xcode + SDKs)
+  #   - Apple targets: macos-15 (real Xcode + SDKs)
   #   - Android      : ubuntu-24.04 + pre-installed NDK
   #   - Windows MSVC : windows-latest (clang-cl + lib.exe)
   # — so no Linux→Apple sysroot or Linux→Windows VM dance is needed inside
@@ -1757,7 +1781,7 @@ jobs:
       matrix:
         include:
           # --- Apple, Tier-2 (stable) ---------------------------------------
-          - os: macos-14
+          - os: macos-15
             target: aarch64-apple-darwin
             ui_crate: perry-ui-macos
             ui_lib: libperry_ui_macos.a
@@ -1765,11 +1789,11 @@ jobs:
             target: x86_64-apple-darwin
             ui_crate: perry-ui-macos
             ui_lib: libperry_ui_macos.a
-          - os: macos-14
+          - os: macos-15
             target: aarch64-apple-ios
             ui_crate: perry-ui-ios
             ui_lib: libperry_ui_ios.a
-          - os: macos-14
+          - os: macos-15
             target: aarch64-apple-ios-sim
             ui_crate: perry-ui-ios
             ui_lib: libperry_ui_ios.a

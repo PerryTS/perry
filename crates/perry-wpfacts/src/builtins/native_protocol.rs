@@ -115,11 +115,18 @@ pub fn native_written(m: &Model, np: Tok, a: Atom) -> bool {
         });
     // A computed read (`STAR_KEY`) may name the key of any write.
     let any = m.atoms[a as usize] == crate::STAR_KEY;
+    // A read under a number (`NUM_KEY`, DECISIONS 217 c) names a numeric key
+    // only: an element store's, a computed one's, or a numeric name's.
+    let num_read = m.atoms[a as usize] == crate::model::NUM_KEY;
     let hit = |t: Tok| {
         m.native_writes.contains_key(&(t, None))
             || m.native_writes.contains_key(&(t, Some(a)))
             || num.is_some_and(|n| m.native_writes.contains_key(&(t, Some(n))))
             || (any && m.native_writes.keys().any(|&(w, _)| w == t))
+            || (num_read
+                && m.native_writes.keys().any(|&(w, k)| {
+                    w == t && k.is_some_and(|k| crate::solve::numeric_key(&m.atoms[k as usize]))
+                }))
     };
     let global = match &m.toks[np as usize] {
         TokKind::NativeProto(n) => ns_by_name(n).is_some(),
@@ -315,6 +322,7 @@ pub(super) fn anon_tmpl(m: &mut Model, what: &'static str) -> Tok {
         birth_keys: vec![],
         definite: vec![],
         declared: Vec::new(),
+        reserved: Vec::new(),
         parent: None,
         ctor: None,
         native_parent: None,

@@ -54,6 +54,20 @@ pub(crate) fn contracts_requested() -> bool {
 /// collection and init order resolve them, for the targets that are program
 /// modules. The HIR keeps a re-export's source as written; without this the
 /// analysis cannot link `export * as X from "./x"` to `./x`'s namespace.
+/// The modules the program loads whatever imports them (worker entries):
+/// `FactsConfig::roots`.
+pub(crate) fn module_roots(ctx: &super::CompilationContext) -> Vec<String> {
+    ctx.worker_url_entries
+        .iter()
+        .flat_map(|(lexical, canonical)| {
+            [
+                lexical.display().to_string(),
+                canonical.display().to_string(),
+            ]
+        })
+        .collect()
+}
+
 pub(crate) fn export_sources(ctx: &super::CompilationContext) -> perry_wpfacts::ExportSources {
     let mut out = perry_wpfacts::ExportSources::new();
     for (path, module) in &ctx.native_modules {
@@ -84,6 +98,7 @@ pub(crate) fn run(
     dynamic_code: bool,
     dynamic_code_reach: &perry_hir::dynamic_code::DynamicCodeReach,
     wrapped: &std::collections::HashMap<PathBuf, super::types::CjsWrapDebugSource>,
+    roots: Vec<String>,
 ) -> Option<Arc<perry_wpfacts::ProgramFacts>> {
     if !perry_wpfacts::enabled_from_env() {
         return None;
@@ -93,6 +108,7 @@ pub(crate) fn run(
     let relations =
         dump.is_some() && std::env::var("PERRY_FACTS_RELATIONS").is_ok_and(|v| v == "1");
     let cfg = perry_wpfacts::FactsConfig {
+        roots,
         diagnostics: dump.is_some(),
         relations,
         sabotage: std::env::var("PERRY_FACTS_SABOTAGE")
@@ -196,6 +212,15 @@ pub(crate) fn run(
         eprintln!(
             "perry: wpfacts: Function.prototype.bind {}",
             pf.fnproto_bind_written
+                .as_deref()
+                .map_or("unwritten".to_string(), |r| format!("may be written: {r}"))
+        );
+        eprintln!(
+            "perry: wpfacts: array @@iterator {}; array iterator next/return {}",
+            pf.array_iteration_written
+                .as_deref()
+                .map_or("unwritten".to_string(), |r| format!("may be written: {r}")),
+            pf.array_iterator_close_written
                 .as_deref()
                 .map_or("unwritten".to_string(), |r| format!("may be written: {r}"))
         );
@@ -327,6 +352,14 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
     // program (the bind gap tests that write Function.prototype must fail).
     out.fnproto_bind_unwritten =
         pf.fnproto_bind_written.is_none() || pf.sabotage.as_deref() == Some("fnproto-unwritten");
+    // `PERRY_FACTS_SABOTAGE=array-iteration-unwritten`: claim both array
+    // iteration facts for every program (the for-of gap tests that replace
+    // an iterator, `next` or `return` must fail).
+    let iteration_sabotage = pf.sabotage.as_deref() == Some("array-iteration-unwritten");
+    out.array_iteration_unwritten = iteration_sabotage
+        || (pf.interp_guard.is_none() && pf.array_iteration_written.is_none());
+    out.array_iterator_close_unwritten = iteration_sabotage
+        || (pf.interp_guard.is_none() && pf.array_iterator_close_written.is_none());
     let Some(mb) = pf.bindings_for(path) else {
         return out;
     };
@@ -428,6 +461,33 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             out.this_of.insert(*id, r);
         }
     }
+    // Holder facts: the prefix-stable classes a definite data field holds
+    // (a reserved key may still be absent: no field-class fact),
+    // when it holds nothing else but null/undefined (no ⊤, function,
+    // builtin, other primitive, literal or class without stable facts).
+    // The field kind is the join over every unit's stores, so per unit it
+    // is never stronger than whole. Interpreted code can store anything.
+    let holder_classes = |f: &perry_wpfacts::FieldFacts| -> Option<(Vec<u32>, bool)> {
+        let k = &f.kind;
+        if interp
+            || f.declared
+            || f.reserved
+            || !f.definite
+            || !f.data_field
+            || k.top
+            || k.funcs != 0
+            || k.builtin_objs != 0
+            || k.objs.is_empty()
+            || k.prims & !(prim::NULL | prim::UNDEF) != 0
+        {
+            return None;
+        }
+        let ids = pf.classes_of(k)?;
+        if ids.is_empty() || !ids.iter().all(|c| stable.contains_key(c)) {
+            return None;
+        }
+        Some((ids, k.prims != 0))
+    };
     // Step 5b: a typed body's entry check proves a class set for a
     // parameter no binding fact covers, so every prefix-stable class's
     // layout facts are visible, not only those of classes some binding holds.
@@ -435,9 +495,12 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
         let fields = t
             .fields
             .iter()
-            .filter(|f| (f.definite || f.declared) && f.data_field)
+            .filter(|f| (f.definite || f.declared || f.reserved) && f.data_field)
             .filter_map(|f| {
+                let (classes, nullable) = holder_classes(f).unwrap_or_default();
                 Some(FactsField {
+                    classes,
+                    nullable,
                     fns: bodies(&f.fns),
                     key: f.key.clone(),
                     slot: f.slot?,
@@ -446,6 +509,7 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
                     ta_stable: f.ta_stable,
                     ta_kind: f.ta_kind,
                     declared: f.declared,
+                    reserved: f.reserved,
                 })
             })
             .collect();
@@ -495,7 +559,63 @@ mod facts_mode_tests {
 #[path = "program_facts/outlined_tests.rs"]
 mod outlined_tests;
 
+#[cfg(test)]
+#[path = "program_facts/literal_chunks_tests.rs"]
+mod literal_chunks_tests;
+
 /// Borrow ordinary modules; reconstruct only outlined module entries.
+/// Dead-code elimination (`dynamic_reach`): the dynamic `import()` /
+/// `require(expr)` specifiers a body that can run holds, by the whole
+/// program's activation pass over `modules`, as (module path, specifier).
+/// `None` when facts are off or past their bounds (every site may run).
+pub(crate) fn live_dynamic_imports(
+    modules: &BTreeMap<PathBuf, perry_hir::Module>,
+    export_sources: perry_wpfacts::ExportSources,
+    dynamic_code: bool,
+    dynamic_code_reach: &perry_hir::dynamic_code::DynamicCodeReach,
+    roots: Vec<String>,
+) -> Option<std::collections::BTreeSet<(String, String)>> {
+    if !perry_wpfacts::enabled_from_env() {
+        return None;
+    }
+    let cfg = perry_wpfacts::FactsConfig {
+        roots,
+        budget_secs: std::env::var("PERRY_FACTS_BUDGET_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|&s| s != 0),
+        // The activation pass alone, over the whole program: a larger bound
+        // than the per-unit facts' (the Supabase CLI needs ~20x the default).
+        max_work: Some(
+            std::env::var("PERRY_DYNAMIC_REACH_MAX_WORK")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(DEFAULT_MAX_WORK * 100),
+        ),
+        max_pts: Some(
+            std::env::var("PERRY_FACTS_MAX_PTS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(400_000_000),
+        ),
+        export_sources,
+        dynamic_code_reach: dynamic_code_reach.clone(),
+        dynamic_code: dynamic_code.then(|| {
+            "E14 the program can run interpreted code (deferred new Function/eval or node:vm)"
+                .into()
+        }),
+        unit: false,
+        jobs: perry_codegen::workers::unit_workers(),
+        ..Default::default()
+    };
+    let inputs = facts_inputs(modules);
+    let list: Vec<(String, &perry_hir::Module)> = inputs
+        .iter()
+        .map(|(p, m)| (p.clone(), m.as_ref()))
+        .collect();
+    perry_wpfacts::live_dynamic_imports(&list, &cfg)
+}
+
 fn facts_inputs(
     modules: &BTreeMap<PathBuf, perry_hir::Module>,
 ) -> Vec<(String, std::borrow::Cow<'_, perry_hir::Module>)> {

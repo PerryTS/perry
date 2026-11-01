@@ -431,8 +431,9 @@ pub unsafe extern "C" fn perry_component_host_dispose(
                     drop(unsafe { (&mut *bridge.pending.get()).take() });
                     if let Some(driver) = &bridge.driver {
                         let before = bridge.async_replies.failure_serial();
-                        driver.dispose();
+                        let result = driver.dispose();
                         disposed = true;
+                        result?;
                         ensure!(
                             before == bridge.async_replies.failure_serial(),
                             "component driver disposal callback failed"

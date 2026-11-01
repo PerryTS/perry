@@ -32,7 +32,7 @@ use crate::strings::StringPool;
 pub const DESC_TY: &str =
     "{ i32, i16, i8, i8, i32, i32, i64, ptr, ptr, i32, i32, ptr, i32, i32, ptr, i32, i32, ptr, i64, [32 x i8] }";
 pub(crate) mod methods;
-/// `%PerryLayoutKey`: atom, slot, attrs, pad, off (16 bytes).
+/// `%PerryLayoutKey`: atom, slot, attrs, pad, off (16 bytes on LP64, 12 on ILP32).
 pub const KEY_TY: &str = "{ ptr, i32, i8, i8, i16 }";
 
 /// The descriptor tail after `image_keys`: `gc_header_word` for a layout of `slot_count` slots.
@@ -810,7 +810,9 @@ fn emit_desc(
     let word = crate::layout_ordinals::descriptor_word(
         desc_name,
         format!("{keys:?}|{family}|{slot_count}|{class:?}"),
-        0,
+        // A family the descriptor links to null (`require.cache`) carries
+        // the null identity, which only a null-kind word names.
+        if proto == 1 { 2 } else { 0 },
         true,
         // Both nominal and admitted classless families carry their DPA word.
         true,
