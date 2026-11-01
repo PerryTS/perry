@@ -700,7 +700,7 @@ impl Model {
     pub fn is_elem_array(&self, t: Tok) -> bool {
         matches!(self.toks[t as usize], TokKind::Obj(tm, _)
             if matches!(self.tmpls[tm as usize].kind,
-                TmplKind::Arr { .. } | TmplKind::BObj { what: "Collection", .. }))
+                TmplKind::Arr { .. } | TmplKind::Args { .. } | TmplKind::BObj { what: "Collection", .. }))
             && !self.is_marker(t)
     }
 
@@ -2055,6 +2055,7 @@ impl Model {
                 TmplKind::Lit { .. } => "literal",
                 TmplKind::FnInst { .. } => "fn instance",
                 TmplKind::Arr { .. } => "array",
+                TmplKind::Args { .. } => "arguments object",
                 TmplKind::ObjCreate { .. } => "Object.create object",
                 TmplKind::BObj { .. } => "builtin object",
             },

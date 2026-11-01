@@ -381,8 +381,9 @@ impl Model {
             self.with_b(|m| builtins::intrinsic_proto_own(m, key, dst));
         }
         // Element reads of array-likes stop at their own elements: their
-        // builtin prototype members are approximated by `tok_load`.
-        if key == Key::Any && self.is_array_like(t) {
+        // builtin prototype members are approximated by `tok_load`. An
+        // `arguments` object's chain is an ordinary one (`Object.prototype`).
+        if key == Key::Any && self.is_array_like(t) && !self.is_args(t) {
             return;
         }
         // The prototype chain's values, shared by every receiver of `t`.
@@ -714,7 +715,7 @@ impl Model {
     pub fn is_array_like(&self, t: Tok) -> bool {
         match self.toks[t as usize] {
             TokKind::Obj(tm, _) => match self.tmpls[tm as usize].kind {
-                TmplKind::Arr { .. } => true,
+                TmplKind::Arr { .. } | TmplKind::Args { .. } => true,
                 TmplKind::BObj { .. } => true,
                 _ => false,
             },
@@ -728,6 +729,12 @@ impl Model {
     /// end of the element range (a new slot reads `undefined`, which every
     /// element read already has). Neither touches a field, so `length` never
     /// joins the elements (`all_fields`) nor reads them (`field_any`).
+    /// A function's `arguments` object (`TmplKind::Args`).
+    pub fn is_args(&self, t: Tok) -> bool {
+        matches!(self.toks[t as usize], TokKind::Obj(tm, _)
+            if matches!(self.tmpls[tm as usize].kind, TmplKind::Args { .. }))
+    }
+
     pub fn is_array_length(&self, t: Tok, key: Key) -> bool {
         matches!(key, Key::Named(a) if self.atoms[a as usize] == "length")
             && matches!(self.toks[t as usize], TokKind::Obj(tm, _)

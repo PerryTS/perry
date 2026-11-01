@@ -429,6 +429,7 @@ impl Model {
                 TmplKind::FnInst { func } => format!("fninst {func}"),
                 TmplKind::ObjCreate { .. } => "objcreate -".into(),
                 TmplKind::Arr { .. } => "arr -".into(),
+                TmplKind::Args { .. } => "args -".into(),
                 TmplKind::BObj { what, .. } => format!("bobj {what}"),
             };
             out.push(format!(
