@@ -1413,11 +1413,13 @@ pub struct Model {
     /// setter, a read-only value), so the own key no longer shadows it.
     pub reshaped_keys: crate::pts::FxHashSet<Atom>,
     pub reshaped_any: bool,
-    /// DECISIONS 234: reads of an own definite data key that skipped the
+    /// DECISIONS 234: lookups of an own definite data key that skipped the
     /// builtin members of the chain (`Model::shadows`), by receiver: (key,
-    /// destination, whether the receiver's own builtin members were
-    /// skipped too). Once the key no longer shadows, the read takes them.
-    pub shadowed: FxHashMap<Tok, Vec<(Atom, NodeId, bool)>>,
+    /// the read (`ChainAct::Load`, its destination) or the method call
+    /// (`ChainAct::Call`) that looked it up, whether the receiver's own
+    /// builtin members were skipped too). Once the key no longer shadows,
+    /// the lookup takes them.
+    pub shadowed: FxHashMap<Tok, Vec<(Atom, ChainAct, bool)>>,
     /// DECISIONS 234: keys a delete or defineProperty through ⊤ may have
     /// removed or redefined (`top_reshaped_any`: every key), in any unit
     /// (`SharedWrite::Hard(Shared::Top, ..)`). ⊤ denotes escaped objects

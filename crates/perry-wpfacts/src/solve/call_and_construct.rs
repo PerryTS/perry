@@ -894,22 +894,21 @@ impl Model {
         }
         // A receiver token / marker is no builtin object: its methods are
         // its classes' (`virt_protos`).
-        if !self.virt_protos.contains_key(&t) {
-            self.with_b(|m| builtins::own_method(m, t, key, call));
+        let own_members = !self.virt_protos.contains_key(&t);
+        // DECISIONS 234: the callee lookup is a [[Get]]. A key every object
+        // `t` denotes holds as an own data property stops it at the object,
+        // as for a read: the call binds the program prototypes' methods (a
+        // superset), not the builtin members, which it takes once the key
+        // no longer shadows them (`flush_shadowed`).
+        match self.shadow_key(t, key) {
+            Some(a) => {
+                let cv = self.cv_of(t, key, false);
+                self.bind_via(cv, call, t);
+                self.note_shadowed(t, a, ChainAct::Call(call), own_members);
+            }
+            None => self.builtin_members(t, key, ChainAct::Call(call), own_members),
         }
-        // Methods on the chain (shared), builtin prototype methods, and
-        // getters returning functions (per receiver, accessor keys only).
-        let cv = self.cv(t, key);
-        self.bind_via(cv, call, t);
-        let cp = self.cp(t);
-        self.cons(
-            cp,
-            Cons::ProtoMethods {
-                origin: t,
-                key,
-                call,
-            },
-        );
+        // Getters returning functions (per receiver, accessor keys only).
         self.accessor_walk(t, t, key, ChainAct::Call(call));
     }
 
