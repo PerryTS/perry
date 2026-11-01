@@ -1,0 +1,23 @@
+package perry:guest-sync-imports@1.0.0;
+
+interface foreign {
+    resource item {
+        constructor(value: u32);
+        read: func() -> u32;
+    }
+    seal: func(id: u32);
+    loan: async func(id: u32, value: borrow<item>) -> u32;
+    exchange: async func(id: u32, value: own<item>) -> own<item>;
+}
+interface api {
+    use foreign.{item};
+    record reply { owner: own<item>, context: u32, text: string, bytes: list<u8> }
+    type pending = future<reply>;
+    record counts { completed: u32, failed: u32, blocked: u32, guards: u32 }
+    make: func(id: u32) -> pending;
+    make-resource: func(value: u32) -> own<item>;
+    resource-value: func(value: borrow<item>) -> u32;
+    guarded: func(value: borrow<item>) -> u32;
+    checkpoint: func() -> counts;
+}
+world plugin { import foreign; export api; }
