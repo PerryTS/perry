@@ -3,6 +3,7 @@
 mod accessor_keys;
 mod array_ctor;
 mod array_elements;
+mod array_iteration;
 mod array_length;
 mod array_named_keys;
 mod array_numeric;

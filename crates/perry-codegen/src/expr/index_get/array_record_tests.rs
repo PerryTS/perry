@@ -809,3 +809,108 @@ fn array_stack_entry_owns_acquisition_without_a_second_dispatch() {
         "GetIterator must not run a second time"
     );
 }
+
+// #13645: with no `return` on the array iterator chain proven, the array
+// arm of IteratorClose is emitted as nothing; unproven, the runtime calls
+// stay. Each assertion is paired with the unproven control.
+fn ir_proven(proven: bool, expr: Expr) -> String {
+    use crate::codegen::{ElisionFacts, ProgramFactsView};
+    let mut m = Module::new("array_record_unsigned");
+    m.functions.push(Function {
+        id: 1,
+        name: "read".into(),
+        type_params: vec![],
+        params: vec![Param {
+            id: 1,
+            name: "array".into(),
+            ty: Type::Array(Box::new(Type::Any)),
+            default: None,
+            decorators: vec![],
+            is_rest: false,
+            arguments_object: None,
+        }],
+        return_type: Type::Any,
+        body: vec![Stmt::Return(Some(expr))],
+        is_async: false,
+        is_generator: false,
+        is_strict: true,
+        is_exported: true,
+        captures: vec![],
+        decorators: vec![],
+        was_plain_async: false,
+        was_unrolled: false,
+    });
+    let elision = ElisionFacts {
+        array_iterator_close_unwritten: proven,
+        ..Default::default()
+    };
+    String::from_utf8(
+        compile_module(
+            &m,
+            CompileOptions {
+                emit_ir_only: true,
+                program_facts: ProgramFactsView {
+                    elision: std::sync::Arc::new(elision),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+        .unwrap(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn proven_array_iterator_close_emits_no_close_call() {
+    let close = || {
+        runtime(
+            "arrayRecordClose",
+            vec![
+                Expr::LocalGet(1),
+                Expr::Number(0.0),
+                Expr::Bool(false),
+                Expr::Undefined,
+                Expr::Bool(false),
+            ],
+        )
+    };
+    let absent = || runtime("arrayRecordCloseAbsent", vec![]);
+    for expr in [close, absent] {
+        let unproven = ir_proven(false, expr());
+        let proven = ir_proven(true, expr());
+        assert!(
+            unproven.contains("call double @js_array_record_close(")
+                || unproven.contains("call i32 @js_array_record_close_absent("),
+            "control keeps the runtime call: {unproven}"
+        );
+        assert!(
+            !proven.contains("call double @js_array_record_close(")
+                && !proven.contains("call i32 @js_array_record_close_absent("),
+            "{proven}"
+        );
+    }
+}
+
+#[test]
+fn proven_array_iterator_close_calls_the_runtime_only_for_the_protocol_arm() {
+    let finish = || {
+        runtime(
+            "arrayRecordFinish",
+            vec![
+                Expr::Bool(false),
+                Expr::LocalGet(1),
+                Expr::Number(0.0),
+                Expr::Undefined,
+                Expr::Bool(true),
+                Expr::Undefined,
+                Expr::Bool(false),
+            ],
+        )
+    };
+    let unproven = ir_proven(false, finish());
+    let proven = ir_proven(true, finish());
+    assert!(!unproven.contains("arec.close"), "{unproven}");
+    assert!(proven.contains("arec.close") && proven.contains("arec.closed"), "{proven}");
+    assert_eq!(proven.matches("call double @js_array_record_finish(").count(), 1, "{proven}");
+}
