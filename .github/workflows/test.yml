@@ -6569,7 +6569,10 @@ jobs:
           set -euo pipefail
           cargo test --locked --profile perry-dev -p perry-codegen --lib inprocess::loop_interrupt::tests -- --test-threads=1 \
             2>&1 | tee target/wasi-host-qualification/loop-interrupt-units.log
-          grep -F 'test result: ok. 5 passed; 0 failed;' target/wasi-host-qualification/loop-interrupt-units.log
+          # The terminated-input regression uses Unix process isolation.
+          expected=5
+          [[ "$RUNNER_OS" != Windows ]] || expected=4
+          grep -F "test result: ok. ${expected} passed; 0 failed;" target/wasi-host-qualification/loop-interrupt-units.log
       - name: Verify Windows helper linkage and linked image sections
         run: |
           set -euo pipefail

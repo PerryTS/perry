@@ -1,6 +1,6 @@
 //! Inspect the binary's external contract, rather than scanning embedded text.
 //! Runtime validation/execution is a separate acceptance step.
-use wasmparser::{ComponentExternalKind, ComponentTypeRef, Encoding, Parser, Payload};
+use wasmparser::{ComponentExternalKind, ComponentTypeRef, Encoding, Parser, Payload, TypeBounds};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
@@ -13,6 +13,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         Vec::new()
     };
+    let mut types = Vec::new();
+    required.retain(|arg| {
+        if let Some(name) = arg.strip_prefix("--type-import=") {
+            types.push(name.to_string());
+            false
+        } else {
+            true
+        }
+    });
+    if types
+        .iter()
+        .any(|name| name.is_empty() || name.starts_with("wasi:"))
+    {
+        return Err("invalid declared application type import".into());
+    }
     if (reactor && required.is_empty()) || (!reactor && args.len() != 1) {
         return Err("invalid P3 contract profile arguments".into());
     }
@@ -34,6 +49,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 for import in section {
                     let import = import?;
                     let name = import.name.name;
+                    // A typed reactor can also import the selected world's
+                    // concrete structural types. Require exact declarations
+                    // and equality bounds; no unlisted type or resource import
+                    // can bypass the WASI version/interface checks below.
+                    if reactor && matches!(import.ty, ComponentTypeRef::Type(TypeBounds::Eq(_))) {
+                        if let Some(index) = types.iter().position(|ty| ty == name) {
+                            types.remove(index);
+                            println!("declared application type {name}");
+                            continue;
+                        }
+                    }
                     if !matches!(import.ty, ComponentTypeRef::Instance(_))
                         || !name.starts_with("wasi:")
                         || !name.ends_with("@0.3.0")
@@ -67,8 +93,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         || (reactor && command)
         || !random
         || !required.is_empty()
+        || !types.is_empty()
     {
-        return Err(format!("incomplete P3 entropy command: depth={depth}, imports={imports}, run={command}, random={random}").into());
+        return Err(format!("incomplete P3 contract: depth={depth}, imports={imports}, run={command}, random={random}, missing_exports={required:?}, missing_types={types:?}").into());
     }
     if reactor {
         println!("PASS: external WASI 0.3-only reactor contract and required function exports");

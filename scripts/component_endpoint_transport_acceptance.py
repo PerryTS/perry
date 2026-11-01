@@ -72,9 +72,15 @@ def main():
                              "-Wl,--no-whole-archive", archive, "-lsetjmp", "-Wl,--export=cabi_realloc",
                              "-Wl,--stack-first", "-Wl,-z,stack-size=8388608", "-Wl,--fatal-warnings", "-o", component])
         components.append(component)
+        if kind == "plain":
+            run("reject-undeclared-types", [args.p3_contract.resolve(), "--reactor", component,
+                                            "pass-future"], expected=1)
+            assert "non-P3 external import: payload" in (out / "reject-undeclared-types.log").read_text()
         run(kind + "-contract", [args.p3_contract.resolve(), "--reactor", component,
                                  "pass-future", "pass-stream", "pass-pair", "character", "empty",
-                                 "units", "bytes", "nested-value", "dispose", "forget", "checkpoint"])
+                                 "units", "bytes", "nested-value", "dispose", "forget", "checkpoint",
+                                 "--type-import=payload", "--type-import=pending",
+                                 "--type-import=values", "--type-import=pair"])
         run(kind + "-execute", [binaries / ("guest_endpoint_transport" + suffix), guest / "world.wit", component])
         assert marker in (out / (kind + "-execute.log")).read_text()
         if kind == "instrumented":
