@@ -534,7 +534,7 @@ pub(super) fn fn_contract_of(
             .filter(|(g2, _)| *g2 == f)
             .map(|&(_, n)| n)
             .collect();
-    let d = describe_nodes(
+    let mut d = describe_nodes(
         g,
         templates,
         f,
@@ -543,6 +543,23 @@ pub(super) fn fn_contract_of(
         layouts_out,
         open_tm,
     );
+    // A ⊤ result has one spelling: `ret: None` with `ret_unknown` and every
+    // primitive kind, as `fn_named` describes one. A reader takes a result named
+    // by no contract (`None`) and one whose only member is ⊤ (`Some([])`,
+    // unknown, every kind) the same way (`Gen::fill_described`: ⊤ and every
+    // kind), but the two digests differ, and which one a solve publishes
+    // depends on the order its escapes ran (`ret_top` holds only a result
+    // that escaped before its function became a contract function). Readers
+    // embed the contract in what they publish, so its owner solved again and
+    // published the other spelling: oxfmt's esbuild `__commonJS` closures in
+    // the Supabase CLI alternated between the two every round, forever.
+    if d.layouts.as_ref().is_some_and(|l| l.is_empty()) && d.unknown && d.prim == model::prim::ALL {
+        d.layouts = None;
+    }
+    if d.layouts.is_none() {
+        d.unknown = true;
+        d.prim = model::prim::ALL;
+    }
     // DECISIONS 140: the calls the body makes through a parameter marker,
     // each argument described as the result is.
     let mut param_calls: Vec<units::ParamCall> = Vec::new();
