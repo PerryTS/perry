@@ -464,7 +464,9 @@ impl<'a> Gen<'a> {
         // functions.
         if !(value.builtins.is_empty()
             && value.arrays.is_empty()
+            && value.made_arrays.is_empty()
             && value.boxes.is_empty()
+            && value.arrayboxes.is_empty()
             && value.indexed_owners.is_empty()
             && value.fns.is_empty())
         {

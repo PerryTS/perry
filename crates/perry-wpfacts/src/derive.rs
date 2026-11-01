@@ -73,6 +73,10 @@ impl KindFact {
 #[derive(Clone, Debug, PartialEq, Hash)]
 pub struct FieldFacts {
     pub key: String,
+    /// `key` is a class private field's storage key (`Model::private_atom`):
+    /// a key apart from the public key of its spelling. A row is named by
+    /// both (`FieldFacts::is`).
+    pub private: bool,
     pub slot: Option<u32>,
     pub definite: bool,
     /// A declared key (`Template::declared`): `slot` is known, presence is
@@ -126,8 +130,11 @@ pub struct TemplateFacts {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Verdict {
-    /// Immutable own length of an exclusively primitive String receiver.
-    StringLength,
+    /// `length` of receivers that are each an Array exotic object or a
+    /// primitive String: an own data property that is never configurable
+    /// (ECMA-262 10.4.2, 10.4.3), so neither a delete, `defineProperty`
+    /// nor a prototype makes it an accessor or removes it.
+    OwnLength,
     T0Mono,
     T0Set,
     /// Proven in the typed body behind the entry guard on the receiver
@@ -200,6 +207,12 @@ impl KindFact {
 }
 
 impl FieldFacts {
+    /// This row describes key `key`, private (`Model::private_atom`) or
+    /// not: a public key spelled like a private storage key is another key.
+    pub fn is(&self, key: &str, private: bool) -> bool {
+        self.key == key && self.private == private
+    }
+
     /// The join of two descriptions of one field (by `key`): a claim holds
     /// only if both make it; a slot or element kind they disagree on is
     /// none; the writers and the kind grow.
@@ -252,7 +265,7 @@ impl TemplateFacts {
         self.statics.retain(|k| o.statics.contains(k));
         self.sabotaged |= o.sabotaged;
         for f in self.fields.iter_mut() {
-            match o.fields.iter().find(|g| g.key == f.key) {
+            match o.fields.iter().find(|g| g.is(&f.key, f.private)) {
                 Some(g) => f.join(g),
                 None => {
                     f.definite = false;
@@ -261,7 +274,7 @@ impl TemplateFacts {
             }
         }
         for g in &o.fields {
-            if !self.fields.iter().any(|f| f.key == g.key) {
+            if !self.fields.iter().any(|f| f.is(&g.key, g.private)) {
                 let mut g = g.clone();
                 g.definite = false;
                 g.reserved = false;
@@ -272,6 +285,12 @@ impl TemplateFacts {
 }
 
 pub fn derive(g: &mut Gen) -> (Vec<TemplateFacts>, Vec<SiteFacts>) {
+    let claimed: Vec<Option<Vec<Atom>>> = (0..g.m.tmpls.len() as TmplId)
+        .map(|tm| {
+            let own = g.m.tmpls[tm as usize].kind.is_fact_unit() && !g.m.foreign.contains_key(&tm);
+            own.then(|| g.claimed_private_atoms(tm)).flatten()
+        })
+        .collect();
     let m = &mut g.m;
     // A program-wide kill only for what the compiled program itself does:
     // an accessor it installs on `Object.prototype` (E23, any key). Dynamic
@@ -300,7 +319,13 @@ pub fn derive(g: &mut Gen) -> (Vec<TemplateFacts>, Vec<SiteFacts>) {
             });
             continue;
         }
-        let tf = template_facts(m, tm, &global, &objproto_hard);
+        let tf = template_facts(
+            m,
+            tm,
+            &global,
+            &objproto_hard,
+            claimed[tm as usize].as_deref(),
+        );
         out.push(tf);
     }
     let sites = site_facts(g, &out);
@@ -382,6 +407,7 @@ fn template_facts(
     tm: TmplId,
     global: &Option<String>,
     objproto_hard: &Option<String>,
+    claimed: Option<&[Atom]>,
 ) -> TemplateFacts {
     // The template's own token and every birth-site token: one layout.
     m.tok(TokKind::Obj(tm, NO_CTX));
@@ -490,6 +516,11 @@ fn template_facts(
     let mut fields = Vec::new();
     let mut slot_ok = true;
     let mut keys: Vec<Atom> = tpl.birth_keys.clone();
+    // The private fields construction claims after the birth keys, each at
+    // the next inline slot (`Gen::claimed_private_atoms`): present wherever
+    // a read finds a value (a read before the claim throws the brand check).
+    let claimed = claimed.unwrap_or_default();
+    keys.extend(claimed.iter().copied());
     // Fields written later (non-birth) are reported too.
     for t in &ts {
         if let Some(fk) = m.field_keys.get(t) {
@@ -503,8 +534,9 @@ fn template_facts(
     let mut fixed_layout = prefix_stable && adds == 0;
     for (i, &a) in keys.iter().enumerate() {
         let birth = i < tpl.birth_keys.len();
+        let claim = !birth && i < tpl.birth_keys.len() + claimed.len();
         let is_accessor = accessor_keys.contains(&a);
-        let definite = birth && tpl.definite.contains(&a) && !is_accessor;
+        let definite = (birth && tpl.definite.contains(&a) || claim) && !is_accessor;
         let declared = birth && tpl.declared.contains(&a) && !is_accessor;
         let reserved = birth && tpl.reserved.contains(&a) && !definite && !is_accessor;
         if birth && !definite && !declared && !reserved {
@@ -518,7 +550,8 @@ fn template_facts(
         if reserved {
             fixed_layout = false;
         }
-        let slot = (birth && (definite || declared || reserved) && slot_ok).then_some(i as u32);
+        let slot =
+            ((birth || claim) && (definite || declared || reserved) && slot_ok).then_some(i as u32);
         let w = m.writers.get(&(tm, a)).cloned().unwrap_or_default();
         let any = m.any_writers.get(&tm).cloned().unwrap_or_default();
         let readonly = escape.is_none()
@@ -546,6 +579,7 @@ fn template_facts(
             ta_stable,
             ta_kind,
             key: m.atoms[a as usize].clone(),
+            private: m.is_private_atom(a),
             slot,
             definite,
             declared,
@@ -723,7 +757,7 @@ fn field_kind(m: &Model, ts: &[Tok], a: Atom, definite: bool) -> KindFact {
 /// DEC220: an own-slot read depends on its receiver's objects. Another
 /// birth sharing their layout may escape or be reconfigured independently.
 /// Layout contracts and all chain/accessor obligations remain template-wide.
-fn private_own_slot(m: &Model, tf: &TemplateFacts, t: Tok, key: &str) -> Option<u32> {
+fn private_own_slot(m: &Model, tf: &TemplateFacts, t: Tok, key: &str, a: Atom) -> Option<u32> {
     if m.foreign.contains_key(&tf.id)
         || m.is_escaped(t)
         || m.hard.contains_key(&t)
@@ -766,7 +800,7 @@ fn private_own_slot(m: &Model, tf: &TemplateFacts, t: Tok, key: &str) -> Option<
     }
     tf.fields
         .iter()
-        .find(|f| f.key == key && f.definite && f.data_field)
+        .find(|f| f.is(key, m.is_private_atom(a)) && f.definite && f.data_field)
         .and_then(|f| f.slot)
 }
 
@@ -937,6 +971,70 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
 /// is a compiled body. Several bodies are fine: each runs in its own form.
 /// A call through a value has the callee node's values as its set.
 #[allow(clippy::too_many_arguments)]
+/// The receivers of an `OwnLength` read: every token an Array exotic
+/// ([`exact_array`]) or a closed marker (its callers' values are beside
+/// it), every primitive a String, and at least one receiver.
+fn own_length(m: &Model, toks: &[Tok], prim: u16) -> Option<Vec<String>> {
+    if prim != 0 && prim != crate::model::prim::STR {
+        return None;
+    }
+    let mut receivers = Vec::new();
+    for &t in toks {
+        if m.closed_marker(t) {
+            continue;
+        }
+        if !exact_array(m, t) {
+            return None;
+        }
+        receivers.push(m.tmpls[m.tmpl_of(t)? as usize].display.clone());
+    }
+    if prim != 0 {
+        receivers.push("primitive:string".into());
+    }
+    receivers.sort();
+    receivers.dedup();
+    (!receivers.is_empty()).then_some(receivers)
+}
+
+/// Is every value of token `t` an Array exotic object (ECMA-262 10.4.2)?
+/// An array site of this unit (a literal, a rest parameter, an ArrayCreate
+/// result), an own-keys result (`keys`, `arraybox`), or another unit's
+/// array its owner publishes as an Array (`ValueContract::arrays`,
+/// `arrayboxes`; one it publishes as made, `made_arrays`, has ⊤ for its
+/// constructor). Not the
+/// `arguments` object (`TmplKind::Args`), not a container of primitives,
+/// not a marker. An array made with ArraySpeciesCreate (10.4.2.3) is one
+/// only while the constructor the algorithm takes (`Template::species`: the
+/// receivers' `constructor` and its `@@species`, as the solve looked them
+/// up) is `%Array%` or no object: `undefined` (or a `null` species) is an
+/// ArrayCreate, any other primitive throws before an array is made.
+pub(crate) fn exact_array(m: &Model, t: Tok) -> bool {
+    if m.is_marker(t) {
+        return false;
+    }
+    let TokKind::Obj(tm, _) = m.toks[t as usize] else {
+        return false;
+    };
+    let tpl = &m.tmpls[tm as usize];
+    match tpl.kind {
+        TmplKind::Arr { .. } => {}
+        TmplKind::BObj {
+            what: "keys" | "arraybox",
+            ..
+        } => return true,
+        _ => return false,
+    }
+    let Some(c) = tpl.species else {
+        return true;
+    };
+    let nd = &m.nodes[c as usize];
+    let array = m
+        .tok_index
+        .get(&TokKind::Builtin(crate::model::BuiltinNs::Array))
+        .copied();
+    nd.pts.to_sorted().into_iter().all(|v| Some(v) == array)
+}
+
 fn judge(
     m: &Model,
     by_id: &FxHashMap<TmplId, &TemplateFacts>,
@@ -961,21 +1059,19 @@ fn judge(
             ),
         };
     }
-    // String boxing creates a non-configurable own length property. Its
-    // value is the published UTF-16 count; prototypes cannot override it.
-    // Keep this native primitive certificate distinct from layout/body T0.
-    if !s.is_call
-        && key == "length"
-        && prim == crate::model::prim::STR
-        && toks.iter().all(|&t| m.closed_marker(t))
-    {
-        return (
-            vec!["primitive:string".into()],
-            false,
-            Verdict::StringLength,
-            true,
-            FxHashMap::default(),
-        );
+    // An Array's and a String's `length` is a non-configurable own data
+    // property (a String's is its UTF-16 count): no prototype or
+    // definition can override it. Unlike T0 it names no layout slot or body.
+    if !s.is_call && key == "length" {
+        if let Some(receivers) = own_length(m, toks, prim) {
+            return (
+                receivers,
+                false,
+                Verdict::OwnLength,
+                true,
+                FxHashMap::default(),
+            );
+        }
     }
     let mut receivers = Vec::new();
     let mut top = false;
@@ -1024,7 +1120,7 @@ fn judge(
                 receivers.push(tf.display.clone());
                 if !tf.prefix_stable {
                     if !s.is_call {
-                        if let Some(slot) = private_own_slot(m, tf, t, key) {
+                        if let Some(slot) = private_own_slot(m, tf, t, key, s.key) {
                             slots.push(Some(slot));
                             // This proves one slot, not a fixed full layout.
                             fixed_shape = false;
@@ -1053,7 +1149,11 @@ fn judge(
                     }
                     continue;
                 }
-                match tf.fields.iter().find(|f| f.key == *key) {
+                match tf
+                    .fields
+                    .iter()
+                    .find(|f| f.is(key, m.is_private_atom(s.key)))
+                {
                     Some(f)
                         if (f.definite || f.declared || f.reserved)
                             && f.data_field
@@ -1250,7 +1350,7 @@ fn lookup(
         return Err("a computed key may hold it".into());
     }
     // A key the layout never writes (a read names it) is the chain's.
-    match tf.fields.iter().find(|f| f.key == *key) {
+    match tf.fields.iter().find(|f| f.is(key, m.is_private_atom(a))) {
         Some(f) if f.definite && f.data_field && f.slot.is_some() => {
             return Ok(holds(t).into_iter().collect());
         }

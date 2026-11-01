@@ -26,7 +26,7 @@ pub(super) fn class_statics(
                 .get(&cobj)
                 .into_iter()
                 .flatten()
-                .filter(|&&k| Some(k as usize) != pa)
+                .filter(|&&k| Some(k as usize) != pa && !g.m.is_private_atom(k))
                 .filter_map(|&k| {
                     let n = *g.m.fields.get(&(cobj, k))?;
                     let ts = g.m.nodes[n as usize].pts.to_sorted();
@@ -81,6 +81,10 @@ pub(super) fn literal_field_fns(
     keys.dedup();
     let mut out = Vec::new();
     'key: for a in keys {
+        // A class private field is no key of the layout to a reader.
+        if g.m.is_private_atom(a) {
+            continue;
+        }
         let mut fs: Vec<(model::FnIdx, model::Tok)> = Vec::new();
         for &t in &mine {
             let Some(&n) = g.m.fields.get(&(t, a)) else {
@@ -1353,10 +1357,14 @@ pub(super) fn describe_toks(
             // An array (DECISIONS 94): its elements are cell `arr:<display>`.
             model::TokKind::Obj(..) if g.m.is_cell_arr(t) => {
                 let d = g.arr_name(t);
-                let v = if g.m.is_box(t) {
+                let v = if g.m.is_box(t) && !crate::derive::exact_array(&g.m, t) {
                     &mut vc.boxes
-                } else {
+                } else if g.m.is_box(t) {
+                    &mut vc.arrayboxes
+                } else if crate::derive::exact_array(&g.m, t) {
                     &mut vc.arrays
+                } else {
+                    &mut vc.made_arrays
                 };
                 if !v.contains(&d) {
                     v.push(d);
@@ -1807,10 +1815,14 @@ pub(super) fn arg_contract_of(
                 // (`Gen::contract_check`), named as a value contract names it (94).
                 if g.m.is_cell_arr(t) {
                     let d = g.arr_name(t);
-                    let v = if g.m.is_box(t) {
+                    let v = if g.m.is_box(t) && !crate::derive::exact_array(&g.m, t) {
                         &mut vc.boxes
-                    } else {
+                    } else if g.m.is_box(t) {
+                        &mut vc.arrayboxes
+                    } else if crate::derive::exact_array(&g.m, t) {
                         &mut vc.arrays
+                    } else {
+                        &mut vc.made_arrays
                     };
                     if !v.contains(&d) {
                         v.push(d);
