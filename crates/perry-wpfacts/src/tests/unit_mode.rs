@@ -611,3 +611,5 @@ mod fn_transfer;
 mod protocol_touch;
 #[path = "unit_mode/unit_cycle_order.rs"]
 mod unit_cycle_order;
+#[path = "unit_mode/own_key_shadow.rs"]
+mod own_key_shadow;

@@ -1048,6 +1048,9 @@ impl Model {
         for &c in &fresh {
             self.virt_by_class.entry(c).or_default().push(t);
         }
+        if !fresh.is_empty() {
+            self.flush_shadowed(Some(t));
+        }
         if let Some(&pn) = self.proto_node.get(&t) {
             for p in fresh {
                 let pt = self.tok(TokKind::Proto(p));
@@ -1070,9 +1073,15 @@ impl Model {
         let n = self.node_l("virt-load");
         self.virt_nodes.insert((t, a), n);
         self.virt_tok_keys.entry(t).or_default().push(a);
-        let cv = self.cv(t, Key::Named(a));
+        // DECISIONS 234: an own definite data key of every instance shadows
+        // the builtin prototypes; its value is the own field.
+        let shadow = self.shadows(t, a);
+        let cv = self.cv_of(t, Key::Named(a), !shadow);
         self.edge(cv, n);
-        let own = self.virt_own(&classes, a);
+        if shadow {
+            self.note_shadowed(t, a, n, false);
+        }
+        let own = shadow || self.virt_own(&classes, a);
         if own {
             let f = self.field(t, a);
             self.edge(f, n);
@@ -1235,6 +1244,7 @@ impl Model {
                 }
                 None => {
                     self.virt_open.insert(p);
+                    self.flush_shadowed(None);
                     None
                 }
             };
@@ -1818,8 +1828,13 @@ impl Model {
                 format!("implicit {n} {reason} {}", proto.name())
             }
             Cons::CreateProto { reason } => format!("createproto {n} {reason}"),
-            Cons::ChainUnion { key, dst, of } => {
-                format!("chainunion {n} {} {dst} {of}", self.key_name(*key))
+            Cons::ChainUnion {
+                key,
+                dst,
+                of,
+                builtin,
+            } => {
+                format!("chainunion {n} {} {dst} {of} {builtin}", self.key_name(*key))
             }
             Cons::ProtoGiven { protos } => format!("protogiven {n} {protos}"),
             Cons::ParentGiven { of } => format!("parentgiven {n} {of}"),

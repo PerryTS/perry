@@ -77,6 +77,7 @@ impl Model {
                     Some(Key::Named(key)),
                     "another unit's accessor",
                 );
+                self.reshape(Some(key));
                 match s {
                     Shared::Top => {}
                     // E23: every lookup that reaches it may run the accessor.
@@ -119,6 +120,15 @@ impl Model {
             // Its effect is the stores and accessors the driver derives
             // (`units::shared_closure`).
             SharedWrite::Handed(_) => {}
+            // DECISIONS 234: another unit's defineProperty through ⊤ under a
+            // computed key (⊤ may be a builtin prototype); its delete,
+            // defineProperty or `with` through ⊤ or on a parameter: a key of
+            // an escaped object may be gone.
+            SharedWrite::Hard(Shared::Top, Hard::E5DefineProperty) => self.reshape(None),
+            SharedWrite::Removed(k) => {
+                let a = k.as_ref().map(|k| self.atom(k));
+                self.top_reshape(a)
+            }
             SharedWrite::Hard(s, kind) => {
                 let t = self.shared_tok(s);
                 let r = self.reason(&format!("{} by another unit", kind.code()));

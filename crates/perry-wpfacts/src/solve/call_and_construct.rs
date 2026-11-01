@@ -1658,6 +1658,7 @@ impl Model {
             None => format!("escape: {}", m.reasons[reason as usize]),
         });
         self.virt_revoke(t, None);
+        self.note_inst(t, false);
         if let Some(is) = self.contract_recv.get(&t).cloned() {
             self.recv_log
                 .entry(t)
@@ -1802,6 +1803,33 @@ impl Model {
 
     pub fn mark_hard(&mut self, t: Tok, kind: Hard, reason: u32) {
         self.virt_revoke(t, None);
+        // DECISIONS 234: under a computed key, a defineProperty on a
+        // prototype of the runtime, or through ⊤ (which may be one), may
+        // redefine any key there (`reshape`); a delete or `with` through ⊤
+        // may remove any key of an escaped object (`top_reshape`). Every
+        // unit sees it: the other units' objects escape into ⊤ too. On an
+        // object it may remove its own keys; on a receiver marker, those of
+        // the other units' instances of its class, which are ⊤ here.
+        if matches!(
+            kind,
+            Hard::E5DefineProperty | Hard::E7Delete | Hard::E15With
+        ) {
+            if t == TOP {
+                if kind == Hard::E5DefineProperty {
+                    self.reshape(None);
+                    self.note_shared(SharedWrite::Hard(Shared::Top, kind));
+                }
+                self.top_reshape(None);
+                self.note_shared(SharedWrite::Removed(None));
+            } else if self.is_chain_proto(t) {
+                self.reshape(None);
+            } else {
+                self.note_inst(t, true);
+                if self.is_marker(t) && !self.marker_define {
+                    self.note_shared(SharedWrite::Removed(None));
+                }
+            }
+        }
         if matches!(
             kind,
             Hard::E5DefineProperty | Hard::E7Delete | Hard::E15With

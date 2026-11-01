@@ -57,6 +57,168 @@ impl Model {
         }
     }
 
+    /// DECISIONS 234: does own key `a` shadow the builtin prototypes on
+    /// every object `t` denotes? It does when each of them holds `a` as an
+    /// own data property from birth (a definite birth key of a fact unit,
+    /// no key of which can disappear; for a receiver token or marker, of
+    /// each class it stands for, `class_holds`), and nothing redefined `a`
+    /// on a builtin prototype or through ⊤ (`reshaped_keys`), where a setter
+    /// or a read-only value would intercept the store that makes the key.
+    pub(crate) fn shadows(&self, t: Tok, a: Atom) -> bool {
+        if t == TOP || self.reshaped_any || self.reshaped_keys.contains(&a) || self.objproto_accessor {
+            return false;
+        }
+        let top = self.top_reshaped_any || self.top_reshaped_keys.contains(&a);
+        if let Some(classes) = self.virt_protos.get(&t) {
+            // Instances of these classes made in another unit may have
+            // escaped there, unseen here: a delete or defineProperty
+            // through ⊤ revokes the key on them.
+            return !top
+                && !classes.is_empty()
+                && classes.iter().all(|&p| self.class_holds(p, a));
+        }
+        match self.tmpl_of(t) {
+            Some(tm) => {
+                self.tmpls[tm as usize].kind.is_fact_unit()
+                    && !self.keys_unsure.contains(&tm)
+                    && !self.inst_lose.contains(&tm)
+                    && !(top && self.inst_escaped.contains(&tm))
+                    && (self.tmpls[tm as usize].definite.contains(&a) || self.spread_sure(tm, a))
+            }
+            None => false,
+        }
+    }
+
+    /// Every instance of class `p` and of each subclass holds `a` as an own
+    /// data property: a definite birth key of `p` (its constructor runs in
+    /// every subclass's `super()`), no instance or receiver of `p` met a
+    /// delete, defineProperty or `with` (`inst_lose`; the keys an instance
+    /// gains, `virt_open`, take none away), no accessor on the chain
+    /// intercepts the store,
+    /// and no subclass of another unit defines `a` or deletes or redefines
+    /// a key (census `override a of p`, `override * of p`).
+    fn class_holds(&self, p: TmplId, a: Atom) -> bool {
+        let tp = &self.tmpls[p as usize];
+        let star = self.atom_index.get(crate::STAR_KEY).copied();
+        tp.definite.contains(&a)
+            && !self.keys_unsure.contains(&p)
+            && !self.inst_lose.contains(&p)
+            && !self.chain_accessor_key(p, a)
+            && !self
+                .override_keys
+                .get(&p)
+                .is_some_and(|v| v.contains(&a) || star.is_some_and(|s| v.contains(&s)))
+    }
+
+    /// A read that skipped the builtin members (`shadows`): resumed by
+    /// `flush_shadowed` once the key no longer shadows them.
+    pub(crate) fn note_shadowed(&mut self, t: Tok, a: Atom, dst: NodeId, own_members: bool) {
+        let v = self.shadowed.entry(t).or_default();
+        if !v.contains(&(a, dst, own_members)) {
+            v.push((a, dst, own_members));
+        }
+    }
+
+    /// The shadowed reads (of `t`; `None`: of every receiver) whose key no
+    /// longer shadows the builtin prototypes take their members now.
+    pub(crate) fn flush_shadowed(&mut self, of: Option<Tok>) {
+        let toks: Vec<Tok> = match of {
+            Some(t) if self.shadowed.contains_key(&t) => vec![t],
+            Some(_) => return,
+            None => {
+                let mut v: Vec<Tok> = self.shadowed.keys().copied().collect();
+                v.sort_unstable();
+                v
+            }
+        };
+        for t in toks {
+            let reads = self.shadowed.remove(&t).unwrap_or_default();
+            let mut kept = Vec::new();
+            for (a, dst, own_members) in reads {
+                if self.shadows(t, a) {
+                    kept.push((a, dst, own_members));
+                    continue;
+                }
+                let key = Key::Named(a);
+                let cv = self.cv(t, key);
+                self.edge(cv, dst);
+                if own_members {
+                    self.with_b(|m| builtins::tok_load(m, t, key, dst));
+                }
+            }
+            if !kept.is_empty() {
+                self.shadowed.insert(t, kept);
+            }
+        }
+    }
+
+    /// DECISIONS 234: key `key` (`None`: any key) of a builtin prototype may
+    /// have been deleted or redefined (through ⊤, or on the prototype).
+    pub(crate) fn reshape(&mut self, key: Option<Atom>) {
+        let star = self.atom_index.get(crate::STAR_KEY).copied();
+        let fresh = match key {
+            Some(a) if Some(a) != star => self.reshaped_keys.insert(a),
+            _ => !std::mem::replace(&mut self.reshaped_any, true),
+        };
+        if fresh {
+            self.flush_shadowed(None);
+        }
+    }
+
+    /// DECISIONS 234: key `key` (`None`: any key) of an object ⊤ denotes,
+    /// an escaped one, may have been deleted or redefined.
+    pub(crate) fn top_reshape(&mut self, key: Option<Atom>) {
+        let star = self.atom_index.get(crate::STAR_KEY).copied();
+        let fresh = match key {
+            Some(a) if Some(a) != star => {
+                !self.top_reshaped_any && self.top_reshaped_keys.insert(a)
+            }
+            _ => !std::mem::replace(&mut self.top_reshaped_any, true),
+        };
+        if fresh {
+            self.flush_shadowed(None);
+        }
+    }
+
+    /// The template of object `t` and its classes up the chain (for a
+    /// receiver token or marker: the classes it stands for).
+    fn inst_classes(&self, t: Tok) -> Vec<TmplId> {
+        if let Some(ps) = self.virt_protos.get(&t) {
+            return ps.clone();
+        }
+        let Some(tm) = self.tmpl_of(t) else {
+            return Vec::new();
+        };
+        let mut seen: Vec<TmplId> = Vec::new();
+        let mut work = vec![tm];
+        while let Some(c) = work.pop() {
+            if seen.contains(&c) {
+                continue;
+            }
+            seen.push(c);
+            let tp = &self.tmpls[c as usize];
+            work.extend(tp.parent);
+            work.extend(tp.parent_links.iter().copied());
+        }
+        seen
+    }
+
+    /// DECISIONS 234: `t` escaped (`lose` false) or met a delete,
+    /// defineProperty or `with` (`lose`): an own key of it may be gone.
+    pub(crate) fn note_inst(&mut self, t: Tok, lose: bool) {
+        let mut fresh = false;
+        for c in self.inst_classes(t) {
+            fresh |= if lose {
+                self.inst_lose.insert(c)
+            } else {
+                self.inst_escaped.insert(c)
+            };
+        }
+        if fresh && (lose || self.top_reshaped_any || !self.top_reshaped_keys.is_empty()) {
+            self.flush_shadowed(None);
+        }
+    }
+
     /// The reads of `tm` that found a key no longer sure read `undefined`.
     pub(crate) fn flush_present_reads(&mut self, tm: TmplId) {
         let reads = self.present_reads.remove(&tm).unwrap_or_default();
@@ -73,6 +235,7 @@ impl Model {
         if !kept.is_empty() {
             self.present_reads.insert(tm, kept);
         }
+        self.flush_shadowed(None);
     }
 
     /// dst ⊇ value of `key` read on object `t` (receiver `origin`).
@@ -191,8 +354,19 @@ impl Model {
         // `undefined`, is never reached. Its values stay (a superset).
         let defined = present && !self.is_proto_key(key);
         let chain = if defined { self.defined_into(dst) } else { dst };
-        if !(self.is_marker(t) && self.beside_values(t)) {
+        // DECISIONS 234: a key every object `t` denotes holds as an own data
+        // property never reaches the builtin prototypes, nor the builtin
+        // members of `t`'s own kind.
+        let shadow = match key {
+            Key::Named(a) if !self.is_proto_key(key) => self.shadows(t, a),
+            _ => false,
+        };
+        let own_members = !(self.is_marker(t) && self.beside_values(t));
+        if own_members && !shadow {
             self.with_b(|m| builtins::tok_load(m, t, key, chain));
+        }
+        if let (true, Key::Named(a)) = (shadow, key) {
+            self.note_shadowed(t, a, dst, own_members);
         }
         if matches!(self.toks[t as usize], TokKind::ObjectProto) && !self.is_proto_key(key) {
             self.with_b(|m| builtins::intrinsic_proto_own(m, key, dst));
@@ -203,7 +377,7 @@ impl Model {
             return;
         }
         // The prototype chain's values, shared by every receiver of `t`.
-        let cv = self.cv(t, key);
+        let cv = self.cv_of(t, key, !shadow);
         if defined {
             // A rule on the chain node, not an edge into a relay: an
             // observation node feeds only observation nodes (`edge`), and
@@ -447,14 +621,49 @@ impl Model {
 
     /// The values `key` takes on `t`'s prototypes (transitively).
     pub fn cv(&mut self, t: Tok, key: Key) -> NodeId {
-        if let Some(&n) = self.cv_nodes.get(&(t, key)) {
+        self.cv_of(t, key, true)
+    }
+
+    /// `cv`, with the builtin prototypes' members or (`builtin` false)
+    /// with the program prototypes' values only.
+    pub fn cv_of(&mut self, t: Tok, key: Key, builtin: bool) -> NodeId {
+        if let Some(&n) = self.cv_nodes.get(&(t, key, builtin)) {
             return n;
         }
         let n = self.node_l("chainval");
-        self.cv_nodes.insert((t, key), n);
+        self.cv_nodes.insert((t, key, builtin), n);
         let pn = self.proto_node(t);
-        self.cons(pn, Cons::ChainUnion { key, dst: n, of: t });
+        self.cons(
+            pn,
+            Cons::ChainUnion {
+                key,
+                dst: n,
+                of: t,
+                builtin,
+            },
+        );
         n
+    }
+
+    /// A prototype of the runtime an instance's chain can reach
+    /// (`ObjectProto` stands for each of them): redefining a key there may
+    /// intercept the store that makes an own key (a setter, a read-only
+    /// value). A namespace object or a builtin function is no instance's
+    /// prototype.
+    pub(crate) fn is_chain_proto(&self, q: Tok) -> bool {
+        matches!(
+            self.toks[q as usize],
+            TokKind::ObjectProto | TokKind::NativeProto(_)
+        )
+    }
+
+    /// A builtin prototype on a chain (`ObjectProto` stands for each of
+    /// them): its members are the runtime's, and what stores into ⊤ wrote.
+    pub(crate) fn is_builtin_proto(&self, q: Tok) -> bool {
+        matches!(
+            self.toks[q as usize],
+            TokKind::ObjectProto | TokKind::NativeProto(_) | TokKind::Builtin(_) | TokKind::BuiltinFn
+        )
     }
 
     /// The node whose values reach `dst` without `undefined` (`Cons::Defined`):
@@ -632,8 +841,8 @@ impl Model {
             }
         }
         if let Some(v) = self.stopped_shared.remove(&p) {
-            for (key, dst) in v {
-                let up = self.cv(p, key);
+            for (key, dst, builtin) in v {
+                let up = self.cv_of(p, key, builtin);
                 self.edge(up, dst);
             }
         }

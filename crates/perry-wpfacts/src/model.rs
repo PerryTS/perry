@@ -239,6 +239,9 @@ impl SharedReads {
             SharedWrite::Unmodeled(s) => self.objects.contains_key(s) || !self.keys.is_empty(),
             // Every chain reaches Object.prototype.
             SharedWrite::Hard(Shared::ObjectProto, _) => true,
+            // DECISIONS 234: a key may be gone from any escaped object.
+            SharedWrite::Hard(Shared::Top, Hard::E5DefineProperty) => true,
+            SharedWrite::Removed(_) => true,
             SharedWrite::Hard(s, _) => self.objects.contains_key(s),
         }
     }
@@ -265,6 +268,10 @@ pub enum SharedWrite {
     /// `setPrototypeOf` ...) on the object: on `Object.prototype` every
     /// chain through it is HARD, as the whole program derives it.
     Hard(Shared, Hard),
+    /// DECISIONS 234: a delete, defineProperty or `with` under a key
+    /// (`None`: computed) on an object ⊤ denotes or on a parameter: it may
+    /// remove or redefine that key of any escaped object (`top_reshape`).
+    Removed(Option<String>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -790,7 +797,14 @@ pub enum Cons {
     CreateProto { reason: u32 },
     /// The node is `ProtoNode(of)`: dst ⊇ the values of `key` on each
     /// prototype (and further up), shared by every receiver of `of`.
-    ChainUnion { key: Key, dst: NodeId, of: Tok },
+    /// `builtin` false: the builtin prototypes on the chain add nothing (an
+    /// own key shadows them, DECISIONS 234).
+    ChainUnion {
+        key: Key,
+        dst: NodeId,
+        of: Tok,
+        builtin: bool,
+    },
     /// The node holds a value given as the prototype of an object (its
     /// `ProtoNode` is `protos`): a builtin prototype there may be any of
     /// them (`ObjectProto` collapses them), whose members the chain cannot
@@ -1323,15 +1337,43 @@ pub struct Model {
     /// Fact units whose keys can disappear (delete, defineProperty, with):
     /// no key of theirs is sure.
     pub keys_unsure: crate::pts::FxHashSet<TmplId>,
+    /// DECISIONS 234: keys a `delete`, a `defineProperty` or an accessor
+    /// through ⊤ or on a builtin prototype may have removed or redefined
+    /// (`reshaped_any`: every key). A builtin prototype redefined under a
+    /// key may intercept the store that makes an object's own key (a
+    /// setter, a read-only value), so the own key no longer shadows it.
+    pub reshaped_keys: crate::pts::FxHashSet<Atom>,
+    pub reshaped_any: bool,
+    /// DECISIONS 234: reads of an own definite data key that skipped the
+    /// builtin members of the chain (`Model::shadows`), by receiver: (key,
+    /// destination, whether the receiver's own builtin members were
+    /// skipped too). Once the key no longer shadows, the read takes them.
+    pub shadowed: FxHashMap<Tok, Vec<(Atom, NodeId, bool)>>,
+    /// DECISIONS 234: keys a delete or defineProperty through ⊤ may have
+    /// removed or redefined (`top_reshaped_any`: every key), in any unit
+    /// (`SharedWrite::Hard(Shared::Top, ..)`). ⊤ denotes escaped objects
+    /// only (DECISIONS 150): it revokes no other object's key.
+    pub top_reshaped_keys: crate::pts::FxHashSet<Atom>,
+    pub top_reshaped_any: bool,
+    /// Templates and classes some instance of which escaped (`inst_escaped`)
+    /// or met a delete, defineProperty or `with` (`inst_lose`): for a
+    /// class, an instance of it or of a subclass, or a receiver of it.
+    pub inst_escaped: crate::pts::FxHashSet<TmplId>,
+    pub inst_lose: crate::pts::FxHashSet<TmplId>,
+    /// A named define on a parameter is marking it HARD: its removal is
+    /// already shared under its key.
+    pub marker_define: bool,
     /// Calls the runtime makes for a protocol (ToPrimitive, iteration …).
     pub protocol_calls: crate::pts::FxHashSet<CallId>,
     /// Shared prototype-chain value nodes: (token, key) → node.
-    pub cv_nodes: FxHashMap<(Tok, Key), NodeId>,
+    /// `true`: with the builtin prototypes' members; `false`: the program
+    /// prototypes only (an own key shadows the builtin ones, DECISIONS 234).
+    pub cv_nodes: FxHashMap<(Tok, Key, bool), NodeId>,
     /// Prototype closure nodes: token → node.
     pub cp_nodes: FxHashMap<Tok, NodeId>,
     /// Shared chain unions that stopped at a declared member: resumed when
     /// that prototype is mutated.
-    pub stopped_shared: FxHashMap<Tok, Vec<(Key, NodeId)>>,
+    pub stopped_shared: FxHashMap<Tok, Vec<(Key, NodeId, bool)>>,
     /// Keys some accessor may be defined under (known at generation): only
     /// lookups of these keys walk the chain per receiver.
     pub accessor_atoms: crate::pts::FxHashSet<Atom>,

@@ -582,6 +582,7 @@ impl Model {
                 d.esc_why.entry(t).or_insert((w, n));
             }
             self.virt_revoke(t, None);
+            self.note_inst(t, false);
         }
         if new & MARK_ESCAPE != 0 && !described {
             self.set_marker_top(t);

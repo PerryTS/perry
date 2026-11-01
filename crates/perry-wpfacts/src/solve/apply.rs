@@ -331,6 +331,16 @@ impl Model {
                         let k = Some(Key::Named(key));
                         self.note_fnproto_write(TOP, k, Hard::E7Delete.code());
                         builtins::note_native_write(self, TOP, k, "E7 delete");
+                        self.top_reshape(Some(key));
+                        let k = self.atoms[key as usize].clone();
+                        self.note_shared(SharedWrite::Removed(Some(k)));
+                    } else if self.is_marker(t) {
+                        // DECISIONS 234: key `key` of what the callers pass.
+                        let k = self.atoms[key as usize].clone();
+                        self.note_shared(SharedWrite::Removed(Some(k)));
+                        self.marker_define = true;
+                        self.mark_hard(t, Hard::E7Delete, reason);
+                        self.marker_define = false;
                     } else {
                         self.mark_hard(t, Hard::E7Delete, reason);
                     }
@@ -351,6 +361,14 @@ impl Model {
             }
             Cons::DefineKey { key, data, reason } => {
                 for &t in toks {
+                    // DECISIONS 234: on a parameter it defines key `key` of
+                    // what the callers pass (shared under its key).
+                    self.marker_define = self.is_marker(t);
+                    if self.marker_define {
+                        self.note_inst(t, true);
+                        let k = self.atoms[key as usize].clone();
+                        self.note_shared(SharedWrite::Removed(Some(k)));
+                    }
                     // A key the layout already holds as data may move into an
                     // accessor pair in its slot, and a class instance's layout
                     // is the class's: E5 HARD, as any defineProperty was. (On
@@ -395,10 +413,19 @@ impl Model {
                             let k = Some(Key::Named(key));
                             self.note_fnproto_write(TOP, k, Hard::E5DefineProperty.code());
                             builtins::note_native_write(self, TOP, k, "E5 Object.defineProperty");
+                            self.reshape(Some(key));
+                            // DECISIONS 234: in every unit, as an accessor
+                            // through ⊤ under the key (a superset: what a
+                            // descriptor installs, a getter included).
+                            self.top_reshape(Some(key));
+                            let k = self.atoms[key as usize].clone();
+                            self.note_shared(SharedWrite::Accessor(Shared::Top, k.clone()));
+                            self.note_shared(SharedWrite::Removed(Some(k)));
                         }
                         _ => self.mark_hard(t, Hard::E5DefineProperty, reason),
                     }
                 }
+                self.marker_define = false;
             }
             Cons::DefineAll {
                 o,
@@ -465,8 +492,16 @@ impl Model {
                     }
                 }
             }
-            Cons::ChainUnion { key, dst, of } => {
+            Cons::ChainUnion {
+                key,
+                dst,
+                of,
+                builtin,
+            } => {
                 for &q in toks {
+                    if !builtin && self.is_builtin_proto(q) {
+                        continue;
+                    }
                     if q == TOP {
                         self.add_tok(dst, TOP);
                         if self.is_constructor_key(key) {
@@ -486,9 +521,10 @@ impl Model {
                     self.edge(f, dst);
                     self.with_b(|m| builtins::chain_load(m, of, q, key, dst));
                     if self.stops_at(q, key) {
-                        self.stopped_shared.entry(q).or_default().push((key, dst));
+                        let v = self.stopped_shared.entry(q).or_default();
+                        v.push((key, dst, builtin));
                     } else {
-                        let up = self.cv(q, key);
+                        let up = self.cv_of(q, key, builtin);
                         self.edge(up, dst);
                     }
                 }
@@ -675,6 +711,9 @@ impl Model {
                     }
                     self.note_fnproto_write(t, Some(Key::Named(key)), "accessor");
                     builtins::note_native_write(self, t, Some(Key::Named(key)), "accessor");
+                    if t == TOP || self.is_chain_proto(t) {
+                        self.reshape(Some(key));
+                    }
                     if t == TOP {
                         continue;
                     }
