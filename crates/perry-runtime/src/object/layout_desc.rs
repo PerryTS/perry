@@ -345,8 +345,22 @@ const _: () = assert!(
             crate::codegen_abi::LAYOUT_DESC_GC_HEADER_WORD_OFFSET_ILP32
         }
 );
-const _: () =
-    assert!(std::mem::offset_of!(PerryLayoutKey, off) == crate::codegen_abi::LAYOUT_KEY_OFF_OFFSET);
+const _: () = assert!(
+    std::mem::offset_of!(PerryLayoutKey, off)
+        == if cfg!(target_pointer_width = "64") {
+            crate::codegen_abi::LAYOUT_KEY_OFF_OFFSET_LP64
+        } else {
+            crate::codegen_abi::LAYOUT_KEY_OFF_OFFSET_ILP32
+        }
+);
+const _: () = assert!(
+    std::mem::size_of::<PerryLayoutKey>()
+        == if cfg!(target_pointer_width = "64") {
+            crate::codegen_abi::LAYOUT_KEY_SIZE_LP64
+        } else {
+            crate::codegen_abi::LAYOUT_KEY_SIZE_ILP32
+        }
+);
 
 const _: () = assert!(
     std::mem::offset_of!(PerryLayoutDesc, image_keys)
@@ -631,6 +645,8 @@ unsafe fn image_atom_symbol(atom: *const StaticAtom) -> Option<*mut crate::symbo
 mod atoms;
 #[cfg(test)]
 use atoms::image_atoms;
+#[cfg(any(all(feature = "wasm-image-selftest", target_family = "wasm"), all(test, target_os = "windows")))]
+use atoms::atom_bounds;
 pub(crate) use atoms::{atom_bytes, coloured_atoms, seed_static_atoms, shadow_name_descriptor};
 pub use atoms::StaticAtom;
 
@@ -663,8 +679,38 @@ pub(crate) use registration::register_static_layouts_in;
 ///
 /// # Safety
 /// `desc` is a registered descriptor of this program.
+#[cfg(not(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu")))]
 #[no_mangle]
 pub unsafe extern "C" fn perry_alloc_layout(desc: *const PerryLayoutDesc) -> *mut ObjectHeader {
+    unsafe { perry_alloc_layout_body(desc, None) }
+}
+
+/// x86-64 Linux: an allocation JS calls directly, entered through a shim that
+/// passes its caller's frame along. Only the arena slow path, the one branch
+/// that can collect, offers it to the collection (`gc::roots::walk_origin`);
+/// the bump path pays the shim's three moves. Allocation runs no JS, which is
+/// what lets it offer.
+#[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+#[unsafe(naked)]
+#[no_mangle]
+pub unsafe extern "C" fn perry_alloc_layout(desc: *const PerryLayoutDesc) -> *mut ObjectHeader {
+    crate::gc::offering_entry_asm!(1, perry_alloc_layout_from)
+}
+
+#[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+extern "C" fn perry_alloc_layout_from(
+    desc: *const PerryLayoutDesc,
+    pc: usize,
+    sp: usize,
+    fp: usize,
+) -> *mut ObjectHeader {
+    unsafe { perry_alloc_layout_body(desc, Some(crate::gc::WalkOrigin { pc, sp, fp })) }
+}
+
+unsafe fn perry_alloc_layout_body(
+    desc: *const PerryLayoutDesc,
+    origin: Option<crate::gc::WalkOrigin>,
+) -> *mut ObjectHeader {
     #[cfg(test)]
     crate::test_support::bootstrap_test_thread();
     let d = &*desc;
@@ -675,7 +721,7 @@ pub unsafe extern "C" fn perry_alloc_layout(desc: *const PerryLayoutDesc) -> *mu
         );
         std::process::abort();
     };
-    alloc_layout_object(d, LayoutWord(id))
+    alloc_layout_object_offering(d, LayoutWord(id), origin)
 }
 
 /// Allocate an instance of class family layout `desc` born on `copy`, a class
@@ -696,9 +742,21 @@ pub(crate) unsafe fn alloc_family_layout_copy(
 /// Allocate an object of the registered layout `id` of `d` (see
 /// [`perry_alloc_layout`]). Can collect.
 unsafe fn alloc_layout_object(d: &PerryLayoutDesc, id: LayoutWord) -> *mut ObjectHeader {
+    alloc_layout_object_offering(d, id, None)
+}
+
+/// [`alloc_layout_object`] for an entry that passed its caller's frame: a
+/// collection the arena slow path runs walks from there.
+#[inline(always)]
+unsafe fn alloc_layout_object_offering(
+    d: &PerryLayoutDesc,
+    id: LayoutWord,
+    origin: Option<crate::gc::WalkOrigin>,
+) -> *mut ObjectHeader {
     // The descriptor carries the header image (with the size) and where the slots start.
-    let obj = crate::arena::arena_alloc_gc_object_word(&d.gc_header_word, d.slot_count)
-        .cast::<ObjectHeader>();
+    let obj =
+        crate::arena::arena_alloc_gc_object_word_offering(&d.gc_header_word, d.slot_count, origin)
+            .cast::<ObjectHeader>();
     finish_layout_object(
         obj,
         d,
@@ -1872,6 +1930,7 @@ mod windows_layout_bounds_tests {
 
 #[cfg(all(test, target_os = "windows"))]
 mod windows_atom_bounds_tests {
+    use super::atoms::atom_bounds;
     use super::*;
 
     #[test]

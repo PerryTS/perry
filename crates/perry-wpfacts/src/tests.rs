@@ -1,12 +1,16 @@
 //! Unit tests: small programs lowered from source, facts checked directly.
 
 mod accessor_keys;
+mod arguments_object;
 mod array_ctor;
 mod array_elements;
+mod array_index_store;
+mod array_iteration;
 mod array_length;
 mod array_named_keys;
 mod array_numeric;
 mod array_record;
+mod array_search;
 mod binding_write_gap;
 mod birth_site;
 mod body_activation;
@@ -19,6 +23,8 @@ mod cjs_require;
 mod class_statics;
 mod closed_world;
 mod closure_context;
+mod ctor_return;
+mod dead_dynamic_import;
 mod diagnostics;
 mod dynamic_code;
 mod dynamic_import;
@@ -36,6 +42,7 @@ mod ledger;
 mod named_accessors;
 mod native_fs;
 mod native_proto;
+mod unknown_accessor_key;
 mod parent_value;
 mod prim_result;
 mod proof_receivers;
@@ -44,14 +51,18 @@ mod protocol_calls;
 mod protocol_keys;
 mod receiver_slots;
 mod receiver_this;
+mod relinked_parent;
 mod rest_element;
 mod run_once_closed;
+mod regexp_exec;
 mod runtime_helpers;
 mod summary;
+mod bound_in_summary;
+mod typed_array_exact;
 mod super_heritage;
 mod unit_alias;
 mod unit_cjs;
-mod ctor_return;
+mod ctor_observed;
 mod unit_ctor;
 mod unit_effects;
 mod unit_extends;
@@ -59,6 +70,11 @@ mod unit_mode;
 mod unit_namespace;
 mod unit_shared;
 mod unit_this;
+mod own_key_shadow;
+mod top_element_key;
+mod unheld_key;
+mod unrun_param_call;
+mod field_array_push;
 
 use crate::{compute, FactsConfig, ProgramFacts, Verdict};
 
@@ -1337,6 +1353,8 @@ fn a_parameter_node_holds_its_argument_marker() {
         lexical_this: false,
         no_summary: true,
         gen_step: false,
+        gen_async: false,
+        gen_reyields: false,
         captures: Vec::new(),
         forwards_super: false,
         parent: NO_FN,
@@ -1401,6 +1419,8 @@ fn a_store_into_a_marker_makes_no_field_of_it() {
         lexical_this: false,
         no_summary: true,
         gen_step: false,
+        gen_async: false,
+        gen_reyields: false,
         captures: Vec::new(),
         forwards_super: false,
         parent: NO_FN,
@@ -1454,6 +1474,8 @@ fn an_argument_marker_leaves_beside_when_a_valued_member_links() {
         lexical_this: false,
         no_summary: true,
         gen_step: false,
+        gen_async: false,
+        gen_reyields: false,
         captures: Vec::new(),
         forwards_super: false,
         parent: NO_FN,
@@ -1501,6 +1523,8 @@ fn marker_model() -> crate::model::Model {
         lexical_this: false,
         no_summary: true,
         gen_step: false,
+        gen_async: false,
+        gen_reyields: false,
         forwards_super: false,
         parent: NO_FN,
         captures: Vec::new(),
@@ -1709,3 +1733,5 @@ fn a_protocol_touch_of_an_argument_marker_reads_nothing() {
     let tj = m.marker_load(r, Some(a));
     assert!(m.marker_use.get(&tj).is_some_and(|&u| u & MARK_ESCAPE != 0));
 }
+mod constructor_values;
+mod generator_results;

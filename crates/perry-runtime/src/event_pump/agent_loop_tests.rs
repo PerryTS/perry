@@ -361,40 +361,44 @@ fn a_worker_agent_gets_its_own_loop() {
 /// primary agent's route.
 #[test]
 fn sibling_worker_agents_do_not_share_a_loop() {
-    let _g = serial();
-    let before = routed_agents();
-    let (a_tx, a_rx) = mpsc::channel();
-    let (go_tx, go_rx) = mpsc::channel::<()>();
-    let a = std::thread::spawn(move || {
-        let agent = crate::agent::enter_worker_agent();
-        assert!(ensure_loop());
-        let loop_id = route_loop_id(agent);
-        assert_ne!(loop_id, 0, "no endpoint published for this agent");
-        a_tx.send((agent, loop_id)).unwrap();
-        // Hold the loop until the sibling has built its own, so both exist at
-        // once — a sequential pair would pass even with one shared route.
-        go_rx.recv().unwrap();
-        crate::agent::retire_agent(agent);
+    // `routed_agents()` counts every agent in the process; a worker agent of
+    // any other module's test moves it between the two reads.
+    crate::test_isolation::in_own_process(|| {
+        let _g = serial();
+        let before = routed_agents();
+        let (a_tx, a_rx) = mpsc::channel();
+        let (go_tx, go_rx) = mpsc::channel::<()>();
+        let a = std::thread::spawn(move || {
+            let agent = crate::agent::enter_worker_agent();
+            assert!(ensure_loop());
+            let loop_id = route_loop_id(agent);
+            assert_ne!(loop_id, 0, "no endpoint published for this agent");
+            a_tx.send((agent, loop_id)).unwrap();
+            // Hold the loop until the sibling has built its own, so both exist at
+            // once — a sequential pair would pass even with one shared route.
+            go_rx.recv().unwrap();
+            crate::agent::retire_agent(agent);
+        });
+        let (a_agent, a_loop) = a_rx.recv().unwrap();
+        let b = std::thread::spawn(move || {
+            let agent = crate::agent::enter_worker_agent();
+            assert!(ensure_loop());
+            let loop_id = route_loop_id(agent);
+            assert_ne!(loop_id, 0, "no endpoint published for this agent");
+            crate::agent::retire_agent(agent);
+            (agent, loop_id)
+        });
+        let (b_agent, b_loop) = b.join().unwrap();
+        go_tx.send(()).unwrap();
+        a.join().unwrap();
+        assert_ne!(a_agent, b_agent);
+        assert_ne!(a_loop, b_loop, "two agents shared one loop");
+        assert_eq!(
+            routed_agents(),
+            before,
+            "retired worker agents leaked route slots"
+        );
     });
-    let (a_agent, a_loop) = a_rx.recv().unwrap();
-    let b = std::thread::spawn(move || {
-        let agent = crate::agent::enter_worker_agent();
-        assert!(ensure_loop());
-        let loop_id = route_loop_id(agent);
-        assert_ne!(loop_id, 0, "no endpoint published for this agent");
-        crate::agent::retire_agent(agent);
-        (agent, loop_id)
-    });
-    let (b_agent, b_loop) = b.join().unwrap();
-    go_tx.send(()).unwrap();
-    a.join().unwrap();
-    assert_ne!(a_agent, b_agent);
-    assert_ne!(a_loop, b_loop, "two agents shared one loop");
-    assert_eq!(
-        routed_agents(),
-        before,
-        "retired worker agents leaked route slots"
-    );
 }
 
 /// A second thread acting for an agent that already has an owner keeps the

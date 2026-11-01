@@ -59,10 +59,23 @@ pub(super) fn run_native_stack_scan() {
         let size = unsafe { libc::pthread_get_stacksize_np(libc::pthread_self()) } as usize;
         (top - size, top)
     };
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     // `_stack_lo`: same unused-on-this-arm shape #8298 underscore-fixed on the
     // macOS arm; the Linux arm kept the bare name and turned `warnings`
     // (-D warnings, host-compatible scope) red on main.
+    let (_stack_lo, stack_hi) = {
+        // The thread's real stack top. A fixed 256 KB above this frame ran
+        // off the top of a shallow main-thread stack and faulted on the first
+        // scheduled collection, so a run with the abort knob crashed before
+        // it could report anything.
+        let top = crate::native_stack::stack_top();
+        if top == 0 {
+            eprintln!("[native-stack-scan] skipped: this thread's stack bounds are unknown");
+            return;
+        }
+        (0usize, top)
+    };
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
     let (_stack_lo, stack_hi) = {
         // Fallback: use a local variable address and scan 256KB upward.
         let marker: usize = 0;

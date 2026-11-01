@@ -111,7 +111,16 @@ impl Model {
                     // DECISIONS 149e: an array leaves by its element cell,
                     // a primitive method's container too (184).
                     let arr = self.is_cell_arr(t);
-                    if !stand_in && !arr {
+                    // A literal layout of this unit is handed over as one
+                    // handed to a closed function is: the argument contract
+                    // describes it key by key (`ctor_args_out`); it escapes
+                    // once a census report broke its layout
+                    // (`Gen::closed_ctor_literals`).
+                    let lit = !stand_in
+                        && matches!(self.toks[t as usize], TokKind::Obj(tm, _)
+                            if matches!(self.tmpls[tm as usize].kind,
+                                TmplKind::Class { literal_shape: true, .. }));
+                    if !stand_in && !arr && !lit {
                         self.escape(t, reason);
                     }
                 }
@@ -201,7 +210,9 @@ impl Model {
                         // put into another function's marker or ⊤ goes there
                         // as before: ⊤ to the reader, and it escapes (below).
                         _ if dst == u32::MAX && reach && to == at => {
-                            self.mark_use(at, crate::model::MARK_ESCAPE);
+                            self.mark_escape_why(at, &|_| {
+                                "store: into the receiver's reach".into()
+                            });
                         }
                         // Another function's marker: another unit's value
                         // the reader cannot follow (DECISIONS 149b).
@@ -294,6 +305,23 @@ impl Model {
                     }
                 }
             }
+            Cons::Guard { test, from, dst } => {
+                let admits = prim & guard::prims(test) != 0
+                    || toks
+                        .into_iter()
+                        .any(|&t| t == TOP || guard::objects(test) || self.is_marker(t));
+                if admits {
+                    self.edge(from, dst);
+                }
+            }
+            Cons::Defined { dst } => {
+                for &t in toks {
+                    self.add_tok(dst, t);
+                }
+                if prim & !prim::UNDEF != 0 {
+                    self.add_prim(dst, prim & !prim::UNDEF);
+                }
+            }
             Cons::TopIfAny { dst, from, reason } => {
                 if !toks.is_empty() || prim != 0 {
                     if let Some(r) = reason {
@@ -312,6 +340,9 @@ impl Model {
                         let k = Some(Key::Named(key));
                         self.note_fnproto_write(TOP, k, Hard::E7Delete.code());
                         builtins::note_native_write(self, TOP, k, "E7 delete");
+                        self.top_reshape(Some(key));
+                        let k = self.atoms[key as usize].clone();
+                        self.note_shared(SharedWrite::Removed(Some(k)));
                     } else {
                         self.mark_hard(t, Hard::E7Delete, reason);
                     }
@@ -332,6 +363,9 @@ impl Model {
             }
             Cons::DefineKey { key, data, reason } => {
                 for &t in toks {
+                    if self.is_marker(t) {
+                        self.note_inst(t, true);
+                    }
                     // A key the layout already holds as data may move into an
                     // accessor pair in its slot, and a class instance's layout
                     // is the class's: E5 HARD, as any defineProperty was. (On
@@ -376,6 +410,14 @@ impl Model {
                             let k = Some(Key::Named(key));
                             self.note_fnproto_write(TOP, k, Hard::E5DefineProperty.code());
                             builtins::note_native_write(self, TOP, k, "E5 Object.defineProperty");
+                            self.reshape(Some(key));
+                            // DECISIONS 234: in every unit, as an accessor
+                            // through ⊤ under the key (a superset: what a
+                            // descriptor installs, a getter included).
+                            self.top_reshape(Some(key));
+                            let k = self.atoms[key as usize].clone();
+                            self.note_shared(SharedWrite::Accessor(Shared::Top, k.clone()));
+                            self.note_shared(SharedWrite::Removed(Some(k)));
                         }
                         _ => self.mark_hard(t, Hard::E5DefineProperty, reason),
                     }
@@ -446,8 +488,16 @@ impl Model {
                     }
                 }
             }
-            Cons::ChainUnion { key, dst, of } => {
+            Cons::ChainUnion {
+                key,
+                dst,
+                of,
+                builtin,
+            } => {
                 for &q in toks {
+                    if !builtin && self.is_builtin_proto(q) {
+                        continue;
+                    }
                     if q == TOP {
                         self.add_tok(dst, TOP);
                         if self.is_constructor_key(key) {
@@ -467,9 +517,10 @@ impl Model {
                     self.edge(f, dst);
                     self.with_b(|m| builtins::chain_load(m, of, q, key, dst));
                     if self.stops_at(q, key) {
-                        self.stopped_shared.entry(q).or_default().push((key, dst));
+                        let v = self.stopped_shared.entry(q).or_default();
+                        v.push((key, dst, builtin));
                     } else {
-                        let up = self.cv(q, key);
+                        let up = self.cv_of(q, key, builtin);
                         self.edge(up, dst);
                     }
                 }
@@ -611,16 +662,25 @@ impl Model {
                             self.cons(holder, Cons::AccessorInstall { key, f: t, setter });
                         }
                         TokKind::Top | TokKind::BuiltinFn | TokKind::Bound(_) => {
-                            // An unknown accessor: reads of any key on the
-                            // holder return ⊤ and stores escape.
+                            // An unknown accessor: the key it is installed
+                            // under (any key, when computed) reads ⊤ on the
+                            // holder, and the holder escapes to the code that
+                            // runs. It defines that one key: on a holder from
+                            // unmodeled code, a builtin prototype may hold it
+                            // under that key only.
                             let r = self.reason("accessor of unknown function value");
                             let fa = self.node_l("acc-unknown");
                             self.add_top(fa, |_| "accessor of unknown function value".into());
                             let site = self.anon_post_site("unknown accessor");
+                            let k = if self.atoms[key as usize] == crate::STAR_KEY {
+                                Key::Any
+                            } else {
+                                Key::Named(key)
+                            };
                             self.cons(
                                 holder,
                                 Cons::Store {
-                                    key: Key::Any,
+                                    key: k,
                                     src: fa,
                                     site,
                                 },
@@ -646,7 +706,11 @@ impl Model {
                         self.note_shared(SharedWrite::Accessor(s, k));
                     }
                     self.note_fnproto_write(t, Some(Key::Named(key)), "accessor");
+                    self.note_array_member_write(t, Some(Key::Named(key)), None, "accessor");
                     builtins::note_native_write(self, t, Some(Key::Named(key)), "accessor");
+                    if t == TOP || self.is_chain_proto(t) {
+                        self.reshape(Some(key));
+                    }
                     if t == TOP {
                         continue;
                     }
@@ -704,6 +768,9 @@ impl Model {
             }
             Cons::ProtoFrom { src } => {
                 for &t in toks {
+                    if t == TOP || matches!(self.toks[t as usize], TokKind::ClassObj(_)) {
+                        self.cons(src, Cons::ParentGiven { of: t });
+                    }
                     // `%Object.prototype%` is an immutable prototype exotic
                     // object: setting its [[Prototype]] to anything but its
                     // own (null) throws.
@@ -732,6 +799,33 @@ impl Model {
                     .any(|&t| matches!(self.toks[t as usize], TokKind::ObjectProto))
                 {
                     self.add_tok(protos, TOP);
+                }
+            }
+            // A class given as the parent of class object `of`: `of`'s
+            // `super()` runs its constructor on `of`'s instances. A class of
+            // this unit given to a class it constructs runs there
+            // (`Cons::SuperCall` follows the live superclass); given to
+            // another unit's class or to ⊤, the code running `super()` is
+            // unknown here, so the class escapes to it. Another unit's class
+            // is that unit's to run on the receiver: the census reports it
+            // (`extends <class>`), and its unit publishes its constructor
+            // as it does for an `extends` naming it (DECISIONS 57).
+            Cons::ParentGiven { of } => {
+                let theirs = |m: &Self, t: Tok| match m.toks[t as usize] {
+                    TokKind::ClassObj(tm) => m.foreign.contains_key(&tm),
+                    _ => t == TOP,
+                };
+                for &p in toks {
+                    let TokKind::ClassObj(tm) = self.toks[p as usize] else {
+                        continue;
+                    };
+                    if self.foreign.contains_key(&tm) {
+                        self.relinked_parents.insert(tm);
+                    } else if theirs(self, of) {
+                        let reason = self
+                            .reason("class given as the parent of a class unknown code constructs");
+                        self.escape(p, reason);
+                    }
                 }
             }
             Cons::ProtoOf { dst } => {
@@ -979,6 +1073,21 @@ impl Model {
                     self.cons(o, Cons::Store { key, src, site });
                 }
             }
+            Cons::StoreIndexed { o, src, site } => {
+                // DECISIONS 217(c) for stores: a Number key (ToPropertyKey:
+                // its ToString, a numeric name, `numeric_key`) writes an
+                // array's elements, never a named non-index key of it; any
+                // other key value is a computed-key store.
+                if prim & prim::NUM != 0 && self.index_store_done.insert((n, site, true)) {
+                    let ek = self.elem_key();
+                    self.cons(o, Cons::Store { key: ek, src, site });
+                }
+                if (prim & !prim::NUM != 0 || !toks.is_empty())
+                    && self.index_store_done.insert((n, site, false))
+                {
+                    self.cons(o, Cons::Store { key: Key::Any, src, site });
+                }
+            }
             Cons::AccessorKeyed { holder, f, setter } => {
                 if let Some(k) = self.keyed_once(n, f, 2 + setter as u8) {
                     let key = k.unwrap_or_else(|| self.atom(crate::STAR_KEY));
@@ -1057,6 +1166,13 @@ impl Model {
             Cons::RetInto { call, run } => self.ret_into(call, run, toks, prim),
             Cons::ArgInto { call, run, i } => self.arg_into(call, run, i, toks),
             Cons::Spread { into, site } => {
+                // A primitive source copies no key surely (`null`,
+                // `undefined`: none at all).
+                if prim != 0 {
+                    if let Some(&tm) = self.lit_spread_site.get(&site) {
+                        self.spread_source(tm, site, Vec::new());
+                    }
+                }
                 for &s in toks {
                     self.cons(into, Cons::SpreadFrom { src: s, site });
                 }

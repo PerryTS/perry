@@ -1,8 +1,20 @@
-//! Canonical metadata ownership. Startup publishes an image descriptor, not
-//! function-address keys. Closure operations index that owner directly.
-use crate::codegen_abi::{FunctionMetadataIdentity, FunctionMetadataOwner, JsFunctionInfo};
-use std::sync::{atomic::Ordering, Arc, Mutex, OnceLock};
-
+//! Canonical metadata ownership. Startup publishes an owner identity and its
+//! image's function records, not function-address keys. Closure operations
+//! read the info they hold; only the rare by-address paths (stack frame names,
+//! the source of raw method code) walk an image's records.
+//!
+//! Records (`perry_codegen::fn_record`) live in a linker-owned section, one
+//! per body that publishes an info, tied to the body's own input section: the
+//! link keeps a record exactly when it keeps the body, so the section between
+//! its bounds lists the surviving bodies and nothing roots the others.
+use crate::codegen_abi::{
+    FunctionMetadataIdentity, FunctionMetadataOwner, FunctionRecordBounds, JsFunctionInfo,
+    FUNCTION_RECORD_BYTES,
+};
+use std::sync::{
+    atomic::{AtomicU32, Ordering},
+    Arc, Mutex, OnceLock,
+};
 #[derive(Default)]
 struct Overrides {
     name: Option<Arc<[u8]>>,
@@ -16,8 +28,12 @@ struct CopiedEntry {
 }
 /// Payload belongs to its descriptor. It contains no GC-managed pointers.
 /// Overrides are sparse, ordered by ordinal and allocated only on a write.
+/// `copied` (an unloadable image's bytes) has one slot per ordinal; the slot
+/// of a body the link dropped stays empty.
 struct OwnerState {
-    copied: OnceLock<Vec<CopiedEntry>>,
+    copied: OnceLock<Box<[OnceLock<CopiedEntry>]>>,
+    /// Set once the owner's copies are listed under their image.
+    listed: std::sync::atomic::AtomicBool,
     overrides: Mutex<Vec<(u32, Overrides)>>,
     /// The owner's registration index plus one (0: not registered): the
     /// order module init published it in, a deterministic owner identity
@@ -28,38 +44,55 @@ impl OwnerState {
     fn new(copied: Option<Vec<CopiedEntry>>) -> Self {
         let storage = OnceLock::new();
         if let Some(entries) = copied {
-            let _ = storage.set(entries);
+            let _ = storage.set(entries.into_iter().map(OnceLock::from).collect());
         }
         Self {
             copied: storage,
+            listed: std::sync::atomic::AtomicBool::new(false),
             overrides: Mutex::new(Vec::new()),
             registration: std::sync::atomic::AtomicU32::new(0),
         }
     }
 }
 
+/// One image's records, as registration found them: the linker-owned
+/// section of a permanent image, or, for an unloadable one, the owners whose
+/// copies were taken from it (its section is never read again).
 #[derive(Clone, Copy)]
-enum RegisteredOwner {
-    Image(&'static FunctionMetadataOwner),
-    Copied(&'static OwnerState),
+enum ImageRecords {
+    Image(&'static FunctionRecordBounds),
+    Copied(&'static [&'static OwnerState]),
 }
-fn owners() -> &'static Mutex<Vec<RegisteredOwner>> {
-    static OWNERS: OnceLock<Mutex<Vec<RegisteredOwner>>> = OnceLock::new();
-    crate::once_init::get_or_init(&OWNERS, || Mutex::new(Vec::new()))
+fn images() -> &'static Mutex<Vec<ImageRecords>> {
+    static IMAGES: OnceLock<Mutex<Vec<ImageRecords>>> = OnceLock::new();
+    crate::once_init::get_or_init(&IMAGES, || Mutex::new(Vec::new()))
 }
-fn image_info(owner: &FunctionMetadataOwner, ordinal: usize) -> Option<&JsFunctionInfo> {
-    if ordinal >= owner.count as usize || owner.entries.is_null() {
-        return None;
-    }
-    // SAFETY: publication validates the descriptor's lifetime; each relative
-    // entry names a complete info record emitted with this owner.
-    unsafe {
-        let delta = owner.entries.add(ordinal).read();
-        let address = (owner.entries as usize).wrapping_add_signed(delta as isize);
-        (address as *const JsFunctionInfo).as_ref()
-    }
-}
-/// The owner's `state` word: null, an `OwnerState` (aligned, low bit clear),
+/// The next owner registration index plus one (CKI S2): owners take indices
+/// in the order module init registers them.
+static NEXT_REGISTRATION: AtomicU32 = AtomicU32::new(1);
+
+/// The infos of an image's records, in section order. A zero offset is no
+/// record (the image sentinel, a section marker, alignment padding).
+///
+/// # Safety
+/// `bounds` names the records section of a loaded image.
+unsafe fn image_infos(
+    bounds: &FunctionRecordBounds,
+) -> impl DoubleEndedIterator<Item = &'static JsFunctionInfo> {
+    let start = bounds.start as usize;
+    let count = (bounds.stop as usize).saturating_sub(start) / FUNCTION_RECORD_BYTES;
+    (0..count).filter_map(move |index| {
+        let record = start + index * FUNCTION_RECORD_BYTES;
+        // SAFETY: inside the section; records are 4-byte aligned.
+        let delta = unsafe { (record as *const i32).read() };
+        if delta == 0 {
+            return None;
+        }
+        let info = record.wrapping_add_signed(delta as isize) as *const JsFunctionInfo;
+        // SAFETY: a record names the complete info emitted with its body.
+        unsafe { info.as_ref() }
+    })
+}/// The owner's `state` word: null, an `OwnerState` (aligned, low bit clear),
 /// or, while no payload exists, the owner's registration index plus one
 /// shifted over a set low bit. Registration therefore allocates nothing, and
 /// the index stays on the owner record (CKI S2).
@@ -128,13 +161,14 @@ fn registration(owner: &FunctionMetadataOwner) -> u32 {
         .map_or(0, |st| st.registration.load(Ordering::Acquire))
 }
 
-/// Register one image's canonical owner. All entry ordinals and info ranges
-/// already exist. Permanent publication does no address-keyed name work.
+/// Register one module's owner and its image's records (the owner names
+/// them). Every ordinal and info already exists; permanent publication does
+/// no per-function work.
 ///
 /// # Safety
-/// Owner and its relative entries/infos must be valid for this call and while
-/// its function objects remain live. A nonzero `permanent` promises process
-/// lifetime; otherwise the canonical owner copies bytes before image unload.
+/// `owner` must be valid for this call. A nonzero `permanent` promises
+/// process lifetime; otherwise the image's metadata bytes are copied here,
+/// before the image can unload.
 #[no_mangle]
 pub unsafe extern "C" fn js_register_function_metadata(
     owner: *const FunctionMetadataOwner,
@@ -146,45 +180,65 @@ pub unsafe extern "C" fn js_register_function_metadata(
     if owner.count == 0 {
         return;
     }
-    let registered = if permanent != 0 {
-        RegisteredOwner::Image(owner)
-    } else {
-        // A cyclic importer may infer a name before this module publishes.
-        // Preserve those overrides and still establish copied image custody.
-        let owned = state(owner).unwrap_or_else(|| install_state(owner, OwnerState::new(None)));
-        owned.copied.get_or_init(|| {
-            (0..owner.count as usize)
-                .map(|ordinal| {
-                    let info = image_info(owner, ordinal).expect("metadata info entry");
-                    CopiedEntry {
-                        code: info.code as usize,
-                        name: super::fn_metadata::info_name_bytes(info).map(Arc::from),
-                        source: super::fn_metadata::retained_source_for_info(info)
-                            .map(|s| Arc::from(s.as_bytes())),
-                        ordinary: info.flags & crate::codegen_abi::FN_NON_STRICT_ORDINARY != 0,
-                    }
-                })
-                .collect()
-        });
-        RegisteredOwner::Copied(owned)
-    };
-    if let Ok(mut list) = owners().lock() {
-        // Module init may be repeated by another agent. Compare owners only;
-        // no code address participates and no per-function entry is inserted.
-        let index = match list.iter().position(|item| match (item, registered) {
-            (RegisteredOwner::Image(a), RegisteredOwner::Image(b)) => std::ptr::eq(*a, b),
-            (RegisteredOwner::Copied(a), RegisteredOwner::Copied(b)) => std::ptr::eq(*a, b),
-            _ => false,
-        }) {
-            Some(index) => index,
-            None => {
-                list.push(registered);
-                list.len() - 1
-            }
-        };
-        // The owner record carries its own index (CKI S2).
-        set_registration(owner, index as u32 + 1);
+    // Module init may be repeated by another agent: an owner keeps the index
+    // it was first given, and the owner record carries it (CKI S2).
+    if registration(owner) == 0 {
+        set_registration(owner, NEXT_REGISTRATION.fetch_add(1, Ordering::Relaxed));
     }
+    let Some(bounds) = owner.record_bounds() else {
+        return;
+    };
+    let Ok(mut list) = images().lock() else {
+        return;
+    };
+    // Every module of an image passes the same bounds, so the image is added
+    // once; images register in runs, so the newest entry is the usual match.
+    let known = list.iter().rev().any(|item| match item {
+        ImageRecords::Image(b) => std::ptr::eq(*b, bounds),
+        ImageRecords::Copied(_) => false,
+    });
+    if known {
+        return;
+    }
+    if permanent != 0 {
+        list.push(ImageRecords::Image(bounds));
+    } else {
+        list.push(ImageRecords::Copied(copy_image(bounds)));
+    }
+}
+/// An unloadable image: copy every record's bytes into its owner's state
+/// now, one slot per ordinal. A cyclic importer may already have written an
+/// override; it is preserved. The section is not read again.
+///
+/// # Safety
+/// `bounds` names the records section of a loaded image.
+#[cold]
+#[inline(never)]
+unsafe fn copy_image(bounds: &FunctionRecordBounds) -> &'static [&'static OwnerState] {
+    let mut states: Vec<&'static OwnerState> = Vec::new();
+    for info in image_infos(bounds) {
+        let Some(FunctionMetadataIdentity { owner, ordinal }) = info.metadata_identity() else {
+            continue;
+        };
+        // SAFETY: `metadata_identity` validated the owner pointer.
+        let owner = &*owner;
+        let owned = state(owner).unwrap_or_else(|| install_state(owner, OwnerState::new(None)));
+        let slots = owned
+            .copied
+            .get_or_init(|| (0..owner.count).map(|_| OnceLock::new()).collect());
+        // An ordinal copied twice keeps its first copy, like its identity.
+        let _ = slots[ordinal as usize].set(CopiedEntry {
+            code: info.code as usize,
+            name: super::fn_metadata::info_name_bytes(info).map(Arc::from),
+            source: super::fn_metadata::retained_source_for_info(info)
+                .map(|s| Arc::from(s.as_bytes())),
+            ordinary: info.flags & crate::codegen_abi::FN_NON_STRICT_ORDINARY != 0,
+        });
+        if !owned.listed.swap(true, Ordering::AcqRel) {
+            states.push(owned);
+        }
+    }
+    Box::leak(states.into_boxed_slice())
 }
 
 /// A ConstFn body's word in the shape-identity fold (CKI S2): its owner's
@@ -229,6 +283,8 @@ pub(crate) fn test_registered_infos(count: usize) -> Vec<u64> {
 }
 
 /// A borrowed canonical record. The info's flag licenses its owner tail.
+/// Two words, so it travels in registers; the methods that read the image's
+/// bytes take the info the record was made from.
 #[derive(Clone, Copy)]
 pub(super) struct Record<'a> {
     owner: &'a FunctionMetadataOwner,
@@ -242,13 +298,14 @@ impl<'a> Record<'a> {
             ordinal,
         })
     }
-    fn image_info(self) -> Option<&'a JsFunctionInfo> {
-        image_info(self.owner, self.ordinal as usize)
-    }
     fn copied(self) -> Option<&'static CopiedEntry> {
-        state(self.owner)?.copied.get()?.get(self.ordinal as usize)
+        state(self.owner)?.copied.get()?.get(self.ordinal as usize)?.get()
     }
-    pub(super) fn with_name<R>(self, read: impl FnOnce(&str) -> R) -> Option<R> {
+    pub(super) fn with_name<R>(
+        self,
+        info: &JsFunctionInfo,
+        read: impl FnOnce(&str) -> R,
+    ) -> Option<R> {
         if let Some(state) = state(self.owner) {
             if let Ok(slots) = state.overrides.lock() {
                 if let Ok(index) = slots.binary_search_by_key(&self.ordinal, |s| s.0) {
@@ -266,15 +323,14 @@ impl<'a> Record<'a> {
         let bytes = if let Some(copy) = self.copied() {
             copy.name.as_deref()
         } else {
-            self.image_info()
-                .and_then(super::fn_metadata::info_name_bytes)
+            super::fn_metadata::info_name_bytes(info)
         };
         bytes
             .and_then(super::fn_metadata::decode_registered_bytes)
             .map(read)
     }
-    pub(super) fn write_name(self, bytes: &[u8], infer: bool) -> bool {
-        if bytes.is_empty() || (infer && self.with_name(|_| ()).is_some()) {
+    pub(super) fn write_name(self, info: &JsFunctionInfo, bytes: &[u8], infer: bool) -> bool {
+        if bytes.is_empty() || (infer && self.with_name(info, |_| ()).is_some()) {
             return false;
         }
         let state =
@@ -301,7 +357,7 @@ impl<'a> Record<'a> {
             false
         }
     }
-    pub(super) fn source(self) -> Option<String> {
+    pub(super) fn source(self, info: &JsFunctionInfo) -> Option<String> {
         if let Some(state) = state(self.owner) {
             if let Ok(slots) = state.overrides.lock() {
                 if let Ok(index) = slots.binary_search_by_key(&self.ordinal, |s| s.0) {
@@ -323,9 +379,9 @@ impl<'a> Record<'a> {
                 .filter(|s| !s.is_empty())
                 .map(str::to_owned);
         }
-        super::fn_metadata::retained_source_for_info(self.image_info()?)
+        super::fn_metadata::retained_source_for_info(info)
     }
-    pub(super) fn ordinary(self, fallback: bool) -> bool {
+    pub(super) fn ordinary(self, info: &JsFunctionInfo) -> bool {
         if let Some(state) = state(self.owner) {
             if let Ok(slots) = state.overrides.lock() {
                 if let Ok(index) = slots.binary_search_by_key(&self.ordinal, |s| s.0) {
@@ -335,11 +391,10 @@ impl<'a> Record<'a> {
                 }
             }
         }
-        self.copied().map(|e| e.ordinary).unwrap_or_else(|| {
-            self.image_info()
-                .map(|i| i.flags & crate::codegen_abi::FN_NON_STRICT_ORDINARY != 0)
-                .unwrap_or(fallback)
-        })
+        self.copied().map_or(
+            info.flags & crate::codegen_abi::FN_NON_STRICT_ORDINARY != 0,
+            |e| e.ordinary,
+        )
     }
     #[cfg(test)]
     pub(super) fn write_source(self, bytes: &[u8], ordinary: bool) {
@@ -357,128 +412,189 @@ impl<'a> Record<'a> {
     }
 }
 
-/// Borrow the canonical owners for IP resolution. This is a view, not a name
+/// Borrow the images' records for IP resolution. This is a view, not a name
 /// snapshot or address-to-id cache. The rare stack path orders actual code
 /// locations at query time; ordinary closure reads never search this list.
-pub(crate) struct BundleFunctionNames<'a>(&'a [RegisteredOwner]);
+pub(crate) struct BundleFunctionNames<'a>(&'a [ImageRecords]);
 impl BundleFunctionNames<'_> {
-    fn entries(&self) -> impl Iterator<Item = (usize, &'static [u8])> + '_ {
-        self.0.iter().flat_map(|owner| {
-            let count = match owner {
-                RegisteredOwner::Image(o) => o.count as usize,
-                RegisteredOwner::Copied(s) => s.copied.get().map_or(0, Vec::len),
-            };
-            (0..count).filter_map(move |ordinal| match owner {
-                RegisteredOwner::Image(o) => {
-                    let info = image_info(*o, ordinal)?;
-                    let bytes = super::fn_metadata::info_name_bytes(info)?;
-                    (!bytes.is_empty()).then_some((info.code as usize, bytes))
+    /// Every named body, `(code, name)`, until `visit` returns true. One
+    /// non-generic walk shared by every query.
+    fn visit(&self, visit: &mut dyn FnMut(usize, &'static [u8]) -> bool) {
+        for image in self.0 {
+            match *image {
+                // SAFETY: a permanent image's records stay mapped.
+                ImageRecords::Image(bounds) => {
+                    for info in unsafe { image_infos(bounds) } {
+                        let Some(bytes) = super::fn_metadata::info_name_bytes(info) else {
+                            continue;
+                        };
+                        if !bytes.is_empty() && visit(info.code as usize, bytes) {
+                            return;
+                        }
+                    }
                 }
-                RegisteredOwner::Copied(s) => {
-                    let entry = &(*s).copied.get()?[ordinal];
-                    let bytes = entry.name.as_deref()?;
-                    (!bytes.is_empty()).then_some((entry.code, bytes))
+                ImageRecords::Copied(states) => {
+                    for state in states {
+                        for entry in state.copied.get().into_iter().flatten() {
+                            let Some(entry) = entry.get() else { continue };
+                            let Some(bytes) = entry.name.as_deref() else {
+                                continue;
+                            };
+                            if !bytes.is_empty() && visit(entry.code, bytes) {
+                                return;
+                            }
+                        }
+                    }
                 }
-            })
-        })
+            }
+        }
+    }
+    /// The entry the key order picks: the greatest under `better`.
+    fn best(
+        &self,
+        keep: &dyn Fn(usize) -> bool,
+        better: &dyn Fn(usize, usize) -> bool,
+    ) -> Option<(usize, &'static [u8])> {
+        let mut best: Option<(usize, &'static [u8])> = None;
+        self.visit(&mut |code, bytes| {
+            if keep(code) && best.is_none_or(|(seen, _)| better(code, seen)) {
+                best = Some((code, bytes));
+            }
+            false
+        });
+        best
     }
     pub(crate) fn len(&self) -> usize {
-        self.entries().count()
+        let mut count = 0;
+        self.visit(&mut |_, _| {
+            count += 1;
+            false
+        });
+        count
     }
     pub(crate) fn contains_key(&self, address: &usize) -> bool {
-        self.entries().any(|(code, _)| code == *address)
+        let mut found = false;
+        self.visit(&mut |code, _| {
+            found = code == *address;
+            found
+        });
+        found
     }
+    /// The named body at the greatest code address at or below `ip` (the
+    /// last such entry on a tie, as `max_by_key` picks).
     pub(crate) fn predecessor(&self, ip: usize) -> Option<(usize, &'static [u8])> {
-        self.entries()
-            .filter(|(code, _)| *code <= ip)
-            .max_by_key(|(code, _)| *code)
+        self.best(&|code| code <= ip, &|code, seen| code >= seen)
     }
     pub(crate) fn first_key_value(&self) -> Option<(usize, &'static [u8])> {
-        self.entries().min_by_key(|(code, _)| *code)
+        self.best(&|_| true, &|code, seen| code < seen)
     }
     pub(crate) fn last_key_value(&self) -> Option<(usize, &'static [u8])> {
-        self.entries().max_by_key(|(code, _)| *code)
+        self.best(&|_| true, &|code, seen| code >= seen)
     }
 }
 pub(crate) fn with_bundle_function_names<R>(
     read: impl FnOnce(&BundleFunctionNames<'_>) -> R,
 ) -> Option<R> {
-    let owners = owners().lock().ok()?;
-    Some(read(&BundleFunctionNames(&owners)))
+    let images = images().lock().ok()?;
+    Some(read(&BundleFunctionNames(&images)))
 }
 
 /// Raw method/accessor dispatch still carries a code location rather than a
-/// closure info. Resolve it against the same canonical descriptors; do not
-/// invent an address-keyed registration ABI or a second routing table.
+/// closure info. Resolve it against the same image records; do not invent an
+/// address-keyed registration ABI or a second routing table.
 pub(super) fn source_for_code(code: usize) -> Option<String> {
-    let owners = owners().lock().ok()?;
-    owners.iter().rev().find_map(|owner| match owner {
-        RegisteredOwner::Image(owner) => (0..owner.count as usize).rev().find_map(|ordinal| {
-            let info = image_info(owner, ordinal)?;
-            (info.code as usize == code)
-                .then(|| super::fn_metadata::retained_source_for_info(info))
-                .flatten()
-        }),
-        RegisteredOwner::Copied(state) => state
-            .copied
-            .get()?
-            .iter()
+    let images = images().lock().ok()?;
+    images.iter().rev().find_map(|image| match *image {
+        // SAFETY: a permanent image's records stay mapped.
+        ImageRecords::Image(bounds) => unsafe { image_infos(bounds) }
             .rev()
-            .find(|entry| entry.code == code)
-            .and_then(|e| e.source.as_deref())
-            .and_then(super::fn_metadata::decode_registered_bytes)
-            .map(str::to_owned),
+            .find(|info| info.code as usize == code)
+            .and_then(super::fn_metadata::retained_source_for_info),
+        ImageRecords::Copied(states) => states.iter().rev().find_map(|state| {
+            state
+                .copied
+                .get()?
+                .iter()
+                .rev()
+                .filter_map(OnceLock::get)
+                .find(|entry| entry.code == code)
+                .and_then(|e| e.source.as_deref())
+                .and_then(super::fn_metadata::decode_registered_bytes)
+                .map(str::to_owned)
+        }),
     })
 }
 pub(super) fn name_for_code(code: usize) -> Option<String> {
     with_bundle_function_names(|names| {
-        names
-            .entries()
-            .filter(|(address, _)| *address == code)
-            .last()
-            .and_then(|(_, bytes)| super::fn_metadata::decode_registered_bytes(bytes))
+        let mut last = None;
+        names.visit(&mut |address, bytes| {
+            if address == code {
+                last = Some(bytes);
+            }
+            false
+        });
+        last.and_then(super::fn_metadata::decode_registered_bytes)
             .map(str::to_owned)
     })
     .flatten()
 }
 pub(crate) fn function_registries_census() -> Vec<crate::gc::census::SideTableRow> {
-    let Ok(owners) = owners().lock() else {
+    let Ok(images) = images().lock() else {
         return Vec::new();
     };
-    let mut entries = 0;
-    let mut bytes = owners.capacity() * std::mem::size_of::<RegisteredOwner>();
-    for owner in owners.iter() {
-        let state = match owner {
-            RegisteredOwner::Image(o) => state(o),
-            RegisteredOwner::Copied(s) => Some(*s),
-        };
-        if let Some(state) = state {
-            bytes += std::mem::size_of::<OwnerState>();
-            if let Some(copied) = state.copied.get() {
-                bytes += copied.capacity() * std::mem::size_of::<CopiedEntry>();
-                bytes += copied
-                    .iter()
-                    .map(|e| {
-                        e.name.as_ref().map_or(0, |b| b.len() + 16)
-                            + e.source.as_ref().map_or(0, |b| b.len() + 16)
-                    })
-                    .sum::<usize>();
+    // The owners with a payload, found through the images' records (a census
+    // walk, not a list the runtime keeps).
+    let mut states: Vec<&'static OwnerState> = Vec::new();
+    for image in images.iter() {
+        match *image {
+            // SAFETY: a permanent image's records stay mapped.
+            ImageRecords::Image(bounds) => {
+                for info in unsafe { image_infos(bounds) } {
+                    if let Some(st) = Record::for_info(info).and_then(|r| state(r.owner)) {
+                        if !states.iter().any(|seen| std::ptr::eq(*seen, st)) {
+                            states.push(st);
+                        }
+                    }
+                }
             }
-            if let Ok(slots) = state.overrides.lock() {
-                entries += slots.len();
-                bytes += slots.capacity() * std::mem::size_of::<(u32, Overrides)>();
-                bytes += slots
-                    .iter()
-                    .map(|(_, v)| {
-                        v.name.as_ref().map_or(0, |b| b.len() + 16)
-                            + v.source.as_ref().map_or(0, |(b, _)| b.len() + 16)
-                    })
-                    .sum::<usize>();
+            ImageRecords::Copied(copied) => {
+                for st in copied {
+                    if !states.iter().any(|seen| std::ptr::eq(*seen, *st)) {
+                        states.push(st);
+                    }
+                }
             }
         }
     }
+    let mut entries = 0;
+    let mut bytes = images.capacity() * std::mem::size_of::<ImageRecords>();
+    for state in states {
+        bytes += std::mem::size_of::<OwnerState>();
+        if let Some(copied) = state.copied.get() {
+            bytes += copied.len() * std::mem::size_of::<OnceLock<CopiedEntry>>();
+            bytes += copied
+                .iter()
+                .filter_map(OnceLock::get)
+                .map(|e| {
+                    e.name.as_ref().map_or(0, |b| b.len() + 16)
+                        + e.source.as_ref().map_or(0, |b| b.len() + 16)
+                })
+                .sum::<usize>();
+        }
+        if let Ok(slots) = state.overrides.lock() {
+            entries += slots.len();
+            bytes += slots.capacity() * std::mem::size_of::<(u32, Overrides)>();
+            bytes += slots
+                .iter()
+                .map(|(_, v)| {
+                    v.name.as_ref().map_or(0, |b| b.len() + 16)
+                        + v.source.as_ref().map_or(0, |(b, _)| b.len() + 16)
+                })
+                .sum::<usize>();
+        }
+    }
     vec![
-        ("fn.metadata_owners", owners.len(), bytes),
+        ("fn.metadata_images", images.len(), bytes),
         ("fn.metadata_overrides(entries)", entries, 0),
     ]
 }
@@ -494,13 +610,14 @@ pub(crate) fn test_bundle_names(entries: &[(usize, &[u8])]) -> BundleFunctionNam
             ordinary: false,
         })
         .collect();
-    let state = Box::leak(Box::new(OwnerState::new(Some(copied))));
-    BundleFunctionNames(Box::leak(Box::new([RegisteredOwner::Copied(state)])))
+    let state: &'static OwnerState = Box::leak(Box::new(OwnerState::new(Some(copied))));
+    let states: &'static [&'static OwnerState] = Box::leak(Box::new([state]));
+    BundleFunctionNames(Box::leak(Box::new([ImageRecords::Copied(states)])))
 }
 #[cfg(test)]
 pub(crate) fn test_publish_bundle_name(code: usize, bytes: &[u8]) {
     let view = test_bundle_names(&[(code, bytes)]);
-    owners().lock().unwrap().extend_from_slice(view.0);
+    images().lock().unwrap().extend_from_slice(view.0);
 }
 #[cfg(test)]
 #[path = "fn_metadata_owner_tests.rs"]

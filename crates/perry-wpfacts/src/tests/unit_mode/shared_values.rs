@@ -11,8 +11,10 @@ pub(super) fn a_member_function_returning_its_own_layout_is_built_once() {
         .expect("D16: the per-unit fixpoint did not end in 60 s");
     // ABM3 (static rule, CWN 10-27): `b`'s store into ⊤ (`y.k = 1`) under
     // `k` writes `k` of every builtin prototype; `a`'s lookups of `k` that
-    // end at `Object.prototype` read it, so `a` solves once more: three.
-    assert_eq!(pf.rounds, 3, "rounds {:?}", pf.round_work);
+    // end at `Object.prototype` read it, so `a` solved once more: three.
+    // DECISIONS 234: `k` is an own definite key of `o`, which shadows the
+    // builtin prototypes: `a`'s read is the field's, two rounds.
+    assert_eq!(pf.rounds, 2, "rounds {:?}", pf.round_work);
 }
 
 /// DECISIONS 113: every unit storing under a computed global key writes ⊤
@@ -753,7 +755,10 @@ pub(super) fn an_escaped_value_beside_top_is_that_top() {
         (e8, e16, e32),
         // DEC221 removes four entries from the redundant wildcard escape
         // at each n; the existing quadratic storage behavior is unchanged.
-        (1064, 2944, 9392),
+        // DCE: `o.l{i} || (o.l{i} = ...)` joins its right operand when the
+        // left one can be falsy (here ⊤), through an edge the solve makes,
+        // which takes no shared set: two entries per literal.
+        (1080, 2976, 9456),
         "entries {e8} {e16} {e32}"
     );
 }

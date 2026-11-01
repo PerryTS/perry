@@ -7,28 +7,57 @@ pub const FN_HAS_METADATA: u32 = 1 << 25;
 /// The owner and all its relative info records are permanent image data.
 pub const METADATA_PERMANENT: u32 = 1;
 
-/// One image's canonical entry inventory. Each signed entry is relative to
-/// `entries` and names the info that owns its name/source. Runtime-native
-/// owners have one entry and a null entries pointer. `state` owns copied
-/// metadata and sparse overrides; null means no mutable payload exists.
+/// One module's metadata owner: the identity its infos name (with an
+/// ordinal below `count`) and, in `state`, its copied metadata and sparse
+/// overrides (null: no mutable payload). It lists no bodies: each body's
+/// record lives in its image's records section, which `bounds` names: a
+/// signed offset from the `bounds` field itself to the image's
+/// [`FunctionRecordBounds`] (a link-time constant, so no relocation), or 0
+/// for none. Runtime-native owners have one ordinal and no records.
 #[repr(C)]
 pub struct FunctionMetadataOwner {
-    pub entries: *const i32,
     pub count: u32,
     pub flags: u32,
     pub state: AtomicPtr<c_void>,
+    pub bounds: i32,
 }
 unsafe impl Sync for FunctionMetadataOwner {}
 impl FunctionMetadataOwner {
     pub const fn native() -> Self {
         Self {
-            entries: core::ptr::null(),
             count: 1,
             flags: 0,
             state: AtomicPtr::new(core::ptr::null_mut()),
+            bounds: 0,
         }
     }
+
+    /// The image records this owner's module registers, if any.
+    pub fn record_bounds(&self) -> Option<&FunctionRecordBounds> {
+        if self.bounds == 0 {
+            return None;
+        }
+        let at = (&self.bounds as *const i32 as usize).wrapping_add_signed(self.bounds as isize);
+        // SAFETY: a nonzero offset is the linker-resolved distance to the
+        // bounds descriptor of the image this owner was emitted into.
+        unsafe { (at as *const FunctionRecordBounds).as_ref() }
+    }
 }
+
+/// One image's function records section, as the linker left it: the records
+/// of the bodies the link kept, between `start` and `stop`. A record begins
+/// with the signed offset from itself to its body's `JsFunctionInfo`; a zero
+/// offset is no record (the image sentinel, a section marker, padding).
+/// Mach-O records carry a second word (the code, which keeps them live).
+#[repr(C)]
+pub struct FunctionRecordBounds {
+    pub start: *const u8,
+    pub stop: *const u8,
+    pub sentinel: *const u8,
+}
+unsafe impl Sync for FunctionRecordBounds {}
+/// Bytes per record in this target's records section.
+pub const FUNCTION_RECORD_BYTES: usize = if cfg!(target_vendor = "apple") { 8 } else { 4 };
 
 /// Indexing never derives identity from a code or owner address.
 #[repr(C)]

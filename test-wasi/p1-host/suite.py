@@ -419,9 +419,16 @@ add("discard_reuse", discard=True, stdout="intact\n", host_args=["--env", "PERRY
     log=zeroed_reuse)
 
 
+def run_env(host_args: list[str]) -> dict[str, str]:
+    """The `--env NAME=VALUE` pairs a case hands its guest."""
+    return dict(value.split("=", 1) for flag, value in zip(host_args, host_args[1:]) if flag == "--env")
+
+
 def compile_case(perry: Path, source: Path, wasm: Path, log: Path, net: bool,
-                 discard: bool = False) -> str | None:
-    env = dict(os.environ, PERRY_NO_AUTO_OPTIMIZE="1", PERRY_NO_CACHE="1")
+                 discard: bool = False, guest_env: dict[str, str] | None = None) -> str | None:
+    # The guest's run-time knobs are set while compiling too: the GC
+    # diagnostics (PERRY_GC_LOG) are installed only when asked for at compile time.
+    env = dict(os.environ, PERRY_NO_AUTO_OPTIMIZE="1", PERRY_NO_CACHE="1", **(guest_env or {}))
     env.pop("PERRY_WASM_NET", None)
     env.pop("PERRY_WASM_DISCARD", None)
     if net:
@@ -511,7 +518,8 @@ def main() -> int:
         wasm = args.output / f"{c.name}.wasm"
         try:
             problem = compile_case(args.perry, HERE / "cases" / f"{c.source or c.name}.ts", wasm,
-                                   args.output / f"{c.name}.compile.log", c.net, c.discard)
+                                   args.output / f"{c.name}.compile.log", c.net, c.discard,
+                                   run_env(c.host_args))
             if problem is None:
                 problem = run_case(c, args.host, wasm, args.output)
         except Exception:  # a harness error is a failure, never a skip

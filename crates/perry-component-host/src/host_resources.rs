@@ -143,9 +143,19 @@ pub(crate) fn drop_owned(
         .handle
         .context("host resource is owned by the guest")?;
     let (rep, ty) = (entry.rep, entry.ty);
-    handle.resource_drop(store.as_context_mut())?;
+    release(handle, store.as_context_mut())?;
     *released = true;
     destroy(store, rep, ty)
+}
+
+/// Remove a host-defined handle's table entry. Its type has no canonical
+/// destructor, so no guest code runs; unlike resource_drop this is valid in an
+/// async-configured Store such as the persistent driver's.
+fn release(handle: ResourceAny, store: StoreContextMut<'_, StoreData>) -> Result<()> {
+    handle
+        .try_into_resource_dynamic(store)
+        .map(drop)
+        .map_err(anyhow::Error::from)
 }
 
 pub(crate) fn drain(mut store: StoreContextMut<'_, StoreData>) -> Result<()> {
@@ -183,8 +193,8 @@ pub(crate) fn dispose(mut store: StoreContextMut<'_, StoreData>) -> Result<()> {
         .collect();
     let mut first = None;
     for handle in handles {
-        if let Err(error) = handle.resource_drop(store.as_context_mut()) {
-            first.get_or_insert(anyhow::Error::from(error));
+        if let Err(error) = release(handle, store.as_context_mut()) {
+            first.get_or_insert(error);
         }
     }
     let state = &mut store.data_mut().host_resources;

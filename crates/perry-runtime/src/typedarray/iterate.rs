@@ -37,6 +37,9 @@ use crate::closure::ClosureHeader;
 pub(super) struct CallbackLoop<'s> {
     scope: &'s crate::gc::RuntimeHandleScope,
     recv: f64,
+    /// The callback's `this` (the `thisArg` argument), rooted: it can be a
+    /// movable heap object and the callback can collect.
+    this_arg: crate::gc::RuntimeHandle<'s>,
     /// `None` only under the `typed_loop_root` sabotage, which leaves every
     /// value of the loop unrooted so its witness can tell the difference.
     callback: Option<crate::gc::RuntimeHandle<'s>>,
@@ -60,6 +63,20 @@ impl<'s> CallbackLoop<'s> {
         ta: *const TypedArrayHeader,
         callback: *const ClosureHeader,
     ) -> Self {
+        Self::with_this(
+            scope,
+            ta,
+            callback,
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+        )
+    }
+
+    pub(super) fn with_this(
+        scope: &'s crate::gc::RuntimeHandleScope,
+        ta: *const TypedArrayHeader,
+        callback: *const ClosureHeader,
+        this_arg: f64,
+    ) -> Self {
         let rooted = !loop_roots_sabotaged();
         if rooted {
             scope.root_raw_const_ptr(ta);
@@ -67,6 +84,7 @@ impl<'s> CallbackLoop<'s> {
         Self {
             scope,
             recv: ta_receiver_value(ta),
+            this_arg: scope.root_nanbox_f64(this_arg),
             callback: rooted.then(|| scope.root_raw_const_ptr(callback)),
             unrooted_callback: callback,
         }
@@ -89,7 +107,7 @@ impl<'s> CallbackLoop<'s> {
     pub(super) fn call3(&self, site: &crate::closure::DirectCall3, v: f64, i: usize) -> f64 {
         site.call(
             self.current(),
-            crate::closure::plain_call_receiver(),
+            crate::closure::JsThis::from_f64(self.this_arg.get_nanbox_f64()),
             v,
             i as f64,
             self.recv,
@@ -106,7 +124,7 @@ impl<'s> CallbackLoop<'s> {
     ) -> f64 {
         site.call(
             self.current(),
-            crate::closure::plain_call_receiver(),
+            crate::closure::JsThis::from_f64(self.this_arg.get_nanbox_f64()),
             acc,
             v,
             i as f64,
@@ -123,6 +141,15 @@ pub extern "C" fn js_typed_array_map(
     ta: *const TypedArrayHeader,
     callback: *const ClosureHeader,
 ) -> *mut TypedArrayHeader {
+    typed_array_map_this(ta, callback, f64::from_bits(crate::value::TAG_UNDEFINED))
+}
+
+/// `ta.map(cb, thisArg)`: `this_arg` is the callback's `this`.
+pub(crate) fn typed_array_map_this(
+    ta: *const TypedArrayHeader,
+    callback: *const ClosureHeader,
+    this_arg: f64,
+) -> *mut TypedArrayHeader {
     let ta = clean_ta_ptr(ta);
     if ta.is_null() {
         return typed_array_alloc(KIND_FLOAT64, 0);
@@ -131,7 +158,7 @@ pub extern "C" fn js_typed_array_map(
         let kind = crate::typedarray::element_kind(ta);
         let len = crate::typedarray::element_length(ta) as usize;
         let scope = crate::gc::RuntimeHandleScope::new();
-        let calls = CallbackLoop::new(&scope, ta, callback);
+        let calls = CallbackLoop::with_this(&scope, ta, callback, this_arg);
         // #8180: resolve the callback's dispatch ONCE. It is invariant for a
         // fixed closure (see closure/dispatch/direct.rs), and this loop calls
         // exactly one.
@@ -162,6 +189,15 @@ pub extern "C" fn js_typed_array_filter(
     ta: *const TypedArrayHeader,
     callback: *const ClosureHeader,
 ) -> *mut TypedArrayHeader {
+    typed_array_filter_this(ta, callback, f64::from_bits(crate::value::TAG_UNDEFINED))
+}
+
+/// `ta.filter(cb, thisArg)`: `this_arg` is the callback's `this`.
+pub(crate) fn typed_array_filter_this(
+    ta: *const TypedArrayHeader,
+    callback: *const ClosureHeader,
+    this_arg: f64,
+) -> *mut TypedArrayHeader {
     let ta = clean_ta_ptr(ta);
     if ta.is_null() {
         return typed_array_alloc(KIND_FLOAT64, 0);
@@ -170,7 +206,7 @@ pub extern "C" fn js_typed_array_filter(
         let kind = crate::typedarray::element_kind(ta);
         let len = crate::typedarray::element_length(ta) as usize;
         let scope = crate::gc::RuntimeHandleScope::new();
-        let calls = CallbackLoop::new(&scope, ta, callback);
+        let calls = CallbackLoop::with_this(&scope, ta, callback, this_arg);
         // #8180: resolve the callback's dispatch ONCE. It is invariant for a
         // fixed closure (see closure/dispatch/direct.rs), and this loop calls
         // exactly one.
@@ -204,6 +240,15 @@ pub extern "C" fn js_typed_array_every(
     ta: *const TypedArrayHeader,
     callback: *const ClosureHeader,
 ) -> f64 {
+    typed_array_every_this(ta, callback, f64::from_bits(crate::value::TAG_UNDEFINED))
+}
+
+/// `ta.every(cb, thisArg)`: `this_arg` is the callback's `this`.
+pub(crate) fn typed_array_every_this(
+    ta: *const TypedArrayHeader,
+    callback: *const ClosureHeader,
+    this_arg: f64,
+) -> f64 {
     let ta = clean_ta_ptr(ta);
     if ta.is_null() {
         return f64::from_bits(crate::value::TAG_TRUE);
@@ -211,7 +256,7 @@ pub extern "C" fn js_typed_array_every(
     unsafe {
         let len = crate::typedarray::element_length(ta) as usize;
         let scope = crate::gc::RuntimeHandleScope::new();
-        let calls = CallbackLoop::new(&scope, ta, callback);
+        let calls = CallbackLoop::with_this(&scope, ta, callback, this_arg);
         // #8180: resolve the callback's dispatch ONCE. It is invariant for a
         // fixed closure (see closure/dispatch/direct.rs), and this loop calls
         // exactly one.
@@ -233,6 +278,15 @@ pub extern "C" fn js_typed_array_some(
     ta: *const TypedArrayHeader,
     callback: *const ClosureHeader,
 ) -> f64 {
+    typed_array_some_this(ta, callback, f64::from_bits(crate::value::TAG_UNDEFINED))
+}
+
+/// `ta.some(cb, thisArg)`: `this_arg` is the callback's `this`.
+pub(crate) fn typed_array_some_this(
+    ta: *const TypedArrayHeader,
+    callback: *const ClosureHeader,
+    this_arg: f64,
+) -> f64 {
     let ta = clean_ta_ptr(ta);
     if ta.is_null() {
         return f64::from_bits(crate::value::TAG_FALSE);
@@ -240,7 +294,7 @@ pub extern "C" fn js_typed_array_some(
     unsafe {
         let len = crate::typedarray::element_length(ta) as usize;
         let scope = crate::gc::RuntimeHandleScope::new();
-        let calls = CallbackLoop::new(&scope, ta, callback);
+        let calls = CallbackLoop::with_this(&scope, ta, callback, this_arg);
         // #8180: resolve the callback's dispatch ONCE. It is invariant for a
         // fixed closure (see closure/dispatch/direct.rs), and this loop calls
         // exactly one.
@@ -262,12 +316,21 @@ pub extern "C" fn js_typed_array_for_each(
     ta: *const TypedArrayHeader,
     callback: *const ClosureHeader,
 ) -> f64 {
+    typed_array_for_each_this(ta, callback, f64::from_bits(crate::value::TAG_UNDEFINED))
+}
+
+/// `ta.for_each(cb, thisArg)`: `this_arg` is the callback's `this`.
+pub(crate) fn typed_array_for_each_this(
+    ta: *const TypedArrayHeader,
+    callback: *const ClosureHeader,
+    this_arg: f64,
+) -> f64 {
     let ta = clean_ta_ptr(ta);
     if !ta.is_null() {
         unsafe {
             let len = crate::typedarray::element_length(ta) as usize;
             let scope = crate::gc::RuntimeHandleScope::new();
-            let calls = CallbackLoop::new(&scope, ta, callback);
+            let calls = CallbackLoop::with_this(&scope, ta, callback, this_arg);
             // #8180: resolve the callback's dispatch ONCE. It is invariant for a
             // fixed closure (see closure/dispatch/direct.rs), and this loop calls
             // exactly one.
@@ -287,6 +350,15 @@ pub extern "C" fn js_typed_array_find(
     ta: *const TypedArrayHeader,
     callback: *const ClosureHeader,
 ) -> f64 {
+    typed_array_find_this(ta, callback, f64::from_bits(crate::value::TAG_UNDEFINED))
+}
+
+/// `ta.find(cb, thisArg)`: `this_arg` is the callback's `this`.
+pub(crate) fn typed_array_find_this(
+    ta: *const TypedArrayHeader,
+    callback: *const ClosureHeader,
+    this_arg: f64,
+) -> f64 {
     let ta = clean_ta_ptr(ta);
     if ta.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
@@ -294,7 +366,7 @@ pub extern "C" fn js_typed_array_find(
     unsafe {
         let len = crate::typedarray::element_length(ta) as usize;
         let scope = crate::gc::RuntimeHandleScope::new();
-        let calls = CallbackLoop::new(&scope, ta, callback);
+        let calls = CallbackLoop::with_this(&scope, ta, callback, this_arg);
         // #8180: resolve the callback's dispatch ONCE. It is invariant for a
         // fixed closure (see closure/dispatch/direct.rs), and this loop calls
         // exactly one.
@@ -316,6 +388,15 @@ pub extern "C" fn js_typed_array_find_index(
     ta: *const TypedArrayHeader,
     callback: *const ClosureHeader,
 ) -> f64 {
+    typed_array_find_index_this(ta, callback, f64::from_bits(crate::value::TAG_UNDEFINED))
+}
+
+/// `ta.find_index(cb, thisArg)`: `this_arg` is the callback's `this`.
+pub(crate) fn typed_array_find_index_this(
+    ta: *const TypedArrayHeader,
+    callback: *const ClosureHeader,
+    this_arg: f64,
+) -> f64 {
     let ta = clean_ta_ptr(ta);
     if ta.is_null() {
         return -1.0;
@@ -323,7 +404,7 @@ pub extern "C" fn js_typed_array_find_index(
     unsafe {
         let len = crate::typedarray::element_length(ta) as usize;
         let scope = crate::gc::RuntimeHandleScope::new();
-        let calls = CallbackLoop::new(&scope, ta, callback);
+        let calls = CallbackLoop::with_this(&scope, ta, callback, this_arg);
         // #8180: resolve the callback's dispatch ONCE. It is invariant for a
         // fixed closure (see closure/dispatch/direct.rs), and this loop calls
         // exactly one.

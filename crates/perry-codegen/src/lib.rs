@@ -22,6 +22,7 @@ pub mod ext_registry;
 pub mod facts_consumed;
 pub mod fallback_diag;
 pub(crate) mod fn_info;
+pub(crate) mod fn_record;
 pub mod function;
 pub mod function_order;
 pub(crate) mod gc_call_effects;
