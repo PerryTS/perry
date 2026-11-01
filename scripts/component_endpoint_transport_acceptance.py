@@ -28,9 +28,9 @@ def main():
            "PERRY_RUNTIME_DIR": str(args.native_runtime_dir.resolve())}
     rows = []
 
-    def run(name, command, expected=0):
+    def run(name, command, expected=0, extra_env=None):
         with (out / (name + ".log")).open("w") as log:
-            status = subprocess.run([str(x) for x in command], cwd=root, env=env,
+            status = subprocess.run([str(x) for x in command], cwd=root, env=env | (extra_env or {}),
                                     stdout=log, stderr=subprocess.STDOUT, timeout=1800).returncode
         passed = status == expected
         rows.append(dict(phase=name, exitCode=status, passed=passed))
@@ -57,9 +57,7 @@ def main():
     assert "future/stream guest values" in (out / "public-guard.log").read_text()
     assert not (out / "public").exists(), "guard must reject before publishing files"
     run("generate", [binaries / ("async_guest" + suffix), guest / "world.wit", "plugin", generated])
-    library = guest / "libguest.a"
-    run("compile", [args.perry.resolve(), "compile", guest / "guest.ts", "--target", "wasip3",
-                    "--output-type", "staticlib", "--no-auto-optimize", "--no-cache", "-o", library])
+    libraries = []
     components = []
     control_files = []
     marker = "PASS: actual Perry P3 endpoint transport, compound/char/void/unit/byte/nested values, partial chunks, explicit/GC cleanup and Store reuse"
@@ -74,6 +72,14 @@ def main():
                 "-Wl,--stack-first", "-Wl,-z,stack-size=8388608", "-Wl,--fatal-warnings", "-o", component]
 
     for kind, archive in [("plain", args.plain_runtime.resolve()), ("instrumented", args.runtime.resolve())]:
+        library = guest / ("libguest-" + kind + ".a")
+        libraries.append(library)
+        # WASI programs select runtime installers while compiling. Merely
+        # linking an instrumented archive leaves diagnostic hooks uninstalled.
+        diagnostics = {"PERRY_GC_DIAG": "1", "PERRY_GC_VERIFY_EVACUATION": "1"} if kind == "instrumented" else {}
+        run(kind + "-compile", [args.perry.resolve(), "compile", guest / "guest.ts", "--target", "wasip3",
+                                "--output-type", "staticlib", "--no-auto-optimize", "--no-cache", "-o", library],
+            extra_env=diagnostics)
         component = guest / (kind + ".component.wasm")
         run(kind + "-link", link(generated, archive, component))
         components.append(component)
@@ -111,7 +117,7 @@ def main():
             assert marker in log and copied > 0 and "evacuation_ok" in log
             (out / "moving.json").write_text(json.dumps(dict(guestCopiedObjects=copied, guestEvacuationVerified=True), indent=2) + "\n")
     paths = [args.perry.resolve(), args.wit.resolve(), args.plain_runtime.resolve(), args.runtime.resolve(),
-             library, *components, *binaries.iterdir(), *generated.iterdir(), *control_files]
+             *libraries, *components, *binaries.iterdir(), *generated.iterdir(), *control_files]
     identities = {str(p): dict(bytes=p.stat().st_size, sha256=hashlib.sha256(p.read_bytes()).hexdigest())
                   for p in paths if p.is_file()}
     (out / "artifact-identities.json").write_text(json.dumps(identities, indent=2) + "\n")
