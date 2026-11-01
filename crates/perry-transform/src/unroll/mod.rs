@@ -26,13 +26,14 @@
 //! ```
 //!
 //! With the kx loop unrolled (`kx` substituted with -2, -1, 0, 1, 2), the
-//! `KERNEL[ky + 2][kx + 2]` access folds to `KERNEL[ky + 2][0..4]`. With
-//! the ky loop also unrolled, both indices are compile-time integers and
+//! `KERNEL[ky + 2][kx + 2]` access folds to `KERNEL[ky + 2][0..4]`. If
+//! the expanded nest fits the size budget, ky can also be unrolled: both
+//! indices are then compile-time integers and
 //! Perry's existing flat-const machinery (`Expr::IndexGet` on a flat
 //! `[25 x i32]` global with literal indices) replaces the load with a
 //! constant. LLVM then specializes mul-by-1 to no-op, mul-by-4 to a
-//! 2-bit shift, and mul-by-16 to a 4-bit shift — matching Zig's
-//! ~130 ms scalar blur kernel instead of Perry's SIMD-bound ~240 ms.
+//! 2-bit shift, and mul-by-16 to a 4-bit shift. Kernels with more surrounding
+//! work may remain partly rolled to keep code growth bounded.
 //!
 //! ## Safety guards (rejected shapes)
 //!
