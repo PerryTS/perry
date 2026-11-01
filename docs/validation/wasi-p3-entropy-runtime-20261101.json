@@ -1,0 +1,54 @@
+{
+  "source": "736472af0cf51f5fb506595b0cdcf8645104761d",
+  "scope": "Linux x86_64: real Rust WASI 0.3 entropy command, binary external contract, P1/P2 negative controls, production wasm32-wasip3 runtime archive build",
+  "fullWasi030Qualified": false,
+  "rustToolchain": "nightly-2026-10-04",
+  "rustTarget": "wasm32-wasip3",
+  "wasiSdk": "34.0",
+  "backports": [
+    { "package": "getrandom", "version": "0.2.17", "alignmentAndLengthCasesPassed": 256 },
+    { "package": "getrandom", "version": "0.3.4", "alignmentAndLengthCasesPassed": 256, "scalarCallsPassed": 64 }
+  ],
+  "bufferChecks": "All prefix and suffix sentinels retained; aggregate entropy-write witness passed without requiring any individual random byte to differ",
+  "externalContract": {
+    "method": "wasmparser 0.254.2 top-level component import/export parsing, not string scanning",
+    "wasiInterfaceImports": 15,
+    "allExternalImportsAreWasi030Instances": true,
+    "randomImport": "wasi:random/random@0.3.0",
+    "commandExport": "wasi:cli/run@0.3.0",
+    "actualP1CoreControlRejected": true,
+    "actualP2ComponentControlRejected": true
+  },
+  "execution": {
+    "provider": "Perry native component command host using Turnloop",
+    "qualifiedNativeSource": "c84fb548a86343cf68b65e8b295e1edabe5e816e",
+    "guest": "Independent Rust command; no Perry WASM heap ABI coupling",
+    "exitCode": 0
+  },
+  "runtimeArchive": {
+    "command": "python3 scripts/wasi_build_runtime.py wasm32-wasip3",
+    "exitCode": 0,
+    "bytes": 46061062,
+    "sha256": "deb751401ec11295a9c6798ccc61adf10b36d76d2c8dc9729a99f3fe054cfac9"
+  },
+  "dependencyPolicy": {
+    "strictOfflineTokioInventory": "passed",
+    "getrandomVersionBump": false,
+    "rustflagsEnvironmentChanged": false,
+    "cargoUnwindFlagsPreserved": true
+  },
+  "evidence": {
+    "archive": "wasi-030-v053-evidence.tar.gz",
+    "bytes": 14282571,
+    "sha256": "be636e42ebc06d4173bbb78d3a2eb7f2baa1af755ca1f8011d08f4c5d8b5b5fc",
+    "indexedFiles": 52,
+    "archiveAndEveryIndexedMemberVerifiedLocally": true
+  },
+  "notQualifiedByThisReceipt": [
+    "Perry-generated P3 command or library output",
+    "Perry guest future/stream adapters and public async generator",
+    "Current-source native and P1/P2 execution after dependency source-ID changes",
+    "Complete providers, HTTP compositions and shared-provider ALS",
+    "macOS, Windows, installed distributions and required CI"
+  ]
+}
