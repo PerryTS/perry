@@ -1,5 +1,11 @@
 # Cold runtime size optimization (#13662)
 
+This audit preserves the initial 198-attribute candidate and its measurements.
+The current PR excludes three active array helpers (195 attributes in 119
+runtime files). See the [search slowdown diagnosis](13662-search-slowdown.md)
+for the ablation and scheduler evidence; the historical tables below are not
+measurements of that adjusted candidate.
+
 ## Scope
 
 Keep the runtime's speed optimization policy and add `#[optimize(size)]` only
