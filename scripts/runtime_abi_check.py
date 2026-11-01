@@ -296,7 +296,8 @@ def parse_rust(files: dict[str, str]) -> tuple[dict[str, list[RustFn]], dict[str
             if inner:
                 aliases[m.group(1)].add(" ".join(inner.split()))
         scan_extern_fns(text, lambda off: f"{path}:{line_of(text, off)}", defs)
-        for where_off, expanded in expand_macros(text) + expand_signature_macros(text):
+        for where_off, expanded in (expand_macros(text) + expand_signature_macros(text)
+                                    + expand_repeated_export_macros(text)):
             scan_extern_fns(expanded, lambda _off: f"{path}:{line_of(text, where_off)}", defs)
     return defs, aliases
 
@@ -407,6 +408,55 @@ def expand_macros(text: str) -> list[tuple[int, str]]:
                     expanded = expanded.replace(f"${var}", val)
                 out.append((inv.start(), expanded))
                 break
+    return out
+
+
+def expand_repeated_export_macros(text: str) -> list[tuple[int, str]]:
+    """Read a comma-separated row repetition with an exported function body.
+
+    Derive signatures from the defining arm, including pointer types, rather
+    than duplicating an ABI for each invocation's symbol name.
+    """
+    out = []
+    for md in MACRO_DEF_RE.finditer(text):
+        end = balanced(text, md.end() - 1, "{", "}")
+        if end < 0:
+            continue
+        for pattern, body in macro_arms(text, md.end(), end - 1):
+            pattern, body = pattern.strip(), body.strip()
+            if not pattern.startswith("$(") or not body.startswith("$("):
+                continue
+            pe, be = balanced(pattern, 1), balanced(body, 1)
+            if pe < 0 or be < 0:
+                continue
+            if not re.fullmatch(r",\s*\*\s*(?:\$\(\s*,\s*\)\s*\?)?", pattern[pe:]):
+                continue
+            if body[be:].strip() != "*":
+                continue
+            template = body[2:be - 1]
+            if not EXTERN_FN_RE.search(template.replace("$", "")) or not (
+                    "no_mangle" in template or "export_name" in template):
+                continue
+            rx = arm_regex(pattern[2:pe - 1])
+            if rx is None:
+                raise ValueError(f"unrecognized exported row pattern in {md.group(1)}!")
+            for inv in re.finditer(rf"\b{md.group(1)}!\s*([(\[{{])", text):
+                if md.start() <= inv.start() < end:
+                    continue
+                opener = inv.group(1)
+                close = balanced(text, inv.end() - 1, opener, {"(": ")", "[": "]", "{": "}"}[opener])
+                if close < 0:
+                    raise ValueError(f"unterminated {md.group(1)}! invocation")
+                for row in split_top(text[inv.end():close - 1]):
+                    if not row:
+                        continue
+                    match = rx.fullmatch(row)
+                    if match is None:
+                        raise ValueError(f"unrecognized exported row in {md.group(1)}!: {row}")
+                    expanded = template
+                    for key, value in sorted(match.groupdict().items(), key=lambda kv: -len(kv[0])):
+                        expanded = expanded.replace("$" + key, value)
+                    out.append((inv.start(), expanded))
     return out
 
 
@@ -1186,6 +1236,7 @@ def self_test() -> int:
     macro_sources = load([
         CRATES / "perry-runtime/src/closure/dispatch/calln.rs",
         CRATES / "perry-runtime/src/set.rs",
+        CRATES / "perry-runtime/src/string/concat_parts.rs",
     ])
     macro_defs, _ = parse_rust(macro_sources)
     for arity in range(17):
@@ -1201,6 +1252,30 @@ def self_test() -> int:
         entries = macro_defs.get(name, [])
         if len(entries) != 1 or entries[0].params != params or entries[0].ret != ret:
             failures.append(f"{name}: incorrect kind-entry signature: {entries}")
+    for arity in range(2, 6):
+        name = f"js_string_concat_parts_{arity}"
+        entries = macro_defs.get(name, [])
+        if (len(entries) != 1 or entries[0].params != ["*const ConcatPartSlot"]
+                or entries[0].ret != "*mut StringHeader"):
+            failures.append(f"{name}: missing repeated exported signature: {entries}")
+    repeated_source = '''
+        macro_rules! exports {
+            ($($name:ident = $n:literal),* $(,)?) => {$(
+                #[no_mangle] pub extern "C" fn $name(p: *mut u8, len: usize) -> u32 { $n }
+            )*};
+        }
+        exports! { first = 1, second = 2, }
+    '''
+    repeated_defs, _ = parse_rust({"repeated.rs": repeated_source})
+    for name in ("first", "second"):
+        entries = repeated_defs.get(name, [])
+        if len(entries) != 1 or entries[0].params != ["*mut u8", "usize"] or entries[0].ret != "u32":
+            failures.append(f"{name}: repeated exports must derive their actual signature")
+    try:
+        parse_rust({"bad.rs": repeated_source.replace("second = 2", "second ? 2")})
+        failures.append("unrecognized repeated exported rows must fail closed")
+    except ValueError:
+        pass
     proto_defs, _ = parse_rust({"proto.rs": """
         array_entries! {
             js_array_m_probe0 / js_array_b_probe0 = b"probe", recv() => { UNDEFINED };
