@@ -54,6 +54,10 @@ type CpWaiter = Box<dyn FnOnce() -> (Option<i32>, Option<i32>) + Send>;
 
 mod stdin;
 use stdin::CpStdin;
+#[cfg(unix)]
+mod extra_stdio;
+#[cfg(unix)]
+pub(crate) use extra_stdio::{cp_method_extra_end, cp_method_extra_write};
 /// turnloop P2: the child's readable pipes as loop entries (split out only to
 /// keep this file under the 2000-line cap; it is one subject with the reader
 /// call sites above).
@@ -123,6 +127,14 @@ enum CpEvent {
         len: usize,
         broken: bool,
     },
+    /// The drain thread of an extra `stdio` pipe wrote `len` queued bytes, or the pipe broke.
+    #[cfg(unix)]
+    ExtraWritten {
+        handle: u64,
+        fd: usize,
+        len: usize,
+        broken: bool,
+    },
 }
 
 static CP_EVENT_QUEUE: Mutex<Vec<CpEvent>> = Mutex::new(Vec::new());
@@ -152,6 +164,9 @@ struct LiveChild {
     /// stderr before stdout for a child that closes both descriptors together.
     stdout_eof_pending: bool,
     extra_open: Vec<usize>,
+    /// Write handles on the extra `stdio` pipes.
+    #[cfg(unix)]
+    extra_writers: Vec<extra_stdio::ExtraWriter>,
     /// turnloop entries carrying this child's readable pipes, as
     /// `(fd, entry id)`. Empty on the thread fallback, and drained at EOF and
     /// at teardown so the driver never keeps a descriptor the child is done
@@ -322,6 +337,8 @@ impl CpEvent {
             | CpEvent::Timeout { handle, .. }
             | CpEvent::Abort { handle }
             | CpEvent::StdinWritten { handle, .. } => *handle,
+            #[cfg(unix)]
+            CpEvent::ExtraWritten { handle, .. } => *handle,
         }
     }
 }
@@ -589,8 +606,9 @@ fn cp_register_live_child_parts(
     cp_set_field(stdin_obj, b"__cpHandle", handle_f);
     cp_set_field(stdout_obj, b"__cpHandle", handle_f);
     cp_set_field(stderr_obj, b"__cpHandle", handle_f);
-    for (_, stream, _) in &extra_pipes {
+    for (fd, stream, _) in &extra_pipes {
         cp_set_field(*stream, b"__cpHandle", handle_f);
+        cp_set_field(*stream, b"__cpFd", *fd as f64);
     }
     let (process_ids, pipe_ids) =
         cp_init_async_resources(cp, Some(stdin_obj), stdout_obj, stderr_obj);
@@ -627,6 +645,11 @@ fn cp_register_live_child_parts(
                 stderr_open,
                 stdout_eof_pending: false,
                 extra_open: extra_pipes.iter().map(|(fd, _, _)| *fd).collect(),
+                #[cfg(unix)]
+                extra_writers: extra_pipes
+                    .iter()
+                    .filter_map(|(fd, _, pipe)| extra_stdio::ExtraWriter::new(*fd, pipe))
+                    .collect(),
                 loop_streams: Vec::new(),
                 spawned: false,
                 exited: None,
@@ -1019,7 +1042,7 @@ pub extern "C" fn js_child_process_spawn_streams(
     let mut extra_streams = Vec::new();
     for (fd, kind) in stdio_kinds.iter().copied().enumerate().skip(3) {
         let stream = if kind == CpStdio::Pipe {
-            cp_build_readable()
+            cp_build_duplex()
         } else {
             TAG_NULL_F64
         };
@@ -1376,6 +1399,13 @@ fn cp_reactor_pump_inner() {
                 len,
                 broken,
             } => cp_stdin_written(handle, len, broken),
+            #[cfg(unix)]
+            CpEvent::ExtraWritten {
+                handle,
+                fd,
+                len,
+                broken,
+            } => extra_stdio::cp_extra_written(handle, fd, len, broken),
         }
     }
 
@@ -1583,6 +1613,8 @@ pub fn cp_register_idle_live_child_for_test(cp: f64) -> u64 {
             stderr_open: false,
             stdout_eof_pending: false,
             extra_open: Vec::new(),
+            #[cfg(unix)]
+            extra_writers: Vec::new(),
             loop_streams: Vec::new(),
             spawned: true,
             exited: None,
