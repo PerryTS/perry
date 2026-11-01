@@ -1825,9 +1825,6 @@ impl Model {
                 self.reshape(None);
             } else {
                 self.note_inst(t, true);
-                if self.is_marker(t) && !self.marker_define {
-                    self.note_shared(SharedWrite::Removed(None));
-                }
             }
         }
         if matches!(
