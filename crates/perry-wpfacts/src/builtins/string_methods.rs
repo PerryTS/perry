@@ -12,7 +12,7 @@ const WK: &str = collections::WK_PREFIX;
 
 /// Operand `v` is read by ToPrimitive (ToString / ToNumber / ToPropertyKey).
 pub(crate) fn to_prim(m: &mut Model, v: NodeId, why: &str) {
-    let r = m.reason(why);
+    let r = m.reason(&format!("ToPrimitive of the {why}"));
     m.cons(
         v,
         Cons::Implicit {
@@ -150,7 +150,7 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
                 for &a in &c.args {
                     to_prim(m, a, "String.prototype.replace operand");
                 }
-                ret_prim(m, call, prim::STR);
+                generic_result(m, call);
                 return true;
             };
             to_prim(m, p, "replace searchValue ToString");
@@ -161,7 +161,6 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
             replace_value(m, call, rv);
             let r = sym_call(m, call, p, "replace", vec![s, rv]);
             m.edge(r, c.ret);
-            ret_prim(m, call, prim::STR);
         }
         // 22.1.3.23: GetMethod(separator, @@split) called with (O, limit);
         // else ToString(separator), ToUint32(limit).
@@ -173,8 +172,6 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
                 let r = sym_call(m, call, p, "split", vec![s, lim]);
                 m.edge(r, c.ret);
             }
-            let pb = site_tmpl(m, call, "primbox");
-            ret_tok(m, call, pb);
         }
         // 22.1.3.13 / .14: match: GetMethod(regexp, @@match) called with
         // (O), else RegExpCreate(regexp): ToString(regexp). matchAll first
@@ -189,11 +186,6 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
                 let r = sym_call(m, call, p, name, vec![s]);
                 m.edge(r, c.ret);
             }
-            let pb = site_tmpl(m, call, "primbox");
-            ret_tok(m, call, pb);
-            if name == "match" {
-                ret_prim(m, call, prim::NULL);
-            }
         }
         // 22.1.3.22: @@search called with (O), else RegExpCreate.
         "search" => {
@@ -202,7 +194,6 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
                 let r = sym_call(m, call, p, "search", vec![s]);
                 m.edge(r, c.ret);
             }
-            ret_prim(m, call, prim::NUM);
         }
         // Every operand is ToString'd or ToIntegerOrInfinity'd.
         "charAt" | "charCodeAt" | "codePointAt" | "at" | "slice" | "substring" | "substr"
@@ -211,16 +202,6 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
             for &a in &c.args {
                 to_prim(m, a, "string method operand");
             }
-            ret_prim(
-                m,
-                call,
-                match name {
-                    "charCodeAt" | "indexOf" | "lastIndexOf" => prim::NUM,
-                    "codePointAt" => prim::NUM | prim::UNDEF,
-                    "at" => prim::STR | prim::UNDEF,
-                    _ => prim::STR,
-                },
-            );
         }
         // 22.1.3.7 / .24 / .8 step 2: IsRegExp(searchString) reads @@match;
         // then ToString.
@@ -231,7 +212,6 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
             for &a in &c.args {
                 to_prim(m, a, "string search operand");
             }
-            ret_prim(m, call, prim::BOOL);
         }
         // 22.1.3.12: `that` is ToString'd; locales and options are read by
         // Intl (any key): they keep the generic protocol.
@@ -239,7 +219,7 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
             if let Some(t) = arg0 {
                 to_prim(m, t, "localeCompare operand");
             }
-            let r = m.reason("localeCompare locales/options");
+            let r = m.reason("argument of a primitive method: localeCompare locales/options");
             for &a in c.args.iter().skip(1) {
                 m.cons(
                     a,
@@ -249,10 +229,10 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
                     },
                 );
             }
-            ret_prim(m, call, prim::NUM);
         }
         _ => return false,
     }
+    generic_result(m, call);
     true
 }
 
@@ -279,9 +259,6 @@ pub(super) fn regexp_method(m: &mut Model, t: Tok, name: &str, call: CallId) {
     match name {
         "exec" => {
             read_prim(m, recv, "lastIndex", "RegExp lastIndex ToLength");
-            let pb = site_tmpl(m, call, "primbox");
-            ret_tok(m, call, pb);
-            ret_prim(m, call, prim::NULL);
         }
         _ => {
             if let Some(s) = c.args.first().copied() {
@@ -289,21 +266,23 @@ pub(super) fn regexp_method(m: &mut Model, t: Tok, name: &str, call: CallId) {
                 let r = method_call(m, call, recv, "exec", vec![s]);
                 read_match(m, r);
             }
-            match name {
-                "test" => ret_prim(m, call, prim::BOOL),
-                "@@__perry_wk_replace" => {
-                    if let Some(&rv) = c.args.get(1) {
-                        replace_value(m, call, rv);
-                    }
-                    ret_prim(m, call, prim::STR);
+            if name == "@@__perry_wk_replace" {
+                if let Some(&rv) = c.args.get(1) {
+                    replace_value(m, call, rv);
                 }
-                "@@__perry_wk_match" => {
-                    let pb = site_tmpl(m, call, "primbox");
-                    ret_tok(m, call, pb);
-                    ret_prim(m, call, prim::NULL);
-                }
-                _ => ret_prim(m, call, prim::NUM),
             }
         }
     }
+    generic_result(m, call);
+}
+
+/// The result shape of a method of a primitive's chain the model does not
+/// describe one by one (DECISIONS 184: the unit boundary describes a
+/// `primbox` container beside the primitives): every primitive, or a
+/// container of them. The operands are what these rules make exact; the
+/// result types stay as `prim_method_generic` gave them.
+fn generic_result(m: &mut Model, call: CallId) {
+    ret_prim(m, call, prim::ALL);
+    let pb = site_tmpl(m, call, "primbox");
+    ret_tok(m, call, pb);
 }

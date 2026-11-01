@@ -577,7 +577,7 @@ impl<'a> Gen<'a> {
             Expr::MathMinSpread(s) | Expr::MathMaxSpread(s) => {
                 let s = self.expr(fx, s);
                 let it = self.iterate(s);
-                let r = self.m.reason("spread Math operand");
+                let r = self.m.reason("ToNumber of a spread Math operand");
                 self.m.cons(it, Cons::Implicit { reason: r, proto: Protocol::ToPrimitive });
                 self.prim_node(prim::NUM)
             }
