@@ -693,7 +693,8 @@ impl Model {
     /// reads `named_any` instead. A marker's fields are its reach markers.
     pub fn is_elem_array(&self, t: Tok) -> bool {
         matches!(self.toks[t as usize], TokKind::Obj(tm, _)
-            if matches!(self.tmpls[tm as usize].kind, TmplKind::Arr { .. }))
+            if matches!(self.tmpls[tm as usize].kind,
+                TmplKind::Arr { .. } | TmplKind::Args { .. }))
             && !self.is_marker(t)
     }
 
@@ -2049,6 +2050,7 @@ impl Model {
                 TmplKind::Lit { .. } => "literal",
                 TmplKind::FnInst { .. } => "fn instance",
                 TmplKind::Arr { .. } => "array",
+                TmplKind::Args { .. } => "arguments object",
                 TmplKind::ObjCreate { .. } => "Object.create object",
                 TmplKind::BObj { .. } => "builtin object",
             },
