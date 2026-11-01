@@ -400,6 +400,15 @@ pub extern "C" fn js_typed_array_find_last(
     ta: *const TypedArrayHeader,
     callback: *const ClosureHeader,
 ) -> f64 {
+    typed_array_find_last_this(ta, callback, f64::from_bits(crate::value::TAG_UNDEFINED))
+}
+
+/// `ta.find_last(cb, thisArg)`: `this_arg` is the callback's `this`.
+pub(crate) fn typed_array_find_last_this(
+    ta: *const TypedArrayHeader,
+    callback: *const ClosureHeader,
+    this_arg: f64,
+) -> f64 {
     let ta = clean_ta_ptr(ta);
     if ta.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
@@ -416,6 +425,7 @@ pub extern "C" fn js_typed_array_find_last(
             .map_or(ta, |root| root.get_raw_const_ptr())
     };
     let callback = scope.root_raw_const_ptr(callback);
+    let this_arg = scope.root_nanbox_f64(this_arg);
     let candidate = scope.root_nanbox_f64(f64::from_bits(crate::value::TAG_UNDEFINED));
     unsafe {
         let len = crate::typedarray::element_length(ta) as usize;
@@ -427,7 +437,7 @@ pub extern "C" fn js_typed_array_find_last(
             candidate.set_nanbox_f64(js_typed_array_get(current(), i as i32));
             let r = cb_site.call(
                 callback.get_raw_const_ptr(),
-                crate::closure::plain_call_receiver(),
+                crate::closure::JsThis::from_f64(this_arg.get_nanbox_f64()),
                 candidate.get_nanbox_f64(),
                 i as f64,
                 ta_receiver_value(current()),
@@ -446,6 +456,15 @@ pub extern "C" fn js_typed_array_find_last_index(
     ta: *const TypedArrayHeader,
     callback: *const ClosureHeader,
 ) -> f64 {
+    typed_array_find_last_index_this(ta, callback, f64::from_bits(crate::value::TAG_UNDEFINED))
+}
+
+/// `ta.find_last_index(cb, thisArg)`: `this_arg` is the callback's `this`.
+pub(crate) fn typed_array_find_last_index_this(
+    ta: *const TypedArrayHeader,
+    callback: *const ClosureHeader,
+    this_arg: f64,
+) -> f64 {
     let ta = clean_ta_ptr(ta);
     if ta.is_null() {
         return -1.0;
@@ -462,6 +481,7 @@ pub extern "C" fn js_typed_array_find_last_index(
             .map_or(ta, |root| root.get_raw_const_ptr())
     };
     let callback = scope.root_raw_const_ptr(callback);
+    let this_arg = scope.root_nanbox_f64(this_arg);
     let candidate = scope.root_nanbox_f64(f64::from_bits(crate::value::TAG_UNDEFINED));
     unsafe {
         let len = crate::typedarray::element_length(ta) as usize;
@@ -473,7 +493,7 @@ pub extern "C" fn js_typed_array_find_last_index(
             candidate.set_nanbox_f64(js_typed_array_get(current(), i as i32));
             let r = cb_site.call(
                 callback.get_raw_const_ptr(),
-                crate::closure::plain_call_receiver(),
+                crate::closure::JsThis::from_f64(this_arg.get_nanbox_f64()),
                 candidate.get_nanbox_f64(),
                 i as f64,
                 ta_receiver_value(current()),
