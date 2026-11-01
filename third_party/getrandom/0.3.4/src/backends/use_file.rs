@@ -172,7 +172,7 @@ mod sync {
     /// Wake up all threads which wait for value of atomic `FD` to change.
     pub(super) fn wake() {
         let op = libc::FUTEX_WAKE | libc::FUTEX_PRIVATE_FLAG;
-        let ret = unsafe { libc::syscall(libc::SYS_futex, &FD, op, libc::INT_MAX) };
+        let ret = unsafe { libc::syscall(libc::SYS_futex, &FD, op, libc::c_int::MAX) };
         debug_assert!(ret >= 0);
     }
 

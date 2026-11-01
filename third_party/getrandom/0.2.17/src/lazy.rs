@@ -26,7 +26,7 @@ impl LazyUsize {
     }
 
     // The initialization is not completed.
-    pub const UNINIT: usize = usize::max_value();
+    pub const UNINIT: usize = !0;
 
     // Runs the init() function at most once, returning the value of some run of
     // init(). Multiple callers can run their init() functions in parallel.

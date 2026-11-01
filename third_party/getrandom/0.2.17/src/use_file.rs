@@ -16,7 +16,7 @@ use core::{
 ///   - On AIX, /dev/urandom will "provide cryptographically secure output".
 ///   - On Haiku and QNX Neutrino they are identical.
 const FILE_PATH: &str = "/dev/urandom\0";
-const FD_UNINIT: usize = usize::max_value();
+const FD_UNINIT: usize = !0;
 
 pub fn getrandom_inner(dest: &mut [MaybeUninit<u8>]) -> Result<(), Error> {
     let fd = get_rng_fd()?;
