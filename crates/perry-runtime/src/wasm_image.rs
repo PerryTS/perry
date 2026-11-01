@@ -14,7 +14,6 @@
 #[cfg(target_family = "wasm")]
 mod records {
     pub(crate) struct Atom(pub *const crate::object::layout_desc::StaticAtom);
-    pub(crate) struct Layout(pub *mut crate::object::layout_desc::PerryLayoutDesc);
     pub(crate) struct Image {
         pub start: *const u8,
         pub len: usize,
@@ -22,10 +21,8 @@ mod records {
     // The pointed-to image outlives the instance. Layout ids are published using
     // the same atomic registration protocol as native image descriptors.
     unsafe impl Sync for Atom {}
-    unsafe impl Sync for Layout {}
     unsafe impl Sync for Image {}
     inventory::collect!(Atom);
-    inventory::collect!(Layout);
     inventory::collect!(Image);
 
     /// Return the exact static allocation containing the candidate string header.
@@ -55,12 +52,6 @@ macro_rules! wasm_atom {
     ($name:ident) => {
         #[cfg(target_family = "wasm")]
         inventory::submit! { crate::wasm_image::Atom(std::ptr::addr_of!($name)) }
-    };
-}
-macro_rules! wasm_layout {
-    ($name:ident) => {
-        #[cfg(target_family = "wasm")]
-        inventory::submit! { crate::wasm_image::Layout(std::ptr::addr_of_mut!($name)) }
     };
 }
 macro_rules! wasm_string_image {

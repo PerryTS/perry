@@ -43,6 +43,8 @@
 //! questions" section.
 
 #![deny(missing_docs)]
+// Weak runtime-layout references (`runtime_layouts`).
+#![feature(linkage)]
 
 mod runtime_state_key;
 pub use runtime_state_key::{runtime_call, runtime_get, runtime_set};

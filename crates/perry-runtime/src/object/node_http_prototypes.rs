@@ -45,9 +45,9 @@ impl HttpProto {
 
     fn layout(self) -> *const crate::object::layout_desc::PerryLayoutDesc {
         match self {
-            HttpProto::OutgoingMessage => &raw const layouts::OUTGOING_MESSAGE_PROTOTYPE,
-            HttpProto::ServerResponse => &raw const layouts::SERVER_RESPONSE_PROTOTYPE,
-            HttpProto::IncomingMessage => &raw const layouts::INCOMING_MESSAGE_PROTOTYPE,
+            HttpProto::OutgoingMessage => layouts::OUTGOING_MESSAGE_PROTOTYPE::desc(),
+            HttpProto::ServerResponse => layouts::SERVER_RESPONSE_PROTOTYPE::desc(),
+            HttpProto::IncomingMessage => layouts::INCOMING_MESSAGE_PROTOTYPE::desc(),
         }
     }
 
@@ -732,7 +732,7 @@ unsafe fn message_init(this: f64, req: Option<f64>) {
     // stays on those keys.
     let plain_chain = crate::node_stream::instance_birth::on_layout_with_plain_chain(
         receiver,
-        &raw const layouts::SERVER_RESPONSE,
+        layouts::SERVER_RESPONSE::desc(),
     );
     let on_layout = || {
         plain_chain
@@ -741,7 +741,7 @@ unsafe fn message_init(this: f64, req: Option<f64>) {
             )
             .is_some_and(|obj| {
                 crate::node_stream::instance_birth::instance_layout(obj)
-                    == Some(&raw const layouts::SERVER_RESPONSE)
+                    == Some(layouts::SERVER_RESPONSE::desc())
             })
     };
     let put = |slot: u32, name: &'static [u8], value: f64| {
@@ -906,7 +906,7 @@ pub unsafe extern "C" fn js_node_http_server_response_birth(proto: f64, req: f64
     let proto = scope.root_nanbox_f64(proto);
     let obj = match crate::node_stream::instance_birth::alloc_on_layout(
         proto.get_nanbox_f64(),
-        &raw const layouts::SERVER_RESPONSE,
+        layouts::SERVER_RESPONSE::desc(),
     ) {
         Some(obj) => boxed(obj),
         None => crate::object::js_object_create(proto.get_nanbox_f64()),
@@ -947,7 +947,7 @@ mod tests {
 
     unsafe fn on_layout(obj: usize) -> bool {
         crate::node_stream::instance_birth::instance_layout(obj as *const ObjectHeader)
-            == Some(&raw const crate::object::runtime_layouts::SERVER_RESPONSE)
+            == Some(crate::object::runtime_layouts::SERVER_RESPONSE::desc())
     }
 
     #[test]

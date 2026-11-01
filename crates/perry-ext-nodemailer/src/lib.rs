@@ -164,9 +164,9 @@ fn build_info_object(message_id: &str, response: &str) -> JsValue {
     let _record_roots = perry_ffi::TransientRootScope::enter();
     let obj = _record_roots.root_addr(
         (unsafe {
-            perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
-                perry_ffi::runtime_layouts::RECORD_F28_0
-            ))
+            perry_ffi::runtime_layouts::alloc_runtime_record(
+                perry_ffi::runtime_layouts::RECORD_F28_0::desc(),
+            )
         }) as i64,
     );
     let id_str = alloc_string(message_id);
@@ -302,9 +302,9 @@ mod static_record_layout_tests {
         perry_ffi::initialize_runtime_fixture();
         let roots = perry_ffi::TransientRootScope::enter();
         let record = roots.root_addr(unsafe {
-            perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
-                perry_ffi::runtime_layouts::RECORD_F28_0
-            ))
+            perry_ffi::runtime_layouts::alloc_runtime_record(
+                perry_ffi::runtime_layouts::RECORD_F28_0::desc(),
+            )
         } as i64);
         for slot in 0..2 {
             assert_eq!(
