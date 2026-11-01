@@ -9,6 +9,7 @@ pub(super) fn compose(
     api: InterfaceId,
     source: NodeId,
     members: &[(String, NodeId, bool)],
+    ordinal: usize,
 ) -> Result<NodeId> {
     let mut wrapper = CompositionGraph::new();
     *wrapper.types_mut() = outer.types().clone();
@@ -30,7 +31,12 @@ pub(super) fn compose(
     let bytes = wrapper
         .encode(EncodeOptions::default())
         .context("Invalid typed public-interface forwarding component")?;
-    let package = Package::from_bytes("perry:interface", None, bytes, outer.types_mut())?;
+    let package = Package::from_bytes(
+        &format!("perry:interface-{ordinal}"),
+        None,
+        bytes,
+        outer.types_mut(),
+    )?;
     let package = outer.register_package(package)?;
     let instance = outer.instantiate(package);
     outer.set_instantiation_argument(instance, source_name, source)?;

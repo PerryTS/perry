@@ -139,7 +139,7 @@ pub fn compose_experimental_guest(producer: &[u8], facade: &[u8], plan: &[u8]) -
                 };
                 members.push((field, node, forward.is_some()));
             }
-            let instance = interface::compose(&mut graph, id, original, &members)?;
+            let instance = interface::compose(&mut graph, id, original, &members, exports.len())?;
             exports.push(Export {
                 name,
                 item: expose(&mut graph, &mut temporary, instance)?,
