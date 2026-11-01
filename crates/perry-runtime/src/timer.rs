@@ -345,7 +345,7 @@ pub(crate) fn release_timers_in_freed_ranges(freed: &crate::arena::thread_exit::
 #[no_mangle]
 pub extern "C" fn js_sleep_ms(ms: f64) {
     if ms > 0.0 {
-        std::thread::sleep(Duration::from_millis(ms as u64));
+        crate::event_pump::sleep(Duration::from_millis(ms as u64));
     }
 }
 

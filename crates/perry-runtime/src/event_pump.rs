@@ -27,6 +27,13 @@ use std::sync::atomic::{AtomicBool, AtomicI64, AtomicPtr, Ordering};
 use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::Duration;
 
+#[cfg(all(target_os = "wasi", target_env = "p3"))]
+mod wasi_p3;
+#[cfg(not(all(target_os = "wasi", target_env = "p3")))]
+pub(crate) use std::thread::sleep;
+#[cfg(all(target_os = "wasi", target_env = "p3"))]
+pub(crate) use wasi_p3::sleep;
+
 // turnloop P0: the primary agent parks in its own `turnloop::Loop` on exact
 // `Instant` deadlines. Native targets only; wasm compiles the legacy park
 // instead.
@@ -853,7 +860,7 @@ fn zero_budget_return() {
         });
         if streak > SPIN_THROTTLE_AFTER {
             throttled = true;
-            std::thread::sleep(SPIN_THROTTLE_SLEEP);
+            sleep(SPIN_THROTTLE_SLEEP);
         }
     }
     loop_stats::note_zero_budget(throttled);
@@ -865,6 +872,15 @@ fn zero_budget_return() {
 
 /// The condvar park (#84) for `budget`, shared by the legacy path and the
 /// precise path's turn-failure fallback.
+#[cfg(all(target_os = "wasi", target_env = "p3"))]
+fn condvar_park(budget: Duration) {
+    // P3 commands have no cross-agent notifier. Wait on the canonical clock
+    // instead of the default libc's deliberately unsupported futex operation.
+    sleep(budget);
+    spin_streak_reset();
+}
+
+#[cfg(not(all(target_os = "wasi", target_env = "p3")))]
 fn condvar_park(budget: Duration) {
     // Slow path: take the cvar mutex and sleep on it. Mark ourselves
     // as a waiter first so concurrent notifiers go through the
