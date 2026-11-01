@@ -228,8 +228,9 @@ fn publish(encoded: &[u8], exports: &[Export]) -> Result<Vec<u8>> {
             depth += 1;
         }
     }
-    let types =
-        Validator::new_with_features(WasmFeatures::all()).validate_all(output.as_slice())?;
+    let types = Validator::new_with_features(WasmFeatures::all())
+        .validate_all(output.as_slice())
+        .context("Invalid producer/facade internals after removing temporary exports")?;
     let mut instances = types.as_ref().component_instance_count();
     let mut public = ComponentExportSection::new();
     for export in exports {
@@ -260,6 +261,8 @@ fn publish(encoded: &[u8], exports: &[Export]) -> Result<Vec<u8>> {
     }
     output.section(&public);
     let bytes = output.finish();
-    Validator::new_with_features(WasmFeatures::all()).validate_all(&bytes)?;
+    Validator::new_with_features(WasmFeatures::all())
+        .validate_all(&bytes)
+        .context("Invalid rebuilt public producer interface")?;
     Ok(bytes)
 }

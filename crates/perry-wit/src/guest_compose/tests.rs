@@ -10,6 +10,7 @@ fn concrete_resource_future_payload_is_exported_with_its_enclosing_interface() {
         (export "payload" (type $payload (eq $record)))
         (type $future (future $payload))
         (export "pending" (type $pending (eq $future)))
+        (export "[constructor]item" (func (result $own)))
         (export "make" (func (result $pending)))))"#;
     let producer = wat::parse_str(r#"(component
         (import "kick" (func $kick async))
@@ -26,10 +27,12 @@ fn concrete_resource_future_payload_is_exported_with_its_enclosing_interface() {
         (alias core export $m "make" (core func $make))
         (alias core export $m "realloc" (core func $realloc))
         (func $make (result $pending) (canon lift (core func $make) (memory $memory) (realloc $realloc)))
+        (func $ctor (result $own) (canon lift (core func $make)))
         (instance $api
             (export "item" (type $item))
             (export "payload" (type $payload))
             (export "pending" (type $pending))
+            (export "[constructor]item" (func $ctor))
             (export "make" (func $make)))
         (export "api" (instance $api))
         (export "actor" (func $kick))
@@ -39,14 +42,16 @@ fn concrete_resource_future_payload_is_exported_with_its_enclosing_interface() {
         (import "source" (instance $source (type $api)))
         (import "kick" (func async))
         (alias export $source "make" (func $make))
-        (instance $forward (export "forward" (func $make)))
+        (alias export $source "[constructor]item" (func $ctor))
+        (instance $forward (export "forward" (func $make)) (export "new" (func $ctor)))
         (export "forwarder" (instance $forward)))"#
     ))
     .unwrap();
     let plan = serde_json::to_vec(&serde_json::json!({
         "schema_version":1, "actor":"actor", "signal":"signal", "forward_interface":"forwarder",
         "imports":[{"local":"source","original":"api"},{"local":"kick","original":"actor"}],
-        "forwards":[{"interface":"api","function":"make","export":"forward"}]
+        "forwards":[{"interface":"api","function":"make","export":"forward"},
+                    {"interface":"api","function":"[constructor]item","export":"new"}]
     }))
     .unwrap();
     let bytes = compose_experimental_guest(&producer, &facade, &plan).unwrap();
@@ -57,7 +62,7 @@ fn concrete_resource_future_payload_is_exported_with_its_enclosing_interface() {
     let ItemKind::Instance(api) = exports["api"] else {
         panic!("public interface")
     };
-    assert_eq!(types[api].exports.len(), 4);
+    assert_eq!(types[api].exports.len(), 5);
     let ItemKind::Func(make) = types[api].exports["make"] else {
         panic!("sync factory")
     };
