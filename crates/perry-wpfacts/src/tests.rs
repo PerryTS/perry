@@ -41,6 +41,7 @@ mod layout_key;
 mod ledger;
 mod named_accessors;
 mod native_fs;
+mod global_gc;
 mod native_proto;
 mod own_length;
 mod unknown_accessor_key;
