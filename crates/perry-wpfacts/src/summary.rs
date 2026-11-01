@@ -1103,7 +1103,20 @@ impl Model {
         }
         let f = self.tok_fn(ft);
         let why = |m: &Self| format!("this of escaped function: {}", m.reasons[reason as usize]);
-        let dsts = self.this_nodes(ft);
+        let mut dsts = self.this_nodes(ft);
+        // A constructor's field initializers run on every object it runs on
+        // (before its body, as `run_ctor_chain` runs them for a `new`):
+        // another unit's `super()` reaches them through the constructor's
+        // contract, so their stores into the receiver are the contract's
+        // (`this_stores`, DECISIONS 179), not only the body's.
+        if let Some(fi) = self.funcs[f as usize]
+            .ctor_of
+            .filter(|&tm| self.tmpls[tm as usize].ctor == Some(f))
+            .and_then(|tm| self.tmpls[tm as usize].field_init)
+        {
+            let fit = self.funcs[fi as usize].token;
+            dsts.extend(self.this_nodes(fit));
+        }
         let insts = self.published_this.get(&f).cloned().unwrap_or_default();
         // DECISIONS 116: a method of sealed classes only, published through
         // its contract, runs on the instances this unit gave out (and the
@@ -1169,6 +1182,12 @@ impl Model {
                         self.add_tok(d, t);
                     }
                 }
+                // DECISIONS 231(a): a constructor runs on its receiver
+                // marker (another unit's `super()`) and on the instances
+                // `new` makes (the contract's construction, DECISIONS 125),
+                // never on the receiver token: no unit calls a constructor
+                // as a method of an instance it holds.
+                _ if self.funcs[f as usize].ctor_of.is_some() => {}
                 _ => {
                     for &i in &insts {
                         self.add_tok(d, i);

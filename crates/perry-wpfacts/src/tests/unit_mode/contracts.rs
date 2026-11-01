@@ -320,8 +320,13 @@ pub(super) fn a_broken_namespace_field_function_resolves_only_the_units_that_see
     // (`Cons::Defined`): a relay node for the read's own builtin members
     // and a rule on the chain node, [758, 1094, 952, 42] -> [762, 1104,
     // 960, 42]. DECISIONS 234: a read of an own definite key takes the
-    // chain's program values only (a chain node of its own) -> the pin below.
-    assert_eq!(pf.round_work, [763, 1103, 960, 42], "{:?}", pf.units);
+    // chain's program values only (a chain node of its own) -> [763, 1103,
+    // 960, 42]. DECISIONS 231(c): a store of `a`'s code into an instance of
+    // a class a receiver marker stands for goes to the class's `virt-stored`
+    // node for that key (`virt_store`), which the marker's reads take as its
+    // own field: two such nodes (two keys) in each of the three rounds that
+    // solve `a` -> the pin below.
+    assert_eq!(pf.round_work, [765, 1105, 962, 42], "{:?}", pf.units);
 }
 
 #[test]

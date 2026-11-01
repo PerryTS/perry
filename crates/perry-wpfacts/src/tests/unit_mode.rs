@@ -613,3 +613,5 @@ mod protocol_touch;
 mod unit_cycle_order;
 #[path = "unit_mode/own_key_shadow.rs"]
 mod own_key_shadow;
+
+mod ctor_receiver_calls;

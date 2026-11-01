@@ -70,6 +70,9 @@ impl Model {
         }
         let top = self.top_reshaped_any || self.top_reshaped_keys.contains(&a);
         if let Some(classes) = self.virt_protos.get(&t) {
+            if self.virt_tok_open.contains(&t) {
+                return false;
+            }
             // Instances of these classes made in another unit may have
             // escaped there, unseen here: a delete or defineProperty
             // through ⊤ revokes the key on them.

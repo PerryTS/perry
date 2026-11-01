@@ -873,7 +873,7 @@ impl<'a> Gen<'a> {
         // the marker escapes (the caller's function is then unknown code),
         // they escape as before.
         let calls = self.m.marker_calls.clone();
-        for (f, i, _, call) in calls {
+        for (f, i, _, _, call) in calls {
             let top = self
                 .m
                 .marker_of

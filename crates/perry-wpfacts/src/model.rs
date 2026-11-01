@@ -1622,6 +1622,24 @@ pub struct Model {
     /// computed store, a hard operation, an escape).
     pub virt_revoked: crate::pts::FxHashSet<(TmplId, Atom)>,
     pub virt_open: crate::pts::FxHashSet<TmplId>,
+    /// DECISIONS 231(c): keys the code of this unit stores, with known
+    /// values, into an instance or receiver of each published class or a
+    /// subclass (`virt_store`), and the node holding those values: the own
+    /// field a receiver of the class reads.
+    pub virt_stored: FxHashMap<(TmplId, Atom), NodeId>,
+    /// Published classes an instance or receiver of which escaped: a store
+    /// into ⊤ under a key (any unit's, `top_stored`) may be a store into it.
+    pub virt_escaped: crate::pts::FxHashSet<TmplId>,
+    /// The keys stored into ⊤ (this unit's stores and the replayed ones);
+    /// `None`: under a computed key.
+    pub top_stored: crate::pts::FxHashSet<Option<Atom>>,
+    /// DECISIONS 231(b): argument markers that stood for receiver markers
+    /// only and now stand for another value too: every key may be an own
+    /// key of what they denote, as for an opened class (`virt_own`).
+    pub virt_tok_open: crate::pts::FxHashSet<Tok>,
+    /// The argument markers (no reach) each marker is a member of, for the
+    /// receiver classes an argument marker stands for (`virt_member`).
+    pub virt_member_of: FxHashMap<Tok, Vec<Tok>>,
     /// Census: keys a subclass of another unit defines, per published
     /// class (`override <k> of <display>`; `*`: any key).
     pub override_keys: FxHashMap<TmplId, Vec<Atom>>,
@@ -1832,8 +1850,11 @@ pub struct Model {
     /// The calls through a contract function's parameter marker
     /// (function, parameter, method key, call): `p(..)` (no key, DECISIONS
     /// 140) or `p.k(..)` (DECISIONS 144). Their arguments go to the
-    /// caller's unit, described as the result is.
-    pub marker_calls: Vec<(FnIdx, u32, Option<Atom>, CallId)>,
+    /// caller's unit, described as the result is. DECISIONS 236: with a
+    /// path (parameter `u32::MAX`, path `Some(f)`), `this.f.k(..)` through
+    /// the receiver marker's keyed reach: each unit holding a receiver runs
+    /// it on what its object holds under `f`.
+    pub marker_calls: Vec<(FnIdx, u32, Option<Atom>, Option<Atom>, CallId)>,
     /// A contract function's parameter markers: one object token per
     /// parameter standing for everything the caller passes (anything read
     /// from it is the marker again), and what the callee did with it

@@ -581,7 +581,7 @@ impl Model {
                 let n = d.cause_node;
                 d.esc_why.entry(t).or_insert((w, n));
             }
-            self.virt_revoke(t, None);
+            self.virt_escape(t);
             self.note_inst(t, false);
         }
         if new & MARK_ESCAPE != 0 && !described {
@@ -1228,6 +1228,50 @@ impl Model {
         }
     }
 
+    /// DECISIONS 231(b): an argument marker standing only for receiver
+    /// markers (DECISIONS 59: instances of their classes) is a receiver of
+    /// those classes itself: `this.m()` and `this.k` in a body that runs on
+    /// it resolve through the classes' chains (`virt_load`). Member `m`
+    /// joins `r`: a receiver adds its classes, any other value opens `r`
+    /// (every key may be an own key, `virt_own`), so the loads and calls
+    /// already made on `r` take its own fields too. The first member decides
+    /// whether `r` is a receiver at all; a receiver marker registered after
+    /// it joined adds its classes (`register_virt`).
+    pub(crate) fn virt_member(&mut self, m: Tok, r: Tok) {
+        if self.reach_marker.contains(&r) || self.keyed_parent.contains_key(&r) {
+            return;
+        }
+        self.virt_member_of.entry(m).or_default().push(r);
+        let first = self.arg_members.get(&r).is_some_and(|v| v.len() == 1);
+        match self.virt_protos.get(&m).cloned() {
+            Some(cs) if !self.virt_tok_open.contains(&m) => {
+                if first || self.virt_protos.contains_key(&r) {
+                    self.register_virt(r, &cs);
+                }
+            }
+            _ => self.open_virt_tok(r),
+        }
+    }
+
+    /// `r` stands for a value that is not a receiver of its classes
+    /// (`virt_member`): so do the argument markers above it.
+    pub(crate) fn open_virt_tok(&mut self, r: Tok) {
+        let mut st = vec![r];
+        while let Some(x) = st.pop() {
+            if !self.virt_protos.contains_key(&x) || !self.virt_tok_open.insert(x) {
+                continue;
+            }
+            self.flush_shadowed(Some(x));
+            for a in self.virt_tok_keys.get(&x).cloned().unwrap_or_default() {
+                if let Some(&n) = self.virt_nodes.get(&(x, a)) {
+                    let f = self.field(x, a);
+                    self.edge(f, n);
+                }
+            }
+            st.extend(self.virt_member_of.get(&x).cloned().unwrap_or_default());
+        }
+    }
+
     /// Argument marker `r` stands for marker `m` too: `m` takes every use
     /// of `r`, and what `m` reaches takes every use of what `r` reaches.
     pub(crate) fn link_marker(&mut self, m: Tok, r: Tok) {
@@ -1235,6 +1279,7 @@ impl Model {
             return;
         }
         self.arg_members.get_mut(&r).unwrap().push(m);
+        self.virt_member(m, r);
         // A new link changes the sets settled for `r` and the markers above
         // it (`marker_members`), no others (DECISIONS 200).
         if !self.members_settled.get_mut().is_empty() {

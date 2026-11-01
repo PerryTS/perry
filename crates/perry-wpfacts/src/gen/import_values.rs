@@ -990,12 +990,30 @@ impl<'a> Gen<'a> {
         // unknown: it leaves.
         for pc in &c.param_calls {
             let i = pc.param as usize;
-            let Some(&p) = params.get(i) else {
-                continue;
+            // DECISIONS 236: a call through the receiver's field `f` runs on
+            // what this unit's receivers hold under it (their chain, their
+            // stores; ⊤ where one escaped).
+            let p = match (&pc.path, pc.param) {
+                (Some(f), u32::MAX) => {
+                    if c.lexical_this || c.this_use & MARK_ESCAPE != 0 {
+                        continue;
+                    }
+                    let key = Key::Named(self.m.atom(f));
+                    let l = self.load(this, key);
+                    self.m.nodes[l as usize].frame = run;
+                    l
+                }
+                (Some(_), _) => continue,
+                (None, _) => {
+                    let Some(&p) = params.get(i) else {
+                        continue;
+                    };
+                    if c.params[i] & MARK_ESCAPE != 0 {
+                        continue;
+                    }
+                    p
+                }
             };
-            if c.params[i] & MARK_ESCAPE != 0 {
-                continue;
-            }
             let mut args = Vec::with_capacity(pc.args.len());
             for (j, d) in pc.args.iter().enumerate() {
                 let a = self

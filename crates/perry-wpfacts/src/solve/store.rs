@@ -280,14 +280,19 @@ impl Model {
         // is a store under a computed key.
         let elem = self.is_elem_key(key);
         let key = if elem { Key::Any } else { key };
-        {
-            self.virt_revoke(
-                t,
-                match key {
-                    Key::Named(a) => Some(a),
-                    Key::Any => None,
-                },
-            );
+        // DECISIONS 231(c): a named store is the value of that key on the
+        // receivers of the classes `t` is or stands for (`virt_store`); a
+        // computed one opens them. A store into ⊤ may be a store into an
+        // escaped instance (`top_store`).
+        match key {
+            Key::Named(a) => self.virt_store(t, a, src),
+            Key::Any => self.virt_revoke(t, None),
+        }
+        if t == TOP {
+            self.top_store(match key {
+                Key::Named(a) => Some(a),
+                Key::Any => None,
+            });
         }
         // DECISIONS 210: a store into another unit's function (a stand-in)
         // under `prototype` (or a key that may be it) replaces the chain its
