@@ -116,6 +116,7 @@ pub(super) fn generate(
     let forward_interface = "perry-producer-forward".to_string();
     let forward_key = WorldKey::Name(forward_interface.clone());
     let mut mapped = BTreeMap::new();
+    let mut root_forwards = std::collections::BTreeSet::new();
     let actor = asynchronous::actor_name(anchor);
     let mut entries = Vec::new();
     for interface in &public.exports {
@@ -141,16 +142,30 @@ pub(super) fn generate(
             let mut forwarded = source.clone();
             forwarded.name = export.clone();
             forwarded.kind = wit_parser::FunctionKind::Freestanding;
-            for param in &mut forwarded.params {
-                param.ty = types::remap(&mut resolve, forwarding, &mut mapped, param.ty)?;
+            if interface.name.is_empty() {
+                // World functions already use elaborated world types. Keep
+                // those imported equality identities through the facade.
+                let key = WorldKey::Name(export.clone());
+                root_forwards.insert(key.clone());
+                ensure!(
+                    facade
+                        .imports
+                        .insert(key, WorldItem::Function(forwarded.clone()))
+                        .is_none(),
+                    "Facade forward name collision"
+                );
+            } else {
+                for param in &mut forwarded.params {
+                    param.ty = types::remap(&mut resolve, forwarding, &mut mapped, param.ty)?;
+                }
+                forwarded.result = forwarded
+                    .result
+                    .map(|ty| types::remap(&mut resolve, forwarding, &mut mapped, ty))
+                    .transpose()?;
+                resolve.interfaces[forwarding]
+                    .functions
+                    .insert(export.clone(), forwarded.clone());
             }
-            forwarded.result = forwarded
-                .result
-                .map(|ty| types::remap(&mut resolve, forwarding, &mut mapped, ty))
-                .transpose()?;
-            resolve.interfaces[forwarding]
-                .functions
-                .insert(export.clone(), forwarded.clone());
             entries.push((
                 Forward {
                     interface: interface.name.clone(),
@@ -180,7 +195,7 @@ pub(super) fn generate(
     resolve.exportize(
         world,
         Some(original.name.clone()),
-        Some(&|key, _| key == &forward_key),
+        Some(&|key, _| key == &forward_key || root_forwards.contains(key)),
     )?;
     let facade_id = world;
     let mut files = Files::default();
@@ -245,12 +260,16 @@ pub(super) fn generate(
         &HashMap::new(),
     );
     let upper = world_name.to_uppercase();
-    for (_, key, original, forwarded) in &entries {
+    for (forward, key, original, forwarded) in &entries {
         let name = wit_bindgen_c::c_func_name(
             false,
             &resolve,
             &world_name,
-            Some(&forward_key),
+            if forward.interface.is_empty() {
+                None
+            } else {
+                Some(&forward_key)
+            },
             forwarded,
             &HashMap::new(),
         );

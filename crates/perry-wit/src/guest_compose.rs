@@ -149,7 +149,7 @@ pub fn compose_experimental_guest(producer: &[u8], facade: &[u8], plan: &[u8]) -
             );
             let node = if let Some(forward) = forward {
                 forwarded_count += 1;
-                graph.alias_instance_export(forwarding, &forward.export)?
+                graph.alias_instance_export(facade, &forward.export)?
             } else {
                 original
             };
