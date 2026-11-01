@@ -48,6 +48,12 @@ pub(crate) unsafe fn closure_has_generator_body(closure: *const ClosureHeader) -
         && (*info).flags & (super::FN_GENERATOR | super::FN_ASYNC_GENERATOR) != 0
 }
 
+/// Inline slots a plain function's bag is born with beyond its keys: a
+/// function given own keys usually takes several (ArkType's callable nodes,
+/// `Object.assign` of attachments, then class fields), and each one past the
+/// birth bound would otherwise go to the spill buffer.
+const BAG_ROOM: u32 = 6;
+
 const STATE_PROTO: &str = "p";
 const DELETED_PREFIX: &str = "d:";
 const INTERNAL_PREFIX: &str = "i:";
@@ -184,7 +190,9 @@ pub(crate) unsafe fn bag_born_with_attrs(
                     .or_else(|| super::closure_length(closure))
                     .unwrap_or(0) as f64
                 } else if (*closure).code() == super::BOUND_FUNCTION_FUNC_PTR {
-                    super::bound_function_lazy_name(ptr)
+                    // The bag records it: computed, not defined (a define
+                    // would birth a bag inside this birth).
+                    super::dispatch::bound::bound_function_name_value(ptr).0
                 } else {
                     let name =
                         crate::builtins::function_name_for_closure(closure).unwrap_or_default();
@@ -209,9 +217,9 @@ pub(crate) unsafe fn bag_born_with_attrs(
                     key == intrinsic && value.to_bits() == expected.to_bits()
                 })
         {
-            crate::object::alloc::object_alloc_null_proto_with_key_attrs(entries, attrs)
+            crate::object::alloc::object_alloc_null_proto_with_key_attrs_room(entries, attrs, BAG_ROOM)
         } else if entries.iter().all(|(key, _)| names.contains(key)) {
-            crate::object::alloc::object_alloc_null_proto_with_key_attrs(own, own_attrs)
+            crate::object::alloc::object_alloc_null_proto_with_key_attrs_room(own, own_attrs, BAG_ROOM)
         } else {
             let mut all = Vec::with_capacity(entries.len() + count);
             let mut all_attrs = Vec::with_capacity(entries.len() + count);
@@ -224,7 +232,7 @@ pub(crate) unsafe fn bag_born_with_attrs(
                 all.push((key, value));
                 all_attrs.push(attrs.get(i).copied().unwrap_or(0));
             }
-            crate::object::alloc::object_alloc_null_proto_with_key_attrs(&all, &all_attrs)
+            crate::object::alloc::object_alloc_null_proto_with_key_attrs_room(&all, &all_attrs, BAG_ROOM)
         }
     };
     install_bag(ptr, bag);
