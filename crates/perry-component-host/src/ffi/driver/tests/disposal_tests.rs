@@ -154,6 +154,49 @@ fn ffi_driver_disposal_destroys_live_owners_while_a_guest_call_is_suspended() {
     }
 }
 #[test]
+fn ffi_driver_releases_host_payloads_disposed_in_a_callback_and_held_at_disposal() {
+    unsafe {
+        let mut state = State::default();
+        new(
+            &mut state,
+            crate::host_resource_tests::WORLD,
+            crate::host_resource_tests::COMPONENT,
+        );
+        let world = perry_wit::parse(crate::host_resource_tests::WORLD, None).unwrap();
+        let key = &world.imports[0].resources["token"];
+        let owned = |name: &str| json!({"$hostResource":name,"type":key,"generation":1,"owned":true,"new":true});
+        let drops = |state: &State| -> Vec<Value> {
+            state
+                .resources
+                .iter()
+                .filter(|(e, _, _)| e["kind"] == "drop")
+                .map(|(e, _, _)| e["resource"]["token"].clone())
+                .collect()
+        };
+        state.dispose_consumed = true;
+        let id = submit(
+            state.host,
+            json!({"op":"call","interface":"","function":"consume-imported","args":[owned("passed")]}),
+        )
+        .unwrap();
+        let done = poll(&mut state, 10);
+        assert_eq!(
+            done["completed"],
+            json!([{"id":id,"ok":true,"returned":false}]),
+            "{done}"
+        );
+        assert_eq!(done["retired"], false);
+        assert_eq!(drops(&state), vec![json!("passed")]);
+        completed(
+            &mut state,
+            json!({"op":"call","interface":"","function":"keep","args":[owned("held")]}),
+        );
+        assert_eq!(dispose(&mut state, 900), OK);
+        assert_eq!(drops(&state), vec![json!("passed"), json!("held")]);
+        perry_component_host_drop(state.host);
+    }
+}
+#[test]
 fn ffi_driver_foreign_disposal_preflight_and_discarded_cleanup_observer_keep_owners_distinct() {
     unsafe {
         let mut left = State::default();
