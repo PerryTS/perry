@@ -206,6 +206,7 @@ pub extern "C" fn js_fs_close_sync(fd_value: f64) -> i32 {
     let fd = fd_value as i32;
     FD_REGISTRY.with(|r| {
         if r.borrow_mut().remove(&fd).is_some() {
+            close_inherited_fd(fd);
             FD_PATHS.with(|paths| {
                 paths.borrow_mut().remove(&fd);
             });
