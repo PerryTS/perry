@@ -1,6 +1,7 @@
 //! Unit tests: small programs lowered from source, facts checked directly.
 
 mod accessor_keys;
+mod arguments_object;
 mod array_ctor;
 mod array_elements;
 mod array_iteration;
