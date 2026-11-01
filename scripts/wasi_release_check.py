@@ -50,7 +50,9 @@ def main():
         "--no-auto-optimize", "--no-cache", "-o", str(output / "probe.wasm")],
         cwd=output, env=env, capture_output=True, timeout=120)
     (output / "missing-runtime.log").write_bytes(result.stdout + result.stderr)
-    if result.returncode == 0 or b"Could not find libperry_runtime.a" not in result.stderr:
+    # WASI is a packaged target: perry names the @perryts/perry-target-* package
+    # to install instead of the generic "Could not find" text.
+    if result.returncode == 0 or b"has no libraries for target" not in result.stderr:
         raise SystemExit("The isolated compiler did not reject its missing WASI runtime; inspect missing-runtime.log")
     version = wasi_release.tomllib.loads((root / "Cargo.toml").read_text())["workspace"]["package"]["version"]
     wasi_release.install(args.bundle, installed / args.target / "release", args.revision, version,
