@@ -3,6 +3,16 @@
 // which asks the function's chain), and reads through a bound function's link.
 const keys = (f: any) => Reflect.ownKeys(f).join(",");
 const desc = (f: any, k: string) => JSON.stringify(Object.getOwnPropertyDescriptor(f, k));
+// an own `call` added through a warm key-add edge is the method a call site finds
+// (first: later tests write Function.prototype)
+const md: any = function md() { return "body"; }; md.x = 1;
+Object.assign(md, { call: () => "own" });
+const mc: any = function mc() { return "body"; }; mc.x = 1;
+for (const k of Object.keys({ call: 0 })) mc[k] = () => "own";
+console.log("32", mc.call());
+const me: any = function me() { return "body"; }; me.x = 1;
+for (const k of Object.keys({ call: 0 })) me[k] = () => "own";
+console.log("33", md.call(), me.call());
 class Callable {
   constructor(fn: Function, attach?: object) {
     return Object.assign(Object.setPrototypeOf(fn.bind(this), new.target.prototype), attach);
@@ -163,8 +173,10 @@ for (const lock of [false, false, true]) {
 // a class field over an attached key of the same name overwrites it in place
 for (let i = 0; i < 3; i++) { const o: any = new Leaf({ a: "attached", tag: "o" + i }); console.log("30", o.a, keys(o)); }
 // computed (interned) keys: overwrite, and an own method shadowing Function.prototype's
-const cm: any = function cm() { return "body"; };
-cm.x = 1;
-for (const k of Object.keys({ y: 0, call: 0 })) cm[k] = () => "own-" + k;
-for (const k of Object.keys({ y: 0 })) cm[k] = "again";
-console.log("31", cm.call(), cm.y, keys(cm));
+for (let i = 0; i < 3; i++) {
+  const cm: any = function cm() { return "body"; };
+  cm.x = 1;
+  for (const k of Object.keys({ y: 0, call: 0 })) cm[k] = () => "own-" + k;
+  for (const k of Object.keys({ y: 0 })) cm[k] = "again";
+  console.log("31", cm.call(), cm.y, keys(cm));
+}
