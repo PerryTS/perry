@@ -177,6 +177,22 @@
    "why": "AtomicUsize13 stores only symbol::js_symbol_for/persistent_symbol results (node_prototypes.rs277-309), both backed by leak_symbol Box::into_raw native SymbolHeaders with native Arc string descriptions and no GC descriptor. Only writer validates static atom. Identity retained process-wide; CASloser extra native allocation is not thread-arena custody."
   },
   {
+   "file": "crates/perry-runtime/src/component/guest/endpoints/io.rs",
+   "names": [
+    "OPS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Generated guest adapters install their static const perry_endpoint_ops table (perry-wit/src/guest_c/endpoints.rs). ComponentGuestEndpointOps contains only scalar ABI metadata and an operation code pointer; it stores no frame, JS value, canonical handle or arena address. The unsafe registration contract requires immutable image-lifetime storage, and compare_exchange admits only the first table or that same address again."
+  },
+  {
+   "file": "crates/perry-runtime/src/component/guest/endpoints/producer.rs",
+   "names": [
+    "OPS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Generated guest adapters install their static const perry_producer_ops table (perry-wit/src/guest_c/endpoints.rs). ComponentGuestProducerOps contains only scalar ABI metadata and create/write/notify code pointers; operation frames and canonical handles are arguments, never retained in the table. The unsafe registration contract requires immutable image-lifetime storage, and compare_exchange admits only the first table or that same address again."
+  },
+  {
    "file": "crates/perry-runtime/src/os/signal.rs",
    "names": [
     "SIGWINCH_PENDING"
