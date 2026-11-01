@@ -1073,6 +1073,21 @@ impl Model {
                     self.cons(o, Cons::Store { key, src, site });
                 }
             }
+            Cons::StoreIndexed { o, src, site } => {
+                // DECISIONS 217(c) for stores: a Number key (ToPropertyKey:
+                // its ToString, a numeric name, `numeric_key`) writes an
+                // array's elements, never a named non-index key of it; any
+                // other key value is a computed-key store.
+                if prim & prim::NUM != 0 && self.index_store_done.insert((n, site, true)) {
+                    let ek = self.elem_key();
+                    self.cons(o, Cons::Store { key: ek, src, site });
+                }
+                if (prim & !prim::NUM != 0 || !toks.is_empty())
+                    && self.index_store_done.insert((n, site, false))
+                {
+                    self.cons(o, Cons::Store { key: Key::Any, src, site });
+                }
+            }
             Cons::AccessorKeyed { holder, f, setter } => {
                 if let Some(k) = self.keyed_once(n, f, 2 + setter as u8) {
                     let key = k.unwrap_or_else(|| self.atom(crate::STAR_KEY));

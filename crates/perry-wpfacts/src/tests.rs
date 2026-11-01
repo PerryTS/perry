@@ -4,6 +4,7 @@ mod accessor_keys;
 mod arguments_object;
 mod array_ctor;
 mod array_elements;
+mod array_index_store;
 mod array_iteration;
 mod array_length;
 mod array_named_keys;

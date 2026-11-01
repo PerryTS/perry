@@ -925,6 +925,15 @@ pub enum Cons {
         src: NodeId,
         site: SiteId,
     },
+    /// The node is the key of a computed store `o[key] = src`: a key that
+    /// may be a Number stores at an index (the element key), one that may be
+    /// anything else (a string, a symbol, an object's ToPrimitive result)
+    /// stores under `Key::Any`.
+    StoreIndexed {
+        o: NodeId,
+        src: NodeId,
+        site: SiteId,
+    },
     /// The node is the key of a definition whose descriptor's get (set) is
     /// `f`, on the objects of `holder`: a run's one key installs it under
     /// that key, any other under the computed-key star.
@@ -1060,6 +1069,7 @@ impl Cons {
             Cons::ForInKeys { .. } => "forinkeys",
             Cons::DefineKeyed { .. } => "definekeyed",
             Cons::StoreKeyed { .. } => "storekeyed",
+            Cons::StoreIndexed { .. } => "storeindexed",
             Cons::AccessorKeyed { .. } => "accessorkeyed",
             Cons::ShareBuffer { .. } => "sharebuffer",
             Cons::ThisTo { .. } => "thisto",
@@ -1516,6 +1526,10 @@ pub struct Model {
     /// (key node, operand, kind) a keyed rule (`DefineKeyed`, `StoreKeyed`,
     /// `AccessorKeyed`) has applied once.
     pub keyed_done: crate::pts::FxHashSet<(NodeId, NodeId, u8)>,
+    /// (key node, store site, index) a `StoreIndexed` store has been added
+    /// for: `true` the index store, `false` the computed-key one. A shared
+    /// body's replay has its own key node.
+    pub index_store_done: crate::pts::FxHashSet<(NodeId, SiteId, bool)>,
     /// For-in bodies that define a property under their key.
     pub for_in_defines: crate::pts::FxHashSet<FnIdx>,
     /// The key variable of every for-in body: a run's copy of it holds the
