@@ -356,6 +356,7 @@ jobs:
       - name: Release pipeline failure-path regressions
         run: |
           python3 tests/test_release_pipeline.py
+          python3 tests/test_regen_api_docs.py
           python3 -m unittest discover -s tests -p 'test_runtime_test_batches.py'
           node --test scripts/publish/platform-visibility.test.mjs
 
