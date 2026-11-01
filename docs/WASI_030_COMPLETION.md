@@ -50,7 +50,8 @@ The integration branch now also implements experimental owned guest reader
 capabilities and generated typed future/stream transport. Normal debug-mode
 tests cover joint resource/endpoint custody, nominal payload types, duplicate
 transfers, actual relocation, queued disposal and finalization. Guest reads
-are implemented experimentally; writes and writer factories remain. Public
+are implemented experimentally. Writes and writer factories now have native
+unit/sanitizer coverage; actual Wasm qualification is pending. Public
 generation stays guarded. Actual P3 profiles are qualified separately below.
 
 The [endpoint transport receipt](validation/wasi-p3-endpoint-transport-20261101.json)
@@ -79,13 +80,26 @@ through cancellation. These native sanitizer cases cover owned resource
 payloads; actual resource-bearing Wasm I/O remains to qualify. Future results
 are decoded without stream progress counts, and component imports select
 BigInt operations even without BigInt expressions in TypeScript. Writers,
-factories, the private producer actor and public generation remain unfinished.
+factories were still unimplemented at that receipt's source. Subsequent work
+is qualified separately below.
+
+The [writer unit receipt](validation/wasi-p3-guest-writers-units-20261101.json)
+records 125 normal debug-mode component runtime tests and 34 WIT/C tests.
+Generated typed factories and writes now implement whole-batch ownership
+commit, unconsumed suffix recovery, cancellation and stream closure. Twenty-nine
+ASan/UBSan writer cases distinguish consumed, recovered and discarded owners;
+negative controls catch consumed-owner drops and illegal unfinished-future
+retirement. Actual minor-GC tests verify temporary writer release and severing
+of input expando cycles. Guest ABI 2 and endpoint ABI 1 remain unchanged; the
+producer operations use a separate additive ABI 1 table. These native tests do
+not qualify Wasm writer execution, synchronous factory background scheduling
+or public async generation.
 
 | Requirement | Required evidence | Current state |
 | --- | --- | --- |
 | Canonical async imports and exports | Public generated components compose in both directions; overlapping calls, immediate/delayed completion, errors, post-return work and Store reuse | Experimental scalar/compound profile qualified; public CLI guarded |
 | Resource ownership across async calls | Imported/exported nominal resources, compound aliases, pre-start cancellation, returned-result races, borrow expiry at return/cancel, exactly-once drops and moving GC | Actual experimental entry point qualifies basic and compound C/Perry/C profiles on Linux, including 24 duplicate-owner rejections, 188 exactly-once drops, unclaimed results and moving GC; public async CLI remains guarded |
-| Guest `future<T>` and `stream<T>` | Readable/writable ownership, arbitrary supported WIT payloads, void, bounded writes, backpressure, final partial chunks, closure, cancellation and cleanup across suspension | Experimental reader transport and tested guest-read profiles qualified on Linux: 122 component runtime tests, 33 WIT/C tests, 26 read sanitizer cases, 15 actual acceptance phases and positive Wasm guest relocation. Actual resource-bearing I/O, the wider lifecycle matrix, writes/factories/private actor and public adapters remain |
+| Guest `future<T>` and `stream<T>` | Readable/writable ownership, arbitrary supported WIT payloads, void, bounded writes, backpressure, final partial chunks, closure, cancellation and cleanup across suspension | Experimental reader transport and guest-read profiles qualified on Linux: 15 actual acceptance phases and positive Wasm guest relocation. Subsequent writer/factory implementation passes 125 component runtime tests, 34 WIT/C tests and 29 writer sanitizer cases (plus 26 read cases). Actual Wasm writes, resource-bearing I/O, the wider lifecycle matrix, private producer actor and public adapters remain |
 | WASI 0.3.0 command output | A public command/runtime profile with `wasi:cli/run@0.3.0`, explicit system-interface versions and execution in a host providing the declared 0.3.0 imports; no implicit reliance on P2 compatibility | Integration branch implements `--target wasip3`; nine Perry commands and 51 Linux acceptance phases pass, plus ten separate Wasm-guest GC phases; current runtime changes, native production variants, release/platform qualification and landing remain; `--target wasi` retains P2 |
 | Complete supported 0.3.0 WASI interfaces | Commands, clocks, randomness, filesystem, TCP/UDP/DNS and HTTP execute through Turnloop with capability checks, I/O cancellation and shutdown | Linux provider/command/HTTP receipts exist; complete current-profile matrix still required |
 | Cross-language interoperability | Public Perry output composed with independent Rust and maintained-C components, including resources and future/stream payloads | Scalar/compound and cancellation examples exist; missing value profiles unqualified |

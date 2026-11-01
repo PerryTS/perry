@@ -1,0 +1,64 @@
+{
+  "date": "2026-11-01",
+  "source": "858c256cb7771e40df2b536f0cfa561d20073806",
+  "runtimeImplementationSource": "6cb3fb171e59f176315b1f945a8809a4b2ca4d35",
+  "scope": "Native runtime component and generated C writer ownership tests; actual Wasm writes remain unqualified",
+  "fullWasi030Qualified": false,
+  "guestAbiVersion": 2,
+  "endpointOperationsAbiVersion": 1,
+  "additiveProducerOperationsAbiVersion": 1,
+  "normalDevComponentRuntimeTestsPassed": 125,
+  "runtimeAndStdlibSamePackagePair": true,
+  "stdlibTestsSelected": 0,
+  "debugAssertionsEnabled": true,
+  "runtimeTestsSerial": true,
+  "fullRuntimeSuiteQualified": false,
+  "witTestsPassed": 34,
+  "ignoredFixtureProducers": 2,
+  "nativeAsanUbsanWriterCases": 29,
+  "nativeAsanUbsanReaderCases": 26,
+  "writerOwnershipCases": [
+    "inline and delayed canonical completion",
+    "partial writes preserve only the unconsumed owners",
+    "cancellation acknowledgement and completion races",
+    "explicit stream closure discards the suffix",
+    "parent task cancellation",
+    "cancellation before canonical I/O starts",
+    "abandoned observer cancellation and payload retirement",
+    "refused custody commit leaves staged owners with Rust"
+  ],
+  "negativeControls": {
+    "consumedOwnerDropMutationRejected": true,
+    "unfinishedFutureReleaseTrapsBeforeIllegalCanonicalDrop": true
+  },
+  "runtimeWitnesses": {
+    "observedTemporaryWriterActuallyMoves": true,
+    "settledTemporaryWriterCollectsUnderMinorGc": true,
+    "inputExpandoCycleDoesNotRetainUnobservedOperation": true,
+    "oldRetirementCannotClearRetryNonce": true,
+    "privateWriterCannotTransferAsReader": true
+  },
+  "noTokio": {
+    "offlineInventoryPassed": true,
+    "manifestsChecked": 128,
+    "lockfilesChecked": 28,
+    "rustSourcesChecked": true
+  },
+  "rustflagsEnvironmentModified": false,
+  "evidence": {
+    "archive": "wasi-030-v108-evidence.tar.gz",
+    "bytes": 177641,
+    "sha256": "6eed6bde73603db1591e7786f6e2317a739c66dca290add2b54b59c3503acd7b",
+    "indexedFiles": 74,
+    "archiveAndEveryIndexedMemberVerifiedLocally": true,
+    "exactRegularFileSetVerified": true
+  },
+  "notQualifiedByThisReceipt": [
+    "Actual Wasm guest writes or writer factories",
+    "Private producer actor and background I/O from synchronous public exports",
+    "Actual resource-bearing Wasm endpoint I/O and the complete lifecycle matrix",
+    "Public async generation",
+    "Complete current provider, HTTP and shared-provider ALS profiles",
+    "Current command regressions, all platform packages, required CI, full lint or merge"
+  ]
+}
