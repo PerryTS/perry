@@ -245,6 +245,7 @@ pub(super) fn nested_layouts(
                     literal_shape: true,
                     facts,
                     methods: Vec::new(),
+                    getters: Vec::new(),
                     native_parent: None,
                     parent: foreign_parent(&g, itm),
                     field_fns: Vec::new(),
@@ -341,6 +342,41 @@ pub(super) fn chain_unsettled(g: &gen::Gen, tm: model::TmplId) -> bool {
         cur = t.parent;
     }
     false
+}
+
+/// The getters on `tm`'s prototype chain inside this unit, as `methods`
+/// walks it (`ClassContract::getters`): key and function name.
+pub(super) fn proto_getters(g: &gen::Gen, tm: model::TmplId) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut cur = Some(tm);
+    while let Some(c) = cur {
+        if g.m.foreign.contains_key(&c) {
+            break;
+        }
+        if let Some(&proto) = g.m.tok_index.get(&model::TokKind::Proto(c)) {
+            for &a in g.m.accessor_keys.get(&proto).into_iter().flatten() {
+                let Some((gs, _)) = g.m.accessors.get(&(proto, a)) else {
+                    continue;
+                };
+                for &t in gs {
+                    let f = g.m.tok_fn(t);
+                    if f == model::NO_FN {
+                        continue;
+                    }
+                    let e = (
+                        g.m.atoms[a as usize].clone(),
+                        g.m.funcs[f as usize].name.clone(),
+                    );
+                    if !out.contains(&e) {
+                        out.push(e);
+                    }
+                }
+            }
+        }
+        cur = g.m.tmpls[c as usize].parent;
+    }
+    out.sort();
+    out
 }
 
 /// The first class up `tm`'s chain that is another unit's (a stand-in),
@@ -1085,6 +1121,7 @@ pub(super) fn describe_nodes(
                             literal_shape,
                             facts: facts.clone(),
                             methods: Vec::new(),
+                            getters: Vec::new(),
                             native_parent: None,
                             parent: foreign_parent(&g, tm),
                             field_fns: Vec::new(),
@@ -1436,6 +1473,7 @@ pub(super) fn describe_toks(
                     literal_shape,
                     facts,
                     methods: Vec::new(),
+                    getters: Vec::new(),
                     native_parent: None,
                     parent: foreign_parent(&g, tm),
                     field_fns: Vec::new(),
@@ -1627,6 +1665,7 @@ pub(super) fn fn_inst_contract(
         literal_shape: false,
         facts,
         methods,
+        getters: proto_getters(g, tm),
         native_parent: None,
         parent: None,
         field_fns: Vec::new(),
@@ -1896,6 +1935,7 @@ pub(super) fn arg_contract_of(
                             literal_shape: true,
                             facts: facts.clone(),
                             methods: Vec::new(),
+                            getters: Vec::new(),
                             native_parent: None,
                             parent: foreign_parent(&g, tm),
                             field_fns: Vec::new(),
