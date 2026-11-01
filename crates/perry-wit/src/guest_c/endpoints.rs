@@ -1,5 +1,7 @@
 //! Typed canonical cleanup stays in the maintained C ABI, outside Rust scopes.
 use super::*;
+#[cfg(all(test, target_os = "linux"))]
+mod custody_tests;
 mod read;
 
 impl Generator<'_> {
