@@ -260,7 +260,8 @@ pub(crate) fn auto_optimized_cross_features(
         )
     });
     // Native producers include binary deserialization, bigint-valued OS/fs
-    // metadata, FFI, histogram and WebAssembly results. Their returned values
+    // metadata, FFI, histogram, component payloads and WebAssembly results.
+    // Their returned values
     // must keep the generic BigInt operators and formatting paths installed.
     if features.contains("crypto")
         || features.contains("database-sqlite")
@@ -287,6 +288,9 @@ pub(crate) fn auto_optimized_cross_features(
                     | "ethers"
                     | "sqlite"
                     | "bun:sqlite"
+                    // Canonical s64/u64 payloads become BigInts even when the
+                    // TypeScript program itself contains no BigInt syntax.
+                    | "perry/component"
             )
         })
     {

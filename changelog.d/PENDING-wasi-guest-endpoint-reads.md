@@ -1,1 +1,3 @@
 Experimental guest endpoints gain read-operation custody with weak unobserved Promises, retention after observation, typed completion preparation, originating-task context checks and cancellation cleanup. Guest ABI 2 stays intact through an additive endpoint callback table; public async generation remains guarded while generated I/O and producer coverage are completed.
+
+Decode future completions as result codes rather than counted stream results, and install BigInt support for component s64/u64 payloads even when TypeScript contains no BigInt expressions. Native sanitizer coverage checks owned payload cancellation races and rejects invalid future result encodings.
