@@ -138,3 +138,33 @@ const o1: any = function o1() {}; o1.x = 1; o1.prototype;
 const o2: any = function o2() {}; o2.x = 1; o2.prototype = { z: 1 };
 const o3: any = () => 0; o3.x = 1; o3.prototype = { z: 1 };
 console.log("26", keys(o1), keys(o2), keys(o3));
+// warm key-add edges: a later function of the same bag shape whose chain has a
+// setter or a non-writable key still takes the full [[Set]]
+let warmHits = 0;
+class Hooked { set hook(v: any) { warmHits++; } }
+Object.defineProperty(Hooked.prototype, "ro", { value: "ro", writable: false });
+const mkw = (proto: object, names: object) => {
+  const f: any = function f() {};
+  Object.setPrototypeOf(f, proto);
+  try { for (const k of Object.keys(names)) f[k] = 1; } catch (e) { return "threw " + (e as Error).constructor.name; }
+  return f;
+};
+mkw({}, { x: 0, hook: 0 }); mkw({}, { x: 0, hook: 0 }); mkw({}, { x: 0, ro: 0 }); mkw({}, { x: 0, ro: 0 });
+const wh = mkw(Hooked.prototype, { x: 0, hook: 0 });
+console.log("27", warmHits, Object.prototype.hasOwnProperty.call(wh, "hook"), keys(wh));
+const wr = (() => { "use strict"; return mkw(Hooked.prototype, { x: 0, ro: 0 }); })();
+console.log("28", typeof wr === "string" ? wr : keys(wr));
+// CreateDataProperty on a non-extensible callable throws
+class NX1 extends Callable { constructor(lock: boolean) { super(() => 0); if (lock) Object.preventExtensions(this); } }
+class NX2 extends NX1 { z = 1; }
+for (const lock of [false, false, true]) {
+  try { const v: any = new NX2(lock); console.log("29", lock, v.z); } catch (e) { console.log("29", lock, (e as Error).constructor.name); }
+}
+// a class field over an attached key of the same name overwrites it in place
+for (let i = 0; i < 3; i++) { const o: any = new Leaf({ a: "attached", tag: "o" + i }); console.log("30", o.a, keys(o)); }
+// computed (interned) keys: overwrite, and an own method shadowing Function.prototype's
+const cm: any = function cm() { return "body"; };
+cm.x = 1;
+for (const k of Object.keys({ y: 0, call: 0 })) cm[k] = () => "own-" + k;
+for (const k of Object.keys({ y: 0 })) cm[k] = "again";
+console.log("31", cm.call(), cm.y, keys(cm));

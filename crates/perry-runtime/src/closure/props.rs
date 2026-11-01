@@ -119,20 +119,20 @@ pub(crate) unsafe fn bag_born_with_attrs(
     entries: &[(&str, f64)],
     attrs: &[u8],
 ) -> bool {
-    bag_born_with_room(ptr, entries, attrs, 0)
+    bag_born::<0>(ptr, entries, attrs)
 }
 
-/// [`bag_born_with_attrs`] with `room` inline slots past its keys (see
-/// [`BAG_ROOM`]).
+/// [`bag_born_with_attrs`] with [`BAG_ROOM`] inline slots past its keys.
 ///
 /// # Safety
 /// As [`bag_born_with_attrs`].
-pub(crate) unsafe fn bag_born_with_room(
-    ptr: usize,
-    entries: &[(&str, f64)],
-    attrs: &[u8],
-    room: u32,
-) -> bool {
+pub(crate) unsafe fn bag_born_with_room(ptr: usize, entries: &[(&str, f64)], attrs: &[u8]) -> bool {
+    bag_born::<BAG_ROOM>(ptr, entries, attrs)
+}
+
+/// [`bag_born_with_attrs`] with `ROOM` inline slots past its keys.
+#[inline(always)]
+unsafe fn bag_born<const ROOM: u32>(ptr: usize, entries: &[(&str, f64)], attrs: &[u8]) -> bool {
     let _no_move = crate::gc::GcSuppressScope::new();
     if !bag_of(ptr).is_null()
         || entries.iter().any(|(key, _)| {
@@ -234,9 +234,9 @@ pub(crate) unsafe fn bag_born_with_room(
                     key == intrinsic && value.to_bits() == expected.to_bits()
                 })
         {
-            crate::object::alloc::object_alloc_null_proto_with_key_attrs_room(entries, attrs, room)
+            born_alloc::<ROOM>(entries, attrs)
         } else if entries.iter().all(|(key, _)| names.contains(key)) {
-            crate::object::alloc::object_alloc_null_proto_with_key_attrs_room(own, own_attrs, room)
+            born_alloc::<ROOM>(own, own_attrs)
         } else {
             let mut all = Vec::with_capacity(entries.len() + count);
             let mut all_attrs = Vec::with_capacity(entries.len() + count);
@@ -249,11 +249,21 @@ pub(crate) unsafe fn bag_born_with_room(
                 all.push((key, value));
                 all_attrs.push(attrs.get(i).copied().unwrap_or(0));
             }
-            crate::object::alloc::object_alloc_null_proto_with_key_attrs_room(&all, &all_attrs, room)
+            born_alloc::<ROOM>(&all, &all_attrs)
         }
     };
     install_bag(ptr, bag);
     true
+}
+
+/// A function bag's birth allocation, with `ROOM` inline slots past its keys.
+#[inline(always)]
+unsafe fn born_alloc<const ROOM: u32>(entries: &[(&str, f64)], attrs: &[u8]) -> *mut ObjectHeader {
+    if ROOM == 0 {
+        crate::object::alloc::object_alloc_null_proto_with_key_attrs(entries, attrs)
+    } else {
+        crate::object::alloc::object_alloc_null_proto_with_key_attrs_room::<ROOM>(entries, attrs)
+    }
 }
 
 /// Own data lookup in an ordinary (or dictionary-mode) bag by key bytes.
