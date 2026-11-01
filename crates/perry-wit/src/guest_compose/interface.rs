@@ -3,6 +3,7 @@
 //! context, even when it also contains the corresponding resource type.
 use super::*;
 use wac_graph::types::InterfaceId;
+mod names;
 
 pub(super) fn compose(
     outer: &mut CompositionGraph,
@@ -32,9 +33,14 @@ pub(super) fn compose(
         };
         wrapper.export(node, name)?;
     }
-    let bytes = wrapper
-        .encode(EncodeOptions::default())
-        .context("Invalid typed public-interface forwarding component")?;
+    // Exporting a resource creates a named alias. Constructor/method function
+    // ascriptions must refer to that alias, rather than the imported spelling.
+    let bytes = wrapper.encode(EncodeOptions {
+        validate: false,
+        ..EncodeOptions::default()
+    })?;
+    let bytes =
+        names::rebind(&bytes).context("Invalid typed public-interface forwarding component")?;
     let package = Package::from_bytes(
         &format!("perry:interface-{ordinal}"),
         None,
