@@ -32,6 +32,10 @@ set -euo pipefail
 # The runs below set GC instrument knobs; a binary compiled without the
 # `gc-instruments` runtime feature aborts on them rather than run nothing.
 export PERRY_GC_INSTRUMENTS=1
+# Runtime selection alone does not install the diagnostics hooks. Each compile
+# below also requests DIAG/VERIFY so retirement counters and verifier arms are
+# live. Keep those settings scoped to compilation: the OFF arm must still run
+# without protection, scheduling, or evacuation verification enabled.
 
 PERRY_BIN="${1:-target/release/perry}"
 if [[ ! -x "$PERRY_BIN" ]]; then
@@ -90,7 +94,8 @@ console.log("bad", run());
 TS
 
 echo "== compiling fixture with PERRY_GC_MOVING_LOOP_POLLS=1 (the schedule needs the polls) =="
-PERRY_GC_MOVING_LOOP_POLLS=1 "$PERRY_BIN" compile "$WORK/fixture.ts" -o "$WORK/fixture" >/dev/null
+PERRY_GC_DIAG=1 PERRY_GC_VERIFY_EVACUATION=1 \
+  PERRY_GC_MOVING_LOOP_POLLS=1 "$PERRY_BIN" compile "$WORK/fixture.ts" -o "$WORK/fixture" >/dev/null
 
 # $1 = label, rest = env assignments. Echoes the retirement count.
 run_arm() {
@@ -230,7 +235,8 @@ if [[ -d "$PROBES" ]]; then
     [[ -e "$probe" ]] || continue
     name="$(basename "$probe" .ts)"
     probe_count=$((probe_count + 1))
-    "$PERRY_BIN" compile "$probe" -o "$WORK/$name" >/dev/null
+    PERRY_GC_DIAG=1 PERRY_GC_VERIFY_EVACUATION=1 \
+      "$PERRY_BIN" compile "$probe" -o "$WORK/$name" >/dev/null
     set +e
     PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_PROTECT_FROMSPACE_DEPTH=64 \
     PERRY_GC_HEAP_LIMIT=8 PERRY_GC_INCREMENTAL=0 PERRY_CONSERVATIVE_STACK_SCAN=off \
@@ -303,7 +309,8 @@ if [[ ! -f "$REPRO" ]]; then
   echo "FAIL: #7254's reproducer is missing at $REPRO -- arm 5b has no subject." >&2
   exit 1
 fi
-PERRY_GC_MOVING_LOOP_POLLS=1 "$PERRY_BIN" compile "$REPRO" -o "$WORK/repro7254" >/dev/null
+PERRY_GC_DIAG=1 PERRY_GC_VERIFY_EVACUATION=1 \
+  PERRY_GC_MOVING_LOOP_POLLS=1 "$PERRY_BIN" compile "$REPRO" -o "$WORK/repro7254" >/dev/null
 # #7254 pinned this retained Ptr<NumArray> growth workload as an expected
 # evacuation-verifier abort. #4644 admitted retained growth-array aliases in
 # copying-minor verification, so this arm now requires Node-correct output and
@@ -407,7 +414,8 @@ function run(n: number): number {
 console.log("sum", run(200000));
 TS
 
-"$PERRY_BIN" compile "$WORK/scale.ts" -o "$WORK/scale" >/dev/null
+PERRY_GC_DIAG=1 PERRY_GC_VERIFY_EVACUATION=1 \
+  "$PERRY_BIN" compile "$WORK/scale.ts" -o "$WORK/scale" >/dev/null
 
 # 90s, against a paced cost of a few seconds and an unpaced ~200s on the quiet
 # host. Wide enough that a slow shared runner does not flake it, narrow enough
