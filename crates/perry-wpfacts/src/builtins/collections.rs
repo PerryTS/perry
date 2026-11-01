@@ -165,7 +165,7 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
 
 // ------------------------------------------------------------- arrays
 
-fn cb_call(m: &mut Model, by: CallId, cb: NodeId, this: ThisArg, args: Vec<NodeId>) -> NodeId {
+pub(super) fn cb_call(m: &mut Model, by: CallId, cb: NodeId, this: ThisArg, args: Vec<NodeId>) -> NodeId {
     let ret = m.node_l("cb-ret");
     m.nodes[ret as usize].frame = m.call_run(by);
     let call2 = m.calls.len() as CallId;
@@ -193,15 +193,6 @@ pub(crate) fn to_prim(m: &mut Model, v: NodeId, why: &str) {
             proto: Protocol::ToPrimitive,
         },
     );
-}
-
-/// The `RegExp.prototype` methods that run RegExpExec (22.2.7.1) on the
-/// receiver: `test` and `@@replace`/`@@match`/`@@search`.
-pub(super) fn regexp_runs_exec(name: &str) -> bool {
-    name == "test"
-        || name
-            .strip_prefix(WK_PREFIX)
-            .is_some_and(|s| matches!(s, "replace" | "match" | "search"))
 }
 
 /// `@@split` and `@@matchAll` (22.2.6.14, 22.2.6.11) build their splitter or
@@ -321,22 +312,6 @@ pub(crate) fn typed_array_source_elements(m: &mut Model, call: CallId, src: Node
         },
     );
     to_prim(m, el, "typed array element ToNumber");
-}
-
-/// RegExpExec: `exec` is read from the regexp as a property and called with
-/// the string, so an `exec` the program stored on it (or on `RegExp.prototype`)
-/// runs with the regexp as `this`.
-fn regexp_exec(m: &mut Model, t: Tok, call: CallId) {
-    let c = m.calls[call as usize].clone();
-    let recv = m.node_l("regexp");
-    m.add_tok(recv, t);
-    method_call(
-        m,
-        call,
-        recv,
-        "exec",
-        c.args.first().copied().into_iter().collect(),
-    );
 }
 
 /// The values iterating `v` yields, as `Gen::iterate` models them for
@@ -824,6 +799,9 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             ret_tok(m, call, out);
         }
         ("Error", Some("toString")) => ret_prim(m, call, prim::STR),
+        ("RegExp", Some(n)) if string_methods::regexp_described(n) => {
+            string_methods::regexp_method(m, t, n, call)
+        }
         (
             "Date" | "RegExp" | "URL" | "TextCodec" | "builtin" | "BoxedPrimitive" | "Timer",
             Some(n),
@@ -835,9 +813,6 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
                 m.add_tok(recv, t);
                 to_prim(m, recv, "Date toJSON ToPrimitive");
                 method_call(m, call, recv, "toISOString", vec![]);
-            }
-            if what == "RegExp" && regexp_runs_exec(n) {
-                regexp_exec(m, t, call);
             }
             if what == "RegExp" && regexp_species(n) {
                 regexp_species_constructor(m, t);

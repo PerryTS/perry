@@ -264,9 +264,6 @@ impl<'a> Gen<'a> {
             | Expr::ObjectGetOwnPropertyNames(..)
             | Expr::ObjectGetOwnPropertySymbols(..)
             | Expr::ReflectOwnKeys(..)
-            | Expr::StringSplit(..)
-            | Expr::StringMatch { .. }
-            | Expr::StringMatchAll { .. }
             | Expr::TaggedTemplateStrings { .. }
             | Expr::TemplateRaw(..)
             | Expr::CryptoRandomBytes(..)
@@ -1210,9 +1207,35 @@ impl<'a> Gen<'a> {
                 let _ = self.prim_kids(fx, e, prim::ALL, "Date operand", Protocol::ToPrimitive);
                 self.bobj(mi, "Date").1
             }
-            Expr::RegExp { .. } | Expr::RegExpDynamic { .. } => {
-                let _ = self.prim_kids(fx, e, prim::ALL, "RegExp operand", Protocol::Any);
-                self.bobj(mi, "RegExp").1
+            Expr::RegExp { .. } => self.bobj(mi, "RegExp").1,
+            // ECMA-262 22.2.4.1: IsRegExp(pattern) reads `@@match`; for a
+            // regexp-like pattern `source` and `flags` are read (and in the
+            // call form `constructor`, returning the pattern itself); then
+            // ToString(pattern) and ToString(flags).
+            Expr::RegExpDynamic {
+                pattern,
+                flags,
+                is_call,
+            } => {
+                use crate::builtins::string_methods::{read_only, read_prim, to_prim};
+                let p = self.expr(fx, pattern);
+                let wk = format!("{}match", crate::builtins::WK_PREFIX);
+                read_only(&mut self.m, p, &wk);
+                if *is_call {
+                    read_only(&mut self.m, p, "constructor");
+                }
+                read_prim(&mut self.m, p, "source", "RegExp pattern source ToString");
+                read_prim(&mut self.m, p, "flags", "RegExp pattern flags ToString");
+                to_prim(&mut self.m, p, "RegExp pattern ToString");
+                if let Some(f) = flags {
+                    let f = self.expr(fx, f);
+                    to_prim(&mut self.m, f, "RegExp flags ToString");
+                }
+                let out = self.bobj(mi, "RegExp").1;
+                if *is_call {
+                    self.m.edge(p, out);
+                }
+                out
             }
             Expr::ErrorNew(..)
             | Expr::TypeErrorNew(..)
@@ -1289,38 +1312,20 @@ impl<'a> Gen<'a> {
                 self.m.add_prim(out, prim::STR);
                 out
             }
+            // The string methods dispatch on their pattern operand by the
+            // spec's algorithm (`builtins::string_methods`): the receiver is
+            // ToString'd, and the method runs on a string.
             Expr::StringReplace {
                 string,
                 pattern,
                 replacement,
-            } => {
-                let _ = self.prim_op(
-                    fx,
-                    &[string, pattern],
-                    prim::STR,
-                    "String.replace",
-                    Protocol::Any,
-                );
-                let r = self.expr(fx, replacement);
-                let s = self.prim_node(prim::STR);
-                let ret = self.callback(r, vec![s; 4]);
-                let why = self.m.reason("replace callback result ToString");
-                self.m.cons(
-                    ret,
-                    Cons::Implicit {
-                        reason: why,
-                        proto: Protocol::ToPrimitive,
-                    },
-                );
-                let rc = self.m.reason("replacement ToString");
-                self.m.cons(
-                    r,
-                    Cons::Implicit {
-                        reason: rc,
-                        proto: Protocol::ToPrimitive,
-                    },
-                );
-                self.prim_node(prim::STR)
+            } => self.string_method(fx, string, "replace", &[pattern, replacement]),
+            Expr::StringSplit(string, sep) => self.string_method(fx, string, "split", &[sep]),
+            Expr::StringMatch { string, regex } => {
+                self.string_method(fx, string, "match", &[regex])
+            }
+            Expr::StringMatchAll { string, regex } => {
+                self.string_method(fx, string, "matchAll", &[regex])
             }
 
             // ------------------------------------------------------ arrays

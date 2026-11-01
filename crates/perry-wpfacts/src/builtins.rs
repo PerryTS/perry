@@ -10,6 +10,7 @@ use crate::model::*;
 mod collections;
 mod members;
 mod native_protocol;
+pub(crate) mod string_methods;
 use collections::{array_method, bobj_method, function_method, iterate};
 pub(crate) use collections::to_prim;
 pub(crate) use collections::{WK_ITERATOR, WK_PREFIX};
@@ -1147,6 +1148,7 @@ pub fn prim_method(m: &mut Model, prim: u16, key: Key, call: CallId) {
         Some(Mem::Fn) if name == "__lookupGetter__" || name == "__lookupSetter__" => {
             ret_prim(m, call, prim::UNDEF)
         }
+        Some(Mem::Fn) if string_methods::string_method(m, call, &name) => {}
         Some(Mem::Fn) => prim_method_generic(m, call),
         // A data member is no function: TypeError.
         Some(_) => {}
@@ -1221,7 +1223,7 @@ fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
                 members::bobj_family(what) != Family::Opaque
                     || (*what == "RegExp"
                         && name.as_deref().is_some_and(|n| {
-                            collections::regexp_runs_exec(n) || collections::regexp_species(n)
+                            string_methods::regexp_described(n) || collections::regexp_species(n)
                         }))
             }
             _ => false,

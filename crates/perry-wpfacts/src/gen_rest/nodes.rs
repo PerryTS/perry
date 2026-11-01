@@ -11,6 +11,18 @@ impl<'a> Gen<'a> {
         self.prim_op(fx, &ks, result, why, proto)
     }
 
+    /// `string.name(...operands)`: the receiver is ToString'd (the lowering
+    /// pins the method to `String.prototype`), then the method runs on a
+    /// string with the operands (`builtins::string_methods`).
+    pub(super) fn string_method(&mut self, fx: &Fx, string: &Expr, name: &str, operands: &[&Box<Expr>]) -> NodeId {
+        let s = self.expr(fx, string);
+        crate::builtins::string_methods::to_prim(&mut self.m, s, "string method receiver ToString");
+        let args: Vec<NodeId> = operands.iter().map(|o| self.expr(fx, o)).collect();
+        let recv = self.prim_node(prim::STR);
+        let a = self.m.atom(name);
+        self.mcall(recv, Key::Named(a), args, vec![])
+    }
+
     pub(super) fn primbox_kids(&mut self, fx: &Fx, e: &Expr, why: &str, proto: Protocol) -> NodeId {
         let ks = kids(e);
         self.prim_box_op(fx, &ks, why, proto)
