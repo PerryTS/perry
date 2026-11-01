@@ -1103,7 +1103,9 @@ unsafe fn exotic_get<const ABSENT: bool>(
         None if (*header).obj_type == crate::gc::GC_TYPE_CLOSURE
             && bound_on_described_shape(obj.cast(), hash) =>
         {
-            crate::object::shapes::shape_proto_id((*obj.cast::<crate::closure::ClosureHeader>()).shape_id)
+            crate::object::shapes::shape_proto_id(
+                (*obj.cast::<crate::closure::ClosureHeader>()).shape_id,
+            )
         }
         proto => proto,
     };
@@ -1858,8 +1860,8 @@ pub unsafe extern "C" fn perry_probe_set(
 mod write;
 use write::hole_fill_admitted;
 pub(crate) use write::layouts_admit_add;
-pub(crate) use write::{function_link_admits_add, function_put_plan, FunctionPut};
 use write::probe_add;
+pub(crate) use write::{function_link_admits_add, function_put_plan, FunctionPut};
 
 #[path = "layout_probe/computed.rs"]
 mod computed;
