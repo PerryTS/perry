@@ -73,3 +73,26 @@ Platform coverage and measured limitations belong in the accompanying audit;
 a faster scan alone does not establish a generally regression-free size preset.
 
 Measured controls, validation and limitations: [audit](../../docs/audits/13662-cold-runtime-size.md).
+
+## Investigating noisy application timings
+
+A `#[cold]` annotation alone does not establish that size optimization is safe
+for a workload. The search follow-up excludes the two generic array-read
+helpers and array growth after profiling and a three-function ablation.
+See [the diagnosis](../../docs/audits/13662-search-slowdown.md).
+
+For a workload that prints one JSON object with a positive `milliseconds`
+field and otherwise deterministic output, collect balanced forward/reverse
+blocks, preserving user/system CPU time as well as wall time and counters:
+
+```sh
+python3 benchmarks/runtime-size/compare-workload.py \
+  --binary reference=/path/to/reference --binary candidate=/path/to/candidate \
+  --rounds 6 --output /tmp/comparison.json -- search 250000
+```
+
+Run a placebo with two labels pointing to the **same binary** to estimate
+measurement variation. Compare block means rather than treating adjacent
+samples as independent. Compiler process counts are recorded as a diagnostic,
+not an assertion that a host with zero compilers is idle. Do not run builds,
+profilers or other benchmarks concurrently with the timed comparison.
