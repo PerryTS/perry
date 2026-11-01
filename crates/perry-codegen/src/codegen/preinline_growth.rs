@@ -1,8 +1,10 @@
-//! Bound the copying caused by the raised guarded pre-statepoint budget.
+//! Bound each guarded body's expanded size times its physical direct-call sites.
 //!
 //! A body with a few top-level HIR statements can contain large nested loops.
 //! The per-body admission limit alone also misses a small adapter whose early
-//! inline callee is large. Inspect the existing lowered instructions directly;
+//! inline callee is large. This is a local admission bound, not a module-wide
+//! cap: distinct admitted adapters can multiply a shared callee transitively.
+//! Inspect the existing lowered instructions directly;
 //! no call-graph table, memoization, or emitted runtime state is needed.
 
 use crate::{function::LlFunction, inst::LlInst, module::LlModule};
@@ -77,7 +79,9 @@ fn within_growth_budget(module: &LlModule, function: &LlFunction) -> bool {
         .max(GUARDED_SPECIALIZATION_PREINLINE_MAX_IR_BYTES);
     let bytes = expanded_bytes(module, function, MAX_EXPANSION_DEPTH, limit);
     // Preserve the original compact-leaf allowance. The raised arm pays for
-    // every known copy, instead of resetting the entire allowance per site.
+    // each physical direct-call site, rather than granting the full allowance
+    // per site. This does not count copies of those sites made by other
+    // admitted callers, and compact expanded bodies retain their allowance.
     if bytes <= GUARDED_SPECIALIZATION_PREINLINE_MAX_IR_BYTES {
         return true;
     }
@@ -96,7 +100,8 @@ fn within_growth_budget(module: &LlModule, function: &LlFunction) -> bool {
 
 pub(in crate::codegen) fn apply(module: &mut LlModule) {
     // Removing an admission only decreases later expansion estimates. Thus
-    // every retained body still satisfies the bound in the final graph. A
+    // every retained guarded body still satisfies this local physical-site
+    // bound in the final graph. This is not an aggregate copy-count bound. A
     // different declaration order may conservatively reject an additional
     // adapter; it cannot restore a rejected large callee or increase copying.
     for index in 0..module.function_count() {
@@ -178,6 +183,48 @@ mod tests {
         apply(&mut module);
         assert!(admitted(&module, "large"));
         assert!(!admitted(&module, "adapter"));
+    }
+
+    #[test]
+    fn distinct_adapters_share_a_leaf_under_the_local_physical_site_bound() {
+        // A diamond can make four leaf copies even though each retained
+        // body's expanded bytes times its physical call sites fits the
+        // budget. Preserve this intentional local-policy limitation rather
+        // than implying an aggregate module-wide growth guarantee.
+        for leaf_first in [false, true] {
+            let mut module = LlModule::new("aarch64-apple-darwin");
+            if leaf_first {
+                body(&mut module, "leaf", 650);
+            }
+            for name in ["left", "right"] {
+                caller(&mut module, name, "leaf", 1);
+                let index = module.function_count() - 1;
+                let function = module.function_mut(index).unwrap();
+                function.pre_statepoint_inline = true;
+                function.guarded_preinline = true;
+            }
+            if !leaf_first {
+                body(&mut module, "leaf", 650);
+            }
+            let root = module.define_function("root", DOUBLE, vec![(DOUBLE, "%x".into())]);
+            let block = root.create_block("entry");
+            for name in ["left", "left", "right", "right"] {
+                block.call(DOUBLE, name, &[(DOUBLE, "%x")]);
+            }
+            block.ret(DOUBLE, "%x");
+            let leaf_bytes = module.function_named("leaf").unwrap().estimated_ir_bytes();
+            let limit = guarded_specialization_source_small_max_ir_bytes();
+            assert!(leaf_bytes > GUARDED_SPECIALIZATION_PREINLINE_MAX_IR_BYTES);
+            assert!(leaf_bytes * 4 > limit);
+            apply(&mut module);
+            for name in ["leaf", "left", "right"] {
+                assert!(admitted(&module, name), "{name}");
+                assert!(within_growth_budget(
+                    &module,
+                    module.function_named(name).unwrap()
+                ));
+            }
+        }
     }
 
     #[test]
