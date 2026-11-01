@@ -1,0 +1,43 @@
+{
+  "fixtureSource": "1305969ff477c141d08dcbd22ced9985dbcb998d",
+  "runtimeSource": "1ef0f4fa691bc78abb458124db6f7716f8b8cad0",
+  "compilerAndNativeCarrier": "d7b50d345cc3845b39c6f9f311620600bb5badd5",
+  "scope": "Linux x86_64 actual Perry-generated WASI 0.3 command with moving GC inside the Wasm guest",
+  "fullWasi030Qualified": false,
+  "acceptance": {
+    "script": "scripts/component_p3_guest_gc_acceptance.py",
+    "phasesPassed": 10,
+    "nativeGcControlsOffThroughout": true,
+    "guestControlsGrantedOnlyThroughWasiEnvironment": true,
+    "plainAndInstrumentedControlsWithGuestKnobsOff": true,
+    "plainArchiveRejectsInstrumentationGrantWithExpectedReason": true,
+    "retainedRoots": "24 cyclic class objects, Unicode strings, arrays, Uint8Arrays, closures, Map/Set identity; roots across Promise awaits, a timer and exception handling",
+    "guestCopiedObjectsInMinorLogs": 13883,
+    "guestEvacuationVerified": true,
+    "physicalPageProtectionClaimedForWasmLinearMemory": false,
+    "explicitCommandFuelGrant": 3000000000
+  },
+  "runtimeArchives": {
+    "plain": {
+      "bytes": 46067324,
+      "sha256": "96f1f3cfd6f36607d75d70327eac421a08cae1ec2d12658a876b865f7d3b811c"
+    },
+    "instrumented": {
+      "bytes": 46874088,
+      "sha256": "af478db029317a1370554c8e1122d4616c32f8656ac20e108decc1b3276453b5"
+    }
+  },
+  "evidence": {
+    "archive": "wasi-030-v061-evidence.tar.gz",
+    "bytes": 28814918,
+    "sha256": "775d3ad24e64ff4a3f0496c87859d1d097ac76dc445f1d37f8383ae4dbe8c753",
+    "indexedFiles": 47,
+    "archiveAndEveryIndexedMemberVerifiedLocally": true
+  },
+  "notQualifiedByThisReceipt": [
+    "Guest future/stream endpoint I/O and writer factories, public async generation or reusable plugin interoperability",
+    "Later runtime changes after the recorded source identities",
+    "Distinct ordinary native production builds, full provider/HTTP matrix or shared-provider ALS regression",
+    "macOS/Windows P3 output, installed distributions, required CI or full WASI 0.3.0 completion"
+  ]
+}
