@@ -25,9 +25,10 @@ pub fn canonical_guest(path: &Path, selected: Option<&str>) -> Result<BTreeMap<S
 }
 
 /// Experimental async generation, including the Linux-qualified resource
-/// ownership/cancellation profile and owned future/stream reader transport.
-/// Endpoint I/O and writer factories are not yet implemented. Public --guest-c
-/// async output and future/stream values remain guarded.
+/// ownership/cancellation and guest endpoint read/write profiles. Typed
+/// factories and post-return writers behind async exports are qualified on
+/// Linux; synchronous background producer scheduling remains to implement.
+/// Public --guest-c async output and future/stream values remain guarded.
 #[doc(hidden)]
 pub fn experimental_async_guest(
     path: &Path,

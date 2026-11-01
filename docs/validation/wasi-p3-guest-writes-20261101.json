@@ -1,0 +1,198 @@
+{
+  "date": "2026-11-01",
+  "source": "fb38e46cf49e3bc85e05c41f6bdb0390f604f6b8",
+  "scope": "Linux x86_64 actual Perry WASI 0.3 guest reads, writes and typed factories behind async canonical exports",
+  "fullWasi030Qualified": false,
+  "abi": {
+    "guestVersion": 2,
+    "endpointOperationsVersion": 1,
+    "additiveProducerOperationsVersion": 1,
+    "existingLayoutsUnchanged": true,
+    "sdk": "wasi-sdk 34.0",
+    "experimentalThreadingEnabled": false
+  },
+  "build": {
+    "freshCoherentOrdinaryNativePackages": [
+      "perry",
+      "perry-runtime-static",
+      "perry-stdlib-static",
+      "perry-component-host",
+      "perry-wit",
+      "perry-gc-effects"
+    ],
+    "feature": "perry/target-wasi",
+    "nativeInstruments": false,
+    "nativeSidecarsBuilt": true,
+    "freshP3ArchiveSource": "fb38e46cf49e3bc85e05c41f6bdb0390f604f6b8",
+    "rustflagsEnvironmentModified": false
+  },
+  "units": {
+    "source": "858c256cb7771e40df2b536f0cfa561d20073806",
+    "normalDevComponentRuntimePassed": 125,
+    "debugAssertionsEnabled": true,
+    "serial": true,
+    "fullRuntimeSuiteQualified": false,
+    "witPassed": 34,
+    "witIgnoredFixtureProducers": 2,
+    "nativeAsanUbsanReadCases": 26,
+    "nativeAsanUbsanWriteCases": 29,
+    "consumedOwnerDropMutationRejected": true,
+    "unfinishedFutureReleaseTrapsBeforeIllegalDrop": true,
+    "resourcePayloadCustodyInNativeSanitizerOnly": true
+  },
+  "acceptance": {
+    "script": "scripts/component_endpoint_transport_acceptance.py",
+    "phasesPassed": 15,
+    "phases": [
+      {
+        "phase": "build-probes",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "public-guard",
+        "exitCode": 1,
+        "passed": true
+      },
+      {
+        "phase": "generate",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "plain-compile",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "plain-link",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "reject-undeclared-types",
+        "exitCode": 1,
+        "passed": true
+      },
+      {
+        "phase": "plain-contract",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "plain-execute",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "c-task-context-link",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "c-task-context-execute",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "instrumented-compile",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "instrumented-link",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "instrumented-contract",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "instrumented-execute",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "moving",
+        "exitCode": 0,
+        "passed": true
+      }
+    ],
+    "externalWasiVersions": [
+      "0.3.0"
+    ],
+    "externalWasiInterfaces": 18,
+    "declaredApplicationTypeImports": [
+      "payload",
+      "pending",
+      "values",
+      "pair"
+    ],
+    "undeclaredTypeImportsRejected": true,
+    "publicAsyncGuardPreserved": true,
+    "guestFactoryExportsAreAsync": true,
+    "independentHostReadersAndWriters": true,
+    "postReturnProducersAdvanceWithoutAnotherGuestExport": true,
+    "partialWriteSuffixesRetried": true,
+    "streamCancellationRecoversUnwrittenBatch": true,
+    "explicitStreamCloseDiscardsUnwrittenBatch": true,
+    "nestedFutureWriter": true,
+    "completedProducerCount": 9,
+    "minimumPartialWriteChunks": 11,
+    "producerFailureCount": 0,
+    "readProfileRegressionsPassed": true,
+    "maintainedCCanonicalWaitResumeControl": true,
+    "storeReuse": true,
+    "guestHasNoArtificialBigIntExpression": true,
+    "payloadProfiles": [
+      "future<record(string,u64,char,list<u8>)>",
+      "stream<record(string,u64,char,list<u8>)>",
+      "future<char>",
+      "future<void>",
+      "stream<void>",
+      "stream<u8>",
+      "future<future<u32>>",
+      "stream<u32>"
+    ]
+  },
+  "gc": {
+    "nativeHostControlsOff": true,
+    "plainAndInstrumentedGuestOffControlsPassed": true,
+    "guestCopiedObjectsInMinorLogs": 12032,
+    "guestEvacuationVerified": true,
+    "movingGuestStderrCaptureBytes": 16777216,
+    "physicalWasmPageProtectionClaimed": false
+  },
+  "runtimeArchives": {
+    "plain": {
+      "bytes": 46151896,
+      "sha256": "b205c67d690d71341e01fab5db47b38d70c4d2bf7720e539453b6a4c8b94df0e"
+    },
+    "instrumented": {
+      "bytes": 46957810,
+      "sha256": "85752a716ddd8fb675f17380f93071e1ab744bfb154800e549da24757e7130a4"
+    }
+  },
+  "noTokio": {
+    "offlineInventoryPassed": true,
+    "newDependencies": false
+  },
+  "evidence": {
+    "archive": "wasi-030-v109-evidence.tar.gz",
+    "bytes": 77306801,
+    "sha256": "7b263132d5835f21846fe30c3566e6f729c360d0e8fae7c538d1def666dd0186",
+    "indexedFiles": 148,
+    "archiveAndEveryIndexedMemberVerifiedLocally": true,
+    "exactRegularFileSetVerified": true
+  },
+  "notQualifiedByThisReceipt": [
+    "Private producer actor and background I/O from synchronous public exports",
+    "Actual resource-bearing Wasm endpoint I/O and the full generic payload/lifecycle matrix",
+    "Public async generation",
+    "Complete current provider, HTTP and shared-provider ALS matrix",
+    "Current nine-command regressions, instrumented native release artifacts, macOS/Windows packages, required CI, full lint or merge",
+    "Later ABI inventory/scanner follow-up commits"
+  ]
+}

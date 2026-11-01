@@ -49,10 +49,9 @@ qualification of subsequent runtime changes or the remaining completion rows.
 The integration branch now also implements experimental owned guest reader
 capabilities and generated typed future/stream transport. Normal debug-mode
 tests cover joint resource/endpoint custody, nominal payload types, duplicate
-transfers, actual relocation, queued disposal and finalization. Guest reads
-are implemented experimentally. Writes and writer factories now have native
-unit/sanitizer coverage; actual Wasm qualification is pending. Public
-generation stays guarded. Actual P3 profiles are qualified separately below.
+transfers, actual relocation, queued disposal and finalization. Guest reads,
+writes and factories behind async exports are implemented experimentally and
+qualified on Linux below. Public generation stays guarded.
 
 The [endpoint transport receipt](validation/wasi-p3-endpoint-transport-20261101.json)
 now qualifies that experimental library profile on Linux: 15 acceptance phases,
@@ -79,7 +78,7 @@ including collecting Promise-init hooks and creation/observer ALS isolation
 through cancellation. These native sanitizer cases cover owned resource
 payloads; actual resource-bearing Wasm I/O remains to qualify. Future results
 are decoded without stream progress counts, and component imports select
-BigInt operations even without BigInt expressions in TypeScript. Writers,
+BigInt operations even without BigInt expressions in TypeScript. Writers and
 factories were still unimplemented at that receipt's source. Subsequent work
 is qualified separately below.
 
@@ -95,11 +94,24 @@ producer operations use a separate additive ABI 1 table. These native tests do
 not qualify Wasm writer execution, synchronous factory background scheduling
 or public async generation.
 
+The [actual guest-write receipt](validation/wasi-p3-guest-writes-20261101.json)
+qualifies the subsequent Linux Wasm profile at source fb38e46cf4. A fresh
+coherent ordinary native cohort and both fresh P3 runtime variants pass all
+15 acceptance phases, including the full read regression profile. Independent
+host readers consume guest-created record, character, void, unit, byte and
+nested-future payloads. Async factories return their readers before the
+producers finish; host reads then advance the producers without another guest
+export call. Partial write suffixes, cancellation/retry, explicit stream close,
+nine completed producers and zero producer failures are asserted. The moving
+guest copies 12,032 objects with evacuation verification; native host controls
+remain off. Actual resource-bearing endpoint I/O, the wider lifecycle matrix
+and private producer scheduling behind synchronous public factories remain.
+
 | Requirement | Required evidence | Current state |
 | --- | --- | --- |
 | Canonical async imports and exports | Public generated components compose in both directions; overlapping calls, immediate/delayed completion, errors, post-return work and Store reuse | Experimental scalar/compound profile qualified; public CLI guarded |
 | Resource ownership across async calls | Imported/exported nominal resources, compound aliases, pre-start cancellation, returned-result races, borrow expiry at return/cancel, exactly-once drops and moving GC | Actual experimental entry point qualifies basic and compound C/Perry/C profiles on Linux, including 24 duplicate-owner rejections, 188 exactly-once drops, unclaimed results and moving GC; public async CLI remains guarded |
-| Guest `future<T>` and `stream<T>` | Readable/writable ownership, arbitrary supported WIT payloads, void, bounded writes, backpressure, final partial chunks, closure, cancellation and cleanup across suspension | Experimental reader transport and guest-read profiles qualified on Linux: 15 actual acceptance phases and positive Wasm guest relocation. Subsequent writer/factory implementation passes 125 component runtime tests, 34 WIT/C tests and 29 writer sanitizer cases (plus 26 read cases). Actual Wasm writes, resource-bearing I/O, the wider lifecycle matrix, private producer actor and public adapters remain |
+| Guest `future<T>` and `stream<T>` | Readable/writable ownership, arbitrary supported WIT payloads, void, bounded writes, backpressure, final partial chunks, closure, cancellation and cleanup across suspension | Experimental reads, writes, factories behind async exports and post-return producers qualified on Linux: 15 actual acceptance phases, 12,032 relocated guest objects, 125 component runtime tests, 34 WIT/C tests and 29 writer sanitizer cases (plus 26 read cases). Actual resource-bearing I/O, the wider lifecycle matrix, synchronous factory producer actor and public adapters remain |
 | WASI 0.3.0 command output | A public command/runtime profile with `wasi:cli/run@0.3.0`, explicit system-interface versions and execution in a host providing the declared 0.3.0 imports; no implicit reliance on P2 compatibility | Integration branch implements `--target wasip3`; nine Perry commands and 51 Linux acceptance phases pass, plus ten separate Wasm-guest GC phases; current runtime changes, native production variants, release/platform qualification and landing remain; `--target wasi` retains P2 |
 | Complete supported 0.3.0 WASI interfaces | Commands, clocks, randomness, filesystem, TCP/UDP/DNS and HTTP execute through Turnloop with capability checks, I/O cancellation and shutdown | Linux provider/command/HTTP receipts exist; complete current-profile matrix still required |
 | Cross-language interoperability | Public Perry output composed with independent Rust and maintained-C components, including resources and future/stream payloads | Scalar/compound and cancellation examples exist; missing value profiles unqualified |
