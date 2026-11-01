@@ -28,11 +28,11 @@ impl Kind {
     pub(crate) fn layout(self) -> *const crate::object::layout_desc::PerryLayoutDesc {
         use crate::object::runtime_layouts as rl;
         match self {
-            Self::Readable => &raw const rl::READABLE,
-            Self::Writable => &raw const rl::WRITABLE,
-            Self::Duplex => &raw const rl::DUPLEX,
-            Self::Transform => &raw const rl::TRANSFORM,
-            Self::PassThrough => &raw const rl::PASSTHROUGH,
+            Self::Readable => rl::READABLE::desc(),
+            Self::Writable => rl::WRITABLE::desc(),
+            Self::Duplex => rl::DUPLEX::desc(),
+            Self::Transform => rl::TRANSFORM::desc(),
+            Self::PassThrough => rl::PASSTHROUGH::desc(),
         }
     }
 }

@@ -14,11 +14,9 @@ pub unsafe fn build_iter_result_ordered(
     order: IterResultOrder,
 ) -> f64 {
     let desc = match order {
-        IterResultOrder::ValueDone => {
-            std::ptr::addr_of!(crate::object::runtime_layouts::ITERATOR_RESULT)
-        }
+        IterResultOrder::ValueDone => crate::object::runtime_layouts::ITERATOR_RESULT::desc(),
         IterResultOrder::DoneValue => {
-            std::ptr::addr_of!(crate::object::runtime_layouts::ITERATOR_RESULT_DONE_FIRST)
+            crate::object::runtime_layouts::ITERATOR_RESULT_DONE_FIRST::desc()
         }
     };
     // Scalar members (numbers, booleans, undefined) are not managed, so only

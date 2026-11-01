@@ -192,7 +192,7 @@ pub extern "C" fn js_event_emitter_object_new(options: f64) -> f64 {
     emitter_new(
         proto,
         options.get_nanbox_f64(),
-        &raw const crate::object::runtime_layouts::EVENT_EMITTER,
+        crate::object::runtime_layouts::EVENT_EMITTER::desc(),
     )
 }
 /// `new EventEmitterAsyncResource(opts)`.

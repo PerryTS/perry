@@ -1471,7 +1471,7 @@ mod tests {
 
     #[test]
     fn static_layout_births_take_their_kind_and_stay_unmarked() {
-        let source = r#"fn f() { crate::realm_decl! { birth crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(crate::object::runtime_layouts::EE_ASYNC_RESOURCE_PROTO)); realm { Example.prototype, extends = Base.prototype, members = { constructor; }; } } }"#;
+        let source = r#"fn f() { crate::realm_decl! { birth crate::object::layout_desc::perry_alloc_layout(crate::object::runtime_layouts::EE_ASYNC_RESOURCE_PROTO::desc()); realm { Example.prototype, extends = Base.prototype, members = { constructor; }; } } }"#;
         // PLAIN_ORDINARY|HAS_DESCRIPTORS; no NEVER_MOVE until a realm birth
         // names it as its [[Prototype]].
         assert_eq!(header_word(&inline(source).unwrap()[0]), "2560");
