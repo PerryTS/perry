@@ -63,6 +63,7 @@ fn consumer_credit_bounds_native_buffers_and_cancel_disconnects() {
             body: None,
             redirect: RedirectMode::Follow,
             abort_key: None,
+            tls: None,
         },
         Sink {
             ctx,
@@ -146,6 +147,7 @@ fn consumer_resume_before_connect_keeps_the_request_pending() {
             body: None,
             redirect: RedirectMode::Follow,
             abort_key: None,
+            tls: None,
         },
         Sink {
             ctx,
@@ -214,6 +216,7 @@ fn consumer_resume_before_partial_headers_still_completes_the_body() {
             body: None,
             redirect: RedirectMode::Follow,
             abort_key: None,
+            tls: None,
         },
         Sink {
             ctx,
@@ -257,6 +260,7 @@ fn submit_after_response(ctx: usize, outcome: Outcome) {
             body: None,
             redirect: RedirectMode::Follow,
             abort_key: None,
+            tls: None,
         },
         Sink {
             ctx: ctx + 1,
@@ -314,6 +318,7 @@ fn response_callback_does_not_resume_a_new_connecting_request() {
             body: None,
             redirect: RedirectMode::Follow,
             abort_key: None,
+            tls: None,
         },
         Sink {
             ctx: 7654324,
