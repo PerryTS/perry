@@ -85,4 +85,3 @@ fn a_delegate_from_unmodeled_code_yields_top() {
     let v = verdict("function* outer() { yield* (globalThis as any).hostIter; }");
     assert!(!proven(&v), "{v:?}");
 }
-
