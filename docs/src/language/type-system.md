@@ -1,6 +1,6 @@
 # Type System
 
-Perry erases types at compile time, similar to how `tsc` removes type annotations when emitting JavaScript. However, Perry also performs type inference to generate efficient native code.
+TypeScript annotations describe source-level intent; they do not validate runtime values. Perry combines local evidence, program facts and runtime guards to select native representations. Decorator metadata is an explicit exception to annotation erasure.
 
 ## Type Inference
 
@@ -31,7 +31,7 @@ Standard TypeScript annotations work:
 
 ## Utility Types
 
-Common TypeScript utility types are erased at compile time (they don't affect code generation):
+Utility types describe static relationships and do not introduce runtime wrappers or validation:
 
 ```typescript
 {{#include ../../examples/language/type_system.ts:utility-types}}
@@ -47,7 +47,7 @@ Generic type parameters are erased:
 {{#include ../../examples/language/type_system.ts:generics}}
 ```
 
-At runtime, all values are NaN-boxed — the generic parameter doesn't affect code generation.
+A generic parameter alone is not a runtime representation proof. Generic value boundaries use NaN-boxing, while proven computations can use native scalars and specialized storage.
 
 ## Type Checking with `--type-check`
 
@@ -57,13 +57,13 @@ For stricter type checking, Perry can integrate with Microsoft's TypeScript chec
 perry file.ts --type-check
 ```
 
-This resolves cross-file types, interfaces, and generics via an IPC protocol. It falls back gracefully if the type checker is not installed.
+This starts `tsgo`, loads the project tsconfig and requests diagnostics and resolved types over IPC. Reported type errors stop compilation. Missing tooling, project-load failures or unavailable diagnostics can leave compilation running without checking; this option is not a guaranteed standalone type-check gate.
 
 Without `--type-check`, Perry relies on its own inference engine, which handles common patterns but doesn't perform full TypeScript type checking.
 
 ## Union and Intersection Types
 
-Union types are recognized syntactically but don't affect code generation:
+Unions and intersections do not create runtime tags of their own. Specialization requires evidence about the actual value, such as a validated guard:
 
 ```typescript
 {{#include ../../examples/language/type_system.ts:union-narrowing}}
@@ -78,6 +78,10 @@ Use `typeof` checks for runtime type narrowing.
 ```
 
 The `value is string` annotation is erased, but the `typeof` check works at runtime.
+
+## Program facts and specialization
+
+The default facts pass analyzes value flow across modules. It can prove receiver sets, field layouts and call targets; unknown behavior retains checks or the generic path. See [Program facts](../internals/program-facts.md) and [Local binding type evidence](../internals/local-binding-type-evidence.md).
 
 ## Next Steps
 
