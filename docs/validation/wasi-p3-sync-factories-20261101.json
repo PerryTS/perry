@@ -1,0 +1,207 @@
+{
+  "date": "2026-11-01",
+  "source": "a8dad22b7e8e2a6211bb89078118f9176b789e4d",
+  "scope": "Linux x86_64 actual Perry P3 synchronous public future/stream factories with private sibling producer scheduling; root/world function profile",
+  "fullWasi030Qualified": false,
+  "integratedMain": "ee0d9183d4496489dd4532247a64c66b57969230",
+  "units": {
+    "source": "a8dad22b7e8e2a6211bb89078118f9176b789e4d",
+    "witPassed": 37,
+    "ignoredFixtureProducers": 2,
+    "normalDevComponentRuntimePassed": 125,
+    "debugAssertionsEnabled": true,
+    "serial": true,
+    "fullRuntimeSuiteQualified": false,
+    "nativeAsanUbsanReadCases": 26,
+    "nativeAsanUbsanWriteCases": 30,
+    "generatedFacadeInputBufferRetirementAndResultCustodySanitizer": true,
+    "consumedInputLeakMutationRejected": true
+  },
+  "build": {
+    "freshCoherentOrdinaryNativeSource": "a8dad22b7e8e2a6211bb89078118f9176b789e4d",
+    "packages": [
+      "perry",
+      "perry-runtime-static",
+      "perry-stdlib-static",
+      "perry-component-host",
+      "perry-wit",
+      "perry-gc-effects"
+    ],
+    "feature": "perry/target-wasi",
+    "nativeInstruments": false,
+    "nativeSidecarsBuilt": true,
+    "p3RuntimeArchiveSource": "75e11196ee862e94d1611f71b10689d74794124b",
+    "p3ArchiveReuseProof": "Equal per-path content-addressed Git tree/blob IDs in each immutable source repository; complete runtime/stdlib/ABI/codegen/third_party directories, Cargo manifests/lock, config/toolchain, runtime builder and contract checker. Only P3 archives reused; native cohort freshly built at actual source.",
+    "rustflagsEnvironmentModified": false
+  },
+  "acceptance": {
+    "script": "scripts/component_endpoint_transport_acceptance.py",
+    "phasesPassed": 20,
+    "phases": [
+      {
+        "phase": "build-probes",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "public-guard",
+        "exitCode": 1,
+        "passed": true
+      },
+      {
+        "phase": "generate",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "facade-link",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "plain-compile",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "plain-link",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "plain-compose",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "reject-undeclared-types",
+        "exitCode": 1,
+        "passed": true
+      },
+      {
+        "phase": "plain-contract",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "plain-execute",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "plain-rejects-instrument-grant",
+        "exitCode": 1,
+        "passed": true
+      },
+      {
+        "phase": "c-task-context-link",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "c-task-context-compose",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "c-task-context-execute",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "instrumented-compile",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "instrumented-link",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "instrumented-compose",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "instrumented-contract",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "instrumented-execute",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "moving",
+        "exitCode": 0,
+        "passed": true
+      }
+    ],
+    "publicSynchronousSignaturesPreserved": true,
+    "privateProducerFacade": "Maintained typed C adapter in a sibling component; synchronous forwarding retires input buffers, kicks private async actor, requires inline return and drops subtask before returning. Composition hides private exports and preserves public nominal types.",
+    "postReturnProducersAdvanceWithoutAnotherGuestExport": true,
+    "canonicalIoBeginsAfterPrivateActorTaskReturn": true,
+    "completedProducerCount": 11,
+    "producerFailureCount": 0,
+    "minimumPartialWriteChunks": 14,
+    "externalWasiInterfaces": 18,
+    "externalWasiVersions": [
+      "0.3.0"
+    ],
+    "declaredApplicationTypeImports": [
+      "payload",
+      "pending",
+      "values",
+      "pair"
+    ],
+    "undeclaredTypeNegativePassed": true,
+    "publicGenerationGuardRetained": true,
+    "plainArchiveRejectsInstrumentationGrant": true,
+    "maintainedCCanonicalWaitResumeControl": true,
+    "fullEarlierReadAndAsyncWriterProfilePassed": true,
+    "partialWriteSuffixRetry": true,
+    "cancellationRetry": true,
+    "explicitCloseAndEof": true,
+    "storeReuse": true
+  },
+  "gc": {
+    "nativeHostControlsOff": true,
+    "plainAndInstrumentedGuestOffControlsPassed": true,
+    "guestCopiedObjects": 12870,
+    "guestEvacuationVerified": true,
+    "physicalWasmPageProtectionClaimed": false
+  },
+  "runtimeArchives": {
+    "plain": {
+      "bytes": 46159670,
+      "sha256": "399bdf83fa36874e1af971a7f36f12e25e45fa1478310eaf172897b0d3991c8b"
+    },
+    "instrumented": {
+      "bytes": 46966504,
+      "sha256": "fe0285d8b2647c707ae0a50a92a8a8e0fc02d7ab5a6b8082f79f2285f19a70e0"
+    }
+  },
+  "noTokio": {
+    "strictOfflineInventoryPassed": true,
+    "optionalTransitiveDevBuildAndTargetDependenciesIncluded": true,
+    "newResolvedVersions": false
+  },
+  "evidence": {
+    "archive": "wasi-030-v120-evidence.tar.gz",
+    "bytes": 95227875,
+    "sha256": "674388b461b423b155545903af4830e43540319b54039b4ef6d5df7ad5783591",
+    "indexedFiles": 187,
+    "archiveAndEveryIndexedMemberVerifiedLocally": true,
+    "exactRegularFileSetVerified": true
+  },
+  "notQualifiedByThisReceipt": [
+    "Async imports initiated by synchronous public functions",
+    "Actual resource-bearing Wasm endpoint I/O and named-interface synchronous factory interoperation",
+    "Full endpoint/actor cancellation, hook, ALS, teardown and generic payload matrix",
+    "Public async CLI generation and replacement of existing guard",
+    "Complete current providers/HTTP/shared-provider Response subclass and ALS matrix",
+    "Current nine-command suite, instrumented native artifacts, macOS/Windows installed packages, required CI, full lint and merge"
+  ]
+}
