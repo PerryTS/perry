@@ -118,11 +118,8 @@ fn a_private_fields_map_is_read_through_its_class_only() {
 const FOREIGN_ENTRY: &str = r#"JSON.parse("{\"depth\":\"x\",\"score\":\"y\"}")"#;
 
 /// The class's code returns the field's value: it leaves with the result.
-/// Per unit refuses. The whole program wrongly proves the entries here, as
-/// it does on main with a public field returned by a getter (another
-/// unit's `.set` on the getter's Map is lost): lane SRM fixes that.
+/// Per unit refuses, and so does the whole program.
 #[test]
-#[ignore = "SRM"]
 fn a_private_field_returned_by_its_class_leaves() {
     let e = engine("    get table(): Map<string, Entry> { return this.#table; }");
     let m = format!(
