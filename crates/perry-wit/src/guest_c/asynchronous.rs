@@ -11,6 +11,13 @@ pub(super) fn add_wake_anchor(resolve: &mut Resolve, id: WorldId) -> Result<Stri
         if !resolve.worlds[id]
             .exports
             .contains_key(&WorldKey::Name(candidate.clone()))
+            && !resolve.worlds[id]
+                .imports
+                .contains_key(&WorldKey::Name(candidate.clone()))
+            && !resolve
+                .types
+                .iter()
+                .any(|(_, ty)| ty.name.as_deref() == Some(&candidate))
         {
             break candidate;
         }
@@ -19,7 +26,9 @@ pub(super) fn add_wake_anchor(resolve: &mut Resolve, id: WorldId) -> Result<Stri
     // Append after converting the public world: existing nominal/resource IDs,
     // function indices and the serialized contract stay unchanged.
     let signal = resolve.types.alloc(wit_parser::TypeDef {
-        name: None,
+        // A private name keeps its helper symbols distinct from public unit
+        // streams, including unit streams owned by imported interfaces.
+        name: Some(name.clone()),
         kind: TypeDefKind::Stream(None),
         owner: wit_parser::TypeOwner::None,
         docs: Default::default(),
@@ -46,6 +55,7 @@ pub(super) fn add_wake_anchor(resolve: &mut Resolve, id: WorldId) -> Result<Stri
 pub(super) fn scheduler(world: &str, anchor: &str) -> String {
     include_str!("scheduler.h")
         .replace("$W", world)
+        .replace("$S", &format!("{world}_{}", anchor.to_snake_case()))
         .replace("$U", &world.to_uppercase())
         .replace("$ANCHOR", &anchor.to_snake_case())
 }

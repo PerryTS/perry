@@ -17,8 +17,8 @@ struct perry_task {
     perry_task *next;
     perry_child *children;
     $W_waitable_set_t set;
-    $W_stream_void_t reader;
-    $W_stream_void_writer_t writer;
+    $S_t reader;
+    $S_writer_t writer;
     bool asynchronous, returned, cancelled, has_set, waiting, armed, read_pending;
 };
 static perry_task *perry_tasks;
@@ -28,10 +28,10 @@ static perry_task *perry_active_task;
 
 /* A closed, extra export makes the maintained backend emit unit-stream
    helpers. It is absent from Perry's public contract and registration indices. */
-$W_stream_void_t exports_$W_$ANCHOR(void) {
-    $W_stream_void_writer_t writer;
-    $W_stream_void_t reader = $W_stream_void_new(&writer);
-    $W_stream_void_drop_writable(writer);
+$S_t exports_$W_$ANCHOR(void) {
+    $S_writer_t writer;
+    $S_t reader = $S_new(&writer);
+    $S_drop_writable(writer);
     return reader;
 }
 static void perry_require(bool ok) { if (!ok) __builtin_trap(); }
@@ -99,7 +99,7 @@ static void perry_wake_all(void) {
         perry_require(ready >= 0);
         if (!ready) continue;
         t->armed = false;
-        $W_waitable_status_t status = $W_stream_void_write(t->writer, 1);
+        $W_waitable_status_t status = $S_write(t->writer, 1);
         perry_require(status != $U_WAITABLE_STATUS_BLOCKED);
         perry_require($U_WAITABLE_STATE(status) == $U_WAITABLE_COMPLETED);
         perry_require($U_WAITABLE_COUNT(status) == 1);
@@ -112,11 +112,11 @@ static void perry_task_drop(perry_task *t) {
            children can finish while this signal read is still blocked. */
         $W_waitable_join(t->reader, 0);
         if (t->armed) {
-            $W_waitable_status_t status = $W_stream_void_cancel_read(t->reader);
+            $W_waitable_status_t status = $S_cancel_read(t->reader);
             perry_require(status != $U_WAITABLE_STATUS_BLOCKED);
         }
-        $W_stream_void_drop_readable(t->reader);
-        $W_stream_void_drop_writable(t->writer);
+        $S_drop_readable(t->reader);
+        $S_drop_writable(t->writer);
     }
     if (t->has_set) $W_waitable_set_drop(t->set);
     perry_task **link = &perry_tasks;
@@ -225,7 +225,7 @@ static int32_t perry_task_poll(perry_task *t, uint32_t *result) {
 static $W_callback_code_t perry_task_wait(perry_task *t) {
     perry_task_set(t);
     if (!t->waiting) {
-        t->reader = $W_stream_void_new(&t->writer);
+        t->reader = $S_new(&t->writer);
         $W_waitable_join(t->reader, t->set);
         t->waiting = true;
     }
@@ -233,7 +233,7 @@ static $W_callback_code_t perry_task_wait(perry_task *t) {
        while its completed event is queued. Preserve either read until its
        own event is consumed; only that event permits a new read. */
     if (!t->read_pending) {
-        perry_require($W_stream_void_read(t->reader, 1) == $U_WAITABLE_STATUS_BLOCKED);
+        perry_require($S_read(t->reader, 1) == $U_WAITABLE_STATUS_BLOCKED);
         t->read_pending = t->armed = true;
     }
     $W_context_set_0(t);
