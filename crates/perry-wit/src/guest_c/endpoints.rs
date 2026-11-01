@@ -4,6 +4,8 @@ use super::*;
 mod custody_tests;
 mod read;
 mod write;
+#[cfg(all(test, target_os = "linux"))]
+mod write_tests;
 
 impl Generator<'_> {
     pub(super) fn endpoint_adapters(&mut self) -> Result<()> {
