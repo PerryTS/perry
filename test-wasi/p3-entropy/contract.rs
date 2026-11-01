@@ -3,9 +3,19 @@
 use wasmparser::{ComponentExternalKind, ComponentTypeRef, Encoding, Parser, Payload};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let path = std::env::args()
-        .nth(1)
-        .ok_or("usage: p3-contract <command.wasm>")?;
+    let args: Vec<_> = std::env::args().skip(1).collect();
+    let reactor = args.first().is_some_and(|arg| arg == "--reactor");
+    let path = args.get(usize::from(reactor)).ok_or(
+        "usage: p3-contract <command.wasm> | --reactor <reactor.wasm> <required-export>...",
+    )?;
+    let mut required = if reactor {
+        args[2..].to_vec()
+    } else {
+        Vec::new()
+    };
+    if (reactor && required.is_empty()) || (!reactor && args.len() != 1) {
+        return Err("invalid P3 contract profile arguments".into());
+    }
     let bytes = std::fs::read(path)?;
     let mut depth = 0usize;
     let mut imports = 0;
@@ -42,15 +52,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let export = export?;
                     command |= export.name.name == "wasi:cli/run@0.3.0"
                         && export.kind == ComponentExternalKind::Instance;
+                    if export.kind == ComponentExternalKind::Func {
+                        required.retain(|name| name != export.name.name);
+                    }
                     println!("export {}", export.name.name);
                 }
             }
             _ => {}
         }
     }
-    if depth != 0 || imports == 0 || !command || !random {
+    if depth != 0
+        || imports == 0
+        || (!reactor && !command)
+        || (reactor && command)
+        || !random
+        || !required.is_empty()
+    {
         return Err(format!("incomplete P3 entropy command: depth={depth}, imports={imports}, run={command}, random={random}").into());
     }
-    println!("PASS: external WASI 0.3-only entropy command contract");
+    if reactor {
+        println!("PASS: external WASI 0.3-only reactor contract and required function exports");
+    } else {
+        println!("PASS: external WASI 0.3-only entropy command contract");
+    }
     Ok(())
 }
