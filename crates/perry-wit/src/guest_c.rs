@@ -265,7 +265,12 @@ impl Generator<'_> {
             }
             for item in items.values() {
                 if let WorldItem::Function(function) = item {
-                    if !import && self.anchor.as_deref() == Some(&function.name) {
+                    if !import
+                        && self.anchor.as_ref().is_some_and(|anchor| {
+                            *anchor == function.name
+                                || asynchronous::actor_name(anchor) == function.name
+                        })
+                    {
                         continue;
                     }
                     self.function(None, function, import)?;

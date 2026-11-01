@@ -10,7 +10,8 @@ static unsigned adopted[4], dropped[4], sent_handles[4];
 static unsigned staged, commits, writes, cancels, finishes, io_frames, parent_frames;
 static unsigned writer_drops, reader_drops, cases, length, sent, expected_flags;
 static unsigned expected_remaining, factory_type, action;
-static uint32_t joined;
+static uint32_t joined, signal_joined, actor_returns;
+static void *canonical_context;
 static bool is_stream, observed, immediate, acknowledged, committed, failed, reject_commit;
 static plugin_waitable_state_t terminal;
 static const test_writer_custody_api_payload_t *storage;
@@ -148,19 +149,39 @@ int32_t perry_component_frame_task_resume(void *frame, void (*callback)(void *),
     assert(frame == parent_frame && acknowledged); callback(data); return 0;
 }
 int32_t perry_component_frame_task_ready(void *frame) { (void)frame; return 0; }
+int32_t perry_component_frame_task_checkpoint(void *frame) {
+    assert(frame == parent_frame && action == 7 && actor_returns == 1); return 0;
+}
 int32_t perry_component_frame_task_cancel(void *frame) { assert(frame == parent_frame && !acknowledged); return 0; }
 int32_t perry_component_frame_resource_scope_end(void *frame) { assert(frame == parent_frame && io_frames == 1); return 0; }
-void plugin_waitable_join(uint32_t handle, plugin_waitable_set_t set) { assert(handle == 42 || handle == 0); joined = set; }
+void plugin_waitable_join(uint32_t handle, plugin_waitable_set_t set) {
+    if (handle == 44) { signal_joined = set; return; }
+    assert(handle == 42 || handle == 0); joined = set;
+}
 plugin_waitable_set_t plugin_waitable_set_new(void) { return 71; }
-void plugin_waitable_set_drop(plugin_waitable_set_t set) { assert(set == 71 && joined == 0); }
+void plugin_waitable_set_drop(plugin_waitable_set_t set) { assert(set == 71 && joined == 0 && signal_joined == 0); }
 plugin_subtask_status_t plugin_subtask_cancel(plugin_subtask_t child) { (void)child; assert(0); return 0; }
 void plugin_subtask_drop(plugin_subtask_t child) { (void)child; assert(0); }
 void plugin_task_cancel(void) { assert(acknowledged && io_frames == 1); }
-void plugin_context_set_0(void *pointer) { assert(pointer == NULL); }
-plugin_waitable_status_t plugin_stream_void_cancel_read(plugin_stream_void_t handle) { (void)handle; assert(0); return 0; }
-void plugin_stream_void_drop_readable(plugin_stream_void_t handle) { assert(handle == 0); }
-void plugin_stream_void_drop_writable(plugin_stream_void_writer_t handle) { assert(handle == 0); }
+void plugin_context_set_0(void *pointer) { canonical_context = pointer; }
+void *plugin_context_get_0(void) { return canonical_context; }
+plugin_stream_void_t plugin_stream_void_new(plugin_stream_void_writer_t *writer) {
+    assert(action == 7 && actor_returns == 1); *writer = 45; return 44;
+}
+plugin_waitable_status_t plugin_stream_void_read(plugin_stream_void_t handle, size_t count) {
+    assert(action == 7 && handle == 44 && count == 1 && signal_joined == 71);
+    return PLUGIN_WAITABLE_STATUS_BLOCKED;
+}
+plugin_waitable_status_t plugin_stream_void_cancel_read(plugin_stream_void_t handle) {
+    assert(action == 7 && handle == 44 && signal_joined == 0);
+    return PLUGIN_WAITABLE_CANCELLED;
+}
+void plugin_stream_void_drop_readable(plugin_stream_void_t handle) { assert(handle == 0 || (action == 7 && handle == 44)); }
+void plugin_stream_void_drop_writable(plugin_stream_void_writer_t handle) { assert(handle == 0 || (action == 7 && handle == 45)); }
 plugin_waitable_status_t plugin_stream_void_write(plugin_stream_void_writer_t handle, size_t count) { (void)handle; (void)count; assert(0); return 0; }
+void exports_plugin_perry_scheduler_signal_0_producer_return(void) {
+    assert(action == 7 && writes == 0 && committed && finishes == 0 && ++actor_returns == 1);
+}
 
 static void cleanup(void) {
     failed = false;
@@ -173,7 +194,8 @@ static void cleanup(void) {
 static void reset(bool stream) {
     assert(perry_tasks == NULL && perry_writers == NULL);
     memset(adopted, 0, sizeof(adopted)); memset(dropped, 0, sizeof(dropped)); memset(sent_handles, 0, sizeof(sent_handles));
-    staged = commits = writes = cancels = finishes = io_frames = parent_frames = writer_drops = reader_drops = joined = 0;
+    staged = commits = writes = cancels = finishes = io_frames = parent_frames = writer_drops = reader_drops = joined = signal_joined = actor_returns = 0;
+    canonical_context = NULL;
     acknowledged = committed = failed = reject_commit = false;
     storage = NULL; is_stream = stream; length = stream ? 3 : 1;
     factory_type = stream ? $STREAM_TYPE : $FUTURE_TYPE;
@@ -236,6 +258,28 @@ static void refused_commit(void) {
     perry_tasks = perry_active_task = NULL;
     cleanup(); ++cases;
 }
+static void sync_actor(void) {
+    reset(true); action = 7; observed = true; sent = 1; terminal = PLUGIN_WAITABLE_COMPLETED; immediate = false;
+    expected_flags = 0; expected_remaining = 2;
+    assert(perry_producer_create(scratch_frame, factory_type) == 1);
+    perry_task *task = calloc(1, sizeof(*task)); assert(task);
+    task->frame = parent_frame;
+    perry_tasks = perry_active_task = task;
+    assert(perry_producer_write(io_frame, factory_type, 42, 7, 11) == 0);
+    perry_active_task = NULL;
+    assert(committed && task->io->start != NULL && writes == 0 && finishes == 0 && joined == 0);
+    perry_task_finish_sync(task);
+    assert(task->parked && parent_frames == 0);
+    assert(exports_plugin_perry_scheduler_signal_0_producer() == PLUGIN_CALLBACK_CODE_WAIT(71));
+    assert(actor_returns == 1 && writes == 1 && joined == 71 && signal_joined == 71);
+    assert(task->returned && task->asynchronous && !task->parked && canonical_context == task);
+    plugin_event_t event = { .event = PLUGIN_EVENT_STREAM_WRITE, .waitable = 42, .code = acknowledge() };
+    assert(exports_plugin_perry_scheduler_signal_0_producer_callback(&event) == PLUGIN_CALLBACK_CODE_EXIT);
+    assert(perry_tasks == NULL && canonical_context == NULL && parent_frames == 1 && io_frames == 1);
+    assert(adopted[2] == 1 && adopted[3] == 1 && sent_handles[1] == 1);
+    assert(dropped[1] == 0 && dropped[2] == 0 && dropped[3] == 0);
+    cleanup(); ++cases;
+}
 int main(int argc, char **argv) {
     if (argc == 2) {
         assert(strcmp(argv[1], "--unfinished-future") == 0);
@@ -260,7 +304,8 @@ int main(int argc, char **argv) {
     check(true, true, PLUGIN_WAITABLE_CANCELLED, 0, true, 5);
     check(true, false, PLUGIN_WAITABLE_CANCELLED, 2, false, 6);
     refused_commit();
-    assert(cases == 29);
-    puts("PASS: 29 guest write custody cases");
+    sync_actor();
+    assert(cases == 30);
+    puts("PASS: 30 guest write custody cases");
     return 0;
 }

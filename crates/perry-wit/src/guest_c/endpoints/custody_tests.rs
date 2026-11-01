@@ -41,7 +41,7 @@ fn canonical_guest_reads_retire_only_acknowledged_unclaimed_owned_payloads() {
             .strip_suffix("_state;")
             .unwrap();
         let body = adapter
-            .split(&format!("static int32_t {stem}_start("))
+            .split(&format!("static void {stem}_begin("))
             .nth(1)
             .unwrap()
             .split("\nreturn 0;\n}")

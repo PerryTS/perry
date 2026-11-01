@@ -7,6 +7,9 @@ typedef struct perry_io {
     $W_event_code_t event;
     $W_waitable_status_t status;
     bool complete, cancelled, claimed, joined;
+    /* A synchronous export stages storage but performs no canonical I/O.
+       Its private actor clears this callback before starting that storage. */
+    void (*start)(perry_task *, struct perry_io *);
     void (*deliver)(void *);
     void (*cancel)(struct perry_io *);
     void (*destroy)(struct perry_io *);
@@ -42,7 +45,7 @@ struct perry_task {
     $W_waitable_set_t set;
     $S_t reader;
     $S_writer_t writer;
-    bool asynchronous, returned, cancelled, has_set, waiting, armed, read_pending;
+    bool asynchronous, returned, cancelled, has_set, waiting, armed, read_pending, parked;
 };
 static perry_task *perry_tasks;
 /* Installed only around finite runtime calls, restored before canonical WAIT.
@@ -50,6 +53,17 @@ static perry_task *perry_tasks;
 static perry_task *perry_active_task;
 static void perry_require(bool);
 static int32_t perry_task_resume(perry_task *, void (*)(void *), void *);
+static void perry_io_ready(perry_task *t, perry_io *io) {
+    if (perry_active_task == t) io->deliver(io);
+    else perry_require(perry_task_resume(t, io->deliver, io) >= 0);
+}
+static void perry_io_start(perry_task *t, perry_io *io) {
+    void (*start)(perry_task *, perry_io *) = io->start;
+    perry_require(start != NULL && !io->complete && !io->cancelled && t->asynchronous);
+    io->start = NULL;
+    start(t, io);
+    /* Inline delivery may have reaped io. Do not touch it after start. */
+}
 static void perry_io_sweep(perry_task *);
 static void perry_io_close(uint32_t, uint32_t);
 static void perry_io_reap(perry_task *t) {
@@ -328,4 +342,47 @@ static $W_callback_code_t perry_task_wait(perry_task *t) {
     perry_task_context_set(t);
     perry_wake_all();
     return $U_CALLBACK_CODE_WAIT(t->set);
+}
+
+/* Called after result ownership and incoming borrow retirement. A facade
+   always invokes the private actor before returning the public sync result. */
+static void perry_task_finish_sync(perry_task *t) {
+    perry_require(!t->asynchronous && !t->parked);
+    if (t->io || t->children) t->parked = true;
+    else perry_task_drop(t);
+}
+static $W_callback_code_t perry_actor_step(perry_task *t) {
+    for (;;) {
+        perry_io *pending = NULL;
+        for (perry_io *io = t->io; io; io = io->next)
+            if (io->start) { pending = io; break; }
+        if (!pending) break;
+        perry_io_start(t, pending);
+        perry_task_reap(t);
+        perry_endpoint_flush();
+        /* Starting/resuming may free nodes or publish another operation. */
+    }
+    perry_require(perry_task_checkpoint(t) >= 0);
+    if (t->children || t->io) return perry_task_wait(t);
+    perry_task_context_set(NULL);
+    perry_task_drop(t);
+    return $U_CALLBACK_CODE_EXIT;
+}
+$W_callback_code_t exports_$W_$ACTOR_callback($W_event_t *event) {
+    perry_task *t = perry_task_context_get();
+    perry_require(t != NULL && t->returned && !t->parked);
+    perry_task_event(t, event);
+    return perry_actor_step(t);
+}
+$W_callback_code_t exports_$W_$ACTOR(void) {
+    /* Return before any operation starts. An async-lowered sibling facade
+       therefore observes RETURNED inline and can reap this subtask. */
+    exports_$W_$ACTOR_return();
+    perry_task *t = perry_tasks;
+    while (t && !t->parked) t = t->next;
+    if (!t) return $U_CALLBACK_CODE_EXIT;
+    t->parked = false;
+    t->asynchronous = t->returned = true;
+    perry_task_context_set(t);
+    return perry_actor_step(t);
 }

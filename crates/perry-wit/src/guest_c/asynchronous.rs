@@ -8,16 +8,22 @@ pub(super) fn add_wake_anchor(resolve: &mut Resolve, id: WorldId) -> Result<Stri
     let mut n = 0;
     let name = loop {
         let candidate = format!("perry-scheduler-signal-{n}");
+        let actor = actor_name(&candidate);
         if !resolve.worlds[id]
             .exports
             .contains_key(&WorldKey::Name(candidate.clone()))
             && !resolve.worlds[id]
                 .imports
                 .contains_key(&WorldKey::Name(candidate.clone()))
-            && !resolve
-                .types
-                .iter()
-                .any(|(_, ty)| ty.name.as_deref() == Some(&candidate))
+            && !resolve.types.iter().any(|(_, ty)| {
+                ty.name.as_deref() == Some(&candidate) || ty.name.as_deref() == Some(&actor)
+            })
+            && !resolve.worlds[id]
+                .exports
+                .contains_key(&WorldKey::Name(actor.clone()))
+            && !resolve.worlds[id]
+                .imports
+                .contains_key(&WorldKey::Name(actor))
         {
             break candidate;
         }
@@ -58,7 +64,25 @@ pub(super) fn add_wake_anchor(resolve: &mut Resolve, id: WorldId) -> Result<Stri
     resolve.worlds[id]
         .exports
         .insert(WorldKey::Name(name.clone()), WorldItem::Function(function));
+    let actor = actor_name(&name);
+    resolve.worlds[id].exports.insert(
+        WorldKey::Name(actor.clone()),
+        WorldItem::Function(Function {
+            name: actor,
+            kind: wit_parser::FunctionKind::AsyncFreestanding,
+            params: Vec::new(),
+            result: None,
+            docs: Default::default(),
+            stability: wit_parser::Stability::Unknown,
+            span: Default::default(),
+            external_id: None,
+        }),
+    );
     Ok(name)
+}
+
+pub(super) fn actor_name(anchor: &str) -> String {
+    format!("{anchor}-producer")
 }
 
 pub(super) fn scheduler(world: &str, anchor: &str, signal: &str) -> String {
@@ -72,6 +96,7 @@ pub(super) fn scheduler(world: &str, anchor: &str, signal: &str) -> String {
         .replace("$S", signal)
         .replace("$U", &world.to_uppercase())
         .replace("$ANCHOR", &anchor.to_snake_case())
+        .replace("$ACTOR", &actor_name(anchor).to_snake_case())
 }
 
 impl Generator<'_> {
@@ -191,7 +216,7 @@ impl Generator<'_> {
                 emitter.source.push_str("*result = data.result;\n");
             }
             // Sync canonical post-return owns these result allocations.
-            emitter.source.push_str("perry_allocations_end(&data.arena, true);\nperry_component_frame_drop(data.frame);\nperry_task_drop(t);\n");
+            emitter.source.push_str("perry_allocations_end(&data.arena, true);\nperry_component_frame_drop(data.frame);\nperry_require(perry_component_frame_resource_scope_end(t->frame) == 0);\nperry_task_finish_sync(t);\n");
             if result_ty.is_some() && !indirect {
                 emitter.source.push_str("return data.result;\n");
             }

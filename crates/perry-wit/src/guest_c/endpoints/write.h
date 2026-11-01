@@ -48,6 +48,7 @@ static void $STEM_deliver(void *pointer) {
 static void $STEM_cancel(perry_io *io) {
     perry_require(!io->cancelled && !io->complete);
     io->cancelled = true;
+    if (io->start) { io->start = NULL; io->status = $U_WAITABLE_CANCELLED; return; }
     if (io->joined) { $W_waitable_join(io->reader, 0); io->joined = false; }
     io->status = $HELPER_cancel_write(io->reader);
     perry_require(io->status != $U_WAITABLE_STATUS_BLOCKED);
@@ -64,12 +65,28 @@ static void $STEM_destroy(perry_io *io) {
     perry_component_frame_drop(io->frame);
     free(data);
 }
+static void $STEM_begin(perry_task *parent, perry_io *io) {
+    $STEM_state *data = ($STEM_state *)io;
+    perry_writer *writer = data->writer;
+    uint32_t handle = io->reader;
+    if (writer->cancel == io->operation) {
+        io->cancelled = true; io->status = $U_WAITABLE_CANCELLED;
+    } else {
+        io->status = $NATIVE_WRITE;
+    }
+    if (io->status == $U_WAITABLE_STATUS_BLOCKED) {
+        perry_task_set(parent);
+        $W_waitable_join(handle, parent->set); io->joined = true;
+    } else {
+        perry_io_ready(parent, io);
+    }
+}
 static int32_t $STEM_start(void *f, uint32_t handle, uint32_t operation, uint32_t input) {
     perry_task *parent = perry_active_task;
     perry_writer *writer = perry_writer_find($TYPE, handle);
-    if (!parent || !parent->asynchronous || parent->cancelled || !writer || writer->release ||
+    if (!parent || parent->cancelled || !writer || writer->release ||
         writer->ended || (writer->pending && !writer->pending->complete)) {
-        perry_bad(f, "Guest write requires an open writer and async task"); return -1;
+        perry_bad(f, "Guest write requires an open writer and canonical task"); return -1;
     }
     $STEM_state *data = calloc(1, sizeof(*data));
     if (!data) { perry_bad(f, "Guest write allocation failed"); return -1; }
@@ -90,19 +107,10 @@ static int32_t $STEM_start(void *f, uint32_t handle, uint32_t operation, uint32_
     io->frame = f; io->type = $TYPE; io->reader = handle; io->operation = operation;
     io->event = $U_EVENT_$EVENT_WRITE;
     io->deliver = $STEM_deliver; io->cancel = $STEM_cancel; io->destroy = $STEM_destroy;
+    io->start = $STEM_begin;
     io->next = parent->io; parent->io = io;
     data->writer = writer; writer->pending = io; writer->parent = parent;
-    if (writer->cancel == operation) {
-        io->cancelled = true; io->status = $U_WAITABLE_CANCELLED;
-    } else {
-        io->status = $NATIVE_WRITE;
-    }
-    if (io->status == $U_WAITABLE_STATUS_BLOCKED) {
-        perry_task_set(parent);
-        $W_waitable_join(handle, parent->set); io->joined = true;
-    } else {
-        $STEM_deliver(io);
-    }
+    if (parent->asynchronous) perry_io_start(parent, io);
     return 0;
 }
 static uint32_t perry_new_$TYPE(void *f) {

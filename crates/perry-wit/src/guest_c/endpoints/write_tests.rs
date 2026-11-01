@@ -29,7 +29,7 @@ fn canonical_guest_writes_recover_only_unconsumed_owners_after_native_acknowledg
             .next()
             .unwrap();
         let body = adapter
-            .split(&format!("static int32_t {stem}_start("))
+            .split(&format!("static void {stem}_begin("))
             .nth(1)
             .unwrap()
             .split("\nstatic uint32_t perry_new_")
@@ -123,7 +123,7 @@ fn canonical_guest_writes_recover_only_unconsumed_owners_after_native_acknowledg
                 String::from_utf8_lossy(&output.stderr)
             );
             assert!(String::from_utf8_lossy(&output.stdout)
-                .contains("PASS: 29 guest write custody cases"));
+                .contains("PASS: 30 guest write custody cases"));
             use std::os::unix::process::ExitStatusExt;
             let output = std::process::Command::new(&exe)
                 .arg("--unfinished-future")
