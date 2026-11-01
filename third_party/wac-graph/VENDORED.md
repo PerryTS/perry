@@ -25,6 +25,14 @@ when their anonymous interface does not re-export that type. Direct resource
 imports are cached by nominal identity. Borrow and own use the same resolver.
 Perry's C-boundary interop tests exercise the actual composed components.
 
+Shared value-type aliases also bind by the concrete `InterfaceId`, rather than
+the canonical interface-name string. Two labeled imports may both implement
+one canonical interface while defining different nominal resources. Register
+both instances for dependency/value/resource alias lookup, and reuse only the
+same concrete dependency identity. Perry's composition regression checks the
+exact public import set, preserves the selected record's resource identity,
+and rejects a facade that uses the other labeled instance's owner type.
+
 This is a source fix to the pinned release, with no dependency version/soak
 exception. Remove the vendor after the fix is available in an upstream release
 that passes Perry's normal dependency soak and compatibility checks.

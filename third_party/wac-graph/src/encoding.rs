@@ -144,8 +144,9 @@ impl Default for Encodable {
 pub struct Scope {
     /// The map from types to encoded type index.
     pub type_indexes: IndexMap<Type, u32>,
-    /// The map from interface name (i.e. id) to encoded instance index.
-    pub instances: IndexMap<String, u32>,
+    /// Concrete interface identities, including separately labeled instances
+    /// implementing the same canonical name. Names are not nominal identities.
+    pub instances: IndexMap<InterfaceId, u32>,
     /// Resource identities exported by imported instances, including anonymous ones.
     resource_instances: IndexMap<ResourceId, (u32, String)>,
     /// The map of import/export name to their alias indexes.
@@ -242,11 +243,9 @@ impl<'a> TypeEncoder<'a> {
             return None;
         }
         let ty = Type::Value(ty);
-        let (instance, name) = self.0.interfaces().find_map(|interface| {
-            let iid = interface.id.as_ref()?;
-            let instance = *state.current.instances.get(iid)?;
-            interface.exports.iter().find_map(|(name, kind)| {
-                (*kind == ItemKind::Type(ty)).then(|| (instance, name.clone()))
+        let (instance, name) = state.current.instances.iter().find_map(|(id, instance)| {
+            self.0[*id].exports.iter().find_map(|(name, kind)| {
+                (*kind == ItemKind::Type(ty)).then(|| (*instance, name.clone()))
             })
         })?;
         let index = state.current.encodable.type_count();
@@ -345,7 +344,7 @@ impl<'a> TypeEncoder<'a> {
         for (name, used) in uses {
             let interface = &self.0[used.interface];
             let iid = interface.id.as_ref().expect("interface should have an id");
-            let instance = state.current.instances[iid];
+            let instance = state.current.instances[&used.interface];
             let index = state.current.encodable.type_count();
             let export: &String = used.name.as_ref().unwrap_or(name);
             let kind = interface.exports.get(export).unwrap();
@@ -444,7 +443,7 @@ impl<'a> TypeEncoder<'a> {
 
     fn import_deps(&self, state: &mut State, id: InterfaceId) {
         let iid = self.0[id].id.as_ref().expect("interface should have an id");
-        if state.current.instances.contains_key(iid) {
+        if state.current.instances.contains_key(&id) {
             return;
         }
 
@@ -468,7 +467,7 @@ impl<'a> TypeEncoder<'a> {
         log::debug!(
             "interface `{iid}` is available for aliasing from instance index {import_index}"
         );
-        state.current.instances.insert(iid.clone(), import_index);
+        state.current.instances.insert(id, import_index);
         self.record_instance_resources(state, id, import_index);
     }
 
@@ -885,14 +884,8 @@ impl<'a> TypeEncoder<'a> {
                     .encodable
                     .import_type(extern_name, ComponentTypeRef::Instance(index));
                 self.record_instance_resources(state, id, import_index);
-                if implements.is_none() {
-                    if let Some(iid) = &self.0[id].id {
-                        log::debug!(
-                            "instance index {import_index} ({iid}) is available for aliasing"
-                        );
-                        state.current.instances.insert(iid.clone(), import_index);
-                    }
-                }
+                log::debug!("instance index {import_index} ({id:?}) is available for aliasing");
+                state.current.instances.insert(id, import_index);
             }
             _ => panic!("expected only types, functions, and instance types"),
         }
@@ -930,12 +923,9 @@ impl<'a> TypeEncoder<'a> {
                 // Otherwise, we need to alias the source resource
                 // This should only occur for resources owned by interfaces
                 let source_index = state.current.encodable.type_count();
-                let iid = self.0[alias.owner.expect("should have owner")]
-                    .id
-                    .as_deref()
-                    .expect("expected an interface with an id");
+                let owner = alias.owner.expect("should have owner");
                 state.current.encodable.alias(Alias::InstanceExport {
-                    instance: state.current.instances[iid],
+                    instance: state.current.instances[&owner],
                     kind: ComponentExportKind::Type,
                     name: self.0[source].name.as_str(),
                 });

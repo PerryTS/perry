@@ -1714,16 +1714,13 @@ impl<'a> CompositionGraphEncoder<'a> {
             _ => None,
         };
 
-        // Check to see if this is an import of an interface that's already been
-        // imported; this can happen based on importing of shared dependencies.
-        // Implements imports are skipped here since the same interface can be
-        // imported multiple times under distinct labels.
+        // Reuse only the same concrete dependency interface. Canonical names
+        // can be shared by distinct labeled imports with different resources.
+        // Keep every explicit label even for a structurally identical type.
         if implements.is_none() {
             if let ItemKind::Instance(id) = kind {
-                if let Some(id) = &types[id].id {
-                    if let Some(index) = state.current.instances.get(id) {
-                        return *index;
-                    }
+                if let Some(index) = state.current.instances.get(&id) {
+                    return *index;
                 }
             }
         }
@@ -1771,15 +1768,8 @@ impl<'a> CompositionGraphEncoder<'a> {
             }
             ItemKind::Instance(id) => {
                 encoder.record_instance_resources(state, id, index);
-                // Implements imports are not registered for shared-dependency
-                // aliasing: distinct labels of the same interface must remain
-                // distinct instances rather than collapsing to one.
-                if let (None, Some(id)) = (&implements, &types[id].id) {
-                    log::debug!(
-                        "interface `{id}` is available for aliasing as instance index {index}"
-                    );
-                    state.current.instances.insert(id.clone(), index);
-                }
+                log::debug!("interface {id:?} is available for aliasing as instance index {index}");
+                state.current.instances.insert(id, index);
             }
             _ => {}
         }
