@@ -93,16 +93,23 @@ pub(super) fn remap(
         }
     };
     let name = format!("perry-type-{}", id.index());
+    let handle = matches!(kind, TypeDefKind::Handle(_));
     let new = resolve.types.alloc(wit_parser::TypeDef {
-        name: Some(name.clone()),
+        name: (!handle).then(|| name.clone()),
         kind,
-        owner: TypeOwner::Interface(interface),
+        owner: if handle {
+            TypeOwner::None
+        } else {
+            TypeOwner::Interface(interface)
+        },
         docs: Default::default(),
         stability: Default::default(),
         span: Default::default(),
         external_id: None,
     });
-    resolve.interfaces[interface].types.insert(name, new);
+    if !handle {
+        resolve.interfaces[interface].types.insert(name, new);
+    }
     mapped.insert(id, new);
     Ok(Type::Id(new))
 }
