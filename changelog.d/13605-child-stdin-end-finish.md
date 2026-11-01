@@ -1,0 +1,1 @@
+`child.stdin.end()` never emitted `finish` or `close`, so awaiting the stream's `finish` event (as stream sinks do) hung and `writableEnded`, `writableFinished` and `closed` stayed `false`. `end()` now sets `writableEnded`, and once the pending writes are flushed it runs the callbacks, emits `finish`, then marks the stream destroyed and closed and emits `close`, in Node's order.
