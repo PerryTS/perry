@@ -162,9 +162,7 @@ pub(super) fn lower(
                 ctx,
                 &values[0],
                 ArrayArm {
-                    init: &candidate_init,
                     condition: &candidate_condition,
-                    update: &updates[1],
                     array,
                     counter: *counter,
                     output: *output,
@@ -173,7 +171,7 @@ pub(super) fn lower(
                     element: &values[2],
                     body,
                 },
-                (init, condition.unwrap(), update.unwrap(), body),
+                (condition.unwrap(), update.unwrap()),
             );
         }
     }
@@ -184,9 +182,7 @@ pub(super) fn lower(
 }
 
 struct ArrayArm<'a> {
-    init: &'a Stmt,
     condition: &'a Expr,
-    update: &'a Expr,
     array: u32,
     counter: u32,
     output: u32,
@@ -201,65 +197,86 @@ struct ArrayArm<'a> {
 
 /// A counted record whose entry chose the array arm steps exactly like the
 /// indexed loop: the captured %ArrayIteratorPrototype%.next reads `a[i]`
-/// below the live length (ECMA-262 23.1.5.1). That arm gets its own copy of
-/// the body, lowered by the ordinary counted-loop chain, so the binding and
-/// the body lower like `for (let i = 0; i < a.length; i++) { const x = a[i]; }`.
-/// The protocol arm keeps the record loop unchanged. Both arms share the
+/// below the live length (ECMA-262 23.1.5.1). The two arms differ only in
+/// how a step produces the value, so the loop has one body and two heads:
+///
+///   head:     protocol ? protocol.step : indexed.step
+///   indexed:  state = 2; i < payload.length (typed) ? output = payload[i]
+///   protocol: the record's own Step (state = 2, IteratorStepValue)
+///   body:     state = 0; the user body (one copy)
+///   update:   the record's own (i++ on the indexed head)
+///
+/// The mode is tested once before the loop; each head branches on that one
+/// value, so the per-step work of the indexed head is the indexed loop's.
+/// ECMA-262 order is the record's on both heads: completion state 2 while
+/// Step/Get runs (a throwing getter or `next` completes the record without
+/// IteratorClose), 0 before the user body (a break or throw there closes),
+/// and exhaustion leaves 2 for the plan's release. Both heads share the
 /// cursor, completion state and output locals, so close, abrupt completion
 /// and release see the same record either way.
 fn lower_array_arm(
     ctx: &mut FnCtx<'_>,
     protocol_test: &Expr,
     arm: ArrayArm<'_>,
-    protocol: (Option<&Stmt>, &Expr, &Expr, &[Stmt]),
+    (protocol_condition, record_update): (&Expr, &Expr),
 ) -> Result<bool> {
     let set_state = |value: f64| {
         Stmt::Expr(Expr::LocalSet(arm.state, Box::new(Expr::Number(value))))
     };
-    // Completion state 2 while Get runs: a throwing getter on a hole does not
-    // close (IteratorStepValue errors complete the record). The record body
-    // then sets 0 before the user statements.
-    let user = &arm.body[2..];
-    // A binding whose only input is the step value reads the element itself:
-    // the declared element type of the source picks its lowering, exactly as
-    // for `const x = a[i]`; the read's own guards prove it.
-    let binding = match user.first() {
-        Some(Stmt::Let { id, name, ty, mutable, init: Some(Expr::LocalGet(value)) })
-            if *value == arm.output && !user[1..].iter().any(|s| stmt_reads_local(s, arm.output)) =>
-        {
-            Some((Stmt::Let { id: *id, name: name.clone(), ty: ty.clone(), mutable: *mutable, init: Some(arm.element.clone()) }, ty.clone()))
+    // The record body after its output transfer: `state = 0`, then the
+    // user's statements, which read the step value from `output`. Each
+    // head binds `output` itself (the protocol Step binds it; on that head
+    // the record's transfer keeps it unchanged).
+    let mut shared_body = arm.body[1..].to_vec();
+    // A binding that is the step value's only reader takes it as a
+    // transfer, not as a copy of a local: on the indexed head the value is
+    // an element read (already aliased from the array's slot), and the
+    // protocol head demotes its Step result itself, as `let x = output`
+    // would. Every other body keeps the record's copy.
+    let sole_binding = matches!(shared_body.get(1),
+        Some(Stmt::Let { init: Some(Expr::LocalGet(value)), .. }) if *value == arm.output)
+        && !shared_body[2..].iter().any(|s| stmt_reads_local(s, arm.output));
+    if sole_binding {
+        if let Some(Stmt::Let { init: Some(init), .. }) = shared_body.get_mut(1) {
+            *init = Expr::Sequence(vec![Expr::LocalGet(arm.output)]);
         }
-        _ => None,
-    };
-    let mut array_body = vec![set_state(2.0)];
-    let element_hint = match binding {
-        Some((stmt, ty)) => {
-            array_body.push(stmt);
-            array_body.push(set_state(0.0));
-            array_body.extend(user[1..].iter().cloned());
-            ty
+    }
+    let shared_body = shared_body.as_slice();
+    // The source's declared element type picks the indexed head's length
+    // and read lowering, exactly as for `a[i]` in an indexed loop; the
+    // read's own guards prove it.
+    let element_hint = match arm.body.get(2) {
+        Some(Stmt::Let { ty, init: Some(Expr::LocalGet(value)), .. }) if *value == arm.output => {
+            ty.clone()
         }
-        None => {
-            array_body.push(Stmt::Expr(Expr::LocalSet(arm.output, Box::new(arm.element.clone()))));
-            array_body.extend(arm.body[1..].iter().cloned());
-            perry_hir::types::Type::Any
-        }
+        _ => perry_hir::types::Type::Any,
     };
 
+    // `lower_for` already ran the record's init (the cursor at 0).
     let protocol_mode = crate::lower_conditional::lower_test(ctx, protocol_test)?;
-    let protocol_idx = ctx.new_block("record.protocol");
+    let head_idx = ctx.new_block("record.head");
     let array_idx = ctx.new_block("record.indexed");
-    let merge_idx = ctx.new_block("record.merge");
-    let protocol_label = ctx.block_label(protocol_idx);
+    let array_get_idx = ctx.new_block("record.indexed.get");
+    let protocol_idx = ctx.new_block("record.protocol");
+    let body_idx = ctx.new_block("record.body");
+    let update_idx = ctx.new_block("record.update");
+    let exit_idx = ctx.new_block("record.exit");
+    let head_label = ctx.block_label(head_idx);
     let array_label = ctx.block_label(array_idx);
-    let merge_label = ctx.block_label(merge_idx);
+    let array_get_label = ctx.block_label(array_get_idx);
+    let protocol_label = ctx.block_label(protocol_idx);
+    let body_label = ctx.block_label(body_idx);
+    let update_label = ctx.block_label(update_idx);
+    let exit_label = ctx.block_label(exit_idx);
+    ctx.block().br(&head_label);
+    ctx.current_block = head_idx;
     ctx.block().cond_br(&protocol_mode, &protocol_label, &array_label);
 
+    // Indexed head. Entry proved the payload an Array on this head. The
+    // payload's only other writes are the plan's releases, which run just
+    // before an exit leaves the loop, so in this head it is a stable
+    // binding of the source's declared element type.
     ctx.current_block = array_idx;
-    // Entry proved the payload an Array on this arm; its element hint is
-    // the source's declared one, as for an indexed loop over that source.
-    // The payload's only other writes are the plan's releases, which run
-    // just before an exit leaves this arm, so here it is a stable binding.
     let previous = (!matches!(element_hint, perry_hir::types::Type::Any)).then(|| {
         let rebound = ctx.reassigned_locals.remove(&arm.array);
         let ty = ctx.local_types.insert(
@@ -268,7 +285,7 @@ fn lower_array_arm(
         );
         (ty, rebound)
     });
-    // An unhinted arm keeps the record's proven-array length lowering.
+    // An unhinted head keeps the record's proven-array length lowering.
     let condition = if previous.is_some() {
         arm.condition.clone()
     } else {
@@ -278,7 +295,21 @@ fn lower_array_arm(
             right: Box::new(arm.length.clone()),
         }
     };
-    lower_for_tiers(ctx, Some(arm.init), Some(&condition), Some(arm.update), &array_body)?;
+    let indexed = (|| -> Result<()> {
+        lower_stmt(ctx, &set_state(2.0))?;
+        let ready = crate::lower_conditional::lower_test(ctx, &condition)?;
+        emit_gc_loop_safepoint(ctx, &[], &[&condition]);
+        ctx.block().cond_br(&ready, &array_get_label, &exit_label);
+        ctx.current_block = array_get_idx;
+        lower_stmt(
+            ctx,
+            &Stmt::Expr(Expr::LocalSet(arm.output, Box::new(arm.element.clone()))),
+        )?;
+        if !ctx.block().is_terminated() {
+            ctx.block().br(&body_label);
+        }
+        Ok(())
+    })();
     if let Some((ty, rebound)) = previous {
         match ty {
             Some(ty) => ctx.local_types.insert(arm.array, ty),
@@ -288,32 +319,45 @@ fn lower_array_arm(
             ctx.reassigned_locals.insert(arm.array);
         }
     }
+    indexed?;
+
+    // Protocol head: the record's own condition. Step sets state 2, runs
+    // IteratorStepValue out of line and binds `output`.
+    ctx.current_block = protocol_idx;
+    let ready = crate::lower_conditional::lower_test(ctx, protocol_condition)?;
+    if sole_binding {
+        let value = lower_expr(ctx, &Expr::LocalGet(arm.output))?;
+        crate::expr::emit_string_addref_if_heap_string(ctx, &value);
+    }
+    emit_gc_loop_safepoint(ctx, &[], &[protocol_condition]);
+    ctx.block().cond_br(&ready, &body_label, &exit_label);
+
+    // One body. `continue` runs the shared update, `break` leaves through
+    // the plan's exits like any loop exit.
+    ctx.loop_targets
+        .push((update_label.clone(), exit_label.clone(), ctx.try_depth));
+    ctx.current_block = body_idx;
+    let lowered = lower_stmts(ctx, shared_body);
+    ctx.loop_targets.pop();
+    lowered?;
+    clear_loop_body_shadow_slots(ctx, shared_body);
+    if !ctx.block().is_terminated() && body_needs_asm_barrier(shared_body) {
+        ctx.block().asm_sideeffect_barrier();
+    }
     if !ctx.block().is_terminated() {
-        // Exhaustion completes the record (state 2) for its release; a break
-        // left its own state behind.
-        lower_stmt(
-            ctx,
-            &Stmt::If {
-                condition: Expr::Compare {
-                    op: CompareOp::Eq,
-                    left: Box::new(Expr::LocalGet(arm.state)),
-                    right: Box::new(Expr::Number(0.0)),
-                },
-                then_branch: vec![set_state(2.0)],
-                else_branch: None,
-            },
-        )?;
-        if !ctx.block().is_terminated() {
-            ctx.block().br(&merge_label);
-        }
+        emit_gc_loop_safepoint(ctx, shared_body, &[]);
+        ctx.block().br(&update_label);
     }
 
-    ctx.current_block = protocol_idx;
-    lower_for_after_init(ctx, protocol.0, Some(protocol.1), Some(protocol.2), protocol.3, "for")?;
+    // The record's own update: `i++` on the indexed head; the protocol
+    // completion never observes the cursor.
+    ctx.current_block = update_idx;
+    let _ = lower_expr(ctx, record_update)?;
+    emit_gc_loop_safepoint(ctx, &[], &[record_update]);
     if !ctx.block().is_terminated() {
-        ctx.block().br(&merge_label);
+        ctx.block().br(&head_label);
     }
-    ctx.current_block = merge_idx;
+    ctx.current_block = exit_idx;
     Ok(true)
 }
 
@@ -656,11 +700,11 @@ mod tests {
         assert!(!ir.contains("0x7FF0000000000000"), "{ir}");
     }
 
-    /// #13645: a record whose consumer is not a packed numeric copy still
-    /// gives the array arm its own indexed loop; the binding reads the
-    /// element and the protocol arm keeps the record step.
+    /// #13645: a record whose consumer is not a packed numeric copy steps
+    /// its array arm like the indexed loop and its protocol arm through the
+    /// record Step, and both heads enter one copy of the body.
     #[test]
-    fn array_arm_is_an_indexed_loop_beside_the_protocol_record() {
+    fn array_and_protocol_heads_share_one_body() {
         let _pin = crate::codegen::helpers::NativeRootsPin::native();
         let mut m = Module::new("record_arm");
         let mode = Expr::Compare {
@@ -726,10 +770,10 @@ mod tests {
         let start = ir.find("define i32 @main()").unwrap();
         let ir = &ir[start..];
         let ir = &ir[..ir.find("\n}\n").unwrap()];
-        let arm = ir.find("\nrecord.indexed.").expect(ir);
-        let protocol = ir.find("\nrecord.protocol.").expect(ir);
-        assert!(ir.contains("record.merge."), "{ir}");
+        assert!(ir.contains("\nrecord.indexed."), "{ir}");
+        assert!(ir.contains("\nrecord.protocol."), "{ir}");
+        assert_eq!(ir.matches("\nrecord.body.").count(), 1, "one body: {ir}");
+        assert!(!ir.contains("record.merge."), "no second loop to merge: {ir}");
         assert_eq!(ir.matches("@js_iterator_step(").count(), 1, "one protocol step: {ir}");
-        assert!(arm != protocol, "{ir}");
     }
 }
