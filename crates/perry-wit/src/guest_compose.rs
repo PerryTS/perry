@@ -248,6 +248,12 @@ pub fn compose_experimental_guest(producer: &[u8], facade: &[u8], plan: &[u8]) -
         validate: false,
         ..EncodeOptions::default()
     })?;
+    #[cfg(test)]
+    if original_imports.contains_key("left") {
+        let directory = tempfile::tempdir()?.keep();
+        std::fs::write(directory.join("graph.wasm"), &encoded)?;
+        eprintln!("Labeled-interface diagnostic: {}\n{:#?}", directory.display(), graph.types());
+    }
     publish(&encoded, &exports)
 }
 
