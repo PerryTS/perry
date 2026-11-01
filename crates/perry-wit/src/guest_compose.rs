@@ -150,7 +150,9 @@ fn publish(encoded: &[u8], exports: &[Export]) -> Result<Vec<u8>> {
             ensure!(!exported || id == 0, "Code after temporary facade exports");
             output.section(&RawSection {
                 id,
-                data: &encoded[range],
+                data: encoded
+                    .get(usize::try_from(range.start)?..usize::try_from(range.end)?)
+                    .context("Invalid facade section range")?,
             });
         }
         if matches!(
