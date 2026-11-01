@@ -1645,6 +1645,7 @@ pub(super) fn compile_closure(
                 body.len(),
             ) {
                 lowered.pre_statepoint_inline = true;
+                lowered.guarded_preinline = true;
             }
         }
     }
