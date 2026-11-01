@@ -5,6 +5,8 @@ use super::*;
 use wac_graph::types::InterfaceId;
 use wac_graph::types::{Type, Types};
 mod names;
+mod shape;
+pub(super) use shape::bind_shape;
 
 /// Rename all value types together with their public resource aliases.
 pub(super) fn shape(types: &Types, api: InterfaceId) -> Result<wasm_encoder::InstanceType> {
