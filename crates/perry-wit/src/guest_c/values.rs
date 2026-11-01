@@ -56,7 +56,17 @@ impl<'a> Emitter<'a> {
             Type::F32 => "float".into(),
             Type::F64 => "double".into(),
             Type::String => format!("{}_string_t", self.world),
-            Type::Id(id) => self.names[&id].clone(),
+            Type::Id(id) => self
+                .names
+                .get(&id)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Missing maintained C type name for {}: {:?}",
+                        id.index(),
+                        self.resolve.types[id]
+                    )
+                })
+                .clone(),
             Type::ErrorContext => unreachable!("P3 type rejected before generation"),
         }
     }
