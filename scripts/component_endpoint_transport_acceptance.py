@@ -41,11 +41,12 @@ def main():
 
     run("build-probes", ["cargo", "-Z", "checksum-freshness", "build", "--locked",
                          "--profile", "perry-dev", "-p", "perry-wit", "--example", "async_guest",
+                         "--example", "actor_compose",
                          "-p", "perry-component-host", "--example", "guest_endpoint_transport"])
     binaries = out / "binaries"
     binaries.mkdir()
     suffix = ".exe" if os.name == "nt" else ""
-    for name in ["async_guest", "guest_endpoint_transport"]:
+    for name in ["async_guest", "actor_compose", "guest_endpoint_transport"]:
         shutil.copy2(args.target_dir.resolve() / "perry-dev/examples" / (name + suffix), binaries / (name + suffix))
     guest = out / "guest"
     guest.mkdir()
@@ -57,10 +58,21 @@ def main():
     assert "future/stream guest values" in (out / "public-guard.log").read_text()
     assert not (out / "public").exists(), "guard must reject before publishing files"
     run("generate", [binaries / ("async_guest" + suffix), guest / "world.wit", "plugin", generated])
+    facade = guest / "facade.component.wasm"
+    run("facade-link", [args.wasi_sdk.resolve() / "bin" / ("clang" + suffix),
+                       "--target=wasm32-wasip3", "-mexec-model=reactor", "-O1", "-g",
+                       "-Wall", "-Werror", "-I", generated,
+                       generated / "perry_producer_facade.c", generated / "perry_producer_forward.c",
+                       generated / "perry_producer_facade_component_type.o",
+                       "-Wl,--export=cabi_realloc", "-Wl,--fatal-warnings", "-o", facade])
     libraries = []
-    components = []
+    components = [facade]
     control_files = []
-    marker = "PASS: actual Perry P3 endpoint transport and guest reads/writes, compound/char/void/unit/byte/nested values, guest factories, post-return producers, partial chunks, cancellation, abandoned-read retry and Store reuse"
+    marker = "PASS: actual Perry P3 endpoint transport and guest reads/writes, compound/char/void/unit/byte/nested values, guest async/sync factories, private post-return producers, partial chunks, cancellation, abandoned-read retry and Store reuse"
+
+    def compose(name, producer, public):
+        run(name, [binaries / ("actor_compose" + suffix), producer, facade,
+                   generated / "perry_producer_facade.json", public])
 
     def link(directory, archive, component):
         return [args.wasi_sdk.resolve() / "bin" / ("clang" + suffix),
@@ -81,8 +93,10 @@ def main():
                                 "--output-type", "staticlib", "--no-auto-optimize", "--no-cache", "-o", library],
             extra_env=diagnostics)
         component = guest / (kind + ".component.wasm")
-        run(kind + "-link", link(generated, archive, component))
-        components.append(component)
+        producer = guest / (kind + ".producer.component.wasm")
+        run(kind + "-link", link(generated, archive, producer))
+        compose(kind + "-compose", producer, component)
+        components.extend([producer, component])
         if kind == "plain":
             run("reject-undeclared-types", [args.p3_contract.resolve(), "--reactor", component,
                                             "pass-future"], expected=1)
@@ -95,6 +109,7 @@ def main():
                                  "make-future", "make-values", "make-character", "make-empty",
                                  "make-units", "make-bytes", "make-nested", "make-cancelled", "make-closed",
                                  "writes-completed", "writes-failed", "write-chunks",
+                                 "make-sync-future", "make-sync-values",
                                  "--type-import=payload", "--type-import=pending",
                                  "--type-import=values", "--type-import=pair"])
         run(kind + "-execute", [binaries / ("guest_endpoint_transport" + suffix), guest / "world.wit", component])
@@ -113,7 +128,9 @@ def main():
             body = (fixture / "task-context.c").read_text()
             adapter.write_text(text[:start] + body + text[end:])
             controlled_component = control / "control.component.wasm"
-            run("c-task-context-link", link(control, archive, controlled_component))
+            controlled_producer = control / "control.producer.component.wasm"
+            run("c-task-context-link", link(control, archive, controlled_producer))
+            compose("c-task-context-compose", controlled_producer, controlled_component)
             run("c-task-context-execute", [binaries / ("guest_endpoint_transport" + suffix),
                                             guest / "world.wit", controlled_component])
             assert marker in (out / "c-task-context-execute.log").read_text()

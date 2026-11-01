@@ -175,4 +175,14 @@ register({
   "writes-completed"() { return completed; },
   "writes-failed"() { return failed; },
   "write-chunks"() { return chunks; },
+  "make-sync-future"(value) {
+    const pair = asyncTypes.t2_pending.create();
+    track(writeFuture(pair.writer, value));
+    return pair.value;
+  },
+  "make-sync-values"(value) {
+    const pair = asyncTypes.t3_values.create();
+    track(writeStream(pair.writer, value));
+    return pair.value;
+  },
 });

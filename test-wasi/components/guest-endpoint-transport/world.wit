@@ -39,4 +39,6 @@ world plugin {
     export writes-completed: func() -> u32;
     export writes-failed: func() -> u32;
     export write-chunks: func() -> u32;
+    export make-sync-future: func(value: payload) -> pending;
+    export make-sync-values: func(value: list<payload>) -> values;
 }

@@ -260,6 +260,11 @@ fn guest_writes(driver: &mut Driver, client: &DriverClient, payload: Value) -> R
     ensure!(call(driver, client, "writes-completed", &[])? == 0);
     for (name, args, expected) in [
         ("make-future", vec![payload.clone()], Some(payload.clone())),
+        (
+            "make-sync-future",
+            vec![payload.clone()],
+            Some(payload.clone()),
+        ),
         ("make-character", vec![], Some(json!("🍐"))),
         ("make-empty", vec![], None),
     ] {
@@ -274,6 +279,11 @@ fn guest_writes(driver: &mut Driver, client: &DriverClient, payload: Value) -> R
     for (name, args, expected) in [
         (
             "make-values",
+            vec![json!(vec![payload.clone(); 5])],
+            json!(vec![payload.clone(); 5]),
+        ),
+        (
+            "make-sync-values",
             vec![json!(vec![payload.clone(); 5])],
             json!(vec![payload; 5]),
         ),
@@ -308,10 +318,10 @@ fn guest_writes(driver: &mut Driver, client: &DriverClient, payload: Value) -> R
         .context("guest-produced nested future")?;
     ensure!(result(driver, &mut client.read_async_value(&inner, None)?)? == Some(json!(42)));
     ensure!(call(driver, client, "writes-failed", &[])? == 0);
-    ensure!(call(driver, client, "writes-completed", &[])? == 9);
+    ensure!(call(driver, client, "writes-completed", &[])? == 11);
     ensure!(call(driver, client, "write-chunks", &[])?
         .as_u64()
-        .is_some_and(|n| n >= 11));
+        .is_some_and(|n| n >= 14));
     Ok(())
 }
 
@@ -328,6 +338,15 @@ fn main() -> Result<()> {
         "unknown mode"
     );
     let world = perry_wit::parse_file(Path::new(&args[0]), None)?;
+    for name in ["make-sync-future", "make-sync-values"] {
+        let function = world
+            .exports
+            .iter()
+            .flat_map(|i| &i.functions)
+            .find(|f| f.name == name)
+            .context("synchronous factory")?;
+        ensure!(!function.async_, "public factory must remain synchronous");
+    }
     let diagnostics = args[2..]
         .iter()
         .any(|arg| arg == "--moving")
@@ -448,6 +467,6 @@ fn main() -> Result<()> {
     guest_reads(&mut driver, &client, &world, payload.clone())?;
     guest_writes(&mut driver, &client, payload)?;
     ensure!(call(&mut driver, &client, "checkpoint", &[])? == 73);
-    println!("PASS: actual Perry P3 endpoint transport and guest reads/writes, compound/char/void/unit/byte/nested values, guest factories, post-return producers, partial chunks, cancellation, abandoned-read retry and Store reuse");
+    println!("PASS: actual Perry P3 endpoint transport and guest reads/writes, compound/char/void/unit/byte/nested values, guest async/sync factories, private post-return producers, partial chunks, cancellation, abandoned-read retry and Store reuse");
     Ok(())
 }
