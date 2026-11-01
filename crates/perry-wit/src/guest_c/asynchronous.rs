@@ -8,16 +8,24 @@ pub(super) fn add_wake_anchor(resolve: &mut Resolve, id: WorldId) -> Result<Stri
     let mut n = 0;
     let name = loop {
         let candidate = format!("perry-scheduler-signal-{n}");
+        let stream = format!("{candidate}-stream");
         if !resolve.worlds[id]
             .exports
             .contains_key(&WorldKey::Name(candidate.clone()))
             && !resolve.worlds[id]
                 .imports
                 .contains_key(&WorldKey::Name(candidate.clone()))
-            && !resolve
-                .types
-                .iter()
-                .any(|(_, ty)| ty.name.as_deref() == Some(&candidate))
+            && !resolve.types.iter().any(|(_, ty)| {
+                ty.name
+                    .as_deref()
+                    .is_some_and(|name| name == candidate || name == stream)
+            })
+            && !resolve.worlds[id]
+                .imports
+                .contains_key(&WorldKey::Name(stream.clone()))
+            && !resolve.worlds[id]
+                .exports
+                .contains_key(&WorldKey::Name(stream))
         {
             break candidate;
         }
@@ -28,7 +36,7 @@ pub(super) fn add_wake_anchor(resolve: &mut Resolve, id: WorldId) -> Result<Stri
     let signal = resolve.types.alloc(wit_parser::TypeDef {
         // A private name keeps its helper symbols distinct from public unit
         // streams, including unit streams owned by imported interfaces.
-        name: Some(name.clone()),
+        name: Some(format!("{name}-stream")),
         kind: TypeDefKind::Stream(None),
         owner: wit_parser::TypeOwner::None,
         docs: Default::default(),
@@ -55,7 +63,7 @@ pub(super) fn add_wake_anchor(resolve: &mut Resolve, id: WorldId) -> Result<Stri
 pub(super) fn scheduler(world: &str, anchor: &str) -> String {
     include_str!("scheduler.h")
         .replace("$W", world)
-        .replace("$S", &format!("{world}_{}", anchor.to_snake_case()))
+        .replace("$S", &format!("{world}_{}_stream", anchor.to_snake_case()))
         .replace("$U", &world.to_uppercase())
         .replace("$ANCHOR", &anchor.to_snake_case())
 }

@@ -40,6 +40,9 @@ mod tests {
                 .to_string()
                 .contains("future/stream guest values"));
             let files = experimental_async_guest(&fixture, Some(world)).unwrap();
+            wit_component::metadata::decode(&files[&format!("{world}_component_type.o")]).expect(
+                "generated canonical world must decode without type/function name collisions",
+            );
             let dir = tempfile::tempdir().unwrap();
             for (name, bytes) in files {
                 std::fs::write(dir.path().join(name), bytes).unwrap();
@@ -85,6 +88,8 @@ mod tests {
             .to_string()
             .contains("future/stream"));
         let files = experimental_async_guest(&path, None).unwrap();
+        wit_component::metadata::decode(&files["plugin_component_type.o"])
+            .expect("generated compound world must decode");
         for (name, bytes) in files {
             std::fs::write(dir.path().join(name), bytes).unwrap();
         }
@@ -104,5 +109,18 @@ mod tests {
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
+    #[test]
+    fn scheduler_signal_type_and_function_names_avoid_public_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("world.wit");
+        std::fs::write(&path, "package test:signal-names; world plugin { type perry-scheduler-signal-0-stream = u32; export perry-scheduler-signal-1: func(); export work: async func(value: stream) -> stream; }").unwrap();
+        let files = experimental_async_guest(&path, None).unwrap();
+        let (_, metadata) = wit_component::metadata::decode(&files["plugin_component_type.o"])
+            .expect("type and function namespaces must remain valid");
+        assert!(metadata.resolve.worlds[metadata.world]
+            .exports
+            .contains_key(&WorldKey::Name("perry-scheduler-signal-2".into())));
     }
 }

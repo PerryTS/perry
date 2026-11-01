@@ -110,7 +110,10 @@ fn canonical_child_ownership_survives_cancel_acknowledgement_and_return_races() 
     }
     let harness = include_str!("tests/custody.c")
         .replace("$RESULT_FREE", &free)
-        .replace("plugin_stream_void", "plugin_perry_scheduler_signal_0");
+        .replace(
+            "plugin_stream_void",
+            "plugin_perry_scheduler_signal_0_stream",
+        );
     let source = dir.path().join("custody.c");
     std::fs::write(&source, harness).unwrap();
     let exe = dir.path().join("custody");
@@ -190,7 +193,10 @@ fn async_export_commits_owned_results_and_retires_borrows_before_canonical_retur
     }
     let harness = include_str!("tests/export_resource.c")
         .replace("$RETURN_FUNCTION", return_function)
-        .replace("plugin_stream_void", "plugin_perry_scheduler_signal_0");
+        .replace(
+            "plugin_stream_void",
+            "plugin_perry_scheduler_signal_0_stream",
+        );
     let path = dir.path().join("export_resource.c");
     std::fs::write(&path, harness).unwrap();
     for negative in [false, true] {
