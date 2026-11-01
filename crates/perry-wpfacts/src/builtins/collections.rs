@@ -260,44 +260,6 @@ pub(crate) fn method_call(
     ret
 }
 
-/// TypedArraySpeciesCreate (23.2.4.1): `constructor` and its `@@species` are
-/// read from the receiver and the result constructed from them with
-/// arguments of the algorithm, so a constructor the program stored runs
-/// with any arguments.
-fn species_constructor(m: &mut Model, recv: NodeId) {
-    let k = m.atom("constructor");
-    let cn = m.node_l("species-constructor");
-    m.cons(
-        recv,
-        Cons::Load {
-            key: Key::Named(k),
-            dst: cn,
-        },
-    );
-    let sp = m.atom("@@__perry_wk_species");
-    let sc = m.node_l("species");
-    m.cons(
-        cn,
-        Cons::Load {
-            key: Key::Named(sp),
-            dst: sc,
-        },
-    );
-    for (n, why) in [
-        (cn, "argument of the species constructor lookup"),
-        (sc, "argument of the species constructor"),
-    ] {
-        let r = m.reason(why);
-        m.cons(
-            n,
-            Cons::Implicit {
-                reason: r,
-                proto: Protocol::Any,
-            },
-        );
-    }
-}
-
 /// The values iterating `v` yields, as `Gen::iterate` models them for
 /// compiled code: array-like elements, then the protocol
 /// `v[Symbol.iterator]().next().value` (and `v.next().value`).
