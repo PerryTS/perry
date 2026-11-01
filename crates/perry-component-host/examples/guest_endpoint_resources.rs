@@ -44,7 +44,9 @@ fn result(driver: &mut Driver, call: &mut DriverCall) -> Result<Option<Value>> {
     }
 }
 fn call(driver: &mut Driver, client: &DriverClient, name: &str, args: &[Value]) -> Result<Value> {
-    Ok(result(driver, &mut client.call(API, name, args)?)?.unwrap_or(Value::Null))
+    Ok(result(driver, &mut client.call(API, name, args)?)
+        .with_context(|| format!("resource export {name}"))?
+        .unwrap_or(Value::Null))
 }
 fn counts(driver: &mut Driver, client: &DriverClient, dropped: u32, completed: u32) -> Result<()> {
     let counts = call(driver, client, "checkpoint", &[])?;
