@@ -899,30 +899,28 @@ jobs:
           ${{ runner.os == 'Windows' && 'cargo' || 'mbx' }} build --profile prod --target ${{ matrix.target }} -p perry-runtime -p perry-runtime-static
           ${{ runner.os == 'Windows' && 'cargo' || 'mbx' }} build --profile prod --target ${{ matrix.target }} -p perry-stdlib -p perry-stdlib-static
 
-      - name: Build WebAssembly host archive (Windows)
-        # The WebAssembly host archive, co-built with the archives it links
-        # beside: perry links it for a WebAssembly program and never builds
-        # it while compiling one. On Unix the native ext step below builds this
-        # same package set (plus every extension) in its one invocation, which
-        # is the build that ships; doing it here too cost a full second
-        # compile of perry + runtime + stdlib under a different feature union.
+      - name: Build compiler + runtime + stdlib in one graph (Windows)
+        # On Unix the native ext step below builds this same package set (plus
+        # every extension) in its one invocation, which is the build that
+        # ships; doing it here too cost a full second compile of perry +
+        # runtime + stdlib under a different feature union.
         if: runner.os == 'Windows' && matrix.old_glibc_image == '' && matrix.musl_image == ''
-        run: cargo build --profile prod --target ${{ matrix.target }} -p perry -p perry-runtime-static -p perry-stdlib-static -p perry-wasm-host ${{ matrix.wasi && needs.build-wasi.outputs.enabled == 'true' && '--features perry/target-wasi' || '' }}
+        run: cargo build --profile prod --target ${{ matrix.target }} -p perry -p perry-runtime-static -p perry-stdlib-static ${{ matrix.wasi && needs.build-wasi.outputs.enabled == 'true' && '--features perry/target-wasi' || '' }}
 
-      - name: Build panic=abort runtime variant (Unix)
-        # Out-of-tree installs can't rebuild the runtime, so ship the
-        # panic=abort profile prebuilt: `perry compile` links it for
-        # runtime-only apps with no catch_unwind callers (games, CLIs),
-        # dropping unwind tables/landing pads (~12-18% of the binary).
-        # See optimized_libs.rs (find_runtime_abort_library selection).
-        # Separate CARGO_TARGET_DIR so the profile override doesn't
-        # invalidate the main build's incremental cache.
-        if: runner.os != 'Windows' && matrix.old_glibc_image == '' && matrix.musl_image == ''
-        run: |
-          CARGO_TARGET_DIR=target-abort CARGO_PROFILE_PROD_PANIC=abort \
-            mbx build --profile prod --target ${{ matrix.target }} -p perry-runtime -p perry-runtime-static
-          cp "target-abort/${{ matrix.target }}/prod/libperry_runtime.a" \
-             "target/${{ matrix.target }}/prod/libperry_runtime_abort.a"
+      - name: Build WebAssembly host archive
+        # perry links it for a WebAssembly program and never builds it while
+        # compiling one. It shares no code with the runtime or stdlib (only
+        # perry-abi), so it does not need their invocation.
+        # CARGO_PROFILE_PROD_LTO=false: an ["rlib", "staticlib"] crate is never
+        # LTO'd (the rlib output cannot be), so under the profile's lto="thin"
+        # cargo compiles it and every dependency with embedded LLVM bitcode
+        # for a later LTO that never happens; the staticlib then ships every
+        # object twice (machine code + .llvmbc). lto=false emits the same
+        # machine code without the bitcode.
+        if: matrix.old_glibc_image == '' && matrix.musl_image == ''
+        env:
+          CARGO_PROFILE_PROD_LTO: "false"
+        run: ${{ runner.os == 'Windows' && 'cargo' || 'mbx' }} build --profile prod --target ${{ matrix.target }} -p perry-wasm-host
 
       - name: Build native ext libraries (Unix)
         # #2532 — the perry-ext-* wrapper crates ship the host functions for
@@ -956,7 +954,7 @@ jobs:
           while IFS= read -r name; do
             ext_args="$ext_args -p $name"
           done <<< "$governed_ext_packages"
-          core_args="-p perry -p perry-runtime-static -p perry-stdlib-static -p perry-wasm-host ${{ matrix.wasi && needs.build-wasi.outputs.enabled == 'true' && '--features perry/target-wasi' || '' }}"
+          core_args="-p perry -p perry-runtime-static -p perry-stdlib-static ${{ matrix.wasi && needs.build-wasi.outputs.enabled == 'true' && '--features perry/target-wasi' || '' }}"
           # shellcheck disable=SC2086 # word splitting is the point
           if mbx build --keep-going --profile prod --target ${{ matrix.target }} $core_args $ext_args; then
             exit 0
@@ -1021,7 +1019,6 @@ jobs:
             --env RUSTUP_HOME=/tmp/rustup-home \
             --env LLVM_SYS_221_PREFIX=/usr/lib/llvm-22 \
             --env CARGO_TARGET_DIR=/work/target-glibc231 \
-            --env PERRY_ABORT_TARGET_DIR=/work/target-glibc231-abort \
             --env PERRY_RELEASE_WASI \
             --env PERRY_CLI_UPDATE_PUBLIC_KEYS \
             --volume "$HOME/.cargo:/tmp/cargo-home" \
@@ -1040,8 +1037,8 @@ jobs:
           src="target-glibc231/$TARGET/prod"
           dst="target/$TARGET/prod"
           mkdir -p "$dst"
-          for artifact in perry libperry_runtime.a libperry_runtime_abort.a libperry_stdlib.a \
-              libperry_runtime.a.gc-effects libperry_runtime_abort.a.gc-effects; do
+          for artifact in perry libperry_runtime.a libperry_stdlib.a \
+              libperry_runtime.a.gc-effects; do
             test -s "$src/$artifact"
             cp "$src/$artifact" "$dst/$artifact"
           done
@@ -1098,7 +1095,6 @@ jobs:
             --env CARGO_HOME=/tmp/cargo-home \
             --env RUSTUP_HOME=/tmp/rustup-home \
             --env CARGO_TARGET_DIR=/work/target-musl \
-            --env PERRY_ABORT_TARGET_DIR=/work/target-musl-abort \
             --env PERRY_CLI_UPDATE_PUBLIC_KEYS \
             --volume "$HOME/.cargo:/tmp/cargo-home" \
             --volume "$HOME/.rustup:/tmp/rustup-home" \
@@ -1116,15 +1112,22 @@ jobs:
           src="target-musl/$TARGET/prod"
           dst="target/$TARGET/prod"
           mkdir -p "$dst"
-          for artifact in perry libperry_runtime.a libperry_runtime_abort.a libperry_stdlib.a \
-              libperry_runtime.a.gc-effects libperry_runtime_abort.a.gc-effects \
-              libperry_wasm_host.a; do
+          for artifact in perry libperry_runtime.a libperry_stdlib.a \
+              libperry_runtime.a.gc-effects libperry_wasm_host.a; do
             test -s "$src/$artifact"
             cp "$src/$artifact" "$dst/$artifact"
           done
 
       - name: Build UI library (macOS)
+        # CARGO_PROFILE_PROD_LTO=false: an ["rlib", "staticlib"] crate is never
+        # LTO'd (the rlib output cannot be), so under the profile's lto="thin"
+        # cargo compiles it and every dependency with embedded LLVM bitcode
+        # for a later LTO that never happens; the staticlib then ships every
+        # object twice (machine code + .llvmbc). lto=false emits the same
+        # machine code without the bitcode.
         if: runner.os == 'macOS'
+        env:
+          CARGO_PROFILE_PROD_LTO: "false"
         run: mbx build --profile prod --target ${{ matrix.target }} -p perry-ui-macos
 
       # Closes #394: cross-compile the runtime + stdlib + UI for both the
@@ -1146,15 +1149,22 @@ jobs:
           for triple in aarch64-apple-ios aarch64-apple-ios-sim; do
             mbx build --profile prod --target "$triple" -p perry-runtime -p perry-runtime-static
             mbx build --profile prod --target "$triple" -p perry-stdlib -p perry-stdlib-static
-            mbx build --profile prod --target "$triple" -p perry-ui-ios
+            # lto=false: see "Build UI library (macOS)".
+            CARGO_PROFILE_PROD_LTO=false mbx build --profile prod --target "$triple" -p perry-ui-ios
           done
 
       - name: Build UI library (Linux glibc)
         if: runner.os == 'Linux' && !endsWith(matrix.target, '-musl')
+        # lto=false: see "Build UI library (macOS)".
+        env:
+          CARGO_PROFILE_PROD_LTO: "false"
         run: mbx build --profile prod --target ${{ matrix.target }} -p perry-ui-gtk4
 
       - name: Build UI library (Windows)
         if: runner.os == 'Windows'
+        # lto=false: see "Build UI library (macOS)".
+        env:
+          CARGO_PROFILE_PROD_LTO: "false"
         run: ${{ runner.os == 'Windows' && 'cargo' || 'mbx' }} build --profile prod --target ${{ matrix.target }} -p perry-ui-windows
 
       # Closes #872 / #4823: cross-compile the Android runtime libs (and the
@@ -1281,6 +1291,8 @@ jobs:
           # staticlib (UI crates are already staticlib — no -static wrapper); the
           # global-dynamic TLS rustflag only matters at the consumer's final
           # cdylib link, not here.
+          # lto=false: see "Build UI library (macOS)".
+          $env:CARGO_PROFILE_PROD_LTO = "false"
           cargo build --profile prod --target aarch64-linux-android -p perry-ui-android
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -1420,7 +1432,7 @@ jobs:
             cp -R target/${{ matrix.target }}/prod/wasm32-wasip1 staging/
           fi
           # Include static libraries for linking (runtime, stdlib, UI)
-          for lib in libperry_runtime.a libperry_runtime_abort.a libperry_stdlib.a libperry_wasm_host.a libperry_ui_macos.a libperry_ui_gtk4.a; do
+          for lib in libperry_runtime.a libperry_stdlib.a libperry_wasm_host.a libperry_ui_macos.a libperry_ui_gtk4.a; do
             if [ -f "target/${{ matrix.target }}/prod/$lib" ]; then
               cp "target/${{ matrix.target }}/prod/$lib" staging/
               # The GC effects sidecar travels beside its runtime archive.
@@ -2007,7 +2019,8 @@ jobs:
           # UI crate is matrix-driven. perry-ui-android needs the NDK env
           # we wired above; perry-ui-windows builds against the MSVC SDK
           # already on windows-latest. Both go through plain `cargo build`.
-          ${{ runner.os == 'Windows' && 'cargo' || 'mbx' }} build --profile prod --target ${{ matrix.target }} -p ${{ matrix.ui_crate }}
+          # lto=false: see "Build UI library (macOS)" in the build job.
+          CARGO_PROFILE_PROD_LTO=false ${{ runner.os == 'Windows' && 'cargo' || 'mbx' }} build --profile prod --target ${{ matrix.target }} -p ${{ matrix.ui_crate }}
 
       # #4856 — defense in depth behind the cache eviction above: a stale
       # cached runtime archive fails the release here instead of breaking
