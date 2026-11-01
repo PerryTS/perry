@@ -27,6 +27,7 @@ fn obj_bits(obj: *mut crate::ObjectHeader) -> u64 {
 #[test]
 fn old_weak_holder_repairs_two_moves_then_clears_a_dead_target() {
     let _guard = CopyingNurseryTestGuard::new(2);
+    let _age = crate::gc::tenuring::set_survivals_for_test(4);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let initial = crate::object::js_object_alloc(0, 0);
     let holder = crate::weakref::js_weakref_new(f64::from_bits(obj_bits(initial)));
