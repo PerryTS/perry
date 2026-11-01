@@ -282,24 +282,21 @@ fn native_instanceof(
     // has `Function.prototype` in its prototype chain. Keep `CLASS_ID_FUNCTION`
     // in sync with perry-codegen/src/expr/instance_misc1.rs.
     if class_id == CLASS_ID_FUNCTION {
-        // A function linked off its intrinsic chain (`Object.setPrototypeOf
-        // (fn, p)`) reaches `Function.prototype` only if `p`'s chain does.
         let addr = value_addr(value);
-        let linked_function = addr != 0
-            && crate::closure::is_closure_ptr(addr)
-            && !crate::closure::shape::is_class_info(unsafe {
-                (*(addr as *const crate::closure::ClosureHeader)).info
-            })
-            && crate::closure::closure_static_prototype(addr).is_some();
-        if value_is_callable(value) && !linked_function {
+        // A function whose prototype was reset (`Object.setPrototypeOf(fn,
+        // proto)`) answers by its actual chain, which need not reach
+        // `Function.prototype`.
+        let reset_callable =
+            addr != 0 && crate::closure::closure_static_prototype(addr).is_some();
+        if value_is_callable(value) && !reset_callable {
             return true_val;
         }
         // An ordinary object whose recorded chain reaches a function
         // (`Object.create(fn)`) has `Function.prototype` on it too.
-        if addr != 0
-            && (linked_function
-                || unsafe { crate::object::prototype_chain::meta_capable_object(addr) }.is_some()
-                    && crate::object::prototype_chain::object_static_prototype(addr).is_some())
+        if reset_callable
+            || (addr != 0
+                && unsafe { crate::object::prototype_chain::meta_capable_object(addr) }.is_some()
+                && crate::object::prototype_chain::object_static_prototype(addr).is_some())
         {
             let function = constructor
                 .as_ref()
@@ -469,7 +466,7 @@ fn native_instanceof(
     // prototype side table instead. Honor that chain for user class ids.
     if is_class_id_registered(class_id) {
         let addr = value_addr(value);
-        if addr != 0 && super::prototype_chain::object_static_prototype(addr).is_some() {
+        if addr != 0 && super::prototype_chain::has_recorded_prototype(addr) {
             let constructor = super::class_constructor_ref_value(class_id);
             return if ordinary_has_instance_prototype_walk(
                 rooted_value.get_nanbox_f64(),

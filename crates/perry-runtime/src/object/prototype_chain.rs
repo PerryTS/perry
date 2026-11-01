@@ -674,6 +674,13 @@ pub fn object_static_prototype(obj_ptr: usize) -> Option<u64> {
     }
 }
 
+/// Does the receiver carry an explicitly recorded prototype? A function's is
+/// its own link (its shape's identity, or its record once a dictionary).
+pub(crate) fn has_recorded_prototype(addr: usize) -> bool {
+    object_static_prototype(addr).is_some()
+        || crate::closure::closure_static_prototype(addr).is_some()
+}
+
 /// True when this receiver's recorded prototype diverges from its class
 /// default, regardless of whether runtime wiring or a user-facing operation
 /// selected it. Cache guards use this conservative signal.

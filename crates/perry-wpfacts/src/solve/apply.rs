@@ -111,7 +111,16 @@ impl Model {
                     // DECISIONS 149e: an array leaves by its element cell,
                     // a primitive method's container too (184).
                     let arr = self.is_cell_arr(t);
-                    if !stand_in && !arr {
+                    // A literal layout of this unit is handed over as one
+                    // handed to a closed function is: the argument contract
+                    // describes it key by key (`ctor_args_out`); it escapes
+                    // once a census report broke its layout
+                    // (`Gen::closed_ctor_literals`).
+                    let lit = !stand_in
+                        && matches!(self.toks[t as usize], TokKind::Obj(tm, _)
+                            if matches!(self.tmpls[tm as usize].kind,
+                                TmplKind::Class { literal_shape: true, .. }));
+                    if !stand_in && !arr && !lit {
                         self.escape(t, reason);
                     }
                 }
@@ -1062,6 +1071,21 @@ impl Model {
                 if let Some(k) = self.keyed_once(n, src, 1) {
                     let key = k.map_or(Key::Any, Key::Named);
                     self.cons(o, Cons::Store { key, src, site });
+                }
+            }
+            Cons::StoreIndexed { o, src, site } => {
+                // DECISIONS 217(c) for stores: a Number key (ToPropertyKey:
+                // its ToString, a numeric name, `numeric_key`) writes an
+                // array's elements, never a named non-index key of it; any
+                // other key value is a computed-key store.
+                if prim & prim::NUM != 0 && self.index_store_done.insert((n, site, true)) {
+                    let ek = self.elem_key();
+                    self.cons(o, Cons::Store { key: ek, src, site });
+                }
+                if (prim & !prim::NUM != 0 || !toks.is_empty())
+                    && self.index_store_done.insert((n, site, false))
+                {
+                    self.cons(o, Cons::Store { key: Key::Any, src, site });
                 }
             }
             Cons::AccessorKeyed { holder, f, setter } => {

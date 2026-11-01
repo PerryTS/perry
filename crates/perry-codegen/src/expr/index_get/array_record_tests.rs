@@ -624,16 +624,13 @@ fn stack_record_ir(fused: bool) -> String {
 #[test]
 fn array_stack_record_fuses_only_the_generated_next_value() {
     let ll = stack_record_ir(true);
+    // The protocol arm keeps the fused step: length and Get share one cold
+    // boundary. #13645: the array arm is its own counted loop (it may carry
+    // the counted-loop tiers' guards, exactly as `a[i]` does); its Get still
+    // completes through the record's cold dispatcher.
     assert!(ll.contains("record.next.cold") && ll.contains("i32 6"));
-    assert!(
-        !ll.lines()
-            .any(|l| l.contains("call") && l.contains("@js_region_loop_prime(")),
-        "the traversal keeps one user body without a learned body guard"
-    );
-    assert!(
-        !ll.contains("record.read.cold"),
-        "length and Get share a cold boundary"
-    );
+    assert!(ll.contains("record.indexed.") && ll.contains("record.protocol."), "{ll}");
+    assert!(ll.contains("record.read.cold"), "the array arm's Get: {ll}");
     assert!(
         !ll.contains("call double @perry_length_cold_"),
         "one live bounds check"
@@ -651,8 +648,8 @@ fn array_stack_record_fuses_only_the_generated_next_value() {
         .count();
     assert_eq!(
         calls,
-        consumers * 2,
-        "next and finish share the record ABI; entry already captured the method"
+        consumers * 3,
+        "next, the array arm's Get and finish share the record ABI; entry already captured the method"
     );
     crate::testing::verify_ir(&ll, "fused_array_stack_record").unwrap();
 }

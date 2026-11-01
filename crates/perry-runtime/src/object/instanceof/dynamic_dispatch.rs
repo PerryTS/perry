@@ -284,7 +284,7 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
         // with an individually recorded prototype chain (an instance of a
         // later evaluation) answers by its actual chain.
         if crate::object::class_value::class_value_is_first_evaluation(class_id)
-            && super::prototype_chain::object_static_prototype(value_addr(value)).is_some()
+            && super::prototype_chain::has_recorded_prototype(value_addr(value))
         {
             return f64::from_bits(if ordinary_has_instance_prototype_walk(value, type_ref) {
                 crate::value::TAG_TRUE
