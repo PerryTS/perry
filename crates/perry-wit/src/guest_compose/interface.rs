@@ -34,7 +34,13 @@ pub(super) fn shape(types: &Types, api: InterfaceId) -> Result<Vec<u8>> {
                     section.count() == 1 && shape.is_none(),
                     "Public interface type is not closed"
                 );
-                shape = Some(bytes[section.range()].to_vec());
+                let range = section.range();
+                shape = Some(
+                    bytes
+                        .get(usize::try_from(range.start)?..usize::try_from(range.end)?)
+                        .context("Invalid public interface type range")?
+                        .to_vec(),
+                );
             }
             Payload::Version { .. }
             | Payload::End(_)
