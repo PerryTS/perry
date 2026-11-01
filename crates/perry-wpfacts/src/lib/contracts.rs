@@ -242,6 +242,7 @@ pub(super) fn nested_layouts(
                     facts,
                     methods: Vec::new(),
                     getters: Vec::new(),
+                    own_getters: own_getters(&g, itm),
                     native_parent: None,
                     parent: foreign_parent(&g, itm),
                     field_fns: Vec::new(),
@@ -370,6 +371,43 @@ pub(super) fn proto_getters(g: &gen::Gen, tm: model::TmplId) -> Vec<(String, Str
             }
         }
         cur = g.m.tmpls[c as usize].parent;
+    }
+    out.sort();
+    out
+}
+
+/// The own accessors of literal layout `tm` (`ClassContract::own_getters`):
+/// every accessor installed on an object of `tm` (its birth defines them,
+/// `js_object_define_accessor`), as key and getter name; a key with only a
+/// setter carries an empty name. The key hides the prototype chain for the
+/// reader, as it does in the owner.
+pub(super) fn own_getters(g: &gen::Gen, tm: model::TmplId) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for (&(h, a), (gs, ss)) in g.m.accessors.iter() {
+        if !matches!(g.m.toks[h as usize], model::TokKind::Obj(..)) || g.m.tmpl_of(h) != Some(tm) {
+            continue;
+        }
+        let key = g.m.atoms[a as usize].clone();
+        let mut any = false;
+        for &t in gs {
+            let f = g.m.tok_fn(t);
+            if f == model::NO_FN {
+                continue;
+            }
+            any = true;
+            let e = (key.clone(), g.m.funcs[f as usize].name.clone());
+            if !out.contains(&e) {
+                out.push(e);
+            }
+        }
+        // A setter-only key, or a getter that is no function (a computed
+        // or unknown value): the key is still an own accessor.
+        if !any && (!ss.is_empty() || !gs.is_empty()) {
+            let e = (key.clone(), String::new());
+            if !out.contains(&e) {
+                out.push(e);
+            }
+        }
     }
     out.sort();
     out
@@ -1118,6 +1156,7 @@ pub(super) fn describe_nodes(
                             facts: facts.clone(),
                             methods: Vec::new(),
                             getters: Vec::new(),
+                            own_getters: own_getters(&g, tm),
                             native_parent: None,
                             parent: foreign_parent(&g, tm),
                             field_fns: Vec::new(),
@@ -1470,6 +1509,7 @@ pub(super) fn describe_toks(
                     facts,
                     methods: Vec::new(),
                     getters: Vec::new(),
+                    own_getters: own_getters(&g, tm),
                     native_parent: None,
                     parent: foreign_parent(&g, tm),
                     field_fns: Vec::new(),
@@ -1662,6 +1702,7 @@ pub(super) fn fn_inst_contract(
         facts,
         methods,
         getters: proto_getters(g, tm),
+        own_getters: Vec::new(),
         native_parent: None,
         parent: None,
         field_fns: Vec::new(),
@@ -1932,6 +1973,7 @@ pub(super) fn arg_contract_of(
                             facts: facts.clone(),
                             methods: Vec::new(),
                             getters: Vec::new(),
+                            own_getters: own_getters(&g, tm),
                             native_parent: None,
                             parent: foreign_parent(&g, tm),
                             field_fns: Vec::new(),

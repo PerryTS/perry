@@ -73,6 +73,7 @@ mod unit_shared;
 mod unit_this;
 mod own_key_shadow;
 mod call_shadow;
+mod lit_accessor;
 mod top_element_key;
 mod unheld_key;
 mod unrun_param_call;

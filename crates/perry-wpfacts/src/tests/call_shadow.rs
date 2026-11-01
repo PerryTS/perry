@@ -48,11 +48,11 @@ const USE: &str = r#"
     console.log(factory.createIdentifier("a").kind, factory.flags);
 "#;
 
-fn proven(v: &Verdict) -> bool {
+pub(super) fn proven(v: &Verdict) -> bool {
     !matches!(v, Verdict::No(_))
 }
 
-fn call_of<'a>(pf: &'a ProgramFacts, key: &str) -> &'a crate::SiteFacts {
+pub(super) fn call_of<'a>(pf: &'a ProgramFacts, key: &str) -> &'a crate::SiteFacts {
     pf.sites
         .iter()
         .find(|s| s.key == key && s.is_call)
@@ -60,14 +60,14 @@ fn call_of<'a>(pf: &'a ProgramFacts, key: &str) -> &'a crate::SiteFacts {
 }
 
 /// Whole program: is the call proven, and the read of `flags` after it?
-fn whole(src: &str) -> (bool, bool) {
+pub(super) fn whole(src: &str) -> (bool, bool) {
     let pf = facts(src);
     let call = proven(&call_of(&pf, "createIdentifier").verdict);
     (call, proven(&site(&pf, "flags").verdict))
 }
 
 /// Per unit (one module): is the call proven?
-fn per_unit(src: &str) -> bool {
+pub(super) fn per_unit(src: &str) -> bool {
     let module = perry_parser::parse_typescript(src, "t.ts").expect("parses");
     let hir = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
     let pf = crate::compute_units(&[("t.ts".to_string(), &hir)], &FactsConfig::default());
