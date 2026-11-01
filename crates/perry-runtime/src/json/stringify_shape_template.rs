@@ -396,7 +396,7 @@ pub(crate) unsafe fn try_emit_shape_element(
     *data_record_global_proof = false;
     if !global_to_json_absent
         || !super::stringify_tojson_probe::object_is_plain_record(obj)
-        || crate::object::prototype_chain::object_static_prototype(obj as usize).is_some()
+        || crate::object::prototype_chain::object_static_prototype_is_linked(obj as usize)
     {
         return false;
     }

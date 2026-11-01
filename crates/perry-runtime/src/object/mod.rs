@@ -1815,6 +1815,25 @@ unsafe fn set_object_keys_with_live(
     set_object_keys_with_live_rep(obj, keys, live_inline_slot_count, field_rep::REP_ANY);
 }
 
+/// [`set_object_keys_with_live`] for an unstamped null-prototype newborn: its
+/// first shape names `PROTO_ID_NULL` (`shapes::publish_object_shape_from_rep_born`).
+#[cfg_attr(feature = "shape-mint-diag", track_caller)]
+pub(crate) unsafe fn set_object_keys_with_live_born_null(
+    obj: *mut ObjectHeader,
+    keys: ObjectKeys,
+    live_inline_slot_count: u32,
+) {
+    debug_assert!(shapes::object_shape_descriptor(obj).is_none());
+    shapes::publish_object_shape_from_rep_born(
+        obj,
+        None,
+        keys,
+        live_inline_slot_count,
+        field_rep::REP_ANY,
+        Some(shapes::PROTO_ID_NULL),
+    );
+}
+
 /// `set_object_keys_with_live` publishing the successor with field
 /// representation `rep` (charter step 5, T2: `field_rep_store::publish_key_add_edge`).
 #[cfg_attr(feature = "shape-mint-diag", track_caller)]
