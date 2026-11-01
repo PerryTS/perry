@@ -938,9 +938,9 @@ enum HolderDisposition {
 ///   MARKED and had its weak slots repaired this cycle → `Process`;
 /// * an unmarked NURSERY holder is genuinely dead (an eligible copied minor has
 ///   no pinned young survivors) → `Drop`;
-/// * an unmarked OLD/longlived holder is live-but-unmarked and its weak slots
-///   were neither repaired nor remembered, so it can be neither proven dead nor
-///   safely processed here → `Keep` (a full GC handles it).
+/// * an unmarked OLD/longlived holder survives this minor. Remembered weak
+///   slots receive forwarding repair without marking their targets, so it is
+///   processable too: young weak-only targets must clear even in an old holder.
 unsafe fn resolve_weak_holder_copied(
     ptrs: &crate::gc::CopyingPointerSet,
     addr: usize,
@@ -964,7 +964,7 @@ unsafe fn resolve_weak_holder_copied(
     if crate::arena::pointer_in_nursery(cur_addr) {
         HolderDisposition::Drop
     } else {
-        HolderDisposition::Keep
+        HolderDisposition::Process(cur_addr)
     }
 }
 

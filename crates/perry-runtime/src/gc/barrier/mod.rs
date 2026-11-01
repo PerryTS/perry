@@ -184,6 +184,21 @@ pub(super) unsafe fn scan_dirty_object_slots<const DIAGNOSTICS: bool>(
     stats: &mut RememberedSetTraceStats,
     visit_slot: &mut dyn FnMut(GcMutableSlot, bool, &mut RememberedSetTraceStats),
 ) -> bool {
+    scan_dirty_object_slots_with_weak::<DIAGNOSTICS, false>(header, dirty_pages, stats, visit_slot)
+}
+
+/// Copying must repair weak words without tracing through them. Its visitor
+/// distinguishes weak slots and queues their forwarding repair; mark visitors
+/// continue to omit those slots through the wrapper above.
+pub(super) unsafe fn scan_dirty_object_slots_with_weak<
+    const DIAGNOSTICS: bool,
+    const VISIT_WEAK: bool,
+>(
+    header: *mut GcHeader,
+    dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
+    stats: &mut RememberedSetTraceStats,
+    visit_slot: &mut dyn FnMut(GcMutableSlot, bool, &mut RememberedSetTraceStats),
+) -> bool {
     let body_start = header as usize;
     let body_end = body_start.saturating_add((*header).size as usize);
     let in_body = |slot: *mut u64| {
@@ -215,7 +230,7 @@ pub(super) unsafe fn scan_dirty_object_slots<const DIAGNOSTICS: bool>(
     visit_gc_rewrite_slot_descriptors::<DIAGNOSTICS>(header, |descriptor| unsafe {
         match descriptor {
             GcMutableSlotDescriptor::Slot(slot) => {
-                if crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
+                if !VISIT_WEAK && crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
                     return;
                 }
                 let contained = in_body(slot.slot);
@@ -265,7 +280,8 @@ pub(super) unsafe fn scan_dirty_object_slots<const DIAGNOSTICS: bool>(
                         {
                             super::prefetch::prefetch_boxed_child(*ahead);
                         }
-                        if parent_has_weak_slots
+                        if !VISIT_WEAK
+                            && parent_has_weak_slots
                             && crate::weakref::is_weak_target_trace_slot(header, slot)
                         {
                             continue;

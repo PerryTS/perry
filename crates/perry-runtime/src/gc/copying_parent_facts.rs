@@ -407,13 +407,21 @@ impl CopyingNurseryCollector {
         // target's address now and queue the slot so `repair_weak_slots`
         // fixes targets evacuated after this visit; the registry pass then
         // tombstones dead ones.
-        // No remembered-set entry either — the write barrier skips weak
-        // slots the same way.
+        // Generational custody still applies: a weak slot must be revisited
+        // when its young target moves in a later minor. Remembering its page
+        // does not trace the target; this same branch runs on the next visit.
         if weak_holder && crate::weakref::is_weak_target_trace_slot(parent_header, slot.slot) {
             if let Some(new_bits) = self.rewrite_value_bits(slot.read()) {
                 slot.write(new_bits);
             }
             self.weak_slots.push(slot.slot);
+            if slot.is_parent_owned() && remembering() {
+                let child = super::barrier::decode_heap_addr(slot.read());
+                if child != 0 && super::barrier::remembered_child_needs_tracking(child) {
+                    self.sticky
+                        .remember_slot(parent_header, slot.slot, external());
+                }
+            }
             return;
         }
         // Asked BEFORE the visit: it reads only the parent and the slot's own

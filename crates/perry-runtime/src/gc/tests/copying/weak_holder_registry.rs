@@ -20,6 +20,52 @@ fn obj_bits(obj: *mut crate::ObjectHeader) -> u64 {
     ptr_bits(obj as usize)
 }
 
+/// An old weak holder needs relocation custody without retaining its target.
+/// Repeat the minor so a page remembered only by the mutator's initial store
+/// cannot make the test pass. Then remove the strong root to prove the repair
+/// path never turns the weak edge into a strong edge.
+#[test]
+fn old_weak_holder_repairs_two_moves_then_clears_a_dead_target() {
+    let _guard = CopyingNurseryTestGuard::new(2);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let old = unsafe {
+        let (old, _) = alloc_old_test_object(1);
+        (*old).class_id = crate::weakref::CLASS_ID_WEAKREF;
+        crate::object::shapes::restamp_object_proto_id(old);
+        old
+    };
+    assert!(crate::arena::pointer_in_old_gen(old as usize));
+    js_shadow_slot_set(0, obj_bits(old));
+    crate::weakref::test_support::register_weak_holder_address(old as usize);
+
+    let target = crate::object::js_object_alloc(0, 0);
+    assert!(crate::arena::pointer_in_nursery(target as usize));
+    js_shadow_slot_set(1, obj_bits(target));
+    crate::object::js_object_set_field(old, 0, crate::JSValue::pointer(target.cast()));
+    let mut before = target as usize;
+    for _ in 0..2 {
+        let trace = collect_minor_trace(GcTriggerKind::Direct);
+        assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+        let after = (js_shadow_slot_get(1) & POINTER_MASK) as usize;
+        assert_ne!(after, before, "the live young target must actually move");
+        assert_eq!(
+            crate::weakref::js_weakref_deref(f64::from_bits(js_shadow_slot_get(0))).to_bits(),
+            js_shadow_slot_get(1),
+            "an old holder must track its target through every move"
+        );
+        before = after;
+    }
+
+    js_shadow_slot_set(1, 0);
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+    assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+    assert_eq!(
+        crate::weakref::js_weakref_deref(f64::from_bits(js_shadow_slot_get(0))).to_bits(),
+        crate::value::TAG_UNDEFINED,
+        "repairing an old weak holder must not retain a weak-only young target"
+    );
+}
+
 /// (1) A WeakMap with a live key and a dead key across a moving minor: the dead
 /// entry is tombstoned (dropped from the enumeration) while the live entry
 /// survives with BOTH its key and its (object) value repaired to their

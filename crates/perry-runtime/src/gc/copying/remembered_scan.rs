@@ -85,7 +85,7 @@ pub(in crate::gc) fn scan_remembered_dirty_slots_copying<const DIAGNOSTICS: bool
                     visit(slot, header, external, stats);
                     changed |= slot.read() != before;
                 };
-            let complete = scan_dirty_object_slots::<DIAGNOSTICS>(
+            let complete = super::barrier::scan_dirty_object_slots_with_weak::<DIAGNOSTICS, true>(
                 header,
                 &snapshot.dirty_pages,
                 stats,
