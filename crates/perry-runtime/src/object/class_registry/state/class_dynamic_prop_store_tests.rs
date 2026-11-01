@@ -1,4 +1,3 @@
-
 use super::*;
 
 fn stored(class_id: u32, name: &str) -> Option<f64> {
