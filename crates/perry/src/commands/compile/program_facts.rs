@@ -313,6 +313,8 @@ pub(crate) fn view_for(
         fallback: super::fallback_diag::facts_for(pf, &key),
         digest,
         dynamic_code_reach: pf.dynamic_code_reach.clone(),
+        // Set on the entry module by the driver, once R is closed.
+        realm_reach: None,
         contract_section: Arc::new(section),
         elision: Arc::new(elision),
     }
