@@ -1,0 +1,1 @@
+fetch: a server whose certificate is self-signed with `basicConstraints CA:TRUE` is now accepted when that exact certificate is trusted as a CA (`Agent({ connect: { ca } })`, `NODE_EXTRA_CA_CERTS`), instead of failing with a transport error. The certificate must still match the requested host and be within its validity period.

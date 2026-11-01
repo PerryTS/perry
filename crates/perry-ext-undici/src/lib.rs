@@ -112,6 +112,79 @@ pub fn parse_proxy_agent_options(raw: &str) -> Result<ProxyConfig, String> {
     Ok(ProxyConfig { uri, token })
 }
 
+/// Trust settings from `new Agent({ connect: { ca, rejectUnauthorized } })`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ConnectTls {
+    /// Concatenated PEM bundle from `connect.ca` (string, Buffer, or an array of them).
+    pub ca_pem: String,
+    /// `connect.rejectUnauthorized`, when given.
+    pub reject_unauthorized: Option<bool>,
+}
+
+fn ca_chunk(value: &serde_json::Value, out: &mut String) {
+    match value {
+        serde_json::Value::String(pem) => {
+            out.push_str(pem);
+            out.push('\n');
+        }
+        serde_json::Value::Array(items) => items.iter().for_each(|item| ca_chunk(item, out)),
+        // A Buffer serializes as `{"type":"Buffer","data":[bytes]}`.
+        serde_json::Value::Object(map) => {
+            if let Some(data) = map.get("data").and_then(|data| data.as_array()) {
+                let bytes: Vec<u8> = data
+                    .iter()
+                    .filter_map(|byte| byte.as_u64().map(|byte| byte as u8))
+                    .collect();
+                out.push_str(&String::from_utf8_lossy(&bytes));
+                out.push('\n');
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Parse the `connect` trust options out of the JSON-stringified `new Agent(opts)`
+/// argument. Anything that is not an options object carries no overrides.
+pub fn parse_agent_connect_tls(raw: &str) -> ConnectTls {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(raw.trim()) else {
+        return ConnectTls::default();
+    };
+    let Some(connect) = value.get("connect") else {
+        return ConnectTls::default();
+    };
+    let mut ca_pem = String::new();
+    if let Some(ca) = connect.get("ca") {
+        ca_chunk(ca, &mut ca_pem);
+    }
+    ConnectTls {
+        ca_pem,
+        reject_unauthorized: connect
+            .get("rejectUnauthorized")
+            .and_then(|flag| flag.as_bool()),
+    }
+}
+
+/// Publish `tls` as the trust settings of dispatcher `handle` for per-request
+/// `fetch(url, { dispatcher })` use. Every constructor calls this, with empty
+/// settings when it has none, so a recycled handle id never keeps stale trust.
+fn publish_connect_tls(handle: Handle, tls: &ConnectTls) {
+    let ca = (!tls.ca_pem.is_empty()).then(|| perry_ffi::alloc_string(&tls.ca_pem));
+    let reject = match tls.reject_unauthorized {
+        None => -1,
+        Some(false) => 0,
+        Some(true) => 1,
+    };
+    // SAFETY: `ca` is a freshly allocated Perry string, or null for none.
+    unsafe {
+        js_fetch_set_dispatcher_tls(
+            handle,
+            ca.map(|ca| ca.as_raw() as *const StringHeader)
+                .unwrap_or(std::ptr::null()),
+            reject,
+        )
+    };
+}
+
 // The shared fetch proxy state — defined by perry-stdlib's fetch (bundled
 // in the runtime archive) and by perry-ext-fetch; whichever copy is linked
 // resolves this symbol. Passing a null `uri` clears the proxy.
@@ -120,6 +193,12 @@ unsafe extern "C" {
         uri_ptr: *const StringHeader,
         token_ptr: *const StringHeader,
     ) -> f64;
+    // Defined by perry-stdlib's fetch alongside the proxy state.
+    fn js_fetch_set_dispatcher_tls(
+        handle: i64,
+        ca_pem_ptr: *const StringHeader,
+        reject_unauthorized: i32,
+    );
 }
 
 /// Apply a dispatcher's config to the native fetch client. Returns an
@@ -168,20 +247,30 @@ fn apply_dispatcher(dispatcher: &Dispatcher) -> Result<(), String> {
 pub unsafe extern "C" fn js_undici_proxy_agent_new(opts_ptr: *const StringHeader) -> Handle {
     let raw = read_str(opts_ptr).unwrap_or_default();
     match parse_proxy_agent_options(&raw) {
-        Ok(config) => register_handle(Dispatcher::ProxyAgent(config)),
+        Ok(config) => {
+            let handle = register_handle(Dispatcher::ProxyAgent(config));
+            publish_connect_tls(handle, &ConnectTls::default());
+            handle
+        }
         Err(msg) => throw_with_code(&msg, "UND_ERR_INVALID_ARG", ErrorKind::TypeError),
     }
 }
 
-/// `new Agent(options?)` — a direct-connection dispatcher. Options
-/// (pool sizing, keep-alive tuning) are accepted and ignored: the native
-/// reqwest client owns pooling.
+/// `new Agent(options?)` — a direct-connection dispatcher. `connect.ca` and
+/// `connect.rejectUnauthorized` apply to requests passed this Agent as
+/// `dispatcher`; other options (pool sizing, keep-alive tuning) are accepted
+/// and ignored: the native client owns pooling.
 ///
 /// # Safety
-/// `_opts_ptr` must be null or a Perry-runtime `StringHeader`.
+/// `opts_ptr` must be null or a Perry-runtime `StringHeader`.
 #[no_mangle]
-pub unsafe extern "C" fn js_undici_agent_new(_opts_ptr: *const StringHeader) -> Handle {
-    register_handle(Dispatcher::Agent)
+pub unsafe extern "C" fn js_undici_agent_new(opts_ptr: *const StringHeader) -> Handle {
+    let tls = read_str(opts_ptr)
+        .map(|raw| parse_agent_connect_tls(&raw))
+        .unwrap_or_default();
+    let handle = register_handle(Dispatcher::Agent);
+    publish_connect_tls(handle, &tls);
+    handle
 }
 
 /// `setGlobalDispatcher(agent)` — apply the dispatcher's proxy config to
@@ -214,6 +303,7 @@ pub extern "C" fn js_undici_get_global_dispatcher() -> Handle {
         return handle;
     }
     let handle = register_handle(Dispatcher::Agent);
+    publish_connect_tls(handle, &ConnectTls::default());
     *guard = Some(handle);
     handle
 }
@@ -282,6 +372,21 @@ mod test_shims {
         CALLS.lock().unwrap().push((uri, token));
         1.0
     }
+
+    pub(crate) static TLS_CALLS: Mutex<Vec<(i64, Option<String>, i32)>> = Mutex::new(Vec::new());
+
+    #[no_mangle]
+    pub unsafe extern "C" fn js_fetch_set_dispatcher_tls(
+        handle: i64,
+        ca_pem_ptr: *const StringHeader,
+        reject_unauthorized: i32,
+    ) {
+        let ca = super::read_str(ca_pem_ptr);
+        TLS_CALLS
+            .lock()
+            .unwrap()
+            .push((handle, ca, reject_unauthorized));
+    }
 }
 
 #[cfg(test)]
@@ -322,6 +427,31 @@ mod tests {
         )
         .unwrap();
         assert_eq!(config.uri, "http://p:8080");
+    }
+
+    #[test]
+    fn agent_connect_ca_is_published_for_its_handle() {
+        let opts = perry_ffi::alloc_string(
+            r#"{"connect":{"ca":"-----BEGIN CERTIFICATE-----\nAA\n-----END CERTIFICATE-----","rejectUnauthorized":false}}"#,
+        );
+        let agent = unsafe { js_undici_agent_new(opts.as_raw()) };
+        let calls = test_shims::TLS_CALLS.lock().unwrap();
+        let (_, ca, reject) = calls
+            .iter()
+            .rev()
+            .find(|(handle, _, _)| *handle == agent)
+            .expect("tls published for the agent");
+        assert!(ca.as_deref().unwrap().contains("BEGIN CERTIFICATE"));
+        assert_eq!(*reject, 0);
+    }
+
+    #[test]
+    fn connect_ca_accepts_arrays_and_buffers() {
+        let tls = parse_agent_connect_tls(
+            r#"{"connect":{"ca":["one",{"type":"Buffer","data":[116,119,111]}]}}"#,
+        );
+        assert_eq!(tls.ca_pem, "one\ntwo\n");
+        assert_eq!(tls.reject_unauthorized, None);
     }
 
     #[test]
