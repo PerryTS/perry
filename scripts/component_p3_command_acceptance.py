@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Qualify P3 command execution from an actual compiled TypeScript host."""
 import argparse
+import difflib
 import json
 import os
 from pathlib import Path
@@ -45,7 +46,13 @@ def main():
     for name in ['perry', 'runtime-dir', 'wat-encoder', 'output']:
         parser.add_argument('--' + name, required=True, type=Path)
     parser.add_argument('--moving-gc', action='store_true')
+    parser.add_argument('--p3-runtime-dir', type=Path,
+                        help='also compile and execute Perry-authored P3 smoke commands')
+    parser.add_argument('--p3-contract', type=Path,
+                        help='native test-wasi/p3-entropy p3-contract binary')
     args = parser.parse_args()
+    if bool(args.p3_runtime_dir) != bool(args.p3_contract):
+        parser.error('--p3-runtime-dir and --p3-contract must be supplied together')
     root = Path(__file__).resolve().parent.parent
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
@@ -75,6 +82,15 @@ def main():
     for name, source in commands.items():
         (out / (name + '.wat')).write_text(source)
         run('encode-' + name, [args.wat_encoder.resolve(), out / (name + '.wat'), out / (name + '.wasm')])
+    compiled = []
+    if args.p3_runtime_dir:
+        for source in sorted((root / 'scripts/wasi_smoke').glob('*.ts')):
+            guest = out / (source.stem + '.component.wasm')
+            run('guest-compile-' + source.stem, [args.perry.resolve(), 'compile', source,
+                '--target', 'wasip3', '--no-cache', '--no-auto-optimize', '-o', guest],
+                {'PERRY_RUNTIME_DIR': str(args.p3_runtime_dir.resolve())})
+            run('guest-contract-' + source.stem, [args.p3_contract.resolve(), guest])
+            compiled.append((source, guest))
     payload = bytes((n * 17 + 31) % 256 for n in range(3 * 1024 * 1024 + 137))
     for moving in ([False, True] if args.moving_gc else [False]):
         name = 'moving' if moving else 'ordinary'
@@ -91,6 +107,26 @@ def main():
             assert sum(map(int, re.findall(r'\bcopied_objects=(\d+)', diagnostics))) > 0
             assert 'evacuation_ok' in diagnostics
             assert re.search(r'mode=ProtectPages retired_set=#\d+[^\n]*\bbytes_protected=[1-9]\d*', diagnostics)
+        for source, guest in compiled:
+            # A nonzero command exit is data, so compare it to the fixture's
+            # expected exit rather than requiring subprocess success.
+            phase = source.stem + '-' + name
+            result = subprocess.run([str(executable), 'compiled', str(guest)], cwd=out,
+                env=env | instruments, capture_output=True, timeout=180)
+            (out / (phase + '.stdout')).write_bytes(result.stdout)
+            (out / (phase + '.stderr')).write_bytes(result.stderr)
+            actual = result.stdout.decode().replace('\r\n', '\n') + f'exit {result.returncode}\n'
+            expected = source.with_suffix('.out').read_text()
+            difference = ''.join(difflib.unified_diff(expected.splitlines(True), actual.splitlines(True),
+                fromfile='expected', tofile='actual'))
+            (out / (phase + '.diff')).write_text(difference)
+            passed = actual == expected
+            rows.append({'phase': phase, 'exitCode': 0 if passed else 1,
+                         'guestExitCode': result.returncode, 'passed': passed})
+            (out / 'results.json').write_text(json.dumps(rows, indent=2) + '\n')
+            print(('PASS ' if passed else 'FAIL ') + phase, flush=True)
+            if not passed:
+                raise SystemExit(1)
 
 
 if __name__ == '__main__':

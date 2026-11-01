@@ -2,7 +2,15 @@ import { readFileSync } from "node:fs";
 import { runComponentCommand } from "perry/component";
 declare function gc(): void;
 function check(ok: boolean, message: string): void { if (!ok) throw new Error(message); }
-if (process.argv[2] === "stdio") {
+if (process.argv[2] === "compiled") {
+  const bytes = readFileSync(process.argv[3]);
+  gc();
+  const status = runComponentCommand(bytes, {
+    wasi: { inheritStdout: true, inheritStderr: true },
+  });
+  gc();
+  process.exit(status);
+} else if (process.argv[2] === "stdio") {
   gc();
   const status = runComponentCommand(readFileSync(process.argv[3]), {
     wasi: { inheritStdin: true, inheritStdout: true },
