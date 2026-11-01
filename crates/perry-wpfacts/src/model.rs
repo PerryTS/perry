@@ -269,8 +269,9 @@ pub enum SharedWrite {
     /// chain through it is HARD, as the whole program derives it.
     Hard(Shared, Hard),
     /// DECISIONS 234: a delete, defineProperty or `with` under a key
-    /// (`None`: computed) on an object ⊤ denotes or on a parameter: it may
-    /// remove or redefine that key of any escaped object (`top_reshape`).
+    /// (`None`: computed) on an object ⊤ denotes: it may remove or redefine
+    /// that key of any escaped object (`top_reshape`). A delete or define on
+    /// a parameter marker travels as `Hard` (the callers pass the objects).
     Removed(Option<String>),
 }
 
@@ -1360,9 +1361,6 @@ pub struct Model {
     /// class, an instance of it or of a subclass, or a receiver of it.
     pub inst_escaped: crate::pts::FxHashSet<TmplId>,
     pub inst_lose: crate::pts::FxHashSet<TmplId>,
-    /// A named define on a parameter is marking it HARD: its removal is
-    /// already shared under its key.
-    pub marker_define: bool,
     /// Calls the runtime makes for a protocol (ToPrimitive, iteration …).
     pub protocol_calls: crate::pts::FxHashSet<CallId>,
     /// Shared prototype-chain value nodes: (token, key) → node.

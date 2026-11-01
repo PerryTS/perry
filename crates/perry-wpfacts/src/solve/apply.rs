@@ -334,13 +334,6 @@ impl Model {
                         self.top_reshape(Some(key));
                         let k = self.atoms[key as usize].clone();
                         self.note_shared(SharedWrite::Removed(Some(k)));
-                    } else if self.is_marker(t) {
-                        // DECISIONS 234: key `key` of what the callers pass.
-                        let k = self.atoms[key as usize].clone();
-                        self.note_shared(SharedWrite::Removed(Some(k)));
-                        self.marker_define = true;
-                        self.mark_hard(t, Hard::E7Delete, reason);
-                        self.marker_define = false;
                     } else {
                         self.mark_hard(t, Hard::E7Delete, reason);
                     }
@@ -361,13 +354,8 @@ impl Model {
             }
             Cons::DefineKey { key, data, reason } => {
                 for &t in toks {
-                    // DECISIONS 234: on a parameter it defines key `key` of
-                    // what the callers pass (shared under its key).
-                    self.marker_define = self.is_marker(t);
-                    if self.marker_define {
+                    if self.is_marker(t) {
                         self.note_inst(t, true);
-                        let k = self.atoms[key as usize].clone();
-                        self.note_shared(SharedWrite::Removed(Some(k)));
                     }
                     // A key the layout already holds as data may move into an
                     // accessor pair in its slot, and a class instance's layout
@@ -425,7 +413,6 @@ impl Model {
                         _ => self.mark_hard(t, Hard::E5DefineProperty, reason),
                     }
                 }
-                self.marker_define = false;
             }
             Cons::DefineAll {
                 o,
