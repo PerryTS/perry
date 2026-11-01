@@ -1,6 +1,8 @@
 //! Actual Perry guest: generated C scheduler, moving GC and reverse wakes.
 #[path = "support/guest_diagnostics.rs"]
 mod guest_diagnostics;
+#[path = "support/guest_instrument_denial.rs"]
+mod guest_instrument_denial;
 use anyhow::{ensure, Result};
 use futures_lite::future::{block_on, poll_once};
 use perry_component_host::{AsyncImports, Driver, DriverCall, Host, Imports, Options, WasiOptions};
@@ -66,7 +68,7 @@ fn main() -> Result<()> {
     eprintln!("Component compiled and instantiated");
     let (mut driver, client) = host.into_driver()?;
     if args.get(2).is_some_and(|arg| arg == "--instrument-denial") {
-        return guest_diagnostics::plain_rejection(&mut driver, &client);
+        return guest_instrument_denial::plain_rejection(&mut driver, &client);
     }
     if args.get(2).is_some_and(|arg| arg == "--cancel") {
         let input = json!({"text":"cancel", "bytes":[1], "owner":0});

@@ -1,6 +1,8 @@
 //! Real Perry WASI guest: typed suspended imports, concurrent children and tails.
 #[path = "support/guest_diagnostics.rs"]
 mod guest_diagnostics;
+#[path = "support/guest_instrument_denial.rs"]
+mod guest_instrument_denial;
 use anyhow::{ensure, Result};
 use futures_channel::oneshot;
 use futures_lite::future::{block_on, poll_once};
@@ -209,7 +211,7 @@ fn main() -> Result<()> {
     eprintln!("Import component compiled and instantiated");
     let (mut driver, client) = host.into_driver()?;
     if mode == "--instrument-denial" {
-        return guest_diagnostics::plain_rejection(&mut driver, &client);
+        return guest_instrument_denial::plain_rejection(&mut driver, &client);
     }
     let mut status = client.call("", "status", &[])?;
     assert_eq!(result(&mut driver, &mut status), json!(10000));
