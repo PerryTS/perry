@@ -1885,6 +1885,41 @@ mod shared_parent_tests;
 pub(crate) unsafe fn array_record_close_is_absent() -> bool {
     // Resolve allocating intrinsic setup before retaining raw shape owners.
     ensure_iterator_prototypes();
+    if let Some(absent) = array_record_close_memo() {
+        return absent;
+    }
+    array_record_close_scan()
+}
+
+/// GetMethod(%ArrayIteratorPrototype%, "return") through this site's read
+/// memo: each use follows the live chain and compares every holder's
+/// ShapeId, so a later `return` anywhere on the chain (data, accessor, a
+/// reparenting) misses and takes the scan. `None` declines to the scan.
+unsafe fn array_record_close_memo() -> Option<bool> {
+    use super::layout_probe::site_memo::{collect, Answer, ReadSiteMemo};
+    static MEMO: ReadSiteMemo = ReadSiteMemo::EMPTY;
+    let memo = crate::object::class_image::process_shared_memo(&MEMO);
+    let obj = ARRAY_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *const ObjectHeader;
+    if memo.is_null() || obj.is_null() {
+        return None;
+    }
+    const KEY: &[u8] = b"return";
+    let hash = super::key_bytes_hash(KEY.as_ptr(), KEY.len());
+    // Only an existing property atom: minting one allocates, and no
+    // ordinary shape can hold a key whose atom does not exist yet.
+    let atom = crate::string::atom_lookup(KEY, hash)
+        .filter(|&atom| crate::string::is_property_atom(atom))?;
+    let key_bits = crate::value::STRING_TAG | atom as u64;
+    let hash = crate::string::property_atom_hash(atom);
+    match collect(super::shapes::ordinary_dir_addr(), obj, key_bits, hash, &*memo)? {
+        // GetMethod treats an undefined value as no method.
+        Answer::Data(bits) => Some(bits == crate::value::TAG_UNDEFINED),
+        Answer::Getter(_) => Some(false),
+    }
+}
+
+/// The shape scan of the chain, for chains the memo declines.
+unsafe fn array_record_close_scan() -> bool {
     let mut object_proto = crate::array::object_prototype_addr_if_resolved();
     if object_proto == 0 {
         object_proto = crate::array::object_prototype_addr();

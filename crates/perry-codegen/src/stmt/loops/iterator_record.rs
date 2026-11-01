@@ -123,11 +123,9 @@ pub(super) fn lower(
     // ordinary matcher must independently prove that every consumer statement
     // is call-free and cannot mutate the receiver/length. Only that native
     // copy can substitute the transfer; the protocol keeps its output slot.
-    for stmt in &mut candidate_body {
-        if !substitute_output(stmt, *output, &element) {
-            return Ok(false);
-        }
-    }
+    let substituted = candidate_body
+        .iter_mut()
+        .all(|stmt| substitute_output(stmt, *output, &element));
     let Some(Expr::NativeMethodCall {
         module,
         method,
@@ -146,18 +144,192 @@ pub(super) fn lower(
     }
     let was_nonnegative = ctx.nonnegative_integer_locals.contains(counter);
     ctx.nonnegative_integer_locals.insert(*counter);
-    let result = lower_packed_f64_versioned_for_with_protocol(
-        ctx,
-        Some(&candidate_init),
-        Some(&candidate_condition),
-        Some(&updates[1]),
-        &candidate_body,
-        Some((&values[0], condition.unwrap(), update.unwrap(), body)),
-    );
+    let mut result = if substituted {
+        lower_packed_f64_versioned_for_with_protocol(
+            ctx,
+            Some(&candidate_init),
+            Some(&candidate_condition),
+            Some(&updates[1]),
+            &candidate_body,
+            Some((&values[0], condition.unwrap(), update.unwrap(), body)),
+        )
+    } else {
+        Ok(false)
+    };
+    if matches!(result, Ok(false)) && ctx.pending_labels.is_empty() {
+        if let Expr::LocalSet(state, _) = &args[4] {
+            result = lower_array_arm(
+                ctx,
+                &values[0],
+                ArrayArm {
+                    init: &candidate_init,
+                    condition: &candidate_condition,
+                    update: &updates[1],
+                    array,
+                    counter: *counter,
+                    output: *output,
+                    state: *state,
+                    length: &args[1],
+                    element: &values[2],
+                    body,
+                },
+                (init, condition.unwrap(), update.unwrap(), body),
+            );
+        }
+    }
     if !was_nonnegative {
         ctx.nonnegative_integer_locals.remove(counter);
     }
     result
+}
+
+struct ArrayArm<'a> {
+    init: &'a Stmt,
+    condition: &'a Expr,
+    update: &'a Expr,
+    array: u32,
+    counter: u32,
+    output: u32,
+    state: u32,
+    /// The record's own length: `arrayRecordLength(payload)`.
+    length: &'a Expr,
+    /// The record's own Get: `payload[arrayRecordIndex(counter)]`.
+    element: &'a Expr,
+    /// The record body: output transfer, `state = 0`, then the user's.
+    body: &'a [Stmt],
+}
+
+/// A counted record whose entry chose the array arm steps exactly like the
+/// indexed loop: the captured %ArrayIteratorPrototype%.next reads `a[i]`
+/// below the live length (ECMA-262 23.1.5.1). That arm gets its own copy of
+/// the body, lowered by the ordinary counted-loop chain, so the binding and
+/// the body lower like `for (let i = 0; i < a.length; i++) { const x = a[i]; }`.
+/// The protocol arm keeps the record loop unchanged. Both arms share the
+/// cursor, completion state and output locals, so close, abrupt completion
+/// and release see the same record either way.
+fn lower_array_arm(
+    ctx: &mut FnCtx<'_>,
+    protocol_test: &Expr,
+    arm: ArrayArm<'_>,
+    protocol: (Option<&Stmt>, &Expr, &Expr, &[Stmt]),
+) -> Result<bool> {
+    let set_state = |value: f64| {
+        Stmt::Expr(Expr::LocalSet(arm.state, Box::new(Expr::Number(value))))
+    };
+    // Completion state 2 while Get runs: a throwing getter on a hole does not
+    // close (IteratorStepValue errors complete the record). The record body
+    // then sets 0 before the user statements.
+    let user = &arm.body[2..];
+    // A binding whose only input is the step value reads the element itself:
+    // the declared element type of the source picks its lowering, exactly as
+    // for `const x = a[i]`; the read's own guards prove it.
+    let binding = match user.first() {
+        Some(Stmt::Let { id, name, ty, mutable, init: Some(Expr::LocalGet(value)) })
+            if *value == arm.output && !user[1..].iter().any(|s| stmt_reads_local(s, arm.output)) =>
+        {
+            Some((Stmt::Let { id: *id, name: name.clone(), ty: ty.clone(), mutable: *mutable, init: Some(arm.element.clone()) }, ty.clone()))
+        }
+        _ => None,
+    };
+    let mut array_body = vec![set_state(2.0)];
+    let element_hint = match binding {
+        Some((stmt, ty)) => {
+            array_body.push(stmt);
+            array_body.push(set_state(0.0));
+            array_body.extend(user[1..].iter().cloned());
+            ty
+        }
+        None => {
+            array_body.push(Stmt::Expr(Expr::LocalSet(arm.output, Box::new(arm.element.clone()))));
+            array_body.extend(arm.body[1..].iter().cloned());
+            perry_hir::types::Type::Any
+        }
+    };
+
+    let protocol_mode = crate::lower_conditional::lower_test(ctx, protocol_test)?;
+    let protocol_idx = ctx.new_block("record.protocol");
+    let array_idx = ctx.new_block("record.indexed");
+    let merge_idx = ctx.new_block("record.merge");
+    let protocol_label = ctx.block_label(protocol_idx);
+    let array_label = ctx.block_label(array_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    ctx.block().cond_br(&protocol_mode, &protocol_label, &array_label);
+
+    ctx.current_block = array_idx;
+    // Entry proved the payload an Array on this arm; its element hint is
+    // the source's declared one, as for an indexed loop over that source.
+    // The payload's only other writes are the plan's releases, which run
+    // just before an exit leaves this arm, so here it is a stable binding.
+    let previous = (!matches!(element_hint, perry_hir::types::Type::Any)).then(|| {
+        let rebound = ctx.reassigned_locals.remove(&arm.array);
+        let ty = ctx.local_types.insert(
+            arm.array,
+            perry_hir::types::Type::Array(Box::new(element_hint)),
+        );
+        (ty, rebound)
+    });
+    // An unhinted arm keeps the record's proven-array length lowering.
+    let condition = if previous.is_some() {
+        arm.condition.clone()
+    } else {
+        Expr::Compare {
+            op: CompareOp::Lt,
+            left: Box::new(Expr::LocalGet(arm.counter)),
+            right: Box::new(arm.length.clone()),
+        }
+    };
+    lower_for_tiers(ctx, Some(arm.init), Some(&condition), Some(arm.update), &array_body)?;
+    if let Some((ty, rebound)) = previous {
+        match ty {
+            Some(ty) => ctx.local_types.insert(arm.array, ty),
+            None => ctx.local_types.remove(&arm.array),
+        };
+        if rebound {
+            ctx.reassigned_locals.insert(arm.array);
+        }
+    }
+    if !ctx.block().is_terminated() {
+        // Exhaustion completes the record (state 2) for its release; a break
+        // left its own state behind.
+        lower_stmt(
+            ctx,
+            &Stmt::If {
+                condition: Expr::Compare {
+                    op: CompareOp::Eq,
+                    left: Box::new(Expr::LocalGet(arm.state)),
+                    right: Box::new(Expr::Number(0.0)),
+                },
+                then_branch: vec![set_state(2.0)],
+                else_branch: None,
+            },
+        )?;
+        if !ctx.block().is_terminated() {
+            ctx.block().br(&merge_label);
+        }
+    }
+
+    ctx.current_block = protocol_idx;
+    lower_for_after_init(ctx, protocol.0, Some(protocol.1), Some(protocol.2), protocol.3, "for")?;
+    if !ctx.block().is_terminated() {
+        ctx.block().br(&merge_label);
+    }
+    ctx.current_block = merge_idx;
+    Ok(true)
+}
+
+/// Does `stmt` read local `id`? A closure counts as reading every local:
+/// its captures are not part of this expression walk. (Writes are the
+/// record's own releases, inlined before each exit.)
+fn stmt_reads_local(stmt: &Stmt, id: u32) -> bool {
+    fn names(e: &Expr, id: u32) -> bool {
+        let mut found = matches!(e, Expr::LocalGet(l) if *l == id)
+            || matches!(e, Expr::Closure { .. });
+        if !found {
+            perry_hir::walker::walk_expr_children(e, &mut |c| found |= names(c, id));
+        }
+        found
+    }
+    perry_hir::walker::stmt_any_expr(stmt, &mut |e| names(e, id))
 }
 
 fn mode_local(expr: &Expr) -> Option<u32> {
@@ -482,5 +654,82 @@ mod tests {
         );
         assert_eq!(ir.matches("@js_iterator_step(").count(), 1, "{ir}");
         assert!(!ir.contains("0x7FF0000000000000"), "{ir}");
+    }
+
+    /// #13645: a record whose consumer is not a packed numeric copy still
+    /// gives the array arm its own indexed loop; the binding reads the
+    /// element and the protocol arm keeps the record step.
+    #[test]
+    fn array_arm_is_an_indexed_loop_beside_the_protocol_record() {
+        let _pin = crate::codegen::helpers::NativeRootsPin::native();
+        let mut m = Module::new("record_arm");
+        let mode = Expr::Compare {
+            op: CompareOp::Eq,
+            left: Box::new(Expr::LocalGet(1)),
+            right: Box::new(Expr::Bool(true)),
+        };
+        let element = Expr::IndexGet {
+            byte_offset: 0,
+            byte_end: 0,
+            object: Box::new(Expr::LocalGet(0)),
+            index: Box::new(rt("arrayRecordIndex", vec![Expr::LocalGet(2)])),
+        };
+        m.init = vec![
+            local(0, Type::Array(Box::new(Type::String)),
+                Expr::Array(vec![Expr::String("ab".into()), Expr::String("c".into())], None)),
+            local(1, Type::Boolean,
+                rt("arrayRecordNeedsIterator", vec![Expr::LocalSet(0, Box::new(Expr::LocalGet(0)))])),
+            local(3, Type::Any, Expr::Undefined),
+            local(4, Type::Number, Expr::Number(0.0)),
+            local(5, Type::Number, Expr::Number(0.0)),
+            Stmt::For {
+                init: Some(Box::new(local(2, Type::Number, rt("arrayRecordIndex", vec![Expr::Integer(0)])))),
+                condition: Some(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(2)),
+                    right: Box::new(rt("arrayRecordForBound", vec![
+                        mode.clone(),
+                        rt("arrayRecordLength", vec![Expr::LocalGet(0)]),
+                        Expr::LocalGet(2),
+                        rt("iteratorStep", vec![Expr::Undefined, Expr::Undefined,
+                            Expr::LocalSet(3, Box::new(Expr::Undefined))]),
+                        Expr::LocalSet(4, Box::new(Expr::Number(2.0))),
+                    ])),
+                }),
+                update: Some(rt("arrayRecordForUpdate", vec![mode.clone(),
+                    Expr::Update { id: 2, op: UpdateOp::Increment, prefix: false }])),
+                body: vec![
+                    Stmt::Expr(Expr::LocalSet(3, Box::new(rt("arrayRecordForValue",
+                        vec![mode, Expr::LocalGet(3), element])))),
+                    Stmt::Expr(Expr::LocalSet(4, Box::new(Expr::Number(0.0)))),
+                    Stmt::Let { id: 8, name: "word".into(), ty: Type::String, mutable: false,
+                        init: Some(Expr::LocalGet(3)) },
+                    Stmt::Expr(Expr::LocalSet(5, Box::new(Expr::Binary {
+                        op: BinaryOp::Add,
+                        left: Box::new(Expr::LocalGet(5)),
+                        right: Box::new(Expr::PropertyGet { byte_offset: 0, byte_end: 0,
+                            object: Box::new(Expr::LocalGet(8)), property: "length".into() }),
+                    }))),
+                ],
+            },
+        ];
+        let ir = String::from_utf8(
+            crate::compile_module(&m, crate::CompileOptions {
+                emit_ir_only: true,
+                is_entry_module: true,
+                target: Some("x86_64-unknown-linux-gnu".into()),
+                ..Default::default()
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let start = ir.find("define i32 @main()").unwrap();
+        let ir = &ir[start..];
+        let ir = &ir[..ir.find("\n}\n").unwrap()];
+        let arm = ir.find("\nrecord.indexed.").expect(ir);
+        let protocol = ir.find("\nrecord.protocol.").expect(ir);
+        assert!(ir.contains("record.merge."), "{ir}");
+        assert_eq!(ir.matches("@js_iterator_step(").count(), 1, "one protocol step: {ir}");
+        assert!(arm != protocol, "{ir}");
     }
 }
