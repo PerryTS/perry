@@ -8,14 +8,14 @@ use wac_graph::{
     types::{ItemKind, Package},
     CompositionGraph, EncodeOptions, NodeId,
 };
-use wasm_encoder::{Component, ComponentExportSection, ComponentInstanceSection, RawSection};
+use wasm_encoder::{Component, ComponentExportSection, RawSection};
 use wasmparser::{ComponentExternalKind as Kind, Parser, Payload, Validator, WasmFeatures};
+mod interface;
 #[cfg(test)]
 mod tests;
 
 struct Export {
     name: String,
-    fields: Option<Vec<(String, String)>>,
     item: String,
 }
 
@@ -137,12 +137,12 @@ pub fn compose_experimental_guest(producer: &[u8], facade: &[u8], plan: &[u8]) -
                 } else {
                     graph.alias_instance_export(original, &field)?
                 };
-                members.push((field, expose(&mut graph, &mut temporary, node)?));
+                members.push((field, node, forward.is_some()));
             }
+            let instance = interface::compose(&mut graph, id, original, &members)?;
             exports.push(Export {
                 name,
-                fields: Some(members),
-                item: String::new(),
+                item: expose(&mut graph, &mut temporary, instance)?,
             });
         } else {
             let forward = plan
@@ -162,7 +162,6 @@ pub fn compose_experimental_guest(producer: &[u8], facade: &[u8], plan: &[u8]) -
             };
             exports.push(Export {
                 name,
-                fields: None,
                 item: expose(&mut graph, &mut temporary, node)?,
             });
         }
@@ -171,15 +170,7 @@ pub fn compose_experimental_guest(producer: &[u8], facade: &[u8], plan: &[u8]) -
         forwarded_count == plan.forwards.len(),
         "Unknown synchronous facade function"
     );
-    // These individual aliases are an internal serialization channel, not a
-    // component's public type surface. A function can mention a concrete
-    // resource-bearing value type whose enclosing instance is rebuilt below;
-    // exporting that function alone need not be a valid public contract.
-    // publish validates both the export-free graph and the final component.
-    let encoded = graph.encode(EncodeOptions {
-        validate: false,
-        ..EncodeOptions::default()
-    })?;
+    let encoded = graph.encode(EncodeOptions::default())?;
     publish(&encoded, &exports)
 }
 
@@ -228,36 +219,15 @@ fn publish(encoded: &[u8], exports: &[Export]) -> Result<Vec<u8>> {
             depth += 1;
         }
     }
-    let types = Validator::new_with_features(WasmFeatures::all())
+    Validator::new_with_features(WasmFeatures::all())
         .validate_all(output.as_slice())
         .context("Invalid producer/facade internals after removing temporary exports")?;
-    let mut instances = types.as_ref().component_instance_count();
     let mut public = ComponentExportSection::new();
     for export in exports {
-        if let Some(fields) = &export.fields {
-            let fields = fields
-                .iter()
-                .map(|(name, item)| {
-                    let (kind, index) = items.get(item).context("Missing facade field alias")?;
-                    Ok((name.as_str(), (*kind).into(), *index))
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let mut section = ComponentInstanceSection::new();
-            section.export_items(fields);
-            output.section(&section);
-            public.export(
-                export.name.as_str(),
-                wasm_encoder::ComponentExportKind::Instance,
-                instances,
-                None,
-            );
-            instances += 1;
-        } else {
-            let (kind, index) = items
-                .get(&export.item)
-                .context("Missing facade export alias")?;
-            public.export(export.name.as_str(), (*kind).into(), *index, None);
-        }
+        let (kind, index) = items
+            .get(&export.item)
+            .context("Missing facade export alias")?;
+        public.export(export.name.as_str(), (*kind).into(), *index, None);
     }
     output.section(&public);
     let bytes = output.finish();
