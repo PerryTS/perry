@@ -88,3 +88,53 @@ function* gen() { yield 1; }
 async function asy() {}
 (asy as any).tag = "a";
 console.log("17", keys(gen), (gen as any).tag, keys(asy), (asy as any).tag);
+// a class field over an own configurable non-writable key redefines it with default attributes
+class NW1 extends Callable {
+  constructor() { super(() => 0); Object.defineProperty(this, "x", { value: "nw", writable: false, enumerable: false, configurable: true }); }
+}
+class NW2 extends NW1 { x = "field"; }
+const nw: any = new NW2();
+console.log("18", desc(nw, "x"), keys(nw));
+// a read site that saw a key absent sees it after the add
+const rd = (f: any) => f.later;
+const g1: any = function g1() {}; g1.a = 1;
+const before = rd(g1);
+g1.later = "added";
+console.log("19", before, rd(g1), rd(function other() {}));
+// a bound function's intrinsic name/length with no own keys, read through a link
+const bf2: any = Object.setPrototypeOf(target.bind(null), { name: "proto-name", length: 99, extra: "x" });
+console.log("20", bf2.name, bf2.length, bf2.extra, typeof bf2.prototype);
+// a class field over an own writable non-enumerable key makes it enumerable
+class NE1 extends Callable {
+  constructor() { super(() => 0); Object.defineProperty(this, "y", { value: "ne", writable: true, enumerable: false, configurable: true }); }
+}
+class NE2 extends NE1 { y = "field"; }
+console.log("21", desc(new NE2(), "y"));
+// an own key named like a Function.prototype method, added after other keys
+const fc: any = function fc() { return "body"; };
+fc.a = 1;
+fc.call = () => "own-call";
+fc.apply = () => "own-apply";
+console.log("22", fc.call(), fc.apply(), typeof fc.bind, keys(fc));
+// computed-key stores ([[Set]]) see setters and non-writable keys on the chain
+let cks = 0;
+const ck = (s: string) => s + "";
+const chainProto = { set hook(v: any) { cks++; } };
+Object.defineProperty(chainProto, "ro", { value: "ro", writable: false });
+const cf: any = Object.setPrototypeOf(function cf() {}, chainProto);
+cf[ck("first")] = 1;
+cf[ck("hook")] = 2;
+try { (function () { "use strict"; cf[ck("ro")] = 3; })(); console.log("23 no throw"); } catch (e) { console.log("23", (e as Error).constructor.name); }
+cf[ck("second")] = 4;
+console.log("24", cks, keys(cf), cf.ro, Object.prototype.hasOwnProperty.call(cf, "hook"));
+Object.defineProperty(Function.prototype, "fpHook", { set(v) { cks++; }, configurable: true });
+const pf: any = function pf() {};
+pf[ck("p1")] = 1;
+pf[ck("fpHook")] = 2;
+console.log("25", cks, keys(pf));
+delete (Function.prototype as any).fpHook;
+// a constructor's prototype materialized after other keys keeps its birth place
+const o1: any = function o1() {}; o1.x = 1; o1.prototype; 
+const o2: any = function o2() {}; o2.x = 1; o2.prototype = { z: 1 };
+const o3: any = () => 0; o3.x = 1; o3.prototype = { z: 1 };
+console.log("26", keys(o1), keys(o2), keys(o3));
