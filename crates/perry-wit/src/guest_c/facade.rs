@@ -116,7 +116,7 @@ pub(super) fn generate(
     let forward_interface = "perry-producer-forward".to_string();
     let forward_key = WorldKey::Name(forward_interface.clone());
     let mut mapped = BTreeMap::new();
-    let mut root_forwards = std::collections::BTreeSet::new();
+    let mut root_forwards = std::collections::HashSet::new();
     let actor = asynchronous::actor_name(anchor);
     let mut entries = Vec::new();
     for interface in &public.exports {
