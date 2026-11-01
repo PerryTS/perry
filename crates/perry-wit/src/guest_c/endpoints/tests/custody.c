@@ -9,7 +9,7 @@ static unsigned adopted[4], dropped[4], freed_buffers, io_frames, parent_frames;
 static unsigned finishes, resumes, prepares, native_cancels, reader_drops;
 static unsigned provided, expected_flags, cases;
 static uint32_t joined;
-static bool observed, acknowledged, immediate, live;
+static bool observed, acknowledged, immediate, live, is_stream, packed_future;
 static plugin_waitable_state_t terminal;
 static test_endpoint_custody_api_payload_t *storage;
 static void *const io_frame = (void *)(uintptr_t)1;
@@ -26,7 +26,8 @@ static plugin_waitable_status_t acknowledge(void) {
         storage[i].text.len = 4;
     }
     acknowledged = true;
-    return (provided << 4) | terminal;
+    if (!is_stream) assert(provided == (terminal == PLUGIN_WAITABLE_COMPLETED));
+    return ((is_stream || packed_future) ? (provided << 4) : 0) | terminal;
 }
 void test_endpoint_custody_api_item_drop_own(test_endpoint_custody_api_own_item_t item) {
     assert(acknowledged && io_frames == 0);
@@ -135,7 +136,7 @@ static void check(bool stream, bool inline_read, plugin_waitable_state_t state, 
     memset(adopted, 0, sizeof(adopted)); memset(dropped, 0, sizeof(dropped));
     freed_buffers = io_frames = parent_frames = finishes = resumes = prepares = 0;
     native_cancels = reader_drops = joined = 0;
-    provided = count; terminal = state; immediate = inline_read;
+    is_stream = stream; provided = count; terminal = state; immediate = inline_read;
     observed = observer; live = action != 2; acknowledged = false;
     bool aborted = action != 0 || state == PLUGIN_WAITABLE_CANCELLED || (!stream && count == 0) || !observer;
     bool ended = state == PLUGIN_WAITABLE_DROPPED || (!stream && count == 1);
@@ -178,12 +179,31 @@ static void check(bool stream, bool inline_read, plugin_waitable_state_t state, 
     assert(perry_tasks == NULL && parent_frames == 1);
     ++cases;
 }
-int main(void) {
+int main(int argc, char **argv) {
+    if (argc == 2) {
+        if (strcmp(argv[1], "--packed-future-count") == 0) {
+            packed_future = true;
+            check(false, true, PLUGIN_WAITABLE_COMPLETED, 1, true, 0);
+        } else {
+            assert(strcmp(argv[1], "--dropped-future-read") == 0);
+            /* Future readers have no DROPPED result. Bypass the payload
+               precondition only to verify the generated decoder traps. */
+            is_stream = false; observed = true; immediate = true;
+            perry_task task = { .asynchronous = true };
+            perry_tasks = perry_active_task = &task;
+            $FUTURE_STEM_state *data = calloc(1, sizeof(*data));
+            data->base.frame = io_frame; data->base.status = PLUGIN_WAITABLE_DROPPED;
+            data->capacity = 1;
+            $FUTURE_STEM_deliver(data);
+        }
+        assert(0);
+    }
+
     for (unsigned stream = 0; stream < 2; ++stream) {
         for (unsigned observer = 0; observer < 2; ++observer) {
             check(stream, true, PLUGIN_WAITABLE_COMPLETED, 1, observer, 0);
             check(stream, false, PLUGIN_WAITABLE_COMPLETED, 1, observer, 0);
-            check(stream, false, PLUGIN_WAITABLE_DROPPED, 0, observer, 0);
+            check(stream, false, stream ? PLUGIN_WAITABLE_DROPPED : PLUGIN_WAITABLE_CANCELLED, 0, observer, 0);
             check(stream, false, PLUGIN_WAITABLE_CANCELLED, 0, observer, 1);
             check(stream, false, PLUGIN_WAITABLE_COMPLETED, 1, observer, 1);
             check(stream, false, PLUGIN_WAITABLE_CANCELLED, stream ? 2 : 0, observer, 4);

@@ -132,6 +132,22 @@ fn canonical_guest_reads_retire_only_acknowledged_unclaimed_owned_payloads() {
             );
             assert!(String::from_utf8_lossy(&output.stdout)
                 .contains("PASS: 26 guest read ownership cases"));
+            // Future read results are uncounted enum codes. A packed stream
+            // count or DROPPED code must trap before any payload is lifted.
+            use std::os::unix::process::ExitStatusExt;
+            for argument in ["--packed-future-count", "--dropped-future-read"] {
+                let output = std::process::Command::new(&exe)
+                    .arg(argument)
+                    .env("ASAN_OPTIONS", "handle_sigill=0")
+                    .output()
+                    .unwrap();
+                assert_eq!(
+                    output.status.signal(),
+                    Some(4),
+                    "{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
         }
     }
 }

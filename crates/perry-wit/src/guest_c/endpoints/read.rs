@@ -32,7 +32,21 @@ impl Generator<'_> {
                 .map(|ty| format!("{} *items;", emitter.ctype(ty)))
                 .unwrap_or_default()
         )?;
-        writeln!(emitter.source, "static void {stem}_deliver(void *pointer) {{\n{stem}_state *data = pointer;\nperry_io *io = &data->base;\nvoid *f = io->frame;\nperry_require(!io->complete && !io->joined);\nio->complete = true;\n{world}_waitable_state_t state = {upper}_WAITABLE_STATE(io->status);\nuint32_t count = {upper}_WAITABLE_COUNT(io->status);\nperry_require(state == {upper}_WAITABLE_COMPLETED || state == {upper}_WAITABLE_DROPPED || state == {upper}_WAITABLE_CANCELLED);\nperry_require(count <= data->capacity);\nbool terminal = state == {upper}_WAITABLE_DROPPED{};\nbool abort = io->cancelled || state == {upper}_WAITABLE_CANCELLED{};\nuint32_t result = 0;\nint32_t observed = abort ? 0 : perry_component_frame_endpoint_prepare(f);\nperry_require(observed >= 0);\nif (observed) {{\nio->claimed = true;", if stream { "" } else { " || count == 1" }, if stream { "" } else { " || count == 0" })?;
+        // Stream statuses pack a progress count above the low four bits.
+        // A future status is only a result code: COMPLETED itself initializes
+        // its single payload, including when synchronous cancellation loses.
+        // https://github.com/WebAssembly/component-model/blob/main/design/mvp/Explainer.md#-futureread-and-futurewrite
+        let count = if stream {
+            format!("{upper}_WAITABLE_COUNT(io->status)")
+        } else {
+            format!("(io->status == {upper}_WAITABLE_COMPLETED ? 1u : 0u)")
+        };
+        let valid = if stream {
+            format!("state == {upper}_WAITABLE_COMPLETED || state == {upper}_WAITABLE_DROPPED || state == {upper}_WAITABLE_CANCELLED")
+        } else {
+            format!("io->status == {upper}_WAITABLE_COMPLETED || io->status == {upper}_WAITABLE_CANCELLED")
+        };
+        writeln!(emitter.source, "static void {stem}_deliver(void *pointer) {{\n{stem}_state *data = pointer;\nperry_io *io = &data->base;\nvoid *f = io->frame;\nperry_require(!io->complete && !io->joined);\nio->complete = true;\n{world}_waitable_state_t state = {upper}_WAITABLE_STATE(io->status);\nuint32_t count = {count};\nperry_require({valid});\nperry_require(count <= data->capacity);\nbool terminal = state == {upper}_WAITABLE_DROPPED{};\nbool abort = io->cancelled || state == {upper}_WAITABLE_CANCELLED{};\nuint32_t result = 0;\nint32_t observed = abort ? 0 : perry_component_frame_endpoint_prepare(f);\nperry_require(observed >= 0);\nif (observed) {{\nio->claimed = true;", if stream { "" } else { " || count == 1" }, if stream { "" } else { " || count == 0" })?;
         if stream {
             let chunk = if payload.is_some_and(|ty| is_byte(self.resolve, ty)) {
                 emitter.slot("perry_component_frame_bytes(f, (const uint8_t *)data->items, count)")
@@ -70,7 +84,7 @@ impl Generator<'_> {
         }
         emitter.source.push_str("perry_require(!perry_component_frame_failed(f));\n} else { abort = true; }\nperry_require(perry_component_frame_endpoint_finish(f, result, (terminal ? 1u : 0u) | (abort ? 2u : 0u)) == 0);\n}\n");
         writeln!(emitter.source, "static void {stem}_cancel(perry_io *io) {{\nperry_require(!io->cancelled && !io->complete);\nio->cancelled = true;\nif (io->joined) {{ {world}_waitable_join(io->reader, 0); io->joined = false; }}\nio->status = {helper}_cancel_read(io->reader);\nperry_require(io->status != {upper}_WAITABLE_STATUS_BLOCKED);\n}}")?;
-        writeln!(emitter.source, "static void {stem}_destroy(perry_io *io) {{\n{stem}_state *data = ({stem}_state *)io;\nperry_require(io->complete && !io->joined);\nuint32_t count = {upper}_WAITABLE_COUNT(io->status);\nperry_require(count <= data->capacity);\n(void)count;")?;
+        writeln!(emitter.source, "static void {stem}_destroy(perry_io *io) {{\n{stem}_state *data = ({stem}_state *)io;\nperry_require(io->complete && !io->joined);\nuint32_t count = {count};\nperry_require(count <= data->capacity);\n(void)count;")?;
         if let Some(payload) = payload {
             emitter.source.push_str(
                 "for (uint32_t index = 0; index < count; ++index) {\nif (!io->claimed) {\n",
