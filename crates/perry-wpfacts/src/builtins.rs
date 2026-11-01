@@ -1516,13 +1516,40 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
         (BuiltinNs::Object, "create") => {
             unknown_method_proto(m, call, "argument of builtin Object.create", Some(0), true)
         }
-        (BuiltinNs::Object | BuiltinNs::Reflect, "setPrototypeOf") => unknown_method_proto(
-            m,
-            call,
-            &format!("argument of builtin {ns:?}.setPrototypeOf"),
-            Some(1),
-            true,
-        ),
+        // Called as a value (the generic arm of a guarded namespace call,
+        // an alias), the builtin is the operation its intrinsic lowers to
+        // (`Expr::ObjectSetPrototypeOf`): E6 on the target, whose chain
+        // now holds the prototype; `Object.setPrototypeOf` returns the
+        // target, `Reflect.setPrototypeOf` a boolean. A spread argument
+        // leaves the operands unknown.
+        (BuiltinNs::Object | BuiltinNs::Reflect, "setPrototypeOf") => {
+            let c = m.calls[call as usize].clone();
+            match (c.args.first(), c.args.get(1)) {
+                (Some(&o), Some(&p)) if c.spread.is_empty() => {
+                    let r = m.reason(&format!("E6 {ns:?}.setPrototypeOf"));
+                    m.cons(
+                        o,
+                        Cons::Hard {
+                            kind: Hard::E6SetPrototypeOf,
+                            reason: r,
+                        },
+                    );
+                    m.cons(o, Cons::ProtoFrom { src: p });
+                    if ns == BuiltinNs::Object {
+                        m.edge(o, c.ret);
+                    } else {
+                        ret_prim(m, call, prim::BOOL);
+                    }
+                }
+                _ => unknown_method_proto(
+                    m,
+                    call,
+                    &format!("argument of builtin {ns:?}.setPrototypeOf"),
+                    Some(1),
+                    true,
+                ),
+            }
+        }
         (BuiltinNs::Object, "getPrototypeOf") | (BuiltinNs::Reflect, "getPrototypeOf") => {
             if let Some(o) = arg(m, call, 0) {
                 let ret = m.calls[call as usize].ret;

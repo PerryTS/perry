@@ -396,3 +396,88 @@ fn a_re_export_source_loads_with_the_module_that_re_exports_it() {
         "{live:?}"
     );
 }
+
+/// Effect's schema `make` (effect/dist/internal/schema/make.js): a function
+/// object whose chain is set to a prototype, then given own `name` /
+/// `length` through `Object.defineProperties`.
+const MAKE: &str = r#"
+const TypeId = "~effect/Schema/Schema";
+const RebuildOptions = Symbol();
+const SchemaProto: any = {
+  [TypeId]: TypeId,
+  get make() { const value = 1; Object.defineProperty(this, "make", { value, enumerable: true }); return value; },
+  pipe() { return this; },
+  rebuild(ast: any) { return make(ast, this[RebuildOptions]); }
+};
+export function make(ast: any, options: any) {
+  function Schema() {}
+  const self: any = Object.setPrototypeOf(Schema, SchemaProto);
+  if (options && (Object.hasOwn(options, "name") || Object.hasOwn(options, "length") || Object.hasOwn(options, "__proto__"))) {
+    Object.defineProperties(self, Object.getOwnPropertyDescriptors({ ...options }));
+  } else {
+    Object.assign(self, options);
+  }
+  self[RebuildOptions] = options;
+  self.ast = ast;
+  return self;
+}
+"#;
+
+/// The typegen program plus `mk.ts` (`MAKE` + `extra`), with `main_tail`
+/// before the `languages.map(...)` call. With `interp`, the program holds
+/// interpreted code that names globals, so every namespace call is lowered
+/// guarded (`NamespacePatched(ns) ? globalThis.ns.m(..) : intrinsic`) and the
+/// facts know interpreted code may run. Is the formatter's `import()` live?
+fn imports_formatter_with_make(extra: &str, main_tail: &str, interp: bool) -> bool {
+    let mut reach = perry_hir::dynamic_code::DynamicCodeReach::default();
+    if interp {
+        reach.record_global("new Function(...) @ x.ts (byte 1) (names globals)".into());
+    }
+    let main = format!(
+        "import {{ typescript }} from \"./lang\";\nimport {{ make }} from \"./mk\";\nconst host = {CLI_HOST};\n{main_tail}\n[typescript].map((l: any) => l.generate({{ name: \"db\" }}, {{ detect: process.argv.length > 5, schema: \"public\" }}, host)).forEach((p: any) => p.then((s: string) => console.log(s)));\n"
+    );
+    let mut hirs = hirs(&main);
+    let mut pb = perry_hir::patched_builtins::PatchedBuiltins::new();
+    pb.dynamic_code_reach = reach.clone();
+    perry_hir::patched_builtins::set_patched_builtins(std::sync::Arc::new(pb));
+    let m = perry_parser::parse_typescript(&format!("{MAKE}{extra}"), "mk.ts").expect("parses");
+    let h = perry_hir::lower_module(&m, "mk", "mk.ts").expect("lowers");
+    perry_hir::patched_builtins::clear_patched_builtins();
+    hirs.push(("mk.ts".to_string(), h));
+    for (_, h) in hirs.iter_mut() {
+        for imp in &mut h.imports {
+            if imp.source == "./mk" {
+                imp.resolved_path = Some("mk.ts".into());
+            }
+        }
+    }
+    let list: Vec<(String, &perry_hir::Module)> =
+        hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
+    let mut cfg = FactsConfig::default();
+    if interp {
+        cfg.dynamic_code = Some("interp".into());
+        cfg.dynamic_code_reach = reach;
+    }
+    let live = crate::live_dynamic_imports(&list, &cfg).expect("in bound");
+    live.contains(&("gen.ts".to_string(), "./fmtlib.js".to_string()))
+}
+
+const MAKE_CALLED: &str = "console.log(make({ k: 1 }, { name: \"n\" }));";
+
+/// Rule 1: the generic arm of a guarded `Object.setPrototypeOf(f, P)` is the
+/// intrinsic's operation (E6 on `f`, `f`'s chain holds `P`, the result is
+/// `f`), not an unknown call whose result is ⊤. Otherwise `self` is ⊤, the
+/// `Object.defineProperties(self, ..)` is an any-key write on ⊤, every
+/// builtin key may be written and the language objects reach unknown code.
+#[test]
+fn a_guarded_set_prototype_of_returns_its_target() {
+    assert!(!imports_formatter_with_make("", MAKE_CALLED, true));
+    assert!(!imports_formatter_with_make("", MAKE_CALLED, false));
+    // The fixture can fail: an unknown prototype written into `self` makes
+    // the store an any-key write on ⊤ again.
+    assert!(imports_formatter_with_make(
+        "export function poke(v: any) { const s: any = Object.setPrototypeOf(v, (globalThis as any)[String(process.argv.length)]); Object.defineProperties(s.x, Object.getOwnPropertyDescriptors({ ...v })); }",
+        &format!("{MAKE_CALLED}\nimport {{ poke }} from \"./mk\";\npoke(process.argv);"),
+        true
+    ));
+}
