@@ -1,0 +1,1 @@
+Fix a whole-program-facts soundness gap: RegExp test, @@replace, @@match, @@search, @@split and @@matchAll now run an exec or species constructor the program stored on the regexp, so the objects they capture are no longer proven.
