@@ -1866,11 +1866,29 @@ impl Model {
     }
 
     /// Accessor group binding of summarized `f`: the group's setter value
-    /// into the first parameter, or the getter result into the group's.
-    pub(crate) fn group_summarized(&mut self, ft: Tok, sp: NodeId, ar: NodeId, setter: bool) {
+    /// into the first parameter, or the getter result into the group's, and
+    /// the group's receivers (`this`: its `st` or `gt`) into the instance's
+    /// `this` term.
+    pub(crate) fn group_summarized(
+        &mut self,
+        ft: Tok,
+        sp: NodeId,
+        ar: NodeId,
+        this: NodeId,
+        setter: bool,
+    ) {
         let f = self.tok_fn(ft);
+        // `group_connect` gives the shared node the same receivers; a
+        // summarized body reads and writes through its instance's term.
+        let bind_this = |m: &mut Self, inst: u32| {
+            let it = m.sum.insts[inst as usize].this;
+            if it != NO_NODE && !m.funcs[f as usize].lexical_this {
+                m.edge(this, it);
+            }
+        };
         if setter {
             let inst = self.instance((3, sp, ft));
+            bind_this(self, inst);
             if let Some(&p0) = self.funcs[f as usize].params.first() {
                 let t = self.sum.insts[inst as usize].params[0];
                 if t != NO_NODE {
@@ -1882,6 +1900,7 @@ impl Model {
             }
         } else {
             let inst = self.instance((4, ar, ft));
+            bind_this(self, inst);
             let r = self.sum.insts[inst as usize].ret;
             if r != NO_NODE {
                 self.edge(r, ar);

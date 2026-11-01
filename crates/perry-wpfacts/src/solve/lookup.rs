@@ -1022,12 +1022,12 @@ impl Model {
                 .push(crate::summary::Deferred::Group(holder, key, ft, setter));
             return;
         }
-        let (sp, ar) = {
+        let (sp, ar, this) = {
             let g = &self.acc_groups[&(holder, key)];
-            (g.sp, g.ar)
+            (g.sp, g.ar, if setter { g.st } else { g.gt })
         };
         if self.summarized(f) {
-            self.group_summarized(ft, sp, ar, setter);
+            self.group_summarized(ft, sp, ar, this, setter);
             return;
         }
         if setter {
