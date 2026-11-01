@@ -126,8 +126,11 @@ pub struct TemplateFacts {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Verdict {
-    /// Immutable own length of an exclusively primitive String receiver.
-    StringLength,
+    /// `length` of receivers that are each an Array exotic object or a
+    /// primitive String: an own data property that is never configurable
+    /// (ECMA-262 10.4.2, 10.4.3), so neither a delete, `defineProperty`
+    /// nor a prototype makes it an accessor or removes it.
+    OwnLength,
     T0Mono,
     T0Set,
     /// Proven in the typed body behind the entry guard on the receiver
@@ -937,6 +940,112 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
 /// is a compiled body. Several bodies are fine: each runs in its own form.
 /// A call through a value has the callee node's values as its set.
 #[allow(clippy::too_many_arguments)]
+/// The receivers of an `OwnLength` read: every token an Array exotic
+/// ([`exact_array`]) or a closed marker (its callers' values are beside
+/// it), every primitive a String, and at least one receiver.
+fn own_length(m: &Model, toks: &[Tok], prim: u16) -> Option<Vec<String>> {
+    if prim != 0 && prim != crate::model::prim::STR {
+        return None;
+    }
+    let mut receivers = Vec::new();
+    let mut seen = FxHashSet::default();
+    for &t in toks {
+        if m.closed_marker(t) {
+            continue;
+        }
+        if !exact_array(m, t, &mut seen) {
+            return None;
+        }
+        receivers.push(m.tmpls[m.tmpl_of(t)? as usize].display.clone());
+    }
+    if prim != 0 {
+        receivers.push("primitive:string".into());
+    }
+    receivers.sort();
+    receivers.dedup();
+    (!receivers.is_empty()).then_some(receivers)
+}
+
+/// Is every value of token `t` an Array exotic object (ECMA-262 10.4.2)?
+/// An array site of this unit (a literal, a rest parameter, an ArrayCreate
+/// result), or an own-keys result (`keys`, `arraybox`). Not the `arguments`
+/// object (`TmplKind::Args`), not another unit's array (its stand-in does not
+/// say how it was made), not a marker. An array made with ArraySpeciesCreate
+/// (`Template::species`) is one only while every receiver it was made from
+/// is an exact Array whose `constructor` is `%Array%` with an unwritten
+/// `@@species`: not escaped or HARD (either may give it another
+/// `constructor` or prototype), no own `constructor` or computed-key store,
+/// no own accessor, `Array.prototype.constructor` unwritten. A primitive
+/// receiver is no Array and gets a plain Array (ArrayCreate). `seen`: the
+/// species templates on the walk; one met again is assumed (each of its
+/// arrays was made from an earlier receiver the walk checks).
+pub(crate) fn exact_array(m: &Model, t: Tok, seen: &mut FxHashSet<TmplId>) -> bool {
+    if m.is_marker(t) {
+        return false;
+    }
+    let TokKind::Obj(tm, _) = m.toks[t as usize] else {
+        return false;
+    };
+    let tpl = &m.tmpls[tm as usize];
+    match tpl.kind {
+        TmplKind::Arr { site, .. } if site != u32::MAX => {}
+        TmplKind::BObj {
+            what: "keys" | "arraybox",
+            site,
+            ..
+        } if site != u32::MAX => return true,
+        _ => return false,
+    }
+    let Some(src) = tpl.species else {
+        return true;
+    };
+    if !seen.insert(tm) {
+        return true;
+    }
+    let nd = &m.nodes[src as usize];
+    if nd.pts.contains_tok(TOP) || species_written(m) {
+        return false;
+    }
+    let ctor = m.atom_index.get("constructor").copied();
+    nd.pts.to_sorted().into_iter().all(|r| {
+        m.closed_marker(r)
+            || (exact_array(m, r, seen)
+                && !m.is_escaped(r)
+                && !m.hard.contains_key(&r)
+                && m.accessor_keys.get(&r).is_none_or(|ks| ks.is_empty())
+                && ctor.is_none_or(|a| node_empty(m, m.fields.get(&(r, a)).copied()))
+                && node_empty(m, m.named_any.get(&r).copied()))
+    })
+}
+
+/// No value flows into node `n` (or there is none).
+fn node_empty(m: &Model, n: Option<NodeId>) -> bool {
+    n.is_none_or(|n| {
+        let nd = &m.nodes[n as usize];
+        nd.pts.is_empty() && nd.prim == 0
+    })
+}
+
+/// May `%Array.prototype%.constructor` or `%Array%[@@species]` be written
+/// (DECISIONS 151 census)? Then an array's `constructor` lookup or species
+/// may give another constructor.
+fn species_written(m: &Model) -> bool {
+    let written = |t: Tok, name: &str| match m.atom_index.get(name) {
+        Some(&a) => crate::builtins::native_written(m, t, a),
+        None => m
+            .native_writes
+            .keys()
+            .any(|&(w, k)| k.is_none() && (w == TOP || w == t)),
+    };
+    let op = m.tok_index.get(&TokKind::ObjectProto).copied().unwrap_or(TOP);
+    let arr = m
+        .tok_index
+        .get(&TokKind::Builtin(crate::model::BuiltinNs::Array))
+        .copied()
+        .unwrap_or(TOP);
+    written(op, "constructor") || written(arr, "@@__perry_wk_species")
+}
+
 fn judge(
     m: &Model,
     by_id: &FxHashMap<TmplId, &TemplateFacts>,
@@ -961,21 +1070,19 @@ fn judge(
             ),
         };
     }
-    // String boxing creates a non-configurable own length property. Its
-    // value is the published UTF-16 count; prototypes cannot override it.
-    // Keep this native primitive certificate distinct from layout/body T0.
-    if !s.is_call
-        && key == "length"
-        && prim == crate::model::prim::STR
-        && toks.iter().all(|&t| m.closed_marker(t))
-    {
-        return (
-            vec!["primitive:string".into()],
-            false,
-            Verdict::StringLength,
-            true,
-            FxHashMap::default(),
-        );
+    // An Array's and a String's `length` is a non-configurable own data
+    // property (a String's is its UTF-16 count): no prototype or
+    // definition can override it. Unlike T0 it names no layout slot or body.
+    if !s.is_call && key == "length" {
+        if let Some(receivers) = own_length(m, toks, prim) {
+            return (
+                receivers,
+                false,
+                Verdict::OwnLength,
+                true,
+                FxHashMap::default(),
+            );
+        }
     }
     let mut receivers = Vec::new();
     let mut top = false;

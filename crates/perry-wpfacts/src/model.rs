@@ -372,6 +372,13 @@ pub struct Template {
     /// stand-in has no members and no prototype, so a lookup through it ends
     /// there and never reaches `Object.prototype`.
     pub null_proto: bool,
+    /// An array a builtin made with ArraySpeciesCreate (ECMA-262 10.4.2.3:
+    /// `slice`, `splice`, `concat`, `map`, `filter`, `flat`, `flatMap`): the
+    /// node holding the receivers whose `constructor` made it. It is an
+    /// Array exotic only while each of them is an Array whose `constructor`
+    /// is `%Array%` with an unwritten `@@species` (`derive::exact_array`).
+    /// `None`: born by ArrayCreate, or no array.
+    pub species: Option<NodeId>,
 }
 
 #[derive(Clone, Debug)]
