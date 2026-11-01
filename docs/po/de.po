@@ -79000,7 +79000,7 @@ msgstr ""
 "kompakte Stackmaps. WASI und ARM64 Windows verwenden Shadow Frames. watchOS "
 "ILP32 lehnt die Codeausgabe derzeit ab. Verwaltete Werte müssen während "
 "einer Sammlung in beschreibbaren Roots bleiben; native Speicherplätze "
-"enthalten geboxtе Werte und werden nach Verschiebungen neu geladen. Siehe "
+"enthalten geboxte Werte und werden nach Verschiebungen neu geladen. Siehe "
 "[Roots nach Zielplattform](garbage-collector.md#roots-by-target)."
 
 #: src/internals/memory-model.md:84
