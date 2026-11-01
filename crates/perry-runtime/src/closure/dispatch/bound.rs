@@ -712,7 +712,9 @@ pub(crate) unsafe fn bound_function_name_value(ptr: usize) -> (f64, usize) {
         } else {
             bound_target_declared_name(js_closure_get_capture_f64(closure, 0))
         };
-        let bound_name = format!("bound {target_name}");
+        let mut bound_name = Vec::with_capacity(6 + target_name.len());
+        bound_name.extend_from_slice(b"bound ");
+        bound_name.extend_from_slice(target_name.as_bytes());
         let name_ptr =
             crate::string::js_string_from_bytes(bound_name.as_ptr(), bound_name.len() as u32);
         f64::from_bits(JSValue::string_ptr(name_ptr).bits())

@@ -113,9 +113,13 @@ pub(crate) unsafe fn function_own_put(
             return None;
         }
         let name = crate::string::header_str_checked(key)?;
-        if !crate::closure::closure_define_first_props(ptr, &[(name, value)]) {
+        let prev = (*c).shape_id;
+        if !crate::closure::props::bag_born_with_attrs(ptr, &[(name, value)], &[]) {
             return None;
         }
+        // The born bag lists the intrinsic slots and `key`: the closure's
+        // next shape is `prev`'s key-add edge for `key`, as for any add.
+        closure_shape_key_added(c, prev, key);
         return Some(value);
     }
     match super::layout_probe::function_put_plan(bag, link, key, define) {
