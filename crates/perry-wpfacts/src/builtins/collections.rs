@@ -298,22 +298,6 @@ fn species_constructor(m: &mut Model, recv: NodeId) {
     }
 }
 
-/// `new TypedArray(src)` (23.2.5.1): an object source is iterated, else read
-/// as an array-like; each element is ToNumber'd.
-pub(crate) fn typed_array_source_elements(m: &mut Model, call: CallId, src: NodeId) {
-    let it = iterate(m, call, src);
-    to_prim(m, it, "typed array element ToNumber");
-    let el = m.node_l("array-like-element");
-    m.cons(
-        src,
-        Cons::Load {
-            key: Key::Any,
-            dst: el,
-        },
-    );
-    to_prim(m, el, "typed array element ToNumber");
-}
-
 /// The values iterating `v` yields, as `Gen::iterate` models them for
 /// compiled code: array-like elements, then the protocol
 /// `v[Symbol.iterator]().next().value` (and `v.next().value`).
@@ -840,11 +824,63 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             ret_prim(m, call, prim::NULL);
         }
 
+        // WHATWG URL: serialization reads internal slots; arguments are
+        // ignored. URLSearchParams' inputs alone undergo USVString.
+        ("URL", Some("toString" | "toJSON")) if c.spread.is_empty() => ret_prim(m, call, prim::STR),
+        ("URLSearchParams", Some(n @ ("get" | "getAll" | "has" | "delete" | "set" | "append"))) if c.spread.is_empty() => {
+            let count = if matches!(n, "get" | "getAll") { 1 } else { 2 };
+            for &a in c.args.iter().take(count) { string_methods::to_prim(m, a, "URLSearchParams USVString operand"); }
+            match n {
+                "get" => ret_prim(m, call, prim::STR | prim::NULL),
+                "has" => ret_prim(m, call, prim::BOOL),
+                "getAll" => { let out = site_tmpl(m, call, "Array"); let fa = m.field_any(out); m.add_prim(fa, prim::STR); ret_tok(m, call, out); }
+                _ => ret_prim(m, call, prim::UNDEF),
+            }
+        }
+        ("URLSearchParams", Some("toString")) if c.spread.is_empty() => ret_prim(m, call, prim::STR),
+        ("URLSearchParams", Some("sort")) if c.spread.is_empty() => ret_prim(m, call, prim::UNDEF),
+        ("URLSearchParams", Some("forEach")) if c.spread.is_empty() => {
+            if let Some(&cb) = c.args.first() {
+                let recv = m.node_l("params"); m.add_tok(recv, t);
+                let text = m.node_l("param-string"); m.add_prim(text, prim::STR);
+                let this = c.args.get(1).copied().map(ThisArg::Node).unwrap_or(ThisArg::Undef);
+                let _ = cb_call(m, call, cb, this, vec![text, text, recv]);
+            }
+            ret_prim(m, call, prim::UNDEF);
+        }
+        ("URLSearchParams", Some(n @ ("keys" | "values" | "entries" | "@@__perry_wk_iterator"))) if c.spread.is_empty() => {
+            let text = m.node_l("param-string"); m.add_prim(text, prim::STR);
+            let vals = if matches!(n, "entries" | "@@__perry_wk_iterator") { entry_pairs(m, call, text, false) } else { text };
+            let it = iter_over(m, call, vals); ret_tok(m, call, it);
+        }
+        // Encoding: input ToString for encode/encodeInto, but decode's
+        // BufferSource/destination Uint8Array are validated via internal
+        // slots, with no JS property reads or identity handout.
+        ("TextCodec", Some("encode" | "encodeInto")) if c.spread.is_empty() => {
+            if let Some(&src) = c.args.first() { string_methods::to_prim(m, src, "TextEncoder source USVString"); }
+            if name == Some("encode") {
+                let out = site_tmpl(m, call, "TypedArray"); let fa = m.field_any(out); m.add_prim(fa, prim::NUM); ret_tok(m, call, out);
+            } else {
+                let out = site_tmpl(m, call, "Object()");
+                for key in ["read", "written"] { let a = m.atom(key); let f = m.field(out, a); m.add_prim(f, prim::NUM); }
+                ret_tok(m, call, out);
+            }
+        }
+        ("TextCodec", Some("decode")) if c.spread.is_empty() => {
+            if let Some(&options) = c.args.get(1) { string_methods::read_only(m, options, "stream"); } // ToBoolean, no hooks.
+            ret_prim(m, call, prim::STR);
+        }
+        // Node Timeout handles: no argument is consumed, callbacks/args
+        // remain in the original registration; ref/refresh return this.
+        ("Timer", Some("ref" | "unref" | "refresh" | "close")) if c.spread.is_empty() => ret_tok(m, call, t),
+        ("Timer", Some("hasRef")) if c.spread.is_empty() => ret_prim(m, call, prim::BOOL),
+        ("Timer", Some("@@__perry_wk_toPrimitive")) if c.spread.is_empty() => ret_prim(m, call, prim::NUM),
+        ("Timer", Some("@@__perry_wk_dispose")) if c.spread.is_empty() => ret_prim(m, call, prim::UNDEF),
         ("RegExp", Some(n)) if string_methods::regexp_described(n) => {
             string_methods::regexp_method(m, t, n, call)
         }
         (
-            "Date" | "RegExp" | "URL" | "TextCodec" | "builtin" | "BoxedPrimitive" | "Timer",
+            "Date" | "RegExp" | "URL" | "URLSearchParams" | "TextCodec" | "builtin" | "BoxedPrimitive" | "Timer",
             Some(n),
         ) if !n.starts_with("on") && n != "addEventListener" => {
             implicit_args(m, call, "builtin method argument", Protocol::Any);

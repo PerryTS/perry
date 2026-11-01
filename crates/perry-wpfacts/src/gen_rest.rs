@@ -14,6 +14,7 @@ use perry_hir::{Expr, Stmt};
 #[path = "gen/accessor_descriptor.rs"]
 mod accessor_descriptor;
 mod nodes;
+mod web;
 
 fn kids(e: &Expr) -> Vec<&Expr> {
     let mut v = Vec::new();
@@ -266,15 +267,7 @@ impl<'a> Gen<'a> {
             | Expr::ReflectOwnKeys(..)
             | Expr::TaggedTemplateStrings { .. }
             | Expr::TemplateRaw(..)
-            | Expr::CryptoRandomBytes(..)
-            | Expr::TextEncoderEncodeInto { .. }
-            | Expr::UrlGetSearchParams(..)
-            | Expr::UrlSearchParamsGetAll { .. }
-            | Expr::UrlSearchParamsEntries(..)
-            | Expr::UrlSearchParamsKeys(..)
-            | Expr::UrlSearchParamsValues(..)
-            | Expr::UrlParse(..)
-            | Expr::UrlParseWithBase { .. } => {
+            | Expr::CryptoRandomBytes(..) => {
                 // Own keys and enumeration run no lookup; the others read
                 // elements or dispatch through `@@split` / `@@match`.
                 let proto = match e {
@@ -382,10 +375,6 @@ impl<'a> Gen<'a> {
             | Expr::WebAssemblyValidate(..)
             | Expr::Atob(..)
             | Expr::Btoa(..)
-            | Expr::TextDecoderDecode { .. }
-            | Expr::TextDecoderEncoding(..)
-            | Expr::TextDecoderFatal(..)
-            | Expr::TextDecoderIgnoreBom(..)
             | Expr::EncodeURI(..)
             | Expr::DecodeURI(..)
             | Expr::EncodeURIComponent(..)
@@ -434,36 +423,6 @@ impl<'a> Gen<'a> {
             | Expr::MapDelete { .. }
             | Expr::MapSize(..)
             | Expr::MapClear(..)
-            | Expr::UrlGetHref(..)
-            | Expr::UrlGetPathname(..)
-            | Expr::UrlGetProtocol(..)
-            | Expr::UrlGetHost(..)
-            | Expr::UrlGetHostname(..)
-            | Expr::UrlGetPort(..)
-            | Expr::UrlGetSearch(..)
-            | Expr::UrlGetHash(..)
-            | Expr::UrlGetOrigin(..)
-            | Expr::UrlCanParse(..)
-            | Expr::UrlCanParseWithBase { .. }
-            | Expr::UrlInstanceToString(..)
-            | Expr::UrlInstanceToJSON(..)
-            | Expr::UrlSetPathname { .. }
-            | Expr::UrlSetSearch { .. }
-            | Expr::UrlSetHash { .. }
-            | Expr::UrlSetProtocol { .. }
-            | Expr::UrlSetHostname { .. }
-            | Expr::UrlSetPort { .. }
-            | Expr::UrlSetUsername { .. }
-            | Expr::UrlSetPassword { .. }
-            | Expr::UrlSetHref { .. }
-            | Expr::UrlSearchParamsMissingArgs { .. }
-            | Expr::UrlSearchParamsGet { .. }
-            | Expr::UrlSearchParamsHas { .. }
-            | Expr::UrlSearchParamsSet { .. }
-            | Expr::UrlSearchParamsAppend { .. }
-            | Expr::UrlSearchParamsDelete { .. }
-            | Expr::UrlSearchParamsToString(..)
-            | Expr::UrlSearchParamsSort(..)
             | Expr::ArrayIterationPatched
             | Expr::ImportMetaUrl(..)
             | Expr::ProxyRevoke(..) => {
@@ -946,20 +905,23 @@ impl<'a> Gen<'a> {
             | Expr::WebAssemblyModuleCustomSections { .. }
             | Expr::WebAssemblyInstantiate { .. }
             | Expr::WebAssemblyCallExport { .. } => self.fail_closed(fx, e, "WebAssembly"),
-            Expr::TextEncoderNew | Expr::TextDecoderNew { .. } => {
-                let mut ks = kids(e).into_iter();
-                if let Expr::TextDecoderNew { .. } = e {
-                    // The label is ToString'd (WHATWG Encoding: DOMString).
-                    if let Some(k) = ks.next() {
-                        let l = self.expr(fx, k);
-                        crate::builtins::to_prim(&mut self.m, l, "TextDecoder label DOMString");
-                    }
-                }
-                let _ = ks.map(|k| self.expr(fx, k)).count();
-                self.bobj(mi, "TextCodec").1
-            }
-            Expr::TextEncoderEncode(..)
-            | Expr::BufferFrom { .. }
+            // Web helper algorithms live beside this exhaustive routing match.
+            Expr::TextEncoderNew | Expr::TextDecoderNew { .. } | Expr::TextEncoderEncode(..)
+            | Expr::TextEncoderEncodeInto { .. } | Expr::TextDecoderDecode { .. } | Expr::TextDecoderEncoding(..) | Expr::TextDecoderFatal(..) | Expr::TextDecoderIgnoreBom(..)
+            | Expr::UrlInstanceToString(..) | Expr::UrlInstanceToJSON(..) | Expr::UrlSearchParamsGet { .. }
+            | Expr::UrlSearchParamsGetAll { .. } | Expr::UrlSearchParamsHas { .. } | Expr::UrlSearchParamsSet { .. }
+            | Expr::UrlSearchParamsAppend { .. } | Expr::UrlSearchParamsDelete { .. } | Expr::UrlSearchParamsToString(..)
+            | Expr::UrlSearchParamsSort(..) | Expr::UrlSearchParamsEntries(..) | Expr::UrlSearchParamsKeys(..)
+            | Expr::UrlSearchParamsValues(..) | Expr::UrlSearchParamsForEach { .. } | Expr::UrlSearchParamsMissingArgs { .. }
+            | Expr::UrlGetHref(..) | Expr::UrlGetPathname(..) | Expr::UrlGetProtocol(..)
+            | Expr::UrlGetHost(..) | Expr::UrlGetHostname(..) | Expr::UrlGetPort(..)
+            | Expr::UrlGetSearch(..) | Expr::UrlGetHash(..) | Expr::UrlGetOrigin(..)
+            | Expr::UrlGetSearchParams(..) | Expr::UrlSetPathname { .. } | Expr::UrlSetSearch { .. }
+            | Expr::UrlSetHash { .. } | Expr::UrlSetProtocol { .. } | Expr::UrlSetHostname { .. }
+            | Expr::UrlSetPort { .. } | Expr::UrlSetUsername { .. } | Expr::UrlSetPassword { .. }
+            | Expr::UrlSetHref { .. } | Expr::UrlNew { .. } | Expr::UrlSearchParamsNew(..) | Expr::UrlPatternNew { .. }
+            | Expr::UrlParse(..) | Expr::UrlParseWithBase { .. } | Expr::UrlCanParse(..) | Expr::UrlCanParseWithBase { .. } => self.web_expr(fx, e),
+            Expr::BufferFrom { .. }
             | Expr::BufferAlloc { .. }
             | Expr::BufferAllocUnsafe(..)
             | Expr::FsReadFileBinary(..) => {
@@ -968,7 +930,6 @@ impl<'a> Gen<'a> {
                 let ks = kids(e);
                 let (t, n) = self.bobj(mi, "TypedArray");
                 let owner = self.begin_indexed_owner(mi, t, e);
-                let mut first = true;
                 for k in ks {
                     let v = self.expr(fx, k);
                     if owner {
@@ -985,36 +946,12 @@ impl<'a> Gen<'a> {
                         },
                     );
                     self.m.cons(v, Cons::ShareBuffer { ta: t });
-                    if first && matches!(e, Expr::Uint8ArrayNew(_) | Expr::TypedArrayNew { .. }) {
-                        // 23.2.5.1: an object source is iterated, else read
-                        // as an array-like; each element is ToNumber'd.
-                        let it = self.iterate(v);
-                        crate::builtins::to_prim(&mut self.m, it, "typed array element ToNumber");
-                        let el = self.load(v, Key::Any);
-                        crate::builtins::to_prim(&mut self.m, el, "typed array element ToNumber");
-                    }
-                    first = false;
                 }
                 let fa = self.m.field_any(t);
                 self.m.add_prim(fa, prim::NUM);
                 n
             }
-            Expr::Uint8ArrayNew(..) | Expr::Uint8ArrayFrom(..) | Expr::TypedArrayNew { .. } => {
-                // Constructor algorithm: source iterable/array-like reads,
-                // followed by numeric element conversion, not escape.
-                let args: Vec<_> = kids(e).iter().map(|k| self.expr(fx, k)).collect();
-                let (call, _) = self.new_call(ThisArg::Undef, args.clone(), vec![]);
-                let (t, n) = self.bobj(mi, "TypedArray");
-                let owner = self.begin_indexed_owner(mi, t, e);
-                if let Some(&v) = args.first() {
-                    let vals = crate::builtins::typed_array_methods::source(&mut self.m, call, v);
-                    crate::builtins::string_methods::to_prim(&mut self.m, vals, "typed-array constructor element ToNumber/ToBigInt");
-                    self.m.cons(v, Cons::ShareBuffer { ta: t });
-                    if owner { if let TokKind::Obj(tm, _) = self.m.toks[t as usize] { self.m.ta_birth_input.insert(tm, v); } }
-                }
-                let fa = self.m.field_any(t); self.m.add_prim(fa, prim::NUM | prim::BIGINT);
-                n
-            }
+            Expr::Uint8ArrayNew(..) | Expr::Uint8ArrayFrom(..) | Expr::TypedArrayNew { .. } => self.typed_array_new(fx, e),
             Expr::BufferFromArrayBuffer { .. }
             | Expr::BufferSlice { .. }
             | Expr::BufferConcat(..)
@@ -1179,7 +1116,6 @@ impl<'a> Gen<'a> {
             | Expr::NetCreateServer { .. }
             | Expr::NetCreateConnection { .. }
             | Expr::NetConnect { .. }
-            | Expr::UrlSearchParamsForEach { .. }
             | Expr::StaticPluginResolve(..)
             | Expr::JsLoadModule { .. }
             | Expr::JsGetExport { .. }
@@ -1208,16 +1144,6 @@ impl<'a> Gen<'a> {
             | Expr::WorkerNew { .. } => {
                 let name = variant_name(e);
                 self.fail_closed(fx, e, &name)
-            }
-            Expr::UrlNew { .. } | Expr::UrlPatternNew { .. } | Expr::UrlSearchParamsNew(..) => {
-                let _ = self.prim_kids(
-                    fx,
-                    e,
-                    prim::ALL,
-                    "URL constructor operand",
-                    Protocol::ToPrimitive,
-                );
-                self.bobj(mi, "URL").1
             }
             Expr::BoxedPrimitiveNew { .. } => {
                 let _ = self.prim_kids(fx, e, prim::ALL, "boxed primitive", Protocol::ToPrimitive);

@@ -150,6 +150,16 @@ impl<'a> Gen<'a> {
                     }
                 }
             }
+            // Direct host timer calls use the same guarded global lookup
+            // as globalThis.setTimeout. Import/module bindings shadow them.
+            Expr::ExternFuncRef { name, .. }
+                if matches!(name.as_str(), "setTimeout" | "setInterval" | "setImmediate" | "clearTimeout" | "clearInterval" | "clearImmediate" | "queueMicrotask")
+                    && !self.is_import(fx.module, name)
+                    && !self.mods[fx.module as usize].scope.contains_key(name) => {
+                let t = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+                let recv = self.tok_node(t); let key = self.m.atom(name);
+                self.mcall(recv, Key::Named(key), args, spread)
+            }
             Expr::ExternFuncRef { name, .. } if self.is_runtime_extern(fx.module, name) => {
                 self.runtime_extern(fx, name, args, spread, vec![])
             }

@@ -1738,3 +1738,16 @@ mod proto_own_call;
 mod string_methods;
 mod date_methods;
 mod typed_array_methods;
+mod web_timer_methods;
+
+/// Export the exact facts fixtures for an independent runtime/Node oracle.
+/// Disabled in ordinary tests; the lane runner sets HLC_FIXTURE_DIR.
+fn dump_helper_fixture(src: &str) {
+    if let Ok(dir) = std::env::var("HLC_FIXTURE_DIR") {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        src.hash(&mut h);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(std::path::Path::new(&dir).join(format!("{:016x}.ts", h.finish())), src).unwrap();
+    }
+}
