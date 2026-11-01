@@ -32,6 +32,9 @@ fn record_own_prefix_preserves_mutation_protocol_and_moving_roots() {
         // Select the instrumented archive at compile time; release archives
         // intentionally compile the runtime GC stress/diagnostic knobs out.
         .env("PERRY_GC_INSTRUMENTS", "1")
+        // Diagnostic hook installation is selected separately from the archive.
+        .env("PERRY_GC_DIAG", "1")
+        .env("PERRY_GC_VERIFY_EVACUATION", "1")
         .arg(&entry)
         .arg("-o")
         .arg(&binary)
