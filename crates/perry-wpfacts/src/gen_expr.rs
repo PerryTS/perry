@@ -374,6 +374,7 @@ impl<'a> Gen<'a> {
             parent_value: None,
             parent_links: Vec::new(),
             null_proto: false,
+            species: None,
         });
         let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
         (tm, t)
