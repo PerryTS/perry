@@ -4,7 +4,11 @@ use super::*;
 
 /// Expand structural aliases for discovery; resource ownership/type keys stay
 /// nominal. Native factory indices and the original schema remain private.
-fn expanded_schema(world: &Value, schema: &Value, depth: usize) -> Result<Value, &'static str> {
+pub(super) fn expanded_schema(
+    world: &Value,
+    schema: &Value,
+    depth: usize,
+) -> Result<Value, &'static str> {
     if depth >= 128 {
         return Err("Async factory schema exceeds the nesting limit");
     }

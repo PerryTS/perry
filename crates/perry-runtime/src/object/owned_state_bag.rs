@@ -27,6 +27,8 @@ pub(crate) const COMPONENT_ASYNC_RESULT_TYPE: u32 = 24;
 pub(crate) const COMPONENT_DRIVER_OWNER: u32 = 25;
 pub(crate) const COMPONENT_ASYNC_VALUE: u32 = 26;
 pub(crate) const COMPONENT_ASYNC_WRITER: u32 = 27;
+pub(crate) const COMPONENT_GUEST_ENDPOINT: u32 = 28;
+pub(crate) const COMPONENT_GUEST_ENDPOINT_FINALIZATION: u32 = 29;
 
 pub(crate) unsafe fn bag(owner: usize, create: bool, last_slot: u32) -> *mut ArrayHeader {
     let _publication = crate::gc::GcSuppressScope::new();

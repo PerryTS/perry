@@ -58,6 +58,7 @@ static uint32_t perry_task_call(perry_task *t, uint32_t interface, uint32_t func
     uint32_t result = perry_component_frame_task_call(t->frame, interface, function, args);
     perry_active_task = previous;
     perry_task_reap(t);
+    perry_endpoint_flush();
     return result;
 }
 static int32_t perry_task_checkpoint(perry_task *t) {
@@ -66,6 +67,7 @@ static int32_t perry_task_checkpoint(perry_task *t) {
     int32_t status = perry_component_frame_task_checkpoint(t->frame);
     perry_active_task = previous;
     perry_task_reap(t);
+    perry_endpoint_flush();
     return status;
 }
 static int32_t perry_task_resume(perry_task *t, void (*callback)(void *), void *data) {
@@ -74,6 +76,7 @@ static int32_t perry_task_resume(perry_task *t, void (*callback)(void *), void *
     int32_t status = perry_component_frame_task_resume(t->frame, callback, data);
     perry_active_task = previous;
     perry_task_reap(t);
+    perry_endpoint_flush();
     return status;
 }
 static perry_task *perry_task_new(bool asynchronous) {
@@ -121,6 +124,7 @@ static void perry_task_drop(perry_task *t) {
     *link = t->next;
     perry_component_frame_drop(t->frame);
     free(t);
+    perry_endpoint_flush();
     /* Jobs whose old lease ended are now adoptable by another live call. */
     perry_wake_all();
 }

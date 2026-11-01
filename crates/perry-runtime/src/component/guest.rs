@@ -1,6 +1,7 @@
 //! Runtime half of a Perry-authored library component. Its export table lives
 //! in GC-owned private global state; the adapter table contains only image
 //! bytes and code addresses. No JS value crosses the C boundary unrooted.
+mod endpoints;
 mod frame;
 mod resources;
 #[cfg(test)]

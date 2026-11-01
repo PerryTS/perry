@@ -7,6 +7,7 @@ impl Emitter<'_> {
     pub fn owns_resources(&self, ty: Type) -> bool {
         let Type::Id(id) = ty else { return false };
         match &self.resolve.types[id].kind {
+            TypeDefKind::Future(_) | TypeDefKind::Stream(_) => true,
             TypeDefKind::Handle(wit_parser::Handle::Own(_)) => true,
             TypeDefKind::Type(ty) | TypeDefKind::Option(ty) | TypeDefKind::List(ty) => {
                 self.owns_resources(*ty)
@@ -37,6 +38,11 @@ impl Emitter<'_> {
         let Type::Id(id) = ty else { unreachable!() };
         let resolve = self.resolve;
         match &resolve.types[id].kind {
+            TypeDefKind::Future(_) | TypeDefKind::Stream(_) => {
+                let name = self.ctype(ty);
+                let stem = name.strip_suffix("_t").unwrap();
+                writeln!(self.source, "{stem}_drop_readable({input});").unwrap();
+            }
             TypeDefKind::Handle(wit_parser::Handle::Own(resource)) => {
                 let resource = crate::resolve::resource_id(resolve, *resource);
                 let stem = self.resources[&resource].name.strip_suffix("_t").unwrap();

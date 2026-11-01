@@ -92,6 +92,15 @@ int32_t perry_component_frame_import_reject(void *, uint32_t);
 uint32_t perry_component_frame_resource_lift(void *, uint32_t, uint32_t, uint32_t, int32_t);
 uint32_t perry_component_frame_resource_lower(void *, uint32_t, uint32_t, int32_t, int32_t);
 void perry_component_frame_resource_commit(void *);
+/* Experimental owned future/stream readers. Type IDs use tN = 2*N and
+   eN = 2*N+1 from the immutable manifest. Lower only stages custody; the
+   resource commit API validates and commits the combined batch atomically.
+   No canonical operation runs in Rust or from the GC weak pass. */
+uint32_t perry_component_frame_endpoint_lift(void *, uint32_t, uint32_t);
+uint32_t perry_component_frame_endpoint_lower(void *, uint32_t, uint32_t);
+/* 1 drop ready, 0 empty, -1 error. Return before the typed canonical drop.
+   Outputs must be distinct. Handle 0 is not an empty-queue sentinel. */
+int32_t perry_component_frame_endpoint_pop(void *, uint32_t *, uint32_t *);
 /* Retire incoming borrows before task.return/cancel. The frame and its values
    remain alive for post-return work. Also releases borrows on a failed frame. */
 int32_t perry_component_frame_resource_scope_end(void *);

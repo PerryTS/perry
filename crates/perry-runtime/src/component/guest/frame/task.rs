@@ -106,6 +106,7 @@ pub unsafe extern "C" fn perry_component_frame_task_release_arguments(
             fail("Expected the first component task result slot");
         }
         if !owner.transfers.is_empty()
+            || !owner.endpoint_transfers.is_empty()
             || !owner.borrows.is_empty()
             || !owner.borrow_states.is_empty()
             || !owner.committed_borrows.is_empty()

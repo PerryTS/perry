@@ -211,7 +211,7 @@ fn released_arguments_collect_but_js_captures_results_als_and_borrow_lifetimes_s
 fn argument_release_validates_first_result_and_custody_before_clearing() {
     crate::gc::gc_init();
     with_exports(|_| unsafe {
-        for pending in [false, true] {
+        for pending in 0..3 {
             let owner = perry_component_frame_task_new();
             let args = perry_component_frame_array(owner, 2);
             let value = perry_component_frame_array(owner, 1);
@@ -220,18 +220,21 @@ fn argument_release_validates_first_result_and_custody_before_clearing() {
             let result = perry_component_frame_task_call(owner, 0, 0, args);
             assert_eq!(perry_component_frame_failed(owner), 0);
             let before = frame(owner).get(args).to_bits();
-            if pending {
+            if pending == 1 {
                 frame(owner).transfers.push(value);
+            } else if pending == 2 {
+                frame(owner).endpoint_transfers.push(value);
             }
             assert_eq!(
                 perry_component_frame_task_release_arguments(
                     owner,
-                    if pending { result } else { result + 1 }
+                    if pending != 0 { result } else { result + 1 }
                 ),
                 -1
             );
             assert_eq!(frame(owner).get(args).to_bits(), before);
             frame(owner).transfers.clear();
+            frame(owner).endpoint_transfers.clear();
             frame(owner).task.as_ref().unwrap().domain.cancel();
             crate::promise::discard_cancelled_guest_jobs();
             perry_component_frame_drop(owner);

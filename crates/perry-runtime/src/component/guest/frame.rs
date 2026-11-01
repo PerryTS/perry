@@ -59,6 +59,7 @@ pub(super) struct Frame {
     _thread: PhantomData<Rc<()>>,
     failed: bool,
     pub(super) transfers: Vec<u32>,
+    pub(super) endpoint_transfers: Vec<u32>,
     pub(super) borrows: Vec<u32>,
     // Each entry roots both its wrapper and its private owner state in slots.
     // Native metadata never caches a managed address across suspension.
@@ -103,6 +104,7 @@ impl Frame {
             _thread: PhantomData,
             failed: false,
             transfers: Vec::new(),
+            endpoint_transfers: Vec::new(),
             borrows: Vec::new(),
             borrow_states: Vec::new(),
             committed_borrows: Vec::new(),
@@ -737,7 +739,10 @@ const fn adapter_entry(code: *const ()) -> AdapterEntry {
 }
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
-static KEEP_ADAPTER_ENTRIES: [AdapterEntry; 50] = [
+static KEEP_ADAPTER_ENTRIES: [AdapterEntry; 53] = [
+    adapter_entry(super::endpoints::perry_component_frame_endpoint_lift as *const ()),
+    adapter_entry(super::endpoints::perry_component_frame_endpoint_lower as *const ()),
+    adapter_entry(super::endpoints::perry_component_frame_endpoint_pop as *const ()),
     adapter_entry(super::resources::payload::js_component_resource_create as *const ()),
     adapter_entry(super::resources::payload::js_component_resource_value as *const ()),
     adapter_entry(super::resources::payload::perry_component_frame_resource_destroy as *const ()),

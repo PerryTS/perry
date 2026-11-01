@@ -13,7 +13,13 @@ impl Generator<'_> {
     ) -> Result<()> {
         let snake = self.resolve.worlds[self.id].name.to_snake_case();
         let stem = format!("perry_import_{interface}_{index}");
-        let mut emitter = values::Emitter::new(self.resolve, &self.names, &self.resources, &snake);
+        let mut emitter = values::Emitter::new(
+            self.resolve,
+            &self.names,
+            &self.resources,
+            &self.endpoints,
+            &snake,
+        );
         let indirect = self
             .resolve
             .wasm_signature(AbiVariant::GuestImportAsync, function)

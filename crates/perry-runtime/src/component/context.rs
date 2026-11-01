@@ -16,6 +16,9 @@ pub(super) struct Context {
     // Native identity metadata only; never contains managed JS values.
     pub pending_resource_drops: Vec<Value>,
     pub pending_collections: Vec<Value>,
+    // Canonical guest identities, drained by C after all Rust scopes return.
+    // Heap teardown frees this metadata; it never calls canonical operations.
+    pub pending_guest_endpoints: std::collections::VecDeque<(u32, u32)>,
 }
 
 impl Drop for Context {
@@ -40,6 +43,7 @@ pub(super) fn publish(world: Value, imports: f64) -> f64 {
         persistent: None,
         pending_resource_drops: Vec::new(),
         pending_collections: Vec::new(),
+        pending_guest_endpoints: std::collections::VecDeque::new(),
     }));
     let cell = unsafe {
         crate::native_handle::native_handle_new_rust_payload(

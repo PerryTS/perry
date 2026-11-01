@@ -5164,6 +5164,9 @@ perry_component_frame_number	i32u	ptr,f64
 perry_component_frame_object	i32u	ptr
 perry_component_frame_promise_poll	i32s	ptr,i32u,ptr
 perry_component_frame_resource_commit	void	ptr
+perry_component_frame_endpoint_lift	i32u	ptr,i32u,i32u
+perry_component_frame_endpoint_lower	i32u	ptr,i32u,i32u
+perry_component_frame_endpoint_pop	i32s	ptr,ptr,ptr
 perry_component_frame_resource_destroy	void	ptr,i32u,i32u
 perry_component_frame_resource_lift	i32u	ptr,i32u,i32u,i32u,i32s
 perry_component_frame_resource_lower	i32u	ptr,i32u,i32u,i32s,i32s

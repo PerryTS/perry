@@ -62,7 +62,13 @@ impl Generator<'_> {
         let upper = snake.to_uppercase();
         let stem = format!("perry_result_{interface}_{index}");
         let async_ = function.kind.is_async();
-        let mut emitter = values::Emitter::new(self.resolve, &self.names, &self.resources, &snake);
+        let mut emitter = values::Emitter::new(
+            self.resolve,
+            &self.names,
+            &self.resources,
+            &self.endpoints,
+            &snake,
+        );
         let result_ty = function.result.map(|ty| emitter.ctype(ty));
         writeln!(
             emitter.source,

@@ -1,6 +1,7 @@
 //! The maintained C backend owns the canonical ABI. This module connects its
 //! typed C functions to Perry's rooted frame API; it never invents Wasm layouts.
 mod asynchronous;
+mod endpoints;
 mod values;
 
 use anyhow::{ensure, Result};
@@ -22,8 +23,9 @@ pub fn canonical_guest(path: &Path, selected: Option<&str>) -> Result<BTreeMap<S
 }
 
 /// Experimental async generation, including the Linux-qualified resource
-/// ownership/cancellation profile. Public --guest-c async output and guest
-/// future/stream values remain guarded pending their complete qualification.
+/// ownership/cancellation profile and owned future/stream reader transport.
+/// Endpoint I/O and writer factories are not yet implemented. Public --guest-c
+/// async output and future/stream values remain guarded.
 #[doc(hidden)]
 pub fn experimental_async_guest(
     path: &Path,
@@ -45,10 +47,11 @@ fn generate_guest(
     resolve.generate_nominal_type_ids(id);
     let world = crate::resolve::convert(&resolve, id)?;
     ensure!(
-        world
-            .types
-            .values()
-            .all(|d| !matches!(d.ty, crate::Type::Future(_) | crate::Type::Stream(_))),
+        experimental
+            || world
+                .types
+                .values()
+                .all(|d| !matches!(d.ty, crate::Type::Future(_) | crate::Type::Stream(_))),
         "future/stream guest values require the P3 rooted-frame adapter"
     );
     ensure!(
@@ -98,6 +101,8 @@ fn generate_resolved(
         world: &world,
         names: BTreeMap::new(),
         resources: BTreeMap::new(),
+        endpoints: BTreeMap::new(),
+        endpoint_operations: BTreeMap::new(),
         resource_operations: BTreeMap::new(),
         source: format!("#include \"{snake}.h\"\n#include \"perry_component_frame.h\"\n"),
         imports: Vec::new(),
@@ -121,6 +126,7 @@ struct Resource {
     local: bool,
 }
 type Resources = BTreeMap<TypeId, Resource>;
+type Endpoints = BTreeMap<TypeId, u32>;
 
 struct Generator<'a> {
     resolve: &'a Resolve,
@@ -128,6 +134,8 @@ struct Generator<'a> {
     world: &'a crate::World,
     names: Names,
     resources: Resources,
+    endpoints: Endpoints,
+    endpoint_operations: BTreeMap<u32, String>,
     resource_operations: BTreeMap<u32, Resource>,
     source: String,
     imports: Vec<(usize, usize)>,
@@ -160,6 +168,15 @@ impl Generator<'_> {
                 ),
             };
             let name = format!("{namespace}_{encoded}_t");
+            if matches!(
+                self.resolve.types[id].kind,
+                TypeDefKind::Future(_) | TypeDefKind::Stream(_)
+            ) {
+                let ty =
+                    u32::try_from(id.index() * 2 + usize::from(!import)).expect("async type index");
+                self.endpoints.insert(id, ty);
+                self.endpoint_operations.insert(ty, name.clone());
+            }
             if matches!(self.resolve.types[id].kind, TypeDefKind::Resource) {
                 let resource = Resource {
                     id: u32::try_from(id.index() * 2 + usize::from(!import))
@@ -178,8 +195,9 @@ impl Generator<'_> {
     }
 
     fn generate(&mut self) -> Result<()> {
-        self.source
-            .push_str("static void *perry_initialize(void);\n");
+        self.source.push_str(
+            "static void *perry_initialize(void);\nstatic void perry_endpoint_flush(void);\n",
+        );
         if let Some(anchor) = &self.anchor {
             self.source.push_str(&asynchronous::scheduler(
                 &self.resolve.worlds[self.id].name.to_snake_case(),
@@ -232,6 +250,7 @@ impl Generator<'_> {
             wit_bindgen_c::imported_types_used_by_exported_interfaces(self.resolve, self.id);
         self.names.retain(|id, _| retained.contains(id));
         self.resources.retain(|id, _| retained.contains(id));
+        self.endpoints.retain(|id, _| retained.contains(id));
         for (key, item) in &world.exports {
             if let WorldItem::Interface { id, .. } = item {
                 let mut live = LiveTypes::default();
@@ -243,6 +262,7 @@ impl Generator<'_> {
             }
         }
         self.resource_adapters()?;
+        self.endpoint_adapters()?;
         self.source.push_str("static uint32_t perry_import(void *f, uint32_t interface, uint32_t function, uint32_t args) {\n");
         for (interface, function) in &self.imports {
             writeln!(self.source, "if (interface == {interface} && function == {function}) return perry_import_{interface}_{function}(f, args);")?;
@@ -338,7 +358,13 @@ static void *perry_initialize(void) {
             .position(|item| item.name == function.name)
             .unwrap();
         let snake = self.resolve.worlds[self.id].name.to_snake_case();
-        let mut emitter = values::Emitter::new(self.resolve, &self.names, &self.resources, &snake);
+        let mut emitter = values::Emitter::new(
+            self.resolve,
+            &self.names,
+            &self.resources,
+            &self.endpoints,
+            &snake,
+        );
         let cname = wit_bindgen_c::c_func_name(
             import,
             self.resolve,

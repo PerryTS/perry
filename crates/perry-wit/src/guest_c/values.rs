@@ -1,5 +1,5 @@
 mod discard;
-use super::{literal, Names, Resources};
+use super::{literal, Endpoints, Names, Resources};
 use anyhow::{bail, Result};
 use std::fmt::Write;
 use wit_parser::{Resolve, Type, TypeDefKind};
@@ -8,6 +8,7 @@ pub(super) struct Emitter<'a> {
     resolve: &'a Resolve,
     names: &'a Names,
     resources: &'a Resources,
+    endpoints: &'a Endpoints,
     world: &'a str,
     serial: usize,
     pub source: String,
@@ -18,12 +19,14 @@ impl<'a> Emitter<'a> {
         resolve: &'a Resolve,
         names: &'a Names,
         resources: &'a Resources,
+        endpoints: &'a Endpoints,
         world: &'a str,
     ) -> Self {
         Self {
             resolve,
             names,
             resources,
+            endpoints,
             world,
             serial: 0,
             source: String::new(),
@@ -163,6 +166,10 @@ impl<'a> Emitter<'a> {
         let Type::Id(id) = ty else { unreachable!() };
         let resolve = self.resolve;
         match &resolve.types[id].kind {
+            TypeDefKind::Future(_) | TypeDefKind::Stream(_) => Ok(self.slot(&format!(
+                "perry_component_frame_endpoint_lift(f, {}, {input})",
+                self.endpoints[&id]
+            ))),
             TypeDefKind::Handle(handle) => {
                 let (resource, owned) = match handle {
                     wit_parser::Handle::Own(id) => (*id, true),
@@ -352,6 +359,13 @@ impl<'a> Emitter<'a> {
         };
         let resolve = self.resolve;
         match &resolve.types[id].kind {
+            TypeDefKind::Future(_) | TypeDefKind::Stream(_) => {
+                writeln!(
+                    self.source,
+                    "{dst} = perry_component_frame_endpoint_lower(f, {slot}, {});",
+                    self.endpoints[&id]
+                )?;
+            }
             TypeDefKind::Handle(handle) => {
                 let (resource, owned) = match handle {
                     wit_parser::Handle::Own(id) => (*id, true),

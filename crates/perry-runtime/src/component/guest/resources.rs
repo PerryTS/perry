@@ -258,6 +258,7 @@ fn unborrowed(fields: f64) {
 }
 
 pub(super) fn commit(frame: &mut Frame) {
+    super::endpoints::validate_transfers(frame);
     // Revalidate all owners before mutation. A property getter used by later
     // argument lowering could have disposed an earlier staged owner.
     for slot in &frame.transfers {
@@ -287,6 +288,7 @@ pub(super) fn commit(frame: &mut Frame) {
     }
     frame.borrows.clear();
     frame.borrow_states.clear();
+    super::endpoints::commit_transfers(frame);
 }
 
 /// Called only while the frame's traced owner is alive. Slots are private and
