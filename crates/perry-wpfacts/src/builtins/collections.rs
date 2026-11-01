@@ -120,9 +120,42 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
                 unknown_method(m, call, "computed method of a function value");
             }
         }
-        // iteration: the function runs with this = itself.
-        Some("next" | "return" | "throw") | None => {
+        // An async generator's step: the function runs with this = itself.
+        Some("next" | "return" | "throw") | None
+            if matches!(m.toks[t as usize], TokKind::Func(f, _) if m.funcs[f as usize].gen_async) =>
+        {
             m.call_tok(call, t, Some(t));
+        }
+        // A sync generator's public `next`/`return`/`throw`: the step runs
+        // with this = itself and hands back its raw value (step kind 0
+        // yield, 1 completion), which the runtime boundary wraps in a fresh
+        // `{ value, done }`; a `yield*` re-yield (kind 2) hands back its
+        // delegate's inner result object, returned as-is.
+        Some("next" | "return" | "throw") | None => {
+            let raw = m.node_l("gen-step-raw");
+            m.nodes[raw as usize].frame = m.call_run(call);
+            let call2 = m.solver_call(
+                call,
+                CallSite {
+                    this: c.this.clone(),
+                    args: c.args.clone(),
+                    spread: c.spread.clone(),
+                    ret: raw,
+                    site: c.site,
+                },
+            );
+            m.call_tok(call2, t, Some(t));
+            let r = site_tmpl(m, call, "IterResult");
+            let va = m.atom("value");
+            let v = m.field(r, va);
+            m.edge(raw, v);
+            let da = m.atom("done");
+            let d = m.field(r, da);
+            m.add_prim(d, prim::BOOL);
+            ret_tok(m, call, r);
+            if matches!(m.toks[t as usize], TokKind::Func(f, _) if m.funcs[f as usize].gen_reyields) {
+                m.edge(raw, c.ret);
+            }
         }
         Some("toString" | "toLocaleString") => ret_prim(m, call, prim::STR),
         Some("hasOwnProperty") => ret_prim(m, call, prim::BOOL),

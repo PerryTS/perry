@@ -1208,6 +1208,8 @@ impl Model {
             lexical_this: false,
             no_summary: true,
             gen_step: false,
+            gen_async: false,
+            gen_reyields: false,
             captures: Vec::new(),
             forwards_super: false,
             parent: NO_FN,

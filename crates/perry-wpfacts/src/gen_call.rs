@@ -748,6 +748,32 @@ impl<'a> Gen<'a> {
                 }
                 self.prim_node(prim::UNDEF)
             }
+            // `yield*`'s pull (`perry-runtime` `iterator_close.rs`): Call(next,
+            // iterator, « value »), or for a sync generator delegate stepped
+            // through its intrinsic `next`, the value that result would carry
+            // (`value`), read from its record.
+            "js_iterator_delegate_step" => {
+                let (Some(it), Some(_next), Some(v)) = (arg(0), arg(1), arg(2)) else {
+                    return self.extern_fail(name, &args, &spread);
+                };
+                // `next` was read from `it` once (the captured method): the
+                // pull is that method call on `it`, which also runs a
+                // generator's step closure (a generator object is its step).
+                let nk = Key::Named(self.m.atom("next"));
+                let res = self.mcall(it, nk, vec![v], vec![]);
+                let va = self.m.atom("value");
+                let raw = self.load(res, Key::Named(va));
+                let out = self.tmp("delegate-step");
+                self.m.edge(res, out);
+                self.m.edge(raw, out);
+                out
+            }
+            // A `yield*` re-yield returns its pull's kind: this step closure
+            // may hand back an inner result object (kind 2).
+            "js_iterator_delegate_kind" => {
+                self.m.funcs[fx.f as usize].gen_reyields = true;
+                self.prim_node(prim::NUM)
+            }
             // The runtime calls the delegate's own `throw` / `return` with
             // the value (`perry-runtime` `iterator_close.rs`); a delegate
             // without `throw` is closed through `return` first.

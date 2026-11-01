@@ -1342,6 +1342,8 @@ fn a_parameter_node_holds_its_argument_marker() {
         lexical_this: false,
         no_summary: true,
         gen_step: false,
+        gen_async: false,
+        gen_reyields: false,
         captures: Vec::new(),
         forwards_super: false,
         parent: NO_FN,
@@ -1406,6 +1408,8 @@ fn a_store_into_a_marker_makes_no_field_of_it() {
         lexical_this: false,
         no_summary: true,
         gen_step: false,
+        gen_async: false,
+        gen_reyields: false,
         captures: Vec::new(),
         forwards_super: false,
         parent: NO_FN,
@@ -1459,6 +1463,8 @@ fn an_argument_marker_leaves_beside_when_a_valued_member_links() {
         lexical_this: false,
         no_summary: true,
         gen_step: false,
+        gen_async: false,
+        gen_reyields: false,
         captures: Vec::new(),
         forwards_super: false,
         parent: NO_FN,
@@ -1506,6 +1512,8 @@ fn marker_model() -> crate::model::Model {
         lexical_this: false,
         no_summary: true,
         gen_step: false,
+        gen_async: false,
+        gen_reyields: false,
         forwards_super: false,
         parent: NO_FN,
         captures: Vec::new(),
@@ -1715,3 +1723,4 @@ fn a_protocol_touch_of_an_argument_marker_reads_nothing() {
     assert!(m.marker_use.get(&tj).is_some_and(|&u| u & MARK_ESCAPE != 0));
 }
 mod constructor_values;
+mod generator_results;

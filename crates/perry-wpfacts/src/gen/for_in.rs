@@ -252,6 +252,8 @@ impl<'a> Gen<'a> {
             lexical_this: true,
             no_summary: false,
             gen_step: false,
+            gen_async: false,
+            gen_reyields: false,
             captures: Vec::new(),
             forwards_super: false,
             parent: fx.f,
