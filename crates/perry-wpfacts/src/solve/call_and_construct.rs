@@ -1046,6 +1046,8 @@ impl Model {
         // compiled function called from unknown code sees ⊤ parameters, whose
         // writes `store_into` records.
         if self.array_member_write.is_none()
+            && t != TOP
+            && self.tok_on_array_chain(t)
             && self.reasons[reason as usize].starts_with(crate::gen_expr::UNMODELED_OPERAND)
         {
             let what = format!("reaches unmodeled code ({})", self.reasons[reason as usize]);
