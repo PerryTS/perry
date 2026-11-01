@@ -61,6 +61,12 @@ pub struct LlModule {
     globals: Vec<String>,
     /// Globals whose same-named definitions own one linker COMDAT.
     comdat_globals: HashSet<String>,
+    /// The definition of every coalesced global in this module, by name. A
+    /// coalesced name is content-derived (an atom or image string spelled by
+    /// its bytes), so independent emitters of one module (its own literals,
+    /// the realm image, the runtime layouts) may define it again; the module
+    /// keeps one definition and rejects a different one under the same name.
+    coalesced_definitions: HashMap<String, String>,
     string_constants: Vec<String>,
     string_counter: u32,
     /// Module symbol prefix folded into every anonymous rodata constant this
@@ -175,6 +181,7 @@ impl LlModule {
             defined_names: HashSet::new(),
             globals: Vec::new(),
             comdat_globals: HashSet::new(),
+            coalesced_definitions: HashMap::new(),
             string_constants: Vec::new(),
             string_counter: 0,
             symbol_prefix: String::new(),
@@ -899,11 +906,51 @@ impl LlModule {
         self.globals.push(line);
     }
 
+    /// The position the next global line takes. With `insert_raw_global` a
+    /// definition can precede globals that were pushed after this mark.
+    pub(crate) fn global_mark(&self) -> usize {
+        self.globals.len()
+    }
+
+    /// Put a definition at `mark`, ahead of every global pushed since. The
+    /// globals print in this order, and an assembler resolves a linked-to
+    /// (SHF_LINK_ORDER) symbol only once its definition has been seen.
+    pub(crate) fn insert_raw_global(&mut self, mark: usize, line: String) {
+        self.globals.insert(mark, line);
+    }
+
+    /// Declare an external global once: every key that names the same
+    /// runtime symbol shares the one declaration (LLVM rejects a second).
+    /// A name this module also defines keeps only its definition, in either
+    /// order (a runtime atom that the program's own literals define as well).
+    pub(crate) fn add_external_declaration(&mut self, line: String) {
+        debug_assert!(is_external_global(&line), "{line}");
+        let defined = global_symbol_name(&line).is_some_and(|name| {
+            self.coalesced_definitions
+                .contains_key(name.trim_start_matches('@'))
+        });
+        if !defined && !self.globals.iter().any(|existing| *existing == line) {
+            self.globals.push(line);
+        }
+    }
+
     /// Fold the entire same-named weak data definition, including its section
     /// bytes. Mach-O already coalesces weak symbols at subsection boundaries;
     /// ELF, COFF and Wasm need a COMDAT: resolving weak symbol references
     /// alone leaves duplicate bytes in a mixed live section.
     pub(crate) fn add_coalesced_global(&mut self, name: &str, mut line: String) {
+        if let Some(defined) = self.coalesced_definitions.get(name) {
+            assert_eq!(
+                defined, &line,
+                "coalesced global @{name} defined twice with different contents"
+            );
+            return;
+        }
+        self.coalesced_definitions
+            .insert(name.to_string(), line.clone());
+        let declaration = format!("@{name} = external ");
+        self.globals
+            .retain(|existing| !existing.starts_with(&declaration));
         if !self.target_triple.contains("apple") {
             self.comdat_globals.insert(format!("@{name}"));
             line.push_str(&format!(", comdat(${name})"));
