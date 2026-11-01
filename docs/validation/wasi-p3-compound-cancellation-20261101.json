@@ -1,0 +1,737 @@
+{
+  "source": "b072f996f5d4989a65f7529f47355a7363012937",
+  "platform": "Linux x86_64",
+  "witTests": 41,
+  "ignoredFixtureProducers": 2,
+  "nativeCohortFresh": true,
+  "nativeProfile": "ordinary perry-dev six-package union",
+  "runtimeArchivesReused": true,
+  "runtimeArchiveSources": {
+    "plain": "e48d556ab6570144bca0d453b1532f50aa719ba9",
+    "instrumented": "ece4e277c3931ebeab568779c644d7735ad77041"
+  },
+  "runtimeProductionEquality": true,
+  "runtimeUnitsReexecuted": false,
+  "profiles": {
+    "cancellation-acceptance": {
+      "phases": [
+        {
+          "phase": "ordinary-import-regression",
+          "exitCode": 0
+        },
+        {
+          "phase": "build-caller-probes",
+          "exitCode": 0
+        },
+        {
+          "phase": "generate-caller",
+          "exitCode": 0
+        },
+        {
+          "phase": "link-caller",
+          "exitCode": 0
+        },
+        {
+          "phase": "compose",
+          "exitCode": 0
+        },
+        {
+          "phase": "p3-contract",
+          "exitCode": 0
+        },
+        {
+          "phase": "execute",
+          "exitCode": 0
+        },
+        {
+          "phase": "moving",
+          "exitCode": 0
+        }
+      ],
+      "moving": {
+        "moving.json": {
+          "copiedObjects": 8031,
+          "evacuationVerified": true
+        }
+      }
+    },
+    "cancellation-acceptance/guest": {
+      "phases": [
+        {
+          "phase": "build",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "public-guard",
+          "exitCode": 1,
+          "passed": true
+        },
+        {
+          "phase": "manifest",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "generate",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "facade-link",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-compile",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-link",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-compose",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "reject-undeclared-functions",
+          "exitCode": 1,
+          "passed": true
+        },
+        {
+          "phase": "reject-wrong-import-kind",
+          "exitCode": 1,
+          "passed": true
+        },
+        {
+          "phase": "reject-wasi-function-allowance",
+          "exitCode": 1,
+          "passed": true
+        },
+        {
+          "phase": "plain-contract",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-execute",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-rejects-instrument-grant",
+          "exitCode": 1,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-compile",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-link",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-compose",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-contract",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-execute",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "moving",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "cancel",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "failure",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "inline",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "inline-moving",
+          "exitCode": 0,
+          "passed": true
+        }
+      ],
+      "moving": {
+        "inline-moving.json": {
+          "guestCopiedObjects": 5345,
+          "guestEvacuationVerified": true
+        },
+        "moving.json": {
+          "guestCopiedObjects": 37766,
+          "guestEvacuationVerified": true
+        }
+      }
+    },
+    "exports-acceptance": {
+      "phases": [
+        {
+          "phase": "build",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "public-guard",
+          "exitCode": 1,
+          "passed": true
+        },
+        {
+          "phase": "manifest",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "generate",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "facade-link",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-compile",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-link",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-compose",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-contract",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-execute",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-rejects-instrument-grant",
+          "exitCode": 1,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-compile",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-link",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-compose",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-contract",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-execute",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "moving",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "cancel",
+          "exitCode": 0,
+          "passed": true
+        }
+      ],
+      "moving": {
+        "moving.json": {
+          "guestCopiedObjects": 30921,
+          "guestEvacuationVerified": true
+        }
+      }
+    },
+    "sync-acceptance": {
+      "phases": [
+        {
+          "phase": "build-probes",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "public-guard",
+          "exitCode": 1,
+          "passed": true
+        },
+        {
+          "phase": "generate",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "facade-link",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-compile",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-link",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-compose",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "reject-wasi-application-declaration",
+          "exitCode": 1,
+          "passed": true
+        },
+        {
+          "phase": "reject-undeclared-interface",
+          "exitCode": 1,
+          "passed": true
+        },
+        {
+          "phase": "reject-missing-interface",
+          "exitCode": 1,
+          "passed": true
+        },
+        {
+          "phase": "plain-contract",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-execute",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-rejects-instrument-grant",
+          "exitCode": 1,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-compile",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-link",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-compose",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-contract",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-execute",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "moving",
+          "exitCode": 0,
+          "passed": true
+        }
+      ],
+      "moving": {
+        "moving.json": {
+          "guestCopiedObjects": 29568,
+          "guestEvacuationVerified": true
+        }
+      }
+    },
+    "imported-acceptance": {
+      "phases": [
+        {
+          "phase": "build-probes",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "public-guard",
+          "exitCode": 1,
+          "passed": true
+        },
+        {
+          "phase": "generate",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "facade-link",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-compile",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-link",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-compose",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "reject-wasi-application-declaration",
+          "exitCode": 1,
+          "passed": true
+        },
+        {
+          "phase": "reject-undeclared-interface",
+          "exitCode": 1,
+          "passed": true
+        },
+        {
+          "phase": "reject-missing-interface",
+          "exitCode": 1,
+          "passed": true
+        },
+        {
+          "phase": "plain-contract",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-execute",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-rejects-instrument-grant",
+          "exitCode": 1,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-compile",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-link",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-compose",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-contract",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-execute",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "moving",
+          "exitCode": 0,
+          "passed": true
+        }
+      ],
+      "moving": {
+        "moving.json": {
+          "guestCopiedObjects": 17811,
+          "guestEvacuationVerified": true
+        }
+      }
+    },
+    "shared-acceptance": {
+      "phases": [
+        {
+          "phase": "build-probes",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "public-guard",
+          "exitCode": 1,
+          "passed": true
+        },
+        {
+          "phase": "generate",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "facade-link",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-compile",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-link",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-compose",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "reject-missing-interface",
+          "exitCode": 1,
+          "passed": true
+        },
+        {
+          "phase": "plain-contract",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-execute",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-rejects-instrument-grant",
+          "exitCode": 1,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-compile",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-link",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-compose",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-contract",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-execute",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "moving",
+          "exitCode": 0,
+          "passed": true
+        }
+      ],
+      "moving": {
+        "moving.json": {
+          "guestCopiedObjects": 17607,
+          "guestEvacuationVerified": true
+        }
+      }
+    },
+    "transport-acceptance": {
+      "phases": [
+        {
+          "phase": "build-probes",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "public-guard",
+          "exitCode": 1,
+          "passed": true
+        },
+        {
+          "phase": "generate",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "facade-link",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-compile",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-link",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-compose",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "reject-undeclared-types",
+          "exitCode": 1,
+          "passed": true
+        },
+        {
+          "phase": "plain-contract",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-execute",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-rejects-instrument-grant",
+          "exitCode": 1,
+          "passed": true
+        },
+        {
+          "phase": "c-task-context-link",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "c-task-context-compose",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "c-task-context-execute",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-compile",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-link",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-compose",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-contract",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-execute",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "moving",
+          "exitCode": 0,
+          "passed": true
+        }
+      ],
+      "moving": {
+        "moving.json": {
+          "guestCopiedObjects": 12870,
+          "guestEvacuationVerified": true
+        }
+      }
+    }
+  },
+  "importsSyncStagingMigrationQualified": true,
+  "canonicalPreReturnCancellationQualified": true,
+  "cancellationRounds": 8,
+  "cancellationNativeChildren": 16,
+  "terminalSubtaskCancellationQualified": false,
+  "publicAsyncGenerationGuardRetained": true,
+  "fullWasi030Qualified": false,
+  "nativeCohortBundled": false,
+  "evidence": {
+    "archive": {
+      "archive": "wasi-030-v162-evidence.tar.gz",
+      "bytes": 479546894,
+      "sha256": "190d6b8ad539a0f9c014d9e0ab8d8fb2968b29d6f0ce8cb18f03ff75d99e5574",
+      "indexedFiles": 681
+    },
+    "exactRegularFileSetVerified": true,
+    "allIndexedSizesAndHashesVerified": true,
+    "archiveExtracted": false,
+    "localPath": "secret-tests/reports/2026-10-27-wasi-030/v162/wasi-030-v162-evidence.tar.gz"
+  },
+  "qualificationScope": "Actual P3 compound imports/exports, synchronous-started import migration and cooperative canonical pre-return cancellation on Linux",
+  "limitations": [
+    "Public async guest CLI remains guarded.",
+    "Runtime archives retain their original sources and selected-production-input identity proofs; they were not rebuilt at the native source.",
+    "Runtime unit tests were not reexecuted by this qualification.",
+    "Ready import futures do not establish canonical inline ABI completion.",
+    "Returned-actor lifecycle audit and generated repeated-label endpoint execution remain open.",
+    "Broader providers/HTTP, installed platform packages, current release benchmarks and full WASI 0.3 qualification remain open."
+  ]
+}

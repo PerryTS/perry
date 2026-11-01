@@ -205,6 +205,25 @@ All 505 indexed evidence files and the exact regular-file set were verified
 locally. Release performance, broader providers, current instrumented native
 artifacts, installed platform packages and qualified landing are not established.
 
+The [P3 compound and cancellation receipt](validation/wasi-p3-compound-cancellation-20261101.json)
+qualifies the migrated compound import/export fixtures at source `b072f996f5`.
+The actual P3 facade profile passes 24 import phases, 18 export phases and an
+eight-phase canonical cancellation parent, whose first phase runs those import
+checks. All 75 synchronous-started import and resource/transport regression
+phases also pass. Synchronous `guarded` imports now stage successfully rather
+than expecting the obsolete rejection. A maintained-C caller cancels two native
+children in each of eight rounds while preserving a live sibling and reusing
+the Store. Moving guests copy 37,766 objects in the import profile, 30,921 in
+the export profile and 8,031 in canonical cancellation, with evacuation verified
+and native controls off. Ready import futures have a separate moving witness;
+they do not prove canonical inline completion. Both plain and instrumented
+guest archives retain their original source identities and exact selected-input
+reuse proofs. The native cohort is freshly built; runtime unit tests were not
+reexecuted by this run. All 681 indexed evidence files and their exact regular
+file set were verified locally. Public generation, returned-actor lifecycle
+auditing, actual repeated-label endpoint execution and the remaining rows stay
+open. Subsequent private-name collision fixes have separate unit qualification.
+
 | Requirement | Required evidence | Current state |
 | --- | --- | --- |
 | Canonical async imports and exports | Public generated components compose in both directions; overlapping calls, immediate/delayed completion, errors, post-return work and Store reuse | Experimental scalar/compound and recorded synchronous-started import profiles qualified on Linux; public CLI guarded |
