@@ -3136,8 +3136,9 @@ jobs:
         # it is free and pins the guarantee rather than inheriting it. Below
         # 11.5.1 the OIDC handshake fails silently and the registry returns a
         # misleading 404 ("'pkg@ver' is not in this registry") on PUT. See
-        # npm/cli#9088.
-        run: npm install -g npm@latest
+        # npm/cli#9088. Pinned to the 11 major: npm 12 changed `npm pack
+        # --json` output and has not been through a publish here.
+        run: npm install -g npm@11
 
       - name: Download all build artifacts
         uses: ./.github/actions/perry/actions/download-artifact # v8
