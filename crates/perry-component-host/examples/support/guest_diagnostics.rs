@@ -43,7 +43,10 @@ pub fn plain_rejection(driver: &mut Driver, client: &DriverClient) -> Result<()>
     let mut call = client.call("", "status", &[])?;
     for _ in 0..256 {
         if let Some(reply) = block_on(poll_once(&mut *driver)) {
-            let error = reply.expect_err("instrument denial must fail the driver");
+            let error = match reply {
+                Err(error) => error,
+                Ok(_) => bail!("instrument denial must fail the driver"),
+            };
             ensure!(!driver.is_active(), "failed Store must retire");
             ensure!(client.call("", "status", &[]).is_err());
             return Err(error.context("plain guest refused instrument-only GC controls"));
