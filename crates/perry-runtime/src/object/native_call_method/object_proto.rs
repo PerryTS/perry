@@ -1,9 +1,7 @@
 use super::*;
 
 pub(super) unsafe fn object_has_null_proto_flag(object: *const ObjectHeader) -> bool {
-    let gc_header =
-        (object as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    ((*gc_header)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO) != 0
+    crate::object::shapes::object_prototype_is_null(object)
 }
 
 /// Resolve `method_name` through an ORDINARY object's prototype chain and call

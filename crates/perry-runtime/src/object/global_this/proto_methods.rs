@@ -431,6 +431,8 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
     );
 }
 
+// Size optimization stops at installation; prototype method bodies stay hot.
+#[optimize(size)]
 #[rustfmt::skip] pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut ObjectHeader) {
     if proto_obj.is_null() {
         return;
