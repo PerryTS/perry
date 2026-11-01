@@ -208,6 +208,10 @@ pub(crate) const INTERNAL_MODULE_KEYS: &[&str] = &["inspector.Network", "punycod
 /// need to pull in `perry-stdlib` for these. Migrated from
 /// `crates/perry-hir/src/ir.rs::RUNTIME_ONLY_MODULES`.
 pub const RUNTIME_ONLY_MODULES: &[&str] = &[
+    // AsyncLocalStorage, AsyncResource and hook observation are runtime-owned.
+    // Emitting stdlib dispatch for an ALS-only component calls a no-op stub
+    // during synchronous initialization, before P3 permits blocking stdio.
+    "async_hooks",
     "fs",
     "fs/promises",
     "path",

@@ -1366,3 +1366,28 @@ fn generated_native_namespaces_compile_without_package_opt_ins() {
         }));
     }
 }
+#[test]
+fn async_hooks_imports_select_runtime_observation_without_stdlib_dispatch() {
+    for source in [
+        "import { AsyncLocalStorage } from 'async_hooks'; const storage = new AsyncLocalStorage(); storage.run(42, () => storage.getStore());",
+        "import { AsyncLocalStorage as Store } from 'node:async_hooks'; const storage = new Store(); storage.run(42, () => storage.getStore());",
+        "import * as hooks from 'node:async_hooks'; hooks.createHook({}).enable();",
+        "const { AsyncLocalStorage } = require('node:async_hooks'); const storage = new AsyncLocalStorage(); storage.getStore();",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = dir.path().join("main.ts");
+        std::fs::write(&entry, source).unwrap();
+        let mut ctx = CompilationContext::new(dir.path().to_path_buf());
+        ctx.entry_canonical = Some(entry.canonicalize().unwrap());
+        let mut visited = HashSet::new();
+        let mut next_class_id = 1;
+        let progress = VerboseProgress::new(OutputFormat::Text, 0);
+        collect_modules(&entry, &mut ctx, &mut visited, OutputFormat::Text, None,
+            &mut next_class_id, false, &progress, None).unwrap();
+        assert!(!ctx.needs_stdlib, "runtime-owned import requested stdlib dispatch: {source}");
+        assert!(ctx.native_module_imports.contains("async_hooks"), "observation install lost: {source}");
+        let features = crate::commands::compile::optimized_libs::auto_optimized_cross_features(
+            &ctx, &std::collections::BTreeSet::new(), &[]);
+        assert!(features.iter().any(|f| f == "perry-runtime/async-hooks"));
+    }
+}
