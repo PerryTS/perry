@@ -118,9 +118,9 @@ unsafe fn ordinary_to_primitive_string_inner(value: f64) -> Option<f64> {
     }
 }
 
-/// True iff `value` is a heap object stamped `OBJ_FLAG_NULL_PROTO`
-/// (`Object.create(null)` and friends) — i.e. it has no `[[Prototype]]`, so it
-/// does not inherit the default `Object.prototype.toString`/`valueOf`.
+/// True iff `value` is an ordinary object whose `[[Prototype]]` is null
+/// (`Object.create(null)` and friends, or one linked to null), so it does not
+/// inherit the default `Object.prototype.toString`/`valueOf`.
 unsafe fn value_is_null_proto_object(value: f64) -> bool {
     let jsval = JSValue::from_bits(value.to_bits());
     if !jsval.is_pointer() {
@@ -136,8 +136,7 @@ unsafe fn value_is_null_proto_object(value: f64) -> bool {
     if (obj as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
         return false;
     }
-    let gc = (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    (*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0
+    crate::object::shapes::cell_prototype_is_null(obj as usize)
 }
 
 #[cold]

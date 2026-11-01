@@ -1031,12 +1031,15 @@ impl Model {
                 .push(crate::summary::Deferred::Group(holder, key, ft, setter));
             return;
         }
-        let (sp, ar) = {
+        let (sp, ar, this) = {
             let g = &self.acc_groups[&(holder, key)];
-            (g.sp, g.ar)
+            (g.sp, g.ar, if setter { g.st } else { g.gt })
         };
         if self.summarized(f) {
-            self.group_summarized(ft, sp, ar, setter);
+            // The group's receivers are the instance's `this`, as they are
+            // the shared `this` in `group_connect` (none for a lexical one).
+            let this = (!self.funcs[f as usize].lexical_this).then_some(this);
+            self.group_summarized(ft, this, sp, ar, setter);
             return;
         }
         if setter {

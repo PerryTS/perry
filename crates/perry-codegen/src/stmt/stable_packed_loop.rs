@@ -1579,6 +1579,13 @@ pub(super) fn lower(
         true
     };
 
+    // Keep the entire admission speculative until the fast clone's final
+    // call scan. Rejected clones must skip the receiver/bound reloads and
+    // guard, so ordinary CFG cleanup can also remove their unused descriptor.
+    let entry_idx = ctx.current_block;
+    let admission_entry_idx = ctx.new_block("stable_packed.loop.admission");
+    let admission_entry_label = ctx.block_label(admission_entry_idx);
+    ctx.current_block = admission_entry_idx;
     let receiver = crate::expr::lower_expr(ctx, &Expr::LocalGet(candidate.array_id))?;
     let bound_box = match candidate.bound {
         LoopBound::Snapshot(bound_id) => crate::expr::lower_expr(ctx, &Expr::LocalGet(bound_id))?,
@@ -1809,11 +1816,15 @@ pub(super) fn lower(
         || candidate.nested_requires_access_revalidation;
     if fast_clone_is_safe {
         record_artifacts(ctx, &candidate, &receiver);
-        ctx.block()
-            .cond_br(&admitted, &fast_pre_label, &slow_pre_label);
-    } else {
-        ctx.block().br(&slow_pre_label);
     }
+    ctx.block()
+        .cond_br(&admitted, &fast_pre_label, &slow_pre_label);
+    ctx.current_block = entry_idx;
+    ctx.block().br(if fast_clone_is_safe {
+        &admission_entry_label
+    } else {
+        &slow_pre_label
+    });
 
     ctx.current_block = slow_pre_idx;
     super::loops::lower_for_after_init(

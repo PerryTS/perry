@@ -984,9 +984,16 @@ unsafe fn try_function_store(
         return super::try_existing_own_data_overwrite_by_content(bag, key, name.as_bytes(), value)
             .then_some(value);
     }
+    // A bound function keeps its own keys in the same bag as any function
+    // (its intrinsic `name`/`length` were declined above), and its shape
+    // names its [[Prototype]] as any described function's does.
     if !matches!(
         descriptor.object_kind,
-        shapes::ShapeObjectKind::Function | shapes::ShapeObjectKind::FunctionDictionary
+        shapes::ShapeObjectKind::Function
+            | shapes::ShapeObjectKind::FunctionDictionary
+            | shapes::ShapeObjectKind::FunctionBound
+            | shapes::ShapeObjectKind::FunctionBoundCall
+            | shapes::ShapeObjectKind::FunctionBoundApply
     ) || flags & (crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND) != 0
     {
         return None;
