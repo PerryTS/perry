@@ -1027,7 +1027,10 @@ impl Model {
             (g.sp, g.ar, if setter { g.st } else { g.gt })
         };
         if self.summarized(f) {
-            self.group_summarized(ft, sp, ar, this, setter);
+            // The group's receivers are the instance's `this`, as they are
+            // the shared `this` in `group_connect` (none for a lexical one).
+            let this = (!self.funcs[f as usize].lexical_this).then_some(this);
+            self.group_summarized(ft, this, sp, ar, setter);
             return;
         }
         if setter {

@@ -615,3 +615,12 @@ mod unit_cycle_order;
 mod own_key_shadow;
 
 mod ctor_receiver_calls;
+
+#[path = "unit_mode/closed_ctor_literal.rs"]
+mod closed_ctor_literal;
+
+#[path = "unit_mode/site_copies.rs"]
+mod site_copies;
+
+#[path = "unit_mode/returned_field_map.rs"]
+mod returned_field_map;
