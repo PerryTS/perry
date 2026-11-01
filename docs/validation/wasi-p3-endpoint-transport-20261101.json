@@ -41,7 +41,9 @@
     "fullRuntimeSuiteQualified": false,
     "witPassed": 32,
     "witIgnoredFixtureProducers": 2,
-    "hostWasiCapabilityPassed": 5
+    "hostWasiCapabilityPassed": 5,
+    "fullNormalDevComponentHostPassed": 222,
+    "fullComponentHostSuiteSerial": true
   },
   "acceptance": {
     "script": "scripts/component_endpoint_transport_acceptance.py",
@@ -186,5 +188,13 @@
     "Blocking native stdio from synchronous canonical exports; moving diagnostics use an explicit bounded capture pipe",
     "Complete current provider/HTTP/shared-provider ALS matrix",
     "Fresh current native release cohorts, all nine command regressions on these later runtime sources, macOS/Windows installed packages, required CI, full lint or merge"
-  ]
+  ],
+  "additionalHostUnitEvidence": {
+    "archive": "wasi-030-v093-evidence.tar.gz",
+    "bytes": 9682,
+    "sha256": "233c186256912a04f1415c9599a009ef5dfdcba31097ab32a28878cd08a81a31",
+    "indexedFiles": 5,
+    "archiveAndEveryIndexedMemberVerifiedLocally": true,
+    "exactRegularFileSetVerified": true
+  }
 }

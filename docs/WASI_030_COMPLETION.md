@@ -59,10 +59,11 @@ plain/instrumented execution, a separate maintained-C canonical WAIT/resume
 control, and 5,346 copied Wasm guest objects with evacuation verification.
 Generated frame calls keep the JS agent in persistent TLS and restore SDK task
 TLS before returning to C; scheduler userdata no longer overwrites the SDK's
-stack context. Thirty-two WIT/C tests and five WASI capability tests pass.
+stack context. Thirty-two WIT/C tests and all 222 native component-host tests
+pass, including five WASI capability checks.
 Moving diagnostics use an explicit bounded guest stderr capture; native host
 GC controls remain off. Guest reads, writes, writer factories and the private
-producer actor remain open, as does blocking native I/O from sync exports.
+producer actor remain open, along with guest I/O scheduling from sync exports.
 
 | Requirement | Required evidence | Current state |
 | --- | --- | --- |
