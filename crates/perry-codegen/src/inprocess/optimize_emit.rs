@@ -199,6 +199,7 @@ pub(super) fn optimize_and_emit(
     if let Some(stats) = stats.as_deref_mut() {
         stats.optimize_secs = optimize_started.elapsed().as_secs_f64();
     }
+    super::equivalent_shape_bodies::apply(module);
     if native_roots {
         native_homes::publish(module)?;
         module
