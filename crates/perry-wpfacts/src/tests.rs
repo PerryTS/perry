@@ -50,6 +50,7 @@ mod receiver_this;
 mod relinked_parent;
 mod rest_element;
 mod run_once_closed;
+mod regexp_exec;
 mod runtime_helpers;
 mod summary;
 mod super_heritage;
