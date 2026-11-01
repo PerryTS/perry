@@ -128,11 +128,13 @@ fn stream(
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     ensure!(
-        (2..=3).contains(&args.len()),
-        "usage: guest_endpoint_transport <world.wit> <component.wasm> [--moving]"
+        (2..=4).contains(&args.len()),
+        "usage: guest_endpoint_transport <world.wit> <component.wasm> [--moving] [--trace]"
     );
     ensure!(
-        args.get(2).is_none_or(|arg| arg == "--moving"),
+        args[2..]
+            .iter()
+            .all(|arg| matches!(arg.as_str(), "--moving" | "--trace")),
         "unknown mode"
     );
     let world = perry_wit::parse_file(Path::new(&args[0]), None)?;
@@ -141,13 +143,18 @@ fn main() -> Result<()> {
         inherit_stdout: true,
         ..WasiOptions::default()
     };
-    if args.len() == 3 {
+    if args[2..].iter().any(|arg| arg == "--moving") {
         for name in [
             "PERRY_GC_INSTRUMENTS",
             "PERRY_GC_FORCE_EVACUATE",
             "PERRY_GC_VERIFY_EVACUATION",
             "PERRY_GC_DIAG",
         ] {
+            wasi.env.insert(name.into(), "1".into());
+        }
+    }
+    if args[2..].iter().any(|arg| arg == "--trace") {
+        for name in ["PERRY_TRACE_THROW", "PERRY_TRACE_ASYNC"] {
             wasi.env.insert(name.into(), "1".into());
         }
     }
