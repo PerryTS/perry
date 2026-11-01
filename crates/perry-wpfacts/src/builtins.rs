@@ -11,7 +11,7 @@ mod collections;
 mod members;
 mod native_protocol;
 use collections::{array_method, bobj_method, function_method, iterate};
-pub(crate) use collections::to_prim;
+pub(crate) use collections::{array_species, to_prim};
 pub(crate) use collections::{WK_ITERATOR, WK_PREFIX};
 use members::{Family, Mem};
 pub use native_protocol::{

@@ -948,12 +948,11 @@ fn own_length(m: &Model, toks: &[Tok], prim: u16) -> Option<Vec<String>> {
         return None;
     }
     let mut receivers = Vec::new();
-    let mut seen = FxHashSet::default();
     for &t in toks {
         if m.closed_marker(t) {
             continue;
         }
-        if !exact_array(m, t, &mut seen) {
+        if !exact_array(m, t) {
             return None;
         }
         receivers.push(m.tmpls[m.tmpl_of(t)? as usize].display.clone());
@@ -968,18 +967,17 @@ fn own_length(m: &Model, toks: &[Tok], prim: u16) -> Option<Vec<String>> {
 
 /// Is every value of token `t` an Array exotic object (ECMA-262 10.4.2)?
 /// An array site of this unit (a literal, a rest parameter, an ArrayCreate
-/// result), or an own-keys result (`keys`, `arraybox`). Not the `arguments`
-/// object (`TmplKind::Args`), not another unit's array (its stand-in does not
-/// say how it was made), not a marker. An array made with ArraySpeciesCreate
-/// (`Template::species`) is one only while every receiver it was made from
-/// is an exact Array whose `constructor` is `%Array%` with an unwritten
-/// `@@species`: not escaped or HARD (either may give it another
-/// `constructor` or prototype), no own `constructor` or computed-key store,
-/// no own accessor, `Array.prototype.constructor` unwritten. A primitive
-/// receiver is no Array and gets a plain Array (ArrayCreate). `seen`: the
-/// species templates on the walk; one met again is assumed (each of its
-/// arrays was made from an earlier receiver the walk checks).
-pub(crate) fn exact_array(m: &Model, t: Tok, seen: &mut FxHashSet<TmplId>) -> bool {
+/// result), an own-keys result (`keys`, `arraybox`), or another unit's
+/// array its owner publishes as an Array (`ValueContract::arrays`,
+/// `arrayboxes`; one it publishes as made, `made_arrays`, has ⊤ for its
+/// constructor). Not the
+/// `arguments` object (`TmplKind::Args`), not a container of primitives,
+/// not a marker. An array made with ArraySpeciesCreate (10.4.2.3) is one
+/// only while the constructor the algorithm takes (`Template::species`: the
+/// receivers' `constructor` and its `@@species`, as the solve looked them
+/// up) is `%Array%` or no object: `undefined` (or a `null` species) is an
+/// ArrayCreate, any other primitive throws before an array is made.
+pub(crate) fn exact_array(m: &Model, t: Tok) -> bool {
     if m.is_marker(t) {
         return false;
     }
@@ -988,62 +986,22 @@ pub(crate) fn exact_array(m: &Model, t: Tok, seen: &mut FxHashSet<TmplId>) -> bo
     };
     let tpl = &m.tmpls[tm as usize];
     match tpl.kind {
-        TmplKind::Arr { site, .. } if site != u32::MAX => {}
+        TmplKind::Arr { .. } => {}
         TmplKind::BObj {
             what: "keys" | "arraybox",
-            site,
             ..
-        } if site != u32::MAX => return true,
+        } => return true,
         _ => return false,
     }
-    let Some(src) = tpl.species else {
+    let Some(c) = tpl.species else {
         return true;
     };
-    if !seen.insert(tm) {
-        return true;
-    }
-    let nd = &m.nodes[src as usize];
-    if nd.pts.contains_tok(TOP) || species_written(m) {
-        return false;
-    }
-    let ctor = m.atom_index.get("constructor").copied();
-    nd.pts.to_sorted().into_iter().all(|r| {
-        m.closed_marker(r)
-            || (exact_array(m, r, seen)
-                && !m.is_escaped(r)
-                && !m.hard.contains_key(&r)
-                && m.accessor_keys.get(&r).is_none_or(|ks| ks.is_empty())
-                && ctor.is_none_or(|a| node_empty(m, m.fields.get(&(r, a)).copied()))
-                && node_empty(m, m.named_any.get(&r).copied()))
-    })
-}
-
-/// No value flows into node `n` (or there is none).
-fn node_empty(m: &Model, n: Option<NodeId>) -> bool {
-    n.is_none_or(|n| {
-        let nd = &m.nodes[n as usize];
-        nd.pts.is_empty() && nd.prim == 0
-    })
-}
-
-/// May `%Array.prototype%.constructor` or `%Array%[@@species]` be written
-/// (DECISIONS 151 census)? Then an array's `constructor` lookup or species
-/// may give another constructor.
-fn species_written(m: &Model) -> bool {
-    let written = |t: Tok, name: &str| match m.atom_index.get(name) {
-        Some(&a) => crate::builtins::native_written(m, t, a),
-        None => m
-            .native_writes
-            .keys()
-            .any(|&(w, k)| k.is_none() && (w == TOP || w == t)),
-    };
-    let op = m.tok_index.get(&TokKind::ObjectProto).copied().unwrap_or(TOP);
-    let arr = m
+    let nd = &m.nodes[c as usize];
+    let array = m
         .tok_index
         .get(&TokKind::Builtin(crate::model::BuiltinNs::Array))
-        .copied()
-        .unwrap_or(TOP);
-    written(op, "constructor") || written(arr, "@@__perry_wk_species")
+        .copied();
+    nd.pts.to_sorted().into_iter().all(|v| Some(v) == array)
 }
 
 fn judge(

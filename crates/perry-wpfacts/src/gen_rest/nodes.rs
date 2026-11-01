@@ -34,7 +34,7 @@ impl<'a> Gen<'a> {
     }
 
     /// An array a builtin makes from `src`'s arrays with ArraySpeciesCreate
-    /// (`Template::species`).
+    /// (`builtins::array_species`).
     pub(crate) fn new_species_arr(
         &mut self,
         mi: u32,
@@ -43,7 +43,7 @@ impl<'a> Gen<'a> {
         src: NodeId,
     ) -> NodeId {
         let tm = self.new_arr_template(mi, what);
-        self.m.tmpls[tm as usize].species = Some(src);
+        crate::builtins::array_species(&mut self.m, tm, src);
         let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
         let fa = self.m.field_any(t);
         for &e in elems {
