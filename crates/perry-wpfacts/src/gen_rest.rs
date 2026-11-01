@@ -101,6 +101,25 @@ impl<'a> Gen<'a> {
                 } else if m0 == "module" && method == "createRequire" && object.is_none() {
                     let t = self.m.tok(TokKind::Builtin(BuiltinNs::Require));
                     self.tok_node(t)
+                } else if module == "array" && matches!(method.as_str(), "push_single" | "push") {
+                    // The array push the HIR folds for a receiver it proved an
+                    // array (`this.items.push(x)`): the arguments are its new
+                    // elements, as `Expr::ArrayPush` stores them; the result
+                    // is the new length. The grown array's write-back into its
+                    // holder stores the same array.
+                    match o {
+                        Some(o) => {
+                            for v in a {
+                                self.elem_store(fx, o, v, "push");
+                            }
+                        }
+                        None => {
+                            for v in a {
+                                self.to_sink(v, "argument of native module array.push");
+                            }
+                        }
+                    }
+                    self.prim_node(prim::NUM)
                 } else {
                     if module == "vm" || module == "node:vm" {
                         crate::builtins::set_dyn_eval(&mut self.m, "E14 node:vm");
