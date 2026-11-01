@@ -1087,6 +1087,40 @@ fn push_executable_relative_host_candidates(
     }
 }
 
+/// Native-extension wrapper archives (`libperry_ext_*.a`, `perry_ext_*.lib`):
+/// they ship in the `ext` package, every other archive in the `target` one.
+pub(super) fn is_ext_archive_name(name: &str) -> bool {
+    name.starts_with("libperry_ext_") || name.starts_with("perry_ext_")
+}
+
+/// Package roots last (`@perryts/perry-<kind>-<triple>` beside the binary,
+/// then `~/.perry/<kind>/<version>/<triple>`), so every install layout before
+/// them keeps precedence. An ext archive comes from the triple's ext package;
+/// any other archive from its target package, which the host's own triple
+/// never has (its libraries ship with perry). A root whose target.json names
+/// another perry version, revision or triple adds nothing.
+fn push_package_candidates(
+    candidates: &mut Vec<PathBuf>,
+    name: &str,
+    triple: &str,
+    exe: Option<&Path>,
+    home: Option<&Path>,
+) {
+    use super::target_packages::{discover, PackageKind, PerryIdentity, HOST_TRIPLE};
+    let kind = if is_ext_archive_name(name) {
+        PackageKind::Ext
+    } else if triple != HOST_TRIPLE {
+        PackageKind::Target
+    } else {
+        return;
+    };
+    for root in discover(kind, triple, exe, home, PerryIdentity::current()) {
+        if root.is_accepted() {
+            candidates.push(root.path.join("lib").join(name));
+        }
+    }
+}
+
 pub(super) fn collect_library_candidates(name: &str, target: Option<&str>) -> Vec<PathBuf> {
     let exe = std::env::current_exe().ok();
     let home = dirs::home_dir();
@@ -1230,19 +1264,7 @@ pub(super) fn collect_library_candidates_from(
                 }
             }
         }
-        // Target packages last (`@perryts/perry-target-<triple>` beside the
-        // binary, then `~/.perry/targets`), so every install layout above
-        // keeps precedence. A root whose target.json names another perry
-        // version, revision or triple adds nothing. The host's own triple
-        // ships with perry and never resolves through one.
-        if triple != super::target_packages::HOST_TRIPLE {
-            let me = super::target_packages::PerryIdentity::current();
-            for root in super::target_packages::discover(triple, exe, home, me) {
-                if root.is_accepted() {
-                    candidates.push(root.path.join("lib").join(name));
-                }
-            }
-        }
+        push_package_candidates(&mut candidates, name, triple, exe, home);
     } else {
         // Host build: search host directories
         candidates.push(PathBuf::from(format!("target/release/{}", name)));
@@ -1259,6 +1281,13 @@ pub(super) fn collect_library_candidates_from(
         // Debian/Ubuntu: libs installed in /usr/lib/perry
         candidates.push(PathBuf::from(format!("/usr/lib/perry/{}", name)));
         candidates.extend(winget_lib_candidates(name));
+        push_package_candidates(
+            &mut candidates,
+            name,
+            super::target_packages::HOST_TRIPLE,
+            exe,
+            home,
+        );
     }
 
     candidates
@@ -1294,10 +1323,12 @@ pub(super) fn locate_runtime_library(target: Option<&str>) -> Result<LocatedLibr
             .map(|p| format!("  - {}", p.display()))
             .collect::<Vec<_>>()
             .join("\n");
-        // A cross target with nothing installed: say which package to
-        // install, pinned to this exact perry, before the search list.
+        // A packaged cross target with nothing installed: say which package
+        // to install, pinned to this exact perry, before the search list. A
+        // triple with no package keeps the generic text below.
         if let (Some(target_name), Some(triple)) = (target, rust_target_triple(target)) {
-            if triple != super::target_packages::HOST_TRIPLE {
+            use super::target_packages::{is_packaged, PackageKind, HOST_TRIPLE};
+            if triple != HOST_TRIPLE && is_packaged(PackageKind::Target, triple) {
                 let exe = std::env::current_exe().ok();
                 let home = dirs::home_dir();
                 return anyhow!(

@@ -1,8 +1,9 @@
-//! Search step 4: target packages come after every install layout, and only
-//! a root whose target.json matches this perry adds candidates.
+//! Search step 4: target and ext packages come after every install layout,
+//! and only a root whose target.json matches this perry adds candidates.
 
 use super::super::target_packages::{
-    package_name, perry_home_root, PerryIdentity, TargetFile, TargetJson, HOST_TRIPLE, TARGET_JSON,
+    package_name, perry_home_root, PackageKind, PerryIdentity, TargetFile, TargetJson, HOST_TRIPLE,
+    TARGET_JSON,
 };
 use super::{collect_library_candidates_from, locate_among};
 use std::fs;
@@ -43,7 +44,11 @@ fn package(root: &Path, triple: &str, version: &str) -> PathBuf {
 }
 
 fn npm_dir(modules: &Path, triple: &str) -> PathBuf {
-    modules.join(package_name(triple))
+    modules.join(package_name(PackageKind::Target, triple))
+}
+
+fn npm_ext_dir(modules: &Path, triple: &str) -> PathBuf {
+    modules.join(package_name(PackageKind::Ext, triple))
 }
 
 fn exe_in(modules: &Path) -> PathBuf {
@@ -66,7 +71,7 @@ fn package_roots_follow_the_install_layouts_npm_before_perry_home() {
         version,
     );
     let mine = package(
-        &perry_home_root(&home, version, "wasm32-wasip1"),
+        &perry_home_root(&home, PackageKind::Target, version, "wasm32-wasip1"),
         "wasm32-wasip1",
         version,
     );
@@ -163,4 +168,67 @@ fn a_compressed_archive_in_a_package_links_the_cache_slot_and_keeps_the_sidecar_
     assert_eq!(fs::read(&located.link).unwrap(), archive);
     let sidecar = perry_gc_effects::sidecar::sidecar_path(&located.candidate);
     assert_eq!(fs::read(sidecar).unwrap(), b"sidecar");
+}
+
+const EXT: &str = "libperry_ext_http.a";
+
+#[test]
+fn ext_archives_come_from_the_host_ext_package_after_the_install_layouts() {
+    let (_t, root) = tree();
+    let modules = root.join("prefix/lib/node_modules");
+    let exe = exe_in(&modules);
+    let home = root.join("home");
+    let version = env!("CARGO_PKG_VERSION");
+    let npm = package(&npm_ext_dir(&modules, HOST_TRIPLE), HOST_TRIPLE, version);
+    let mine = package(
+        &perry_home_root(&home, PackageKind::Ext, version, HOST_TRIPLE),
+        HOST_TRIPLE,
+        version,
+    );
+    let candidates = collect_library_candidates_from(EXT, None, Some(&exe), Some(&home));
+    let pos = |p: &Path| candidates.iter().position(|c| c == p);
+    let beside = pos(&exe.parent().unwrap().join(EXT)).expect("exe dir probed");
+    let npm = pos(&npm.join("lib").join(EXT)).expect("npm ext package probed");
+    let mine = pos(&mine.join("lib").join(EXT)).expect("~/.perry/ext probed");
+    assert!(beside < npm && npm < mine, "{candidates:#?}");
+    assert_eq!(
+        mine,
+        candidates.len() - 1,
+        "package roots are the last step"
+    );
+
+    // A core archive never comes from the ext package, an ext archive never
+    // from a target package.
+    let core = collect_library_candidates_from(LIB, None, Some(&exe), Some(&home));
+    assert!(
+        !core.iter().any(|c| c.starts_with(root.join("home"))),
+        "{core:#?}"
+    );
+    let target = package(
+        &npm_dir(&modules, "wasm32-wasip1"),
+        "wasm32-wasip1",
+        version,
+    );
+    let cross = collect_library_candidates_from(EXT, Some("wasip1"), Some(&exe), Some(&home));
+    assert!(!cross.iter().any(|c| c.starts_with(&target)), "{cross:#?}");
+}
+
+#[test]
+fn an_ext_package_of_another_version_adds_no_candidate() {
+    let (_t, root) = tree();
+    let modules = root.join("prefix/lib/node_modules");
+    let exe = exe_in(&modules);
+    let stale = package(&npm_ext_dir(&modules, HOST_TRIPLE), HOST_TRIPLE, "0.0.1");
+    let other = package(
+        &npm_ext_dir(&modules, "aarch64-linux-android"),
+        "aarch64-linux-android",
+        env!("CARGO_PKG_VERSION"),
+    );
+    let candidates = collect_library_candidates_from(EXT, None, Some(&exe), None);
+    assert!(
+        !candidates
+            .iter()
+            .any(|c| c.starts_with(&stale) || c.starts_with(&other)),
+        "{candidates:#?}"
+    );
 }

@@ -565,6 +565,14 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
         "Controls cache storage or reuse policy; identical compile inputs emit identical bytes.",
     ),
     (
+        "PERRY_HOST_TRIPLE",
+        "Set by build.rs to the triple perry itself was built for; it selects package roots, never emitted code.",
+    ),
+    (
+        "PERRY_NO_AUTO_FETCH",
+        "Decides only whether a missing ext package is downloaded before the link; the archives linked are the same verified bytes either way.",
+    ),
+    (
         "PERRY_NO_CACHE",
         "Controls cache storage or reuse policy; identical compile inputs emit identical bytes.",
     ),
@@ -609,6 +617,14 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
         "Writes IR/report files or diagnostic output without changing emitted objects.",
     ),
     (
+        "PERRY_RELEASE_MIRROR",
+        "Where a missing package is downloaded from; its signed manifest pins the same bytes from any source.",
+    ),
+    (
+        "PERRY_RELEASE_TAG",
+        "Baked in by release CI: the GitHub release perry target add and the ext fetch download from; no emitted code depends on it.",
+    ),
+    (
         "PERRY_REPSEL_DEBUG",
         "Writes IR/report files or diagnostic output without changing emitted objects.",
     ),
@@ -635,6 +651,10 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
     (
         "PERRY_SKIP_CODEGEN",
         "Stops before object emission; the build-cache probe rejects diagnostic/no-link modes.",
+    ),
+    (
+        "PERRY_SOURCE_REVISION",
+        "Baked in by release CI: the commit a target or ext package target.json must name; it selects package roots, never emitted code.",
     ),
     (
         "PERRY_SOURCE_ROOT",

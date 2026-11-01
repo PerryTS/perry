@@ -189,8 +189,9 @@ npm/perry-*/bin/
 npm/perry-*/lib/
 npm/perry-*/LICENSE
 npm/perry-*/README.md
-# target packages are generated whole from npm/perry-target/package.json.tmpl
+# target and ext packages are generated whole from npm/perry-{target,ext}/package.json.tmpl
 npm/perry-target-*/
+npm/perry-ext-*/
 
 # Temporary files
 tmp/

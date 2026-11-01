@@ -70,7 +70,8 @@ pub enum UpdaterCommand {
     /// Sign the authenticated manifest consumed by `perry update`.
     SignCliManifest(SignCliManifestArgs),
 
-    /// Sign the authenticated manifest consumed by `perry target add`.
+    /// Sign the authenticated manifest consumed by `perry target add` (and
+    /// the compile-time ext fetch).
     ///
     /// Same key as `sign-cli-manifest`, its own signing domain: the result
     /// can never pass as a CLI update manifest.
@@ -133,10 +134,13 @@ pub struct SignCliManifestArgs {
 
 #[derive(Debug, clap::Args)]
 pub struct SignTargetManifestArgs {
-    /// The target package tarball (`perry-target-<triple>-<version>.tgz`,
-    /// byte-identical to the npm tarball).
+    /// The package tarball (`perry-target-<triple>-<version>.tgz`, or
+    /// `perry-ext-...` with `--ext`), byte-identical to the npm tarball.
     #[arg(long)]
     pub artifact: PathBuf,
+    /// The tarball is the triple's ext package (`@perryts/perry-ext-<triple>`).
+    #[arg(long)]
+    pub ext: bool,
     /// The Rust triple the package holds libraries for.
     #[arg(long)]
     pub triple: String,
@@ -338,9 +342,14 @@ fn run_sign_target_manifest(args: SignTargetManifestArgs) -> Result<()> {
     }
     let (signing, artifact) =
         manifest_signing_inputs(&args.url, &args.secret_key_b64, &args.artifact)?;
-    let expected = format!("perry-target-{}-{}.tgz", args.triple, args.release_version);
+    let kind = if args.ext {
+        crate::commands::compile::target_packages::PackageKind::Ext
+    } else {
+        crate::commands::compile::target_packages::PackageKind::Target
+    };
+    let expected = crate::commands::target::asset_name(kind, &args.triple, &args.release_version);
     if artifact.name != expected {
-        bail!("artifact filename must be {expected} to prevent target confusion");
+        bail!("artifact filename must be {expected} to prevent package confusion");
     }
     let mut manifest = perry_update_manifest::TargetPackageManifest {
         schema_version: 1,
