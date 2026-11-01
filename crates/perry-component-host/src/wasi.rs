@@ -21,6 +21,11 @@ pub struct WasiOptions {
     pub inherit_stdin: bool,
     pub inherit_stdout: bool,
     pub inherit_stderr: bool,
+    /// Rust embedding capability: capture stderr in an explicitly bounded pipe.
+    /// Not serialized across the native engine ABI; mutually exclusive with
+    /// inherited stderr. The caller retains a clone to read the captured bytes.
+    #[serde(skip)]
+    pub stderr_buffer: Option<perry_wasi::pipe::MemoryOutputPipe>,
     pub preopens: Vec<Preopen>,
     pub network: Network,
 }
@@ -78,6 +83,10 @@ impl State {
 
 impl WasiOptions {
     pub(crate) fn build(&self) -> Result<State> {
+        anyhow::ensure!(
+            !(self.inherit_stderr && self.stderr_buffer.is_some()),
+            "inherit_stderr and stderr_buffer are mutually exclusive"
+        );
         // Bound native work and persistent transports independently per
         // component. No process-global runtime or inherited network authority.
         let mut ctx = WasiCtx::new(64).map_err(anyhow::Error::from)?;
@@ -95,6 +104,9 @@ impl WasiOptions {
         }
         if self.inherit_stderr {
             ctx.cli.inherit_stderr();
+        }
+        if let Some(buffer) = &self.stderr_buffer {
+            ctx.cli.stderr = Box::new(buffer.clone());
         }
         for preopen in &self.preopens {
             ctx.preopened_dir(
@@ -208,6 +220,73 @@ mod tests {
                     .collect::<Vec<_>>()
             );
         }
+    }
+
+    #[test]
+    fn captured_stderr_is_bounded_isolated_and_not_serialized() {
+        let first = perry_wasi::pipe::MemoryOutputPipe::new(8);
+        let second = perry_wasi::pipe::MemoryOutputPipe::new(8);
+        for (index, buffer) in [&first, &second].into_iter().enumerate() {
+            let options = WasiOptions {
+                stderr_buffer: Some(buffer.clone()),
+                ..Default::default()
+            };
+            let encoded = serde_json::to_value(&options).unwrap();
+            assert!(encoded.get("stderrBuffer").is_none());
+            assert!(serde_json::from_value::<WasiOptions>(encoded)
+                .unwrap()
+                .stderr_buffer
+                .is_none());
+            let state = options.build().unwrap();
+            let mut stream = state.ctx.cli.stderr.p2_stream();
+            assert_eq!(stream.check_write().unwrap(), 8);
+            stream.write(b"abc".as_slice().into()).unwrap();
+            stream.flush().unwrap();
+            assert_eq!(stream.check_write().unwrap(), 5);
+            assert!(stream.write(b"too big".as_slice().into()).is_err());
+            assert_eq!(buffer.contents(), b"abc".as_slice());
+            stream.write(b"12345".as_slice().into()).unwrap();
+            assert!(stream.check_write().is_err());
+            if index == 0 {
+                assert!(
+                    second.contents().is_empty(),
+                    "another context must stay isolated"
+                );
+            }
+        }
+        assert_eq!(first.contents(), second.contents());
+        let options = WasiOptions {
+            inherit_stderr: true,
+            stderr_buffer: Some(first),
+            ..Default::default()
+        };
+        assert!(options.build().is_err());
+        assert!(crate::sync_wasi::State::new(&options).is_err());
+    }
+
+    #[test]
+    fn synchronous_stderr_uses_the_same_bounded_capture_capability() {
+        use crate::sync_wasi::bindings::wasi::{cli::stderr::Host, io::streams::HostOutputStream};
+        use wasmtime::component::Resource;
+        let buffer = perry_wasi::pipe::MemoryOutputPipe::new(8);
+        let mut state = crate::sync_wasi::State::new(&WasiOptions {
+            stderr_buffer: Some(buffer.clone()),
+            ..Default::default()
+        })
+        .unwrap();
+        let output = state.get_stderr().unwrap();
+        let borrow = || Resource::new_borrow(output.rep());
+        assert_eq!(state.check_write(borrow()).unwrap(), 8);
+        state.write(borrow(), b"abc".to_vec()).unwrap();
+        assert_eq!(state.check_write(borrow()).unwrap(), 5);
+        assert!(state.write(borrow(), b"too big".to_vec()).is_err());
+        assert_eq!(buffer.contents(), b"abc".as_slice());
+        state
+            .blocking_write_and_flush(borrow(), b"12345".to_vec())
+            .unwrap();
+        assert!(state.check_write(borrow()).is_err());
+        assert_eq!(buffer.contents(), b"abc12345".as_slice());
+        HostOutputStream::drop(&mut state, output).unwrap();
     }
 }
 

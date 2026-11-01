@@ -27,6 +27,7 @@ pub enum Output {
     Sink,
     Stdout,
     Stderr,
+    Captured(perry_wasi::pipe::MemoryOutputPipe),
     File {
         file: Arc<File>,
         offset: Option<u64>,
@@ -170,6 +171,11 @@ impl streams::HostOutputStream for State {
         if let Output::Tcp(c) = self.table.get(&stream)? {
             return c.check_write(self.io);
         }
+        if let Output::Captured(buffer) = self.table.get_mut(&stream)? {
+            return wasmtime_wasi_io::streams::OutputStream::check_write(buffer)
+                .map(|size| (size as u64).min(PERMIT))
+                .map_err(captured_error);
+        }
         if matches!(self.table.get(&stream)?, Output::Closed) {
             Err(StreamError::Closed)
         } else {
@@ -184,6 +190,10 @@ impl streams::HostOutputStream for State {
         let result = match output {
             Output::Closed => return Err(StreamError::Closed),
             Output::Tcp(c) => return c.write(self.io, contents),
+            Output::Captured(buffer) => {
+                return wasmtime_wasi_io::streams::OutputStream::write(buffer, contents.into())
+                    .map_err(captured_error);
+            }
             Output::Sink => Ok(()),
             Output::Stdout => io::stdout().write_all(&contents),
             Output::Stderr => io::stderr().write_all(&contents),
@@ -231,7 +241,7 @@ impl streams::HostOutputStream for State {
             Output::Tcp(c) => return c.prepare_write(self.io).map_err(StreamError::Trap),
             Output::Stdout => io::stdout().flush(),
             Output::Stderr => io::stderr().flush(),
-            Output::Sink | Output::File { .. } => Ok(()),
+            Output::Sink | Output::File { .. } | Output::Captured(_) => Ok(()),
         };
         if result.is_err() {
             *output = Output::Closed;
@@ -493,10 +503,24 @@ impl cli::stdout::Host for State {
 }
 impl cli::stderr::Host for State {
     fn get_stderr(&mut self) -> wasmtime::Result<Resource<Output>> {
-        Ok(self.table.push(if self.options.inherit_stderr {
-            Output::Stderr
-        } else {
-            Output::Sink
-        })?)
+        Ok(self
+            .table
+            .push(if let Some(buffer) = &self.options.stderr_buffer {
+                Output::Captured(buffer.clone())
+            } else if self.options.inherit_stderr {
+                Output::Stderr
+            } else {
+                Output::Sink
+            })?)
+    }
+}
+
+fn captured_error(error: wasmtime_wasi_io::streams::StreamError) -> StreamError {
+    match error {
+        wasmtime_wasi_io::streams::StreamError::Closed => StreamError::Closed,
+        wasmtime_wasi_io::streams::StreamError::Trap(error) => StreamError::Trap(error),
+        wasmtime_wasi_io::streams::StreamError::LastOperationFailed(error) => {
+            StreamError::Failed(io::Error::other(error.to_string()))
+        }
     }
 }

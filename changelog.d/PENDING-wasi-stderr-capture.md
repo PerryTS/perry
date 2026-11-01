@@ -1,0 +1,1 @@
+Rust component hosts can supply an explicitly bounded stderr capture pipe for synchronous and asynchronous WASI providers. Capture is isolated from inherited stderr and stays within the Rust embedding API; the native JSON ABI remains unchanged.

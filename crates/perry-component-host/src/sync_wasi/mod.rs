@@ -71,6 +71,10 @@ pub struct State {
 
 impl State {
     pub fn new(options: &WasiOptions) -> wasmtime::Result<Self> {
+        wasmtime::ensure!(
+            !(options.inherit_stderr && options.stderr_buffer.is_some()),
+            "inherit_stderr and stderr_buffer are mutually exclusive"
+        );
         let mut seed = [0; 16];
         random::fill(&mut seed)?;
         Ok(Self {

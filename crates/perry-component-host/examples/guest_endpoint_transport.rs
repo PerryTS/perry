@@ -9,10 +9,21 @@ use perry_component_host::{
 use perry_wit::{Type, World};
 use serde_json::{json, Value};
 use std::{
+    io::Write,
     path::Path,
     sync::Arc,
     time::{Duration, Instant},
 };
+
+// Synchronous canonical exports cannot block on native stderr. The bounded
+// guest pipe records the actual Wasm diagnostics; native printing happens
+// after execution (also on an early Result error), with native GC controls off.
+struct GuestDiagnostics(perry_wasi::pipe::MemoryOutputPipe);
+impl Drop for GuestDiagnostics {
+    fn drop(&mut self) {
+        let _ = std::io::stderr().write_all(&self.0.contents());
+    }
+}
 
 fn result(driver: &mut Driver, call: &mut DriverCall) -> Result<Option<Value>> {
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -138,8 +149,13 @@ fn main() -> Result<()> {
         "unknown mode"
     );
     let world = perry_wit::parse_file(Path::new(&args[0]), None)?;
+    let diagnostics = args[2..]
+        .iter()
+        .any(|arg| arg == "--moving")
+        .then(|| GuestDiagnostics(perry_wasi::pipe::MemoryOutputPipe::new(16 * 1024 * 1024)));
     let mut wasi = WasiOptions {
-        inherit_stderr: true,
+        inherit_stderr: diagnostics.is_none(),
+        stderr_buffer: diagnostics.as_ref().map(|output| output.0.clone()),
         inherit_stdout: true,
         ..WasiOptions::default()
     };
