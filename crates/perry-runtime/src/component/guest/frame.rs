@@ -258,6 +258,15 @@ impl Drop for Frame {
             super::endpoints::io::retire(self);
             super::resources::release_borrows(self);
             self.end_resource_scope();
+            // The stable native cell is non-young. After unpinning it, a
+            // nursery collection can still scan its remembered child edges
+            // until a major sweep reclaims it. Release conversion values now,
+            // so a closed factory frame cannot keep its returned pair alive.
+            // Every index already exists; these stores cannot allocate.
+            let values = array(self.values());
+            for slot in 0..self.length {
+                crate::array::js_array_set_f64(values, slot, undefined());
+            }
             let owner = unsafe { payload::link_event_owner(self.owner) }
                 .expect("canonical frame on owner thread");
             payload::close(owner, &FRAME);
