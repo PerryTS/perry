@@ -1,4 +1,4 @@
-Whole-program and per-unit facts give a  read of a real Array or a
+Whole-program and per-unit facts give a `length` read of a real Array or a
 primitive String the verdict OwnLength: the property is own and
 non-configurable on those values, so the read needs no prototype check. A
 value that may be no Array (the arguments object, an array made through a
