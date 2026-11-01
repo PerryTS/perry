@@ -173,16 +173,6 @@ pub(crate) fn family_layout_id(ctx: &mut FnCtx<'_>, class_id: u32) -> Option<Str
     Some(blk.load(I32, &id_ptr))
 }
 
-/// May a clone compiled for class `class_name`'s birth layout (the proven-`this`
-/// clone body, fixed slot offsets) run on every object of the class? A class
-/// born on a family is told by the family word, so the family must hold the birth
-/// layout ([`family_holds_birth_layout`]); a class with no family is born on the
-/// birth pair itself.
-pub(crate) fn births_match_clone_layout(ctx: &FnCtx<'_>, class_name: &str, class_id: u32) -> bool {
-    !ctx.program_layouts.families.contains_key(&class_id)
-        || family_holds_birth_layout(ctx, class_name, class_id)
-}
-
 /// Does class `class_name`'s family layout hold exactly the instance its
 /// birth pair describes? Its keys are the class layout's keyable fields, in
 /// the same order at the same slots, every one stored by the inert
