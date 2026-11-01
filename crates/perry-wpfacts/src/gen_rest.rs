@@ -434,56 +434,6 @@ impl<'a> Gen<'a> {
             | Expr::MapDelete { .. }
             | Expr::MapSize(..)
             | Expr::MapClear(..)
-            | Expr::SetHas { .. }
-            | Expr::SetDelete { .. }
-            | Expr::SetSize(..)
-            | Expr::SetClear(..)
-            | Expr::DateNow
-            | Expr::DateGetTime(..)
-            | Expr::DateToISOString(..)
-            | Expr::DateGetFullYear(..)
-            | Expr::DateGetMonth(..)
-            | Expr::DateGetDate(..)
-            | Expr::DateGetDay(..)
-            | Expr::DateGetHours(..)
-            | Expr::DateGetMinutes(..)
-            | Expr::DateGetSeconds(..)
-            | Expr::DateGetMilliseconds(..)
-            | Expr::DateParse(..)
-            | Expr::DateUtc(..)
-            | Expr::DateGetUtcDay(..)
-            | Expr::DateGetUtcFullYear(..)
-            | Expr::DateGetUtcMonth(..)
-            | Expr::DateGetUtcDate(..)
-            | Expr::DateGetUtcHours(..)
-            | Expr::DateGetUtcMinutes(..)
-            | Expr::DateGetUtcSeconds(..)
-            | Expr::DateGetUtcMilliseconds(..)
-            | Expr::DateSetUtcFullYear { .. }
-            | Expr::DateSetUtcMonth { .. }
-            | Expr::DateSetUtcDate { .. }
-            | Expr::DateSetUtcHours { .. }
-            | Expr::DateSetUtcMinutes { .. }
-            | Expr::DateSetUtcSeconds { .. }
-            | Expr::DateSetUtcMilliseconds { .. }
-            | Expr::DateSetFullYear { .. }
-            | Expr::DateSetMonth { .. }
-            | Expr::DateSetDate { .. }
-            | Expr::DateSetHours { .. }
-            | Expr::DateSetMinutes { .. }
-            | Expr::DateSetSeconds { .. }
-            | Expr::DateSetMilliseconds { .. }
-            | Expr::DateSetTime { .. }
-            | Expr::DateValueOf(..)
-            | Expr::DateToString(..)
-            | Expr::DateToDateString(..)
-            | Expr::DateToTimeString(..)
-            | Expr::DateToUTCString(..)
-            | Expr::DateToLocaleDateString(..)
-            | Expr::DateToLocaleTimeString(..)
-            | Expr::DateToLocaleString(..)
-            | Expr::DateGetTimezoneOffset(..)
-            | Expr::DateToJSON(..)
             | Expr::UrlGetHref(..)
             | Expr::UrlGetPathname(..)
             | Expr::UrlGetProtocol(..)
@@ -519,6 +469,63 @@ impl<'a> Gen<'a> {
             | Expr::ProxyRevoke(..) => {
                 // Mixed: element reads, `raw` / `toISOString` lookups, spreads.
                 self.prim_kids(fx, e, prim::ALL, "primitive builtin operand", Protocol::Any)
+            }
+            Expr::DateGetTime(..) => self.receiver_method(fx, e, "getTime"),
+            Expr::DateGetFullYear(..) => self.receiver_method(fx, e, "getFullYear"),
+            Expr::DateGetMonth(..) => self.receiver_method(fx, e, "getMonth"),
+            Expr::DateGetDate(..) => self.receiver_method(fx, e, "getDate"),
+            Expr::DateGetDay(..) => self.receiver_method(fx, e, "getDay"),
+            Expr::DateGetHours(..) => self.receiver_method(fx, e, "getHours"),
+            Expr::DateGetMinutes(..) => self.receiver_method(fx, e, "getMinutes"),
+            Expr::DateGetSeconds(..) => self.receiver_method(fx, e, "getSeconds"),
+            Expr::DateGetMilliseconds(..) => self.receiver_method(fx, e, "getMilliseconds"),
+            Expr::DateGetUtcDay(..) => self.receiver_method(fx, e, "getUTCDay"),
+            Expr::DateGetUtcFullYear(..) => self.receiver_method(fx, e, "getUTCFullYear"),
+            Expr::DateGetUtcMonth(..) => self.receiver_method(fx, e, "getUTCMonth"),
+            Expr::DateGetUtcDate(..) => self.receiver_method(fx, e, "getUTCDate"),
+            Expr::DateGetUtcHours(..) => self.receiver_method(fx, e, "getUTCHours"),
+            Expr::DateGetUtcMinutes(..) => self.receiver_method(fx, e, "getUTCMinutes"),
+            Expr::DateGetUtcSeconds(..) => self.receiver_method(fx, e, "getUTCSeconds"),
+            Expr::DateGetUtcMilliseconds(..) => self.receiver_method(fx, e, "getUTCMilliseconds"),
+            Expr::DateValueOf(..) => self.receiver_method(fx, e, "valueOf"),
+            Expr::DateGetTimezoneOffset(..) => self.receiver_method(fx, e, "getTimezoneOffset"),
+            Expr::DateToISOString(..) => self.receiver_method(fx, e, "toISOString"),
+            Expr::DateToString(..) => self.receiver_method(fx, e, "toString"),
+            Expr::DateToDateString(..) => self.receiver_method(fx, e, "toDateString"),
+            Expr::DateToTimeString(..) => self.receiver_method(fx, e, "toTimeString"),
+            Expr::DateToUTCString(..) => self.receiver_method(fx, e, "toUTCString"),
+            Expr::DateToLocaleDateString(..) => self.receiver_method(fx, e, "toLocaleDateString"),
+            Expr::DateToLocaleTimeString(..) => self.receiver_method(fx, e, "toLocaleTimeString"),
+            Expr::DateToLocaleString(..) => self.receiver_method(fx, e, "toLocaleString"),
+            Expr::DateToJSON(..) => self.receiver_method(fx, e, "toJSON"),
+            Expr::DateSetUtcFullYear{ .. } => self.receiver_method(fx, e, "setUTCFullYear"),
+            Expr::DateSetUtcMonth{ .. } => self.receiver_method(fx, e, "setUTCMonth"),
+            Expr::DateSetUtcDate{ .. } => self.receiver_method(fx, e, "setUTCDate"),
+            Expr::DateSetUtcHours{ .. } => self.receiver_method(fx, e, "setUTCHours"),
+            Expr::DateSetUtcMinutes{ .. } => self.receiver_method(fx, e, "setUTCMinutes"),
+            Expr::DateSetUtcSeconds{ .. } => self.receiver_method(fx, e, "setUTCSeconds"),
+            Expr::DateSetUtcMilliseconds{ .. } => self.receiver_method(fx, e, "setUTCMilliseconds"),
+            Expr::DateSetFullYear{ .. } => self.receiver_method(fx, e, "setFullYear"),
+            Expr::DateSetMonth{ .. } => self.receiver_method(fx, e, "setMonth"),
+            Expr::DateSetDate{ .. } => self.receiver_method(fx, e, "setDate"),
+            Expr::DateSetHours{ .. } => self.receiver_method(fx, e, "setHours"),
+            Expr::DateSetMinutes{ .. } => self.receiver_method(fx, e, "setMinutes"),
+            Expr::DateSetSeconds{ .. } => self.receiver_method(fx, e, "setSeconds"),
+            Expr::DateSetMilliseconds{ .. } => self.receiver_method(fx, e, "setMilliseconds"),
+            Expr::DateSetTime{ .. } => self.receiver_method(fx, e, "setTime"),
+            // Static Date conversions do not read a receiver. parse
+            // ToString's one operand; UTC ToNumber's at most 7 components.
+            Expr::DateNow => self.prim_node(prim::NUM),
+            Expr::DateParse(x) => self.prim_op(fx, &[x], prim::NUM, "ToString of Date.parse text", Protocol::ToPrimitive),
+            Expr::DateUtc(xs) => self.prim_op(fx, &xs.iter().take(7).collect::<Vec<_>>(), prim::NUM, "ToNumber of Date.UTC component", Protocol::ToPrimitive),
+            // Set queries compare keys by SameValueZero; size reads an
+            // internal slot and clear retains/calls no operand.
+            Expr::SetHas { .. } => self.receiver_method(fx, e, "has"),
+            Expr::SetDelete { .. } => self.receiver_method(fx, e, "delete"),
+            Expr::SetClear(..) => self.receiver_method(fx, e, "clear"),
+            Expr::SetSize(x) => {
+                let recv = self.expr(fx, x); let a = self.m.atom("size");
+                self.load(recv, Key::Named(a))
             }
             // Every Math function returns a Number (ECMA-262 Math).
             Expr::MathFloor(..)

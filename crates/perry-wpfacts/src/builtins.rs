@@ -1221,6 +1221,7 @@ fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
             TmplKind::Arr { .. } => true,
             TmplKind::BObj { what, .. } => {
                 members::bobj_family(what) != Family::Opaque
+                    || *what == "Date"
                     || (*what == "RegExp"
                         && name.as_deref().is_some_and(|n| {
                             string_methods::regexp_described(n) || collections::regexp_species(n)
@@ -2055,7 +2056,18 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             }
             ret_tok(m, call, e);
         }
-        BuiltinNs::Date | BuiltinNs::RegExp => {
+        BuiltinNs::Date => {
+            // ECMA-262 21.4.2.1: one operand ToPrimitive (unless a Date
+            // internal-slot copy); 2..7 operands ToNumber. No operand is
+            // retained or called otherwise; surplus operands are ignored.
+            let c = m.calls[call as usize].clone();
+            for &a in c.args.iter().take(if c.args.len() == 1 { 1 } else { 7 }) {
+                string_methods::to_prim(m, a, "Date constructor ToNumber/ToString");
+            }
+            let o = site_tmpl(m, call, "Date");
+            ret_tok(m, call, o);
+        }
+        BuiltinNs::RegExp => {
             implicit_args(m, call, "builtin constructor argument", Protocol::Any);
             let what = if ns == BuiltinNs::Date {
                 "Date"

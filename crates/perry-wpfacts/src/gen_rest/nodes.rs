@@ -6,6 +6,17 @@
 use super::*;
 
 impl<'a> Gen<'a> {
+    /// The first HIR child is the receiver; the remaining children are
+    /// arguments. Solve normal property lookup, including replacements
+    /// and unknown receiver families, before choosing a builtin rule.
+    pub(super) fn receiver_method(&mut self, fx: &Fx, e: &Expr, name: &str) -> NodeId {
+        let ks = kids(e);
+        let recv = self.expr(fx, ks[0]);
+        let args = ks[1..].iter().map(|x| self.expr(fx, x)).collect();
+        let a = self.m.atom(name);
+        self.mcall(recv, Key::Named(a), args, vec![])
+    }
+
     pub(super) fn prim_kids(&mut self, fx: &Fx, e: &Expr, result: u16, why: &str, proto: Protocol) -> NodeId {
         let ks = kids(e);
         self.prim_op(fx, &ks, result, why, proto)

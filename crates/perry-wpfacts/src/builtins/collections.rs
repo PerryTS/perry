@@ -799,6 +799,47 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             ret_tok(m, call, out);
         }
         ("Error", Some("toString")) => ret_prim(m, call, prim::STR),
+        // ECMA-262 21.4.4: getters inspect [[DateValue]], never the
+        // operands. The known Date token and intrinsic_miss in own_method
+        // guard this rule; a written method also takes the opaque path.
+        ("Date", Some("getTime" | "getDate" | "getDay" | "getFullYear" | "getYear"
+            | "getMonth" | "getHours" | "getMinutes" | "getSeconds" | "getMilliseconds"
+            | "getUTCDate" | "getUTCDay" | "getUTCFullYear" | "getUTCMonth"
+            | "getUTCHours" | "getUTCMinutes" | "getUTCSeconds" | "getUTCMilliseconds"
+            | "getTimezoneOffset" | "valueOf")) if c.spread.is_empty() => ret_prim(m, call, prim::NUM),
+        ("Date", Some("toString" | "toDateString" | "toTimeString" | "toUTCString"
+            | "toGMTString" | "toISOString")) if c.spread.is_empty() => ret_prim(m, call, prim::STR),
+        ("Date", Some(n @ ("setTime" | "setDate" | "setFullYear" | "setYear" | "setMonth"
+            | "setHours" | "setMinutes" | "setSeconds" | "setMilliseconds" | "setUTCDate"
+            | "setUTCFullYear" | "setUTCMonth" | "setUTCHours" | "setUTCMinutes"
+            | "setUTCSeconds" | "setUTCMilliseconds"))) if c.spread.is_empty() => {
+            // Each supplied component is ToNumber'd. The setter retains
+            // only the clipped numeric time and returns a Number.
+            let count = match n {
+                "setFullYear" | "setUTCFullYear" | "setMinutes" | "setUTCMinutes" => 3,
+                "setMonth" | "setUTCMonth" | "setSeconds" | "setUTCSeconds" => 2,
+                "setHours" | "setUTCHours" => 4,
+                _ => 1,
+            };
+            for &a in c.args.iter().take(count) {
+                string_methods::to_prim(m, a, "Date setter ToNumber");
+            }
+            ret_prim(m, call, prim::NUM);
+        }
+        ("Date", Some("toJSON")) if c.spread.is_empty() => {
+            // 21.4.4.37: ToPrimitive(this, number), then Invoke(this,
+            // "toISOString"). Its arbitrary result is returned verbatim;
+            // a nonfinite primitive time instead returns null.
+            let recv = m.node_l("date");
+            m.add_tok(recv, t);
+            string_methods::to_prim(m, recv, "Date toJSON time");
+            let a = m.atom("toISOString");
+            let nested = m.calls.len() as CallId;
+            m.solver_call(call, CallSite { this: ThisArg::Node(recv), args: vec![], spread: vec![], ret: c.ret, site: nested });
+            m.cons(recv, Cons::MCall { key: Key::Named(a), call: nested });
+            ret_prim(m, call, prim::NULL);
+        }
+
         ("RegExp", Some(n)) if string_methods::regexp_described(n) => {
             string_methods::regexp_method(m, t, n, call)
         }
