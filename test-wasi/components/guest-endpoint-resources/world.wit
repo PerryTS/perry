@@ -1,0 +1,23 @@
+package perry:guest-endpoint-resources@1.0.0;
+
+interface api {
+    resource item { constructor(value: u32); read: func() -> u32; }
+    record payload {
+        first: own<item>,
+        second: option<own<item>>,
+        text: string,
+        bytes: list<u8>,
+    }
+    type pending = future<payload>;
+    type values = stream<payload>;
+    record counts { dropped: u32, completed: u32, failed: u32, chunks: u32, started: u32 }
+    make-future: func(value: payload) -> pending;
+    make-values: func(value: list<payload>) -> values;
+    make-cancelled: func(value: list<payload>) -> values;
+    make-closed: func(value: list<payload>) -> values;
+    read-future: async func(value: pending) -> payload;
+    read-values: async func(value: values) -> list<payload>;
+    checkpoint: func() -> counts;
+}
+
+world plugin { export api; }

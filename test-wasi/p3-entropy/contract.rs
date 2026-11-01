@@ -14,9 +14,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Vec::new()
     };
     let mut types = Vec::new();
+    let mut instances = Vec::new();
     required.retain(|arg| {
         if let Some(name) = arg.strip_prefix("--type-import=") {
             types.push(name.to_string());
+            false
+        } else if let Some(name) = arg.strip_prefix("--instance-export=") {
+            instances.push(name.to_string());
             false
         } else {
             true
@@ -28,7 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         return Err("invalid declared application type import".into());
     }
-    if (reactor && required.is_empty()) || (!reactor && args.len() != 1) {
+    if (reactor && required.is_empty() && instances.is_empty()) || (!reactor && args.len() != 1) {
         return Err("invalid P3 contract profile arguments".into());
     }
     let bytes = std::fs::read(path)?;
@@ -80,6 +84,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         && export.kind == ComponentExternalKind::Instance;
                     if export.kind == ComponentExternalKind::Func {
                         required.retain(|name| name != export.name.name);
+                    } else if export.kind == ComponentExternalKind::Instance {
+                        instances.retain(|name| name != export.name.name);
                     }
                     println!("export {}", export.name.name);
                 }
@@ -94,8 +100,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         || !random
         || !required.is_empty()
         || !types.is_empty()
+        || !instances.is_empty()
     {
-        return Err(format!("incomplete P3 contract: depth={depth}, imports={imports}, run={command}, random={random}, missing_exports={required:?}, missing_types={types:?}").into());
+        return Err(format!("incomplete P3 contract: depth={depth}, imports={imports}, run={command}, random={random}, missing_exports={required:?}, missing_types={types:?}, missing_instances={instances:?}").into());
     }
     if reactor {
         println!("PASS: external WASI 0.3-only reactor contract and required function exports");
