@@ -374,10 +374,11 @@ pub struct Template {
     pub null_proto: bool,
     /// An array a builtin made with ArraySpeciesCreate (ECMA-262 10.4.2.3:
     /// `slice`, `splice`, `concat`, `map`, `filter`, `flat`, `flatMap`): the
-    /// node holding the receivers whose `constructor` made it. It is an
-    /// Array exotic only while each of them is an Array whose `constructor`
-    /// is `%Array%` with an unwritten `@@species` (`derive::exact_array`).
-    /// `None`: born by ArrayCreate, or no array.
+    /// node of the constructors the algorithm may take, each receiver's
+    /// `constructor` and that value's `@@species`
+    /// (`builtins::array_species`). It is an Array exotic only while no
+    /// object but `%Array%` is among them (`derive::exact_array`). `None`:
+    /// born by ArrayCreate, or no array.
     pub species: Option<NodeId>,
 }
 

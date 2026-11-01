@@ -63,7 +63,9 @@ impl<'a> Gen<'a> {
                 && vc.fns.is_empty()
                 && vc.builtins.is_empty()
                 && vc.arrays.is_empty()
+                && vc.made_arrays.is_empty()
                 && vc.boxes.is_empty()
+                && vc.arrayboxes.is_empty()
                 && vc.indexed_owners.is_empty()
                 && vc.layouts.iter().all(|c| !unit_in.broken(&c.display));
             if !described {
@@ -410,9 +412,39 @@ impl<'a> Gen<'a> {
             let t = self.stand_in_arr(mi, d, false);
             self.m.add_tok(n, t);
         }
+        // ARU D6: one made through a constructor its owner does not prove
+        // to be an Array. Its stand-in's constructor is ⊤
+        // (`Template::species`), so no description of the same array makes
+        // it exact again.
+        for d in &c.made_arrays {
+            let t = self.stand_in_arr(mi, d, false);
+            let tm = self.m.tmpl_of(t).expect("array template");
+            let src = match self.m.tmpls[tm as usize].species {
+                Some(s) => s,
+                None => {
+                    let s = self.m.node_l("array-species");
+                    self.m.tmpls[tm as usize].species = Some(s);
+                    s
+                }
+            };
+            self.m
+                .add_top(src, |_| "made by another unit through a constructor".into());
+            self.m.add_tok(n, t);
+        }
         // DECISIONS 184: another unit's primitive method container.
         for d in &c.boxes {
             let t = self.stand_in_arr(mi, d, true);
+            self.m.add_tok(n, t);
+        }
+        // ARU D3: one that is an Array (an own-keys result). A stand-in a
+        // `box:` cell key made first (`primbox`, the key does not say which)
+        // takes the kind its description gives.
+        for d in &c.arrayboxes {
+            let t = self.stand_in_arr(mi, d, true);
+            let tm = self.m.tmpl_of(t).expect("container template");
+            if let TmplKind::BObj { what, .. } = &mut self.m.tmpls[tm as usize].kind {
+                *what = "arraybox";
+            }
             self.m.add_tok(n, t);
         }
         n

@@ -514,19 +514,49 @@ fn iterator_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
     }
 }
 
-/// `out` (a call's array) is made from receiver `t` with ArraySpeciesCreate
-/// (`Template::species`).
-fn species_from(m: &mut Model, out: Tok, t: Tok) {
-    let tm = m.tmpl_of(out).expect("site template");
-    let n = match m.tmpls[tm as usize].species {
+/// ArraySpeciesCreate (ECMA-262 10.4.2.3) of array template `tm` from the
+/// receivers in node `src`: the receivers' `constructor` is read, and its
+/// `@@species` when it is an object. Both values flow into the template's
+/// species node (`Template::species`): the constructor it is made with is
+/// one of them (or `undefined`). Neither is called here: the array stays
+/// the builtin's result (a constructor other than `%Array%` only takes the
+/// verdicts that need an Array away, `derive::exact_array`).
+pub(crate) fn array_species(m: &mut Model, tm: TmplId, src: NodeId) {
+    let sc = match m.tmpls[tm as usize].species {
         Some(n) => n,
         None => {
-            let n = m.node_l("species-source");
+            let n = m.node_l("array-species");
             m.tmpls[tm as usize].species = Some(n);
             n
         }
     };
-    m.add_tok(n, t);
+    let k = m.atom("constructor");
+    let cn = m.node_l("array-species-constructor");
+    m.cons(
+        src,
+        Cons::Load {
+            key: Key::Named(k),
+            dst: cn,
+        },
+    );
+    m.edge(cn, sc);
+    let sp = m.atom("@@__perry_wk_species");
+    m.cons(
+        cn,
+        Cons::Load {
+            key: Key::Named(sp),
+            dst: sc,
+        },
+    );
+}
+
+/// `out` (a call's array) is made from receiver `t` with ArraySpeciesCreate
+/// (`array_species`).
+fn species_from(m: &mut Model, out: Tok, t: Tok) {
+    let tm = m.tmpl_of(out).expect("site template");
+    let src = m.node_l("array-species-receiver");
+    m.add_tok(src, t);
+    array_species(m, tm, src);
 }
 
 pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
