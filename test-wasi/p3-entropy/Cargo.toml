@@ -1,0 +1,27 @@
+[package]
+name = "perry-p3-entropy-probe"
+version = "0.0.0"
+edition = "2021"
+publish = false
+autobins = false
+
+[workspace]
+
+[[bin]]
+name = "entropy"
+path = "entropy.rs"
+
+[[bin]]
+name = "p3-contract"
+path = "contract.rs"
+
+[dependencies]
+getrandom02 = { package = "getrandom", path = "../../third_party/getrandom/0.2.17" }
+getrandom03 = { package = "getrandom", path = "../../third_party/getrandom/0.3.4" }
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+# Same parser release as the component engine in the root lockfile.
+wasmparser = "=0.254.2"
+
+[profile.release]
+panic = "abort"
