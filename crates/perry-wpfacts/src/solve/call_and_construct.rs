@@ -1045,6 +1045,12 @@ impl Model {
         // callbacks are not that: they never write the intrinsics, and a
         // compiled function called from unknown code sees ⊤ parameters, whose
         // writes `store_into` records.
+        if self.array_member_write.is_none()
+            && self.reasons[reason as usize].starts_with(crate::gen_expr::UNMODELED_OPERAND)
+        {
+            let what = format!("reaches unmodeled code ({})", self.reasons[reason as usize]);
+            self.note_array_member_write(t, None, None, &what);
+        }
         if self.fnproto_write.is_none()
             && matches!(self.toks[t as usize], TokKind::ObjectProto)
             && self.reasons[reason as usize].starts_with(crate::gen_expr::UNMODELED_OPERAND)
@@ -1877,6 +1883,12 @@ impl Model {
         }
         if kind == Hard::E6SetPrototypeOf {
             self.super_relink.insert(t);
+        }
+        if matches!(
+            kind,
+            Hard::E5DefineProperty | Hard::E6SetPrototypeOf | Hard::E15With
+        ) {
+            self.note_array_member_write(t, None, None, kind.code());
         }
         if matches!(
             kind,

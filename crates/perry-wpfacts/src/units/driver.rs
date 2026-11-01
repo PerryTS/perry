@@ -1726,6 +1726,11 @@ pub(super) fn merge_unit(
     pf.super_unrelinked.extend(u.super_unrelinked);
     pf.interp_guard = pf.interp_guard.take().or(u.interp_guard);
     pf.fnproto_bind_written = pf.fnproto_bind_written.take().or(u.fnproto_bind_written);
+    pf.array_iteration_written = pf.array_iteration_written.take().or(u.array_iteration_written);
+    pf.array_iterator_close_written = pf
+        .array_iterator_close_written
+        .take()
+        .or(u.array_iterator_close_written);
     let (a, s) = (&mut pf.stats, &u.stats);
     a.templates += s.templates;
     a.fact_units += s.fact_units;

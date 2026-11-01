@@ -215,6 +215,15 @@ pub(crate) fn run(
                 .as_deref()
                 .map_or("unwritten".to_string(), |r| format!("may be written: {r}"))
         );
+        eprintln!(
+            "perry: wpfacts: array @@iterator {}; array iterator next/return {}",
+            pf.array_iteration_written
+                .as_deref()
+                .map_or("unwritten".to_string(), |r| format!("may be written: {r}")),
+            pf.array_iterator_close_written
+                .as_deref()
+                .map_or("unwritten".to_string(), |r| format!("may be written: {r}"))
+        );
         let t0 = pf
             .sites
             .iter()
@@ -343,6 +352,14 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
     // program (the bind gap tests that write Function.prototype must fail).
     out.fnproto_bind_unwritten =
         pf.fnproto_bind_written.is_none() || pf.sabotage.as_deref() == Some("fnproto-unwritten");
+    // `PERRY_FACTS_SABOTAGE=array-iteration-unwritten`: claim both array
+    // iteration facts for every program (the for-of gap tests that replace
+    // an iterator, `next` or `return` must fail).
+    let iteration_sabotage = pf.sabotage.as_deref() == Some("array-iteration-unwritten");
+    out.array_iteration_unwritten = iteration_sabotage
+        || (pf.interp_guard.is_none() && pf.array_iteration_written.is_none());
+    out.array_iterator_close_unwritten = iteration_sabotage
+        || (pf.interp_guard.is_none() && pf.array_iterator_close_written.is_none());
     let Some(mb) = pf.bindings_for(path) else {
         return out;
     };

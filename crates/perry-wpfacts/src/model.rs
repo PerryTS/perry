@@ -1459,6 +1459,20 @@ pub struct Model {
     /// them. `None` after the solve: compiled code never writes them
     /// ([`Model::note_fnproto_write`]).
     pub fnproto_write: Option<u32>,
+    /// #13645: why iterating an array may not read the builtin
+    /// `%Array.prototype%[@@iterator]`: the first write under
+    /// `Symbol.iterator`, `__proto__` or a computed key, definition or
+    /// prototype change on a value that may be an array (or a prototype on
+    /// an Array subclass's chain), or a `Reflect.construct` with a new
+    /// target ([`Model::note_array_member_write`]). Writes that may reach a
+    /// builtin prototype are in [`Model::native_writes`]
+    /// ([`Model::array_iteration_writes`]).
+    pub array_member_write: Option<u32>,
+    /// #13645: computed-key stores (site, reason) on a value that may be an
+    /// array: a write of `@@iterator` or `__proto__` only if the site's key
+    /// can hold a string, a symbol or an object once the solve is done
+    /// ([`Model::array_iteration_writes`]); a number key is an element.
+    pub array_keyed_stores: Vec<(SiteId, u32)>,
     /// Native parent prototypes (`EventEmitter.prototype`, `Error.prototype`
     /// …) are runtime-owned, like `Object.prototype`: sealed static layouts
     /// whose keys the analysis knows ([`crate::builtins::native_proto_keys`]),
