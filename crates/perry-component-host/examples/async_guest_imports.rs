@@ -1,4 +1,6 @@
 //! Real Perry WASI guest: typed suspended imports, concurrent children and tails.
+#[path = "support/guest_diagnostics.rs"]
+mod guest_diagnostics;
 use anyhow::{ensure, Result};
 use futures_channel::oneshot;
 use futures_lite::future::{block_on, poll_once};
@@ -157,16 +159,11 @@ fn main() -> Result<()> {
         inherit_stderr: true,
         ..WasiOptions::default()
     };
-    if matches!(mode, "--moving" | "--inline-moving") {
-        for name in [
-            "PERRY_GC_INSTRUMENTS",
-            "PERRY_GC_FORCE_EVACUATE",
-            "PERRY_GC_VERIFY_EVACUATION",
-            "PERRY_GC_DIAG",
-        ] {
-            wasi.env.insert(name.into(), "1".into());
-        }
-    }
+    let _diagnostics = guest_diagnostics::configure(
+        &mut wasi,
+        matches!(mode, "--moving" | "--inline-moving"),
+        311,
+    );
     let options = Options {
         fuel: 2_000_000_000,
         memory_bytes: 256 * 1024 * 1024,

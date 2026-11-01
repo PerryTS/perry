@@ -1,4 +1,6 @@
 //! Compose a C caller around the Perry guest and cancel one canonical call.
+#[path = "support/guest_diagnostics.rs"]
+mod guest_diagnostics;
 use anyhow::{ensure, Result};
 use futures_channel::oneshot;
 use futures_lite::future::{block_on, poll_once};
@@ -111,16 +113,8 @@ fn main() -> Result<()> {
         inherit_stderr: true,
         ..WasiOptions::default()
     };
-    if args.get(2).is_some_and(|s| s == "--moving") {
-        for key in [
-            "PERRY_GC_INSTRUMENTS",
-            "PERRY_GC_FORCE_EVACUATE",
-            "PERRY_GC_VERIFY_EVACUATION",
-            "PERRY_GC_DIAG",
-        ] {
-            wasi.env.insert(key.into(), "1".into());
-        }
-    }
+    let _diagnostics =
+        guest_diagnostics::configure(&mut wasi, args.get(2).is_some_and(|s| s == "--moving"), 313);
     let host = Host::new_for_driver(
         &std::fs::read(&args[1])?,
         &world,

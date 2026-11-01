@@ -1,4 +1,6 @@
 //! Actual Perry guest: generated C scheduler, moving GC and reverse wakes.
+#[path = "support/guest_diagnostics.rs"]
+mod guest_diagnostics;
 use anyhow::{ensure, Result};
 use futures_lite::future::{block_on, poll_once};
 use perry_component_host::{AsyncImports, Driver, DriverCall, Host, Imports, Options, WasiOptions};
@@ -43,16 +45,7 @@ fn main() -> Result<()> {
         inherit_stderr: true,
         ..WasiOptions::default()
     };
-    if moving {
-        for name in [
-            "PERRY_GC_INSTRUMENTS",
-            "PERRY_GC_FORCE_EVACUATE",
-            "PERRY_GC_VERIFY_EVACUATION",
-            "PERRY_GC_DIAG",
-        ] {
-            wasi.env.insert(name.into(), "1".into());
-        }
-    }
+    let _diagnostics = guest_diagnostics::configure(&mut wasi, moving, 312);
     let options = Options {
         // Overlapping calls share one budget, including repeated full guest GC.
         fuel: 2_000_000_000,
