@@ -378,9 +378,15 @@ static void *perry_initialize(void) {
         let mut live = LiveTypes::default();
         live.add_func(self.resolve, function);
         for id in live.iter() {
-            if let Some(ty) = self.endpoints.get(&id) {
-                self.endpoint_operations
-                    .insert(*ty, self.names[&id].clone());
+            if let Some(ty) = self.endpoints.get(&id).copied() {
+                if !self.endpoint_operations.contains_key(&ty) {
+                    let name = self.names[&id].clone();
+                    // Encode the payload while this import/export namespace
+                    // is active. Exported interfaces deliberately prune and
+                    // rebuild these maps; readers retain the emitted C code.
+                    self.reader_adapter(ty, id, &name)?;
+                    self.endpoint_operations.insert(ty, name);
+                }
             }
         }
         let name = key

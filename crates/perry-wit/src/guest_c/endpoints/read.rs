@@ -3,7 +3,12 @@ use super::*;
 use wit_parser::Type;
 
 impl Generator<'_> {
-    pub(super) fn reader_adapter(&mut self, ty: u32, id: TypeId, name: &str) -> Result<()> {
+    pub(in super::super) fn reader_adapter(
+        &mut self,
+        ty: u32,
+        id: TypeId,
+        name: &str,
+    ) -> Result<()> {
         let (stream, payload) = match self.resolve.types[id].kind {
             TypeDefKind::Future(payload) => (false, payload),
             TypeDefKind::Stream(payload) => (true, payload),

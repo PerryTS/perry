@@ -16,4 +16,15 @@ world plugin {
     export dispose: func(value: future<u32>);
     export forget: func(value: stream<u32>);
     export checkpoint: func() -> u32;
+    export read-started: func() -> u32;
+    export read-future: async func(value: pending) -> payload;
+    export read-values: async func(value: values) -> list<payload>;
+    export read-character: async func(value: future<char>) -> char;
+    export read-empty: async func(value: future) -> bool;
+    export read-units: async func(value: stream) -> u32;
+    export read-bytes: async func(value: stream<u8>) -> list<u8>;
+    export read-nested: async func(value: future<future<u32>>) -> u32;
+    export dispose-pending: async func(value: future<u32>) -> bool;
+    export abandon-read: async func(value: future<u32>) -> bool;
+    export read-held: async func() -> u32;
 }

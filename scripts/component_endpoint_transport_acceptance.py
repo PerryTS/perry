@@ -60,7 +60,7 @@ def main():
     libraries = []
     components = []
     control_files = []
-    marker = "PASS: actual Perry P3 endpoint transport, compound/char/void/unit/byte/nested values, partial chunks, explicit/GC cleanup and Store reuse"
+    marker = "PASS: actual Perry P3 endpoint transport and guest reads, compound/char/void/unit/byte/nested values, partial chunks, cancellation, abandoned-read retry and Store reuse"
 
     def link(directory, archive, component):
         return [args.wasi_sdk.resolve() / "bin" / ("clang" + suffix),
@@ -90,6 +90,8 @@ def main():
         run(kind + "-contract", [args.p3_contract.resolve(), "--reactor", component,
                                  "pass-future", "pass-stream", "pass-pair", "character", "empty",
                                  "units", "bytes", "nested-value", "dispose", "forget", "checkpoint",
+                                 "read-started", "read-future", "read-values", "read-character", "read-empty",
+                                 "read-units", "read-bytes", "read-nested", "dispose-pending", "abandon-read", "read-held",
                                  "--type-import=payload", "--type-import=pending",
                                  "--type-import=values", "--type-import=pair"])
         run(kind + "-execute", [binaries / ("guest_endpoint_transport" + suffix), guest / "world.wit", component])

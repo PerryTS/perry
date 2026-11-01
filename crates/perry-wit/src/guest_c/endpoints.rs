@@ -9,15 +9,6 @@ impl Generator<'_> {
                 .push_str("static void perry_endpoint_flush(void) {}\n");
             return Ok(());
         }
-        for (ty, name) in self.endpoint_operations.clone() {
-            let id = self
-                .resolve
-                .types
-                .iter()
-                .find_map(|(id, _)| (id.index() == (ty / 2) as usize).then_some(id))
-                .expect("manifest endpoint TypeId");
-            self.reader_adapter(ty, id, &name)?;
-        }
         self.source.push_str("static int32_t perry_endpoint_operation(void *f, uint32_t type, uint32_t reader, uint32_t operation, uint32_t argument) {\nif (operation != 0) { perry_bad(f, \"Unsupported guest endpoint operation\"); return -1; }\nswitch (type) {\n");
         for ty in self.endpoint_operations.keys() {
             writeln!(

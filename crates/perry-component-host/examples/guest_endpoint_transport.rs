@@ -136,6 +136,126 @@ fn stream(
     Ok(())
 }
 
+fn guest_read_start(
+    driver: &mut Driver,
+    client: &DriverClient,
+    name: &str,
+    reader: Value,
+) -> Result<DriverCall> {
+    let before = call(driver, client, "read-started", &[])?
+        .as_u64()
+        .context("read counter")?;
+    let mut pending = client.call("", name, &[reader])?;
+    // A sibling synchronous call must execute while the async read is blocked.
+    // It also collects, proving the awaited endpoint and operation are rooted.
+    ensure!(
+        call(driver, client, "read-started", &[])? == before + 1,
+        "guest read did not start"
+    );
+    ensure!(
+        block_on(poll_once(&mut pending)).is_none(),
+        "guest read completed before its writer supplied data"
+    );
+    Ok(pending)
+}
+
+fn guest_reads(
+    driver: &mut Driver,
+    client: &DriverClient,
+    world: &World,
+    payload: Value,
+) -> Result<()> {
+    for (name, value, expected) in [
+        ("read-future", payload.clone(), payload.clone()),
+        ("read-character", json!("🍐"), json!("🍐")),
+        ("read-empty", Value::Null, json!(true)),
+    ] {
+        let (reader, writer) = pair(driver, client, world, name)?;
+        let mut pending = guest_read_start(driver, client, name, reader)?;
+        let write = result(driver, &mut client.write_async_value(&writer, &[value])?)?
+            .context("read fixture write")?;
+        ensure!(write["written"] == 1);
+        ensure!(
+            result(driver, &mut pending)? == Some(expected),
+            "{name} result"
+        );
+    }
+    for (name, values, expected) in [
+        (
+            "read-values",
+            vec![payload.clone(); 5],
+            json!(vec![payload; 5]),
+        ),
+        ("read-units", vec![Value::Null; 7], json!(7)),
+        (
+            "read-bytes",
+            vec![json!(0), json!(1), json!(128), json!(255), json!(17)],
+            json!([0, 1, 128, 255, 17]),
+        ),
+    ] {
+        let (reader, writer) = pair(driver, client, world, name)?;
+        let mut pending = guest_read_start(driver, client, name, reader)?;
+        let mut remaining = values;
+        let mut chunks = 0;
+        while !remaining.is_empty() {
+            let write = result(driver, &mut client.write_async_value(&writer, &remaining)?)?
+                .context("chunk write")?;
+            ensure!(write["written"]
+                .as_u64()
+                .is_some_and(|count| count > 0 && count <= 2));
+            remaining = write["remaining"]
+                .as_array()
+                .context("remaining chunk")?
+                .clone();
+            chunks += 1;
+        }
+        ensure!(chunks >= 3, "the guest must really read partial chunks");
+        result(driver, &mut client.close_async_writer(&writer)?)?;
+        ensure!(
+            result(driver, &mut pending)? == Some(expected),
+            "{name} result"
+        );
+    }
+    let (inner, inner_writer) = pair(driver, client, world, "dispose")?;
+    let (outer, outer_writer) = pair(driver, client, world, "read-nested")?;
+    let mut pending = guest_read_start(driver, client, "read-nested", outer)?;
+    result(
+        driver,
+        &mut client.write_async_value(&outer_writer, &[inner])?,
+    )?;
+    ensure!(block_on(poll_once(&mut pending)).is_none());
+    result(
+        driver,
+        &mut client.write_async_value(&inner_writer, &[json!(42)])?,
+    )?;
+    ensure!(result(driver, &mut pending)? == Some(json!(42)));
+
+    let (reader, writer) = pair(driver, client, world, "dispose-pending")?;
+    ensure!(call(driver, client, "dispose-pending", &[reader])? == true);
+    let closed = result(
+        driver,
+        &mut client.write_async_value(&writer, &[json!(17)])?,
+    )?
+    .context("cancelled read writer")?;
+    ensure!(closed["closed"] == true && closed["written"] == 0);
+
+    let (reader, writer) = pair(driver, client, world, "abandon-read")?;
+    ensure!(call(driver, client, "abandon-read", &[reader])? == true);
+    let before = call(driver, client, "read-started", &[])?;
+    let mut retry = client.call("", "read-held", &[])?;
+    ensure!(call(driver, client, "read-started", &[])?.as_u64() == before.as_u64().map(|n| n + 1));
+    ensure!(block_on(poll_once(&mut retry)).is_none());
+    result(
+        driver,
+        &mut client.write_async_value(&writer, &[json!(99)])?,
+    )?;
+    ensure!(
+        result(driver, &mut retry)? == Some(json!(99)),
+        "abandoned read must cancel without consuming its retained endpoint"
+    );
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     ensure!(
@@ -221,7 +341,7 @@ fn main() -> Result<()> {
             &returned["first"],
             &aw,
             payload.clone()
-        )? == Some(payload)
+        )? == Some(payload.clone())
     );
     stream(&mut driver, &client, &returned["second"], &bw, vec![])?;
     for (name, value, expected) in [
@@ -266,6 +386,8 @@ fn main() -> Result<()> {
         call(&mut driver, &client, "checkpoint", &[])? == 73,
         "Store must remain usable"
     );
-    println!("PASS: actual Perry P3 endpoint transport, compound/char/void/unit/byte/nested values, partial chunks, explicit/GC cleanup and Store reuse");
+    guest_reads(&mut driver, &client, &world, payload.clone())?;
+    ensure!(call(&mut driver, &client, "checkpoint", &[])? == 73);
+    println!("PASS: actual Perry P3 endpoint transport and guest reads, compound/char/void/unit/byte/nested values, partial chunks, cancellation, abandoned-read retry and Store reuse");
     Ok(())
 }
