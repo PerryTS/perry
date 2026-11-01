@@ -276,8 +276,18 @@ impl<'a> Gen<'a> {
                     | Expr::ObjectGetOwnPropertyNames(..)
                     | Expr::ObjectGetOwnPropertySymbols(..)
                     | Expr::ReflectOwnKeys(..) => Protocol::OwnKeys,
+                    // path.parse(p) ToString's its argument (validated as a
+                    // string); crypto.randomBytes(n) validates a number.
+                    Expr::PathParse(..) | Expr::CryptoRandomBytes(..) => Protocol::ToPrimitive,
                     _ => Protocol::Any,
                 };
+                // The cooked strings of a tagged template are read, not coerced.
+                if let Expr::TaggedTemplateStrings { cooked, .. } = e {
+                    for k in cooked {
+                        let _ = self.expr(fx, k);
+                    }
+                    return self.primbox_kids_none(fx, "primitive container builtin");
+                }
                 self.primbox_kids(fx, e, "primitive container builtin", proto)
             }
             Expr::NamespacePatched(_) => self.prim_node(prim::BOOL),

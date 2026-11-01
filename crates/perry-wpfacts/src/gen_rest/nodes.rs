@@ -75,6 +75,24 @@ impl<'a> Gen<'a> {
         self.mcall(recv, Key::Named(a), args, vec![])
     }
 
+    /// `receiver.name(...operands)` of a builtin the lowering pinned by the
+    /// receiver's static class: the method call goes through the receiver
+    /// (its description in `builtins`, or what the program stored), and the
+    /// result is a primitive operation's.
+    pub(super) fn builtin_method_op(&mut self, fx: &Fx, receiver: &Expr, name: &str, operands: &[&Expr]) -> NodeId {
+        let r = self.expr(fx, receiver);
+        let args: Vec<NodeId> = operands.iter().map(|o| self.expr(fx, o)).collect();
+        let a = self.m.atom(name);
+        let _ = self.mcall(r, Key::Named(a), args, vec![]);
+        self.prim_node(prim::ALL)
+    }
+
+    /// A primitive container whose operands were already evaluated and are
+    /// coerced by nothing.
+    pub(super) fn primbox_kids_none(&mut self, fx: &Fx, why: &str) -> NodeId {
+        self.prim_box_op(fx, &[], why, Protocol::OwnKeys)
+    }
+
     pub(super) fn primbox_kids(&mut self, fx: &Fx, e: &Expr, why: &str, proto: Protocol) -> NodeId {
         let ks = kids(e);
         self.prim_box_op(fx, &ks, why, proto)

@@ -1735,6 +1735,7 @@ mod native_push;
 mod helper_protocols;
 mod delegate_step;
 mod proto_own_call;
+mod host_helpers;
 mod string_methods;
 mod date_methods;
 mod typed_array_methods;
