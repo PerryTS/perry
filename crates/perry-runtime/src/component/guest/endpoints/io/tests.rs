@@ -409,7 +409,7 @@ fn guest_read_completion_and_cancel_restore_creation_als_and_preserve_a_sibling_
             })));
         }
         als::enter_with(storage.token(), 44.0);
-        sibling.run(|| unsafe {
+        sibling.run(|| {
             let callback = JSValue::from_bits(callbacks[1].get_nanbox_f64().to_bits())
                 .as_pointer::<crate::closure::ClosureHeader>();
             crate::promise::then::js_promise_attach_handlers(
