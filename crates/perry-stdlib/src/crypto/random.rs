@@ -502,6 +502,25 @@ pub unsafe extern "C" fn js_crypto_native_dispatch(
             };
             js_crypto_pbkdf2_async_alg(bytes_ptr(0), bytes_ptr(1), arg(2), arg(3), digest, callback)
         }
+        // `crypto.pbkdf2Sync(password, salt, iterations, keylen, digest)` reached
+        // as a VALUE (named import, detached reference). Mirrors the direct
+        // call site's argument validation before deriving.
+        "pbkdf2Sync" => {
+            perry_runtime::validators::validate_integer(arg(2), "iterations", 1.0, i32::MAX as f64);
+            perry_runtime::validators::validate_integer(arg(3), "keylen", 0.0, i32::MAX as f64);
+            let digest = if args_len >= 5 {
+                perry_runtime::validators::validate_string(arg(4), "digest");
+                str_ptr(4)
+            } else {
+                0i64
+            };
+            pointer_value(
+                js_crypto_pbkdf2_bytes(bytes_ptr(0), bytes_ptr(1), arg(2), arg(3), digest)
+                    as *mut u8,
+            )
+        }
+        "argon2Sync" => pointer_value(js_crypto_argon2_sync(str_ptr(0), arg(1)) as *mut u8),
+        "argon2" => js_crypto_argon2_async(str_ptr(0), arg(1), arg(2)),
         "scrypt" => {
             let options = if args_len >= 5 { arg(3) } else { undefined };
             let callback = if args_len >= 5 { arg(4) } else { arg(3) };
