@@ -426,9 +426,6 @@ impl<'a> Gen<'a> {
             | Expr::PodLayoutOffsetOf { .. }
             | Expr::ChildProcessGetProcessStatus(..)
             | Expr::ChildProcessKillProcess(..)
-            | Expr::ArrayIndexOf { .. }
-            | Expr::ArrayLastIndexOf { .. }
-            | Expr::ArrayIncludes { .. }
             | Expr::StringFromCharCode(..)
             | Expr::StringFromCharCodeSpread(..)
             | Expr::StringFromCodePoint(..)
@@ -1305,6 +1302,44 @@ impl<'a> Gen<'a> {
                 let out = self.elem_load(a);
                 self.m.add_prim(out, prim::UNDEF);
                 out
+            }
+            // `indexOf` / `lastIndexOf` / `includes` the HIR folds for an array
+            // receiver (ECMA-262 23.1.3.16/.19/.13): they read the receiver's
+            // `length` and elements and compare each with the value
+            // (IsStrictlyEqual / SameValueZero: no conversion, no call). Only
+            // `fromIndex` is converted (ToIntegerOrInfinity). The result is
+            // a Number, or a Boolean for `includes`.
+            Expr::ArrayIndexOf {
+                array,
+                value,
+                from_index,
+            }
+            | Expr::ArrayLastIndexOf {
+                array,
+                value,
+                from_index,
+            }
+            | Expr::ArrayIncludes {
+                array,
+                value,
+                from_index,
+            } => {
+                let a = self.expr(fx, array);
+                let _ = self.expr(fx, value);
+                if let Some(x) = from_index {
+                    let _ = self.prim_op(
+                        fx,
+                        &[x],
+                        prim::NUM,
+                        "search index",
+                        Protocol::ToPrimitive,
+                    );
+                }
+                let _ = self.elem_load(a);
+                match e {
+                    Expr::ArrayIncludes { .. } => self.prim_node(prim::BOOL),
+                    _ => self.prim_node(prim::NUM),
+                }
             }
             Expr::ArraySlice {
                 array, start, end, ..
