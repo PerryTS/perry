@@ -274,9 +274,8 @@ impl Model {
                 self.add_prim(dst, prim::UNDEF);
                 return;
             }
-            // DECISIONS 235: an element key is a number, never
-            // `constructor`: ⊤ read under it is ⊤, not the Function
-            // constructor.
+            // An element of ⊤ is ⊤. Its key is an index, never
+            // `constructor`: no Function constructor (DECISIONS 235).
             if t == TOP {
                 self.add_tok(dst, TOP);
                 return;

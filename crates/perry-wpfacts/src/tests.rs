@@ -71,6 +71,10 @@ mod unit_mode;
 mod unit_namespace;
 mod unit_shared;
 mod unit_this;
+mod native_given_proto;
+mod const_key_set_store;
+mod interp_from_facts;
+mod spread_elements;
 mod own_key_shadow;
 mod top_element_key;
 mod unheld_key;
@@ -1738,3 +1742,25 @@ fn a_protocol_touch_of_an_argument_marker_reads_nothing() {
 }
 mod constructor_values;
 mod generator_results;
+mod native_push;
+mod helper_protocols;
+mod delegate_step;
+mod proto_own_call;
+mod host_helpers;
+mod collection_entries;
+mod string_methods;
+mod date_methods;
+mod typed_array_methods;
+mod web_timer_methods;
+
+/// Export the exact facts fixtures for an independent runtime/Node oracle.
+/// Disabled in ordinary tests; the lane runner sets HLC_FIXTURE_DIR.
+fn dump_helper_fixture(src: &str) {
+    if let Ok(dir) = std::env::var("HLC_FIXTURE_DIR") {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        src.hash(&mut h);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(std::path::Path::new(&dir).join(format!("{:016x}.ts", h.finish())), src).unwrap();
+    }
+}
