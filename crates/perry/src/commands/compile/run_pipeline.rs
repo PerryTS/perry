@@ -6564,6 +6564,7 @@ pub fn run_with_parse_cache(
         &ctx.patched_builtins.dynamic_code_reach,
         &ctx.cjs_wrap_debug_sources,
         super::program_facts::module_roots(&ctx),
+        &ctx.cache_dir,
     );
     program_step("whole-program facts", Some(facts_started));
     #[allow(clippy::type_complexity)]
