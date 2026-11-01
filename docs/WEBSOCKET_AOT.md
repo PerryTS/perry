@@ -116,3 +116,12 @@ and compressed artifact sizes. Engine/host process costs must be reported
 alongside guest costs. The upstream README's js2wasm size is an upstream claim;
 we have not reproduced competitor artifacts. Smoke timings do not establish
 that Perry is faster or smaller than another compiler.
+
+The footprint comparison also spans different memory models. The
+[js2wasm project](https://github.com/loopdive/js2) emits WasmGC and requires
+post-MVP engine features. Perry's WASI output carries its linear-memory runtime
+and collector. Record required engine features and host memory alongside guest
+bytes when reproducing the comparison. The next Perry measurement should use
+current main's runtime pruning and fresh release archives, then attribute the
+remaining retained functions. A WasmGC backend would be a separate compiler
+project from completing the current WASI 0.3 component profile.
