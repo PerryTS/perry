@@ -1,0 +1,204 @@
+{
+  "date": "2026-11-01",
+  "source": "02cf3068aec985a0a87d7b1a39343865e2645fd4",
+  "scope": "Linux x86_64 unchanged upstream WebSocket state machine, native/P1/P3 output, independent wire bytes and both unchanged upstream clients over real sockets",
+  "fullWasi030Qualified": false,
+  "performanceQualified": false,
+  "releasePlatformQualification": false,
+  "upstream": {
+    "repository": "https://github.com/guest271314/websocket-server",
+    "commit": "d7f94f5634f733415f1f52547fe45b3794d9d41a",
+    "file": "websocket-server-wasm-debug.ts",
+    "sha256": "ea9269e655def8f0aa95c09c467a5cb048f71e55994d22d1c90285f513b5de49",
+    "sourceUnmodified": true,
+    "clientsUnmodified": [
+      "client.mjs",
+      "websocket-stream-client.js"
+    ]
+  },
+  "build": {
+    "nativeSource": "02cf3068aec985a0a87d7b1a39343865e2645fd4",
+    "nativeProfile": "fresh coherent ordinary perry-dev six-package union and sidecars",
+    "nativeGcControlsOff": true,
+    "packages": [
+      "perry",
+      "perry-runtime-static",
+      "perry-stdlib-static",
+      "perry-component-host",
+      "perry-wit",
+      "perry-gc-effects"
+    ],
+    "feature": "perry/target-wasi",
+    "wasiRuntimeSource": "e48d556ab6570144bca0d453b1532f50aa719ba9",
+    "wasiRuntimeProfile": "release plain P1 and P3",
+    "wasiRuntimeFreshAtRecordedSource": true,
+    "wasiRuntimesReusedAtNativeSource": true,
+    "reusedRuntimeSelectedProductionInputsVerifiedIdentical": true,
+    "runtimeProof": "qualification/runtime-production-equivalence.json",
+    "sdk": "wasi-sdk 34.0",
+    "node": "26.12.1",
+    "wasmtimeLibrary": "48.0.7",
+    "rayonCompilerThreads": 4,
+    "rustflagsEnvironmentModified": false,
+    "workspaceVersionBumped": false,
+    "dependencyVersionsChangedForParallelCompilation": false
+  },
+  "actual": {
+    "passedPhases": 27,
+    "wireCasesPerMode": 3,
+    "modes": [
+      "Node oracle",
+      "Perry native",
+      "Perry wasip1",
+      "Perry wasip3"
+    ],
+    "wireCoverage": [
+      "sample SHA-1 handshake",
+      "text",
+      "binary contents",
+      "ping/pong",
+      "close",
+      "payload boundaries 0/125/126/127/65535/65536/65537/1048576",
+      "20 MiB as 320 separate 64 KiB frames"
+    ],
+    "expectedOutputBytes": [
+      171,
+      1245755,
+      20974867
+    ],
+    "realSocketClientPhases": 8,
+    "p3TextClientOriginalFourSecondDeadlinePassed": true,
+    "p1Imports": "standard wasi_snapshot_preview1 only; no custom allowances",
+    "p3Contract": "exact 0.3.0 command",
+    "commandRegressionPhases": 45,
+    "compiledP3Commands": 11,
+    "stdioRegressions": [
+      "return before stdin EOF",
+      "consume stdin EOF",
+      "close registry stdio entries without closing instance-owned originals"
+    ],
+    "directUnmodifiedUpstreamP1HostControlSmokePassed": true
+  },
+  "units": {
+    "source": "02cf3068aec985a0a87d7b1a39343865e2645fd4",
+    "witPassed": 41,
+    "witIgnored": 2,
+    "upstreamTypesPassed": 23,
+    "upstreamGraphHarnessPassed": 1,
+    "upstreamGraphCases": 32,
+    "upstreamBaselinesUnchanged": true,
+    "normalDevCommandHostPassed": 11,
+    "otherCommandHostUnitsFiltered": 211,
+    "serial": true,
+    "debugAssertionsEnabled": true,
+    "earlierRuntimeUnitSource": "e48d556ab6570144bca0d453b1532f50aa719ba9",
+    "earlierNormalDevComponentRuntimePassed": 129,
+    "earlierNormalDevStandardDescriptorPassed": 1,
+    "runtimeAndStdlibTestedTogether": true,
+    "fullRuntimeSuiteQualified": false,
+    "sameCanonicalLabeledImportsCompositionAndWrongOwnerRejectionPassed": true,
+    "sameCanonicalLabeledImportsActualGeneratedEndpointInteropQualified": false
+  },
+  "dependencyPolicy": {
+    "strictTokioBanPassed": true,
+    "manifests": 129,
+    "lockfiles": 28,
+    "rustSourcesChecked": true,
+    "isolatedUpstreamTestLockNoTokio": true,
+    "noTokioException": true
+  },
+  "functionalArtifactIdentities": {
+    "websocket-native": {
+      "bytes": 7436096,
+      "sha256": "e7c1d9cc9bc7fe2f1671932afeae6ca96baf7e9166e05446639e33b0e10c3ebf"
+    },
+    "websocket-p3.component.wasm": {
+      "bytes": 6073109,
+      "sha256": "e5355ddae2037c0c16ae9d16aacc9af3101ccc26bb118d3cd5b4cec4586d3bae"
+    },
+    "p3-host": {
+      "bytes": 35380360,
+      "sha256": "694f363616943f9bf8266986ea70684dd3a66a72fff835db81fda7665b107d03"
+    },
+    "websocket-p1.wasm": {
+      "bytes": 5844453,
+      "sha256": "8c40ba9b64740478e92ff4d6e2659b31a2d404bec99e7927179e5852d2c51599"
+    }
+  },
+  "footprint": {
+    "baselineP1CodeSectionBytes": 5347131,
+    "baselineP1CodePercent": 91.49,
+    "baselineP1DataSectionBytes": 478665,
+    "diagnosticFunctionCount": 7740,
+    "diagnosticBodyBytesBySymbolPrefix": {
+      "perry_runtime::object": 2001251,
+      "perry_runtime::gc": 819571,
+      "perry_runtime::array": 249815,
+      "perry_runtime::closure": 154107,
+      "perry_runtime::promise": 146238,
+      "perry_runtime::arena": 115670,
+      "perry_runtime::string": 111817,
+      "core": 111763,
+      "perry_runtime::builtins": 103777,
+      "perry_runtime::buffer": 65645,
+      "perry_runtime::typedarray": 58452,
+      "perry_runtime::timer": 49108,
+      "perry_runtime::node_submodules": 46802,
+      "perry_runtime::value": 43425,
+      "perry_runtime::map": 40962,
+      "<alloc": 39116,
+      "perry_runtime::symbol": 39009,
+      "<core": 34409,
+      "num_bigint": 33790,
+      "perry_runtime::weakref": 28112,
+      "js_instanceof_dynamic": 27832,
+      "perry_runtime::tls_hot": 26728,
+      "perry_runtime::error": 26669,
+      "<num_bigint": 26560,
+      "perry_runtime::exception": 26183,
+      "perry_runtime::iterator_helpers": 26017,
+      "<std": 25751,
+      "<hashbrown": 22912,
+      "perry_runtime::validators": 22432,
+      "<rustc_demangle": 20724,
+      "perry_runtime::process": 18854,
+      "perry_runtime::intl": 18556,
+      "perry_runtime::set": 18516,
+      "perry_runtime::typedarray_props": 17652,
+      "perry_runtime::fast_hash": 16045,
+      "perry_runtime::web_storage": 14301,
+      "miniz_oxide": 14210,
+      "perry_runtime::abi_trampoline": 13060,
+      "perry_fn_websocket_server_wasm_debug_ts__sha1": 12941,
+      "perry_runtime::cold_sort": 12163
+    },
+    "diagnosticUsesNamesAndUncompressedRelocations": true,
+    "diagnosticSizesComparableToStrippedBaseline": false,
+    "competitorArtifactsReproduced": false
+  },
+  "evidence": {
+    "file": "websocket-aot-v006-evidence.tar.gz",
+    "bytes": 91255323,
+    "sha256": "d86b3fc6eb2ba51a894bc969b67507bdb9dc02be0e741aeccc26d6b2e4ddcf79",
+    "indexedFiles": 505,
+    "localReport": "secret-tests/reports/2026-11-01-websocket-aot/v006",
+    "allIndexedSizesAndHashesLocallyVerified": true,
+    "exactRegularFileSetLocallyVerified": true,
+    "nativeCohortBundled": false,
+    "nativeCohortIdentitiesRecorded": true,
+    "failedStdinShutdownAndColdClientControlsIncluded": true,
+    "upstreamP1HostSupplement": {
+      "localFile": "upstream-p1-host-supplement.json",
+      "sha256": "16f1fa777a152868d993ff968f97a0609e1e477b119e7038fc08ac4ae757d249",
+      "stdoutAndHostLocallyVerifiedAgainstMainArchive": true,
+      "includedInMainArchive": false,
+      "scope": "one additional control-wire smoke using unchanged node-wasi.mjs; the full client matrix uses the generated standard Node WASI host"
+    }
+  },
+  "remaining": [
+    "release size/startup/throughput/memory comparisons on identical engine and bridge settings",
+    "reduce retained standalone runtime code",
+    "installed macOS ARM64 and Windows x64 qualification",
+    "full WASI 0.3.0 completion matrix, current checks and qualified landing"
+  ]
+}
