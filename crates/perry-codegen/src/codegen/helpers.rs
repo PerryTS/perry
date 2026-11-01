@@ -972,6 +972,7 @@ pub fn resolve_target_triple(name: &str) -> Option<String> {
         // The WASI preview1 flavour: a core module for hosts without the
         // component model. The runtime and the link use `wasm32-wasip1`.
         "wasip1" if cfg!(feature = "target-wasi") => Some("wasm32-unknown-wasip1".to_string()),
+        "wasip3" if cfg!(feature = "target-wasi") => Some("wasm32-unknown-wasip3".to_string()),
         "tvos" => Some("aarch64-apple-tvos".to_string()),
         "tvos-simulator" => Some("arm64-apple-tvos17.0-simulator".to_string()),
         "harmonyos" => Some("aarch64-unknown-linux-ohos".to_string()),
@@ -1017,6 +1018,7 @@ pub const TARGET_NAMES: &[&str] = &[
     "watchos-simulator",
     "wasi",
     "wasip1",
+    "wasip3",
     "tvos",
     "tvos-simulator",
     "harmonyos",
@@ -1123,7 +1125,7 @@ mod target_os_tests {
                 "ios" | "ios-simulator" => "ios",
                 "visionos" | "visionos-simulator" => "visionos",
                 "watchos" | "watchos-simulator" => "watchos",
-                "wasi" | "wasip1" => "wasi",
+                "wasi" | "wasip1" | "wasip3" => "wasi",
                 "tvos" | "tvos-simulator" => "tvos",
                 "harmonyos" | "harmonyos-simulator" => "ohos",
                 "android" | "android-x86_64" | "wearos" => "android",
@@ -1137,7 +1139,7 @@ mod target_os_tests {
             assert_eq!(target_os_of(name), Some(expected), "alias {name}");
             let Some(triple) = resolve_target_triple(name) else {
                 // WASI is deliberately available only in target-wasi builds.
-                assert!(matches!(*name, "wasi" | "wasip1"));
+                assert!(matches!(*name, "wasi" | "wasip1" | "wasip3"));
                 assert_eq!(target_os_of(name), Some(expected));
                 continue;
             };
@@ -1155,6 +1157,7 @@ mod target_os_tests {
             ("x86_64-unknown-linux-musl", "linux"),
             ("wasm32-unknown-wasip2", "wasi"),
             ("wasm32-unknown-wasip1", "wasi"),
+            ("wasm32-unknown-wasip3", "wasi"),
             ("aarch64-apple-ios", "ios"),
             ("arm64-apple-tvos17.0-simulator", "tvos"),
             ("arm64-apple-watchos10.0-simulator", "watchos"),

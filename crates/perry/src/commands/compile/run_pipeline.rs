@@ -7464,7 +7464,13 @@ pub fn run_with_parse_cache(
             obj_cleanup_paths.push(seed_path.clone());
             obj_paths.push(seed_path);
             if is_staticlib {
-                super::link::wasi::archive_library(&obj_paths, &runtime_lib, &exe_path, verbose)?;
+                super::link::wasi::archive_library(
+                    flavour,
+                    &obj_paths,
+                    &runtime_lib,
+                    &exe_path,
+                    verbose,
+                )?;
             } else {
                 super::link::wasi::link_wasi(
                     flavour,
@@ -7479,7 +7485,7 @@ pub fn run_with_parse_cache(
                     "Wrote WASI {}: {}",
                     match (is_staticlib, flavour) {
                         (true, _) => "static archive",
-                        (false, Flavour::P2) => "component",
+                        (false, Flavour::P2 | Flavour::P3) => "component",
                         (false, Flavour::P1) => "module",
                     },
                     exe_path.display()

@@ -278,7 +278,7 @@ mod tests {
 
     #[test]
     fn static_reloc_is_opt_in_and_wasm32_only() {
-        for wasm in ["wasm32-wasip1", "wasm32-wasip2"] {
+        for wasm in ["wasm32-wasip1", "wasm32-wasip2", "wasm32-wasip3"] {
             assert_eq!(reloc_mode_for(wasm, true), RelocMode::Static);
             assert_eq!(reloc_mode_for(wasm, false), RelocMode::PIC);
         }

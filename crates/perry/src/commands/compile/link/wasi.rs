@@ -3,6 +3,9 @@
 //! component. The pinned SDK emits WASI 0.2.12 imports; the host must provide
 //! those interfaces and Wasm EH (tested with Wasmtime 48).
 //!
+//! `--target wasip3` uses a distinct `wasm32-wasip3` runtime and the SDK's
+//! native WASI 0.3 command component link. It never adds a Preview 1 adapter.
+//!
 //! `--target wasip1` is the same pipeline for a WASI preview1 core module
 //! (runtime built for `wasm32-wasip1`): it imports only
 //! `wasi_snapshot_preview1`, carries no component-model adapter and so has no
@@ -95,7 +98,7 @@ pub(super) fn link_args(
             "-Wl,--compress-relocations".to_string(),
         ]);
     }
-    if flavour == Flavour::P2 {
+    if matches!(flavour, Flavour::P2 | Flavour::P3) {
         // The component adapter allocates through the module's allocator.
         args.push("-Wl,--export=cabi_realloc".to_string());
     }
@@ -174,12 +177,13 @@ pub(crate) fn feature_installer(
 
 /// Archive the reusable library objects for a separate canonical adapter link.
 pub(crate) fn archive_library(
+    flavour: Flavour,
     objects: &[PathBuf],
     runtime: &Path,
     output: &Path,
     verbose: u8,
 ) -> Result<()> {
-    let sdk = wasi_sdk(Flavour::P2)?;
+    let sdk = wasi_sdk(flavour)?;
     let archiver = sdk.join("bin").join(if cfg!(windows) {
         "llvm-ar.exe"
     } else {
@@ -200,7 +204,7 @@ pub(crate) fn archive_library(
         "version": 1,
         "archive": output.canonicalize()?.display().to_string(),
         "entry_symbol": "perry_module_init",
-        "target": "wasi",
+        "target": flavour.target(),
         "link_archives": [{"role": "runtime", "path": runtime.canonicalize()?.display().to_string()}],
         "system_libraries": []
     });
@@ -211,7 +215,7 @@ pub(crate) fn archive_library(
     Ok(())
 }
 
-/// Link `objects` into the WASI command component (P2) or core module (P1) at
+/// Link `objects` into a WASI command component (P2/P3) or core module (P1) at
 /// `output`.
 pub(crate) fn link_wasi(
     flavour: Flavour,
@@ -234,6 +238,10 @@ pub(crate) fn link_wasi(
             // A core module needs no component wrapping, so no wasm-tools.
             (Some(opt), _, Flavour::P1) => Some((opt, None)),
             (Some(opt), Some(component), Flavour::P2) => Some((opt, Some(component))),
+            // The P2 optimisation recipe injects a Preview 1 reactor adapter.
+            // Keep the SDK's native P3 component link intact until a separate
+            // P3 optimisation recipe is qualified with canonical async code.
+            (_, _, Flavour::P3) => None,
             (opt, _, _) => {
                 if verbose > 0 {
                     let missing = if opt.is_none() {
@@ -469,6 +477,24 @@ mod tests {
         );
     }
 
+    #[test]
+    fn wasip3_uses_its_own_component_triple_without_preview1_host_imports() {
+        let mut expected = link(Flavour::P2, false);
+        expected[0] = "--target=wasm32-wasip3".to_string();
+        assert_eq!(link(Flavour::P3, false), expected);
+        assert_eq!(
+            link_host(
+                Flavour::P3,
+                false,
+                HostImports {
+                    net: true,
+                    discard: true
+                }
+            ),
+            expected,
+        );
+    }
+
     /// P1 is the P2 recipe for the preview1 triple, minus the component
     /// allocator export: it is a core module, not a component.
     #[test]
@@ -542,7 +568,7 @@ mod tests {
 
     #[test]
     fn keeping_symbols_preserves_debug_offsets() {
-        for flavour in [Flavour::P2, Flavour::P1] {
+        for flavour in [Flavour::P2, Flavour::P1, Flavour::P3] {
             let args = link(flavour, true);
             assert!(!args.iter().any(|arg| arg.contains("--strip")));
             assert!(!args
@@ -555,13 +581,15 @@ mod tests {
     fn flavours_map_to_their_target_names_and_triples() {
         assert_eq!(Flavour::from_target("wasi"), Some(Flavour::P2));
         assert_eq!(Flavour::from_target("wasip1"), Some(Flavour::P1));
+        assert_eq!(Flavour::from_target("wasip3"), Some(Flavour::P3));
         for other in ["wasip2", "wasm", "web", "linux", "macos", ""] {
             assert_eq!(Flavour::from_target(other), None, "{other}");
         }
-        for flavour in [Flavour::P2, Flavour::P1] {
+        for flavour in [Flavour::P2, Flavour::P1, Flavour::P3] {
             assert_eq!(Flavour::from_target(flavour.target()), Some(flavour));
         }
         assert_eq!(Flavour::P2.triple(), "wasm32-wasip2");
         assert_eq!(Flavour::P1.triple(), "wasm32-wasip1");
+        assert_eq!(Flavour::P3.triple(), "wasm32-wasip3");
     }
 }

@@ -1,4 +1,4 @@
-//! The two WASI flavours behind `--target wasi` and `--target wasip1`.
+//! WASI flavours behind `--target wasi`, `--target wasip1` and `--target wasip3`.
 //!
 //! One helper owns the CLI name and the Rust/clang triple, so every driver
 //! arm asks `Flavour::from_target` instead of matching target literals.
@@ -10,6 +10,8 @@ pub(crate) enum Flavour {
     P2,
     /// `--target wasip1`: a WASI preview1 core module.
     P1,
+    /// `--target wasip3`: a WASI 0.3 component, with its own runtime archive.
+    P3,
 }
 
 impl Flavour {
@@ -18,6 +20,7 @@ impl Flavour {
         match target {
             "wasi" => Some(Self::P2),
             "wasip1" => Some(Self::P1),
+            "wasip3" => Some(Self::P3),
             _ => None,
         }
     }
@@ -28,6 +31,7 @@ impl Flavour {
         match self {
             Self::P2 => "wasi",
             Self::P1 => "wasip1",
+            Self::P3 => "wasip3",
         }
     }
 
@@ -38,6 +42,7 @@ impl Flavour {
         match self {
             Self::P2 => "wasm32-wasip2",
             Self::P1 => "wasm32-wasip1",
+            Self::P3 => "wasm32-wasip3",
         }
     }
 }

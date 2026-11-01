@@ -7,7 +7,7 @@
 #   eval "$(./scripts/wasi_toolchain.sh .cache/wasi)"
 #   ./scripts/wasi_build_runtime.sh
 #
-# An optional argument selects the other WASI target, wasm32-wasip1.
+# An optional argument selects wasm32-wasip1 or wasm32-wasip3.
 #
 # Needs wasi-sdk's C compiler for the runtime's C sources (CC_wasm32_wasip2
 # or CC_wasm32_wasip1/CC_wasm32_wasip3 and friends, as printed by wasi_toolchain.sh). Liveness: requires Cargo to
