@@ -36,6 +36,14 @@ on:
         type: boolean
         default: false
 
+# Largest packed npm tarball a run may produce, in bytes. npm documents no
+# limit; evidence from release 10-30: perry-linux-x64 at 177.2 MB was accepted,
+# perry-win32-x64 (233.3 MB) and perry-win32-arm64 (228.4 MB) got 413 Payload
+# Too Large. Checked by prepare-ci-packages.mts in npm-pack-check (stage and
+# nightly) and in npm-publish before the first `npm publish`.
+env:
+  NPM_PACKED_SIZE_BUDGET: "180000000"
+
 permissions:
   contents: write
   # `write` (was `read`): the await-tests gate dispatches test.yml /
@@ -3067,6 +3075,74 @@ jobs:
           echo "Hub response: ${RESPONSE}"
 
   # ---------------------------------------------------------------------------
+  # npm packaging dry run (stage + nightly modes). Materializes and packs every
+  # npm tarball exactly as npm-publish would (same artifacts, same scripts) and
+  # fails on the packed-size budget, so a packaging problem shows up in the
+  # test build and not hours into a real cut. Publishes nothing: read-only
+  # token, no id-token, no publish step.
+  # ---------------------------------------------------------------------------
+  npm-pack-check:
+    needs: [preflight, build, build-cross]
+    if: >
+      !cancelled() &&
+      needs.build.result == 'success' &&
+      needs.build-cross.result == 'success' &&
+      (needs.preflight.outputs.mode == 'stage' || needs.preflight.outputs.mode == 'nightly')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ needs.preflight.outputs.checkout-ref }}
+          EXPECTED_SHA: ${{ needs.preflight.outputs.checkout-sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          # Build exactly the commit preflight resolved, or nothing.
+          : "${EXPECTED_SHA:?preflight resolved no checkout-sha}"
+          built=$(git rev-parse HEAD)
+          echo "built tree: $built  expected: $EXPECTED_SHA  (ref: $CHECKOUT_REF)"
+          if [ "$built" != "$EXPECTED_SHA" ]; then
+            echo "::error::checked out $built, not $EXPECTED_SHA — refusing to build or pack a different commit."
+            exit 1
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - uses: ./.github/actions/perry/actions/setup-node # v7
+        with:
+          node-version: "26"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Pin npm to the 11 major (same as npm-publish)
+        run: npm install -g npm@11
+
+      - name: Download all build artifacts
+        uses: ./.github/actions/perry/actions/download-artifact # v8
+        with:
+          path: release-artifacts/
+
+      - name: Materialize npm packages
+        run: ./scripts/stage-npm.sh release-artifacts/
+
+      - name: Pack the exact publication tarballs (size budget enforced)
+        run: node scripts/publish/prepare-ci-packages.mts
+
+  # ---------------------------------------------------------------------------
   # Publish npm packages (@perryts/perry + 8 per-platform packages)
   #
   # Uses OIDC / Trusted Publishers (no npm login, long-lived NPM_TOKEN, or
@@ -3136,8 +3212,9 @@ jobs:
         # it is free and pins the guarantee rather than inheriting it. Below
         # 11.5.1 the OIDC handshake fails silently and the registry returns a
         # misleading 404 ("'pkg@ver' is not in this registry") on PUT. See
-        # npm/cli#9088.
-        run: npm install -g npm@latest
+        # npm/cli#9088. Pinned to the 11 major: npm 12 changed `npm pack
+        # --json` output and has not been through a publish here.
+        run: npm install -g npm@11
 
       - name: Download all build artifacts
         uses: ./.github/actions/perry/actions/download-artifact # v8
@@ -3148,6 +3225,8 @@ jobs:
         run: ./scripts/stage-npm.sh release-artifacts/
 
       - name: Pack the exact publication tarballs
+        # Fails on NPM_PACKED_SIZE_BUDGET before any `npm publish` below, so an
+        # oversize package can never leave a cut half-published.
         run: node scripts/publish/prepare-ci-packages.mts
 
       - name: Install the Socket scan SDK
