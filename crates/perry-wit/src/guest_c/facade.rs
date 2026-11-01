@@ -30,6 +30,16 @@ pub(crate) struct Binding {
     pub original: String,
 }
 
+fn private_name(base: &str, mut occupied: impl FnMut(&str) -> bool) -> String {
+    let mut name = base.to_string();
+    let mut suffix = 0;
+    while occupied(&name) {
+        suffix += 1;
+        name = format!("{base}-{suffix}");
+    }
+    name
+}
+
 pub(super) fn generate(
     resolve: &Resolve,
     world: WorldId,
@@ -65,7 +75,9 @@ pub(super) fn generate(
                     resolve.packages[package].interfaces.shift_remove(&old);
                 }
             }
-            let name = format!("perry-producer-source-{}", id.index());
+            let name = private_name(&format!("perry-producer-source-{}", id.index()), |name| {
+                resolve.packages[package].interfaces.contains_key(name)
+            });
             resolve.packages[package]
                 .interfaces
                 .insert(name.clone(), *id);
@@ -113,7 +125,9 @@ pub(super) fn generate(
         span: Default::default(),
         clone_of: None,
     });
-    let forward_interface = "perry-producer-forward".to_string();
+    let forward_interface = private_name("perry-producer-forward", |name| {
+        facade.imports.contains_key(&WorldKey::Name(name.into()))
+    });
     let forward_key = WorldKey::Name(forward_interface.clone());
     let mut mapped = BTreeMap::new();
     let mut root_forwards = std::collections::HashSet::new();
@@ -138,7 +152,12 @@ pub(super) fn generate(
                     resolve.interfaces[*id].functions[&function.name].clone(),
                 )
             };
-            let export = format!("perry-forward-{}", entries.len());
+            let export = private_name(&format!("perry-forward-{}", entries.len()), |name| {
+                name == forward_interface
+                    || facade.imports.contains_key(&WorldKey::Name(name.into()))
+                    || resolve.interfaces[forwarding].functions.contains_key(name)
+                    || resolve.interfaces[forwarding].types.contains_key(name)
+            });
             let mut forwarded = source.clone();
             forwarded.name = export.clone();
             forwarded.kind = wit_parser::FunctionKind::Freestanding;

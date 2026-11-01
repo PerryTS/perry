@@ -1,6 +1,87 @@
 use super::*;
 
 #[test]
+fn private_source_interface_preserves_public_package_names() {
+    let template = r#"package test:facade-package;
+        interface api { inspect: func() -> u32; later: async func() -> u32; }
+        interface reserved { original: func() -> u64; }
+        world plugin { import api; import reserved; export api; }"#;
+    let mut resolve = Resolve::default();
+    let package = resolve.push_str("world.wit", template).unwrap();
+    let world = resolve.select_world(&[package], None).unwrap();
+    resolve.generate_nominal_type_ids(world);
+    let exported = resolve.worlds[world]
+        .exports
+        .values()
+        .find_map(|item| match item {
+            WorldItem::Interface { id, .. } => Some(*id),
+            _ => None,
+        })
+        .unwrap();
+    assert!(resolve.interfaces[exported].clone_of.is_some());
+    let reserved = format!("perry-producer-source-{}", exported.index());
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("world.wit");
+    std::fs::write(&path, template.replace("reserved", &reserved)).unwrap();
+    let files = experimental_async_guest(&path, None).unwrap();
+    let plan: Plan = serde_json::from_slice(&files["perry_producer_facade.json"]).unwrap();
+    let renamed = plan
+        .imports
+        .iter()
+        .find(|binding| binding.original == "test:facade-package/api")
+        .unwrap();
+    assert_eq!(renamed.local, format!("test:facade-package/{reserved}-1"));
+    let (_, metadata) =
+        wit_component::metadata::decode(&files["perry_producer_facade_component_type.o"]).unwrap();
+    let original = metadata
+        .resolve
+        .interfaces
+        .iter()
+        .find(|(_, interface)| interface.name.as_deref() == Some(reserved.as_str()))
+        .unwrap()
+        .1;
+    assert!(original.functions.contains_key("original"));
+    assert!(!original.functions.contains_key("inspect"));
+}
+
+#[test]
+fn private_forward_interface_preserves_labeled_imports() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("world.wit");
+    std::fs::write(
+        &path,
+        r#"package test:facade-labels;
+        world plugin {
+            import perry-producer-forward: interface { first: func() -> u32; }
+            import perry-producer-forward-1: interface { second: func() -> u64; }
+            export inspect: func() -> u32;
+            export later: async func() -> u32;
+        }"#,
+    )
+    .unwrap();
+    let files = experimental_async_guest(&path, None).unwrap();
+    let plan: Plan = serde_json::from_slice(&files["perry_producer_facade.json"]).unwrap();
+    assert_eq!(plan.forward_interface, "perry-producer-forward-2");
+    let (_, metadata) =
+        wit_component::metadata::decode(&files["perry_producer_facade_component_type.o"]).unwrap();
+    let world = &metadata.resolve.worlds[metadata.world];
+    for (label, function) in [
+        ("perry-producer-forward", "first"),
+        ("perry-producer-forward-1", "second"),
+    ] {
+        let WorldItem::Interface { id, .. } = world.imports[&WorldKey::Name(label.into())] else {
+            panic!("a public labeled import must remain an interface");
+        };
+        assert!(metadata.resolve.interfaces[id]
+            .functions
+            .contains_key(function));
+    }
+    assert!(world
+        .exports
+        .contains_key(&WorldKey::Name(plan.forward_interface)));
+}
+
+#[test]
 fn private_forward_names_preserve_public_world_type_identities() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("world.wit");
