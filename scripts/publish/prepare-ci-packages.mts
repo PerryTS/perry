@@ -1,5 +1,5 @@
 /**
- * Materialize the exact nine npm tarballs that CI will optionally scan and
+ * Materialize the exact npm tarballs (ALL_PACKAGES) that CI will optionally scan and
  * then publish. The manifest is retained as workflow evidence and consumed by
  * the local GitHub-only release finalizer; it never contains credentials.
  */

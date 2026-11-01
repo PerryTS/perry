@@ -8,6 +8,10 @@
 //! - `sign`          — produce a v2 signature `Ed25519(sha256(binary) || version_utf8)`.
 //! - `verify`        — verify a v2 signature against a binary + version (sanity check before publish).
 //!
+//! Plus the two release-CI signers for perry's own artifacts:
+//! `sign-cli-manifest` (`perry update`) and `sign-target-manifest`
+//! (`perry target add`).
+//!
 //! Output format: every command emits a JSON object on stdout with
 //! base64-encoded byte strings, ready to slot into a manifest with `jq`.
 //!
@@ -65,6 +69,12 @@ pub enum UpdaterCommand {
 
     /// Sign the authenticated manifest consumed by `perry update`.
     SignCliManifest(SignCliManifestArgs),
+
+    /// Sign the authenticated manifest consumed by `perry target add`.
+    ///
+    /// Same key as `sign-cli-manifest`, its own signing domain: the result
+    /// can never pass as a CLI update manifest.
+    SignTargetManifest(SignTargetManifestArgs),
 }
 
 #[derive(Debug, clap::Args)]
@@ -122,6 +132,29 @@ pub struct SignCliManifestArgs {
 }
 
 #[derive(Debug, clap::Args)]
+pub struct SignTargetManifestArgs {
+    /// The target package tarball (`perry-target-<triple>-<version>.tgz`,
+    /// byte-identical to the npm tarball).
+    #[arg(long)]
+    pub artifact: PathBuf,
+    /// The Rust triple the package holds libraries for.
+    #[arg(long)]
+    pub triple: String,
+    /// HTTPS URL from which the tarball will be downloaded.
+    #[arg(long)]
+    pub url: String,
+    /// The perry version the package belongs to.
+    #[arg(long = "release-version")]
+    pub release_version: String,
+    /// Stable identifier for the trusted public key; used for key rotation.
+    #[arg(long)]
+    pub key_id: String,
+    /// Base64-encoded 32-byte secret-key seed from protected release CI.
+    #[arg(long)]
+    pub secret_key_b64: String,
+}
+
+#[derive(Debug, clap::Args)]
 pub struct VerifyArgs {
     /// Path to the binary to verify.
     #[arg(short, long)]
@@ -153,6 +186,7 @@ pub fn run(args: UpdaterArgs) -> Result<()> {
         UpdaterCommand::Sign(a) => run_sign(a),
         UpdaterCommand::Verify(a) => run_verify(a),
         UpdaterCommand::SignCliManifest(a) => run_sign_cli_manifest(a),
+        UpdaterCommand::SignTargetManifest(a) => run_sign_target_manifest(a),
     }
 }
 
@@ -258,11 +292,14 @@ fn run_sign(args: SignArgs) -> Result<()> {
     Ok(())
 }
 
-fn run_sign_cli_manifest(args: SignCliManifestArgs) -> Result<()> {
-    if args.release_version.is_empty() || args.key_id.is_empty() || args.platform.is_empty() {
-        bail!("version, key-id, and platform must be non-empty");
-    }
-    let parsed = url::Url::parse(&args.url).context("invalid artifact URL")?;
+/// The checks and inputs both manifest signers share: an HTTPS URL without
+/// credentials, the signing key, and the artifact's name, digest and size.
+fn manifest_signing_inputs(
+    url: &str,
+    secret_key_b64: &str,
+    artifact: &std::path::Path,
+) -> Result<(SigningKey, perry_update_manifest::CliUpdateArtifact)> {
+    let parsed = url::Url::parse(url).context("invalid artifact URL")?;
     if parsed.scheme() != "https"
         || parsed.host_str().is_none()
         || parsed.username() != ""
@@ -270,8 +307,7 @@ fn run_sign_cli_manifest(args: SignCliManifestArgs) -> Result<()> {
     {
         bail!("artifact URL must be an absolute HTTPS URL without credentials");
     }
-    let bytes =
-        perry_base64::engine::general_purpose::STANDARD.decode(args.secret_key_b64.trim())?;
+    let bytes = perry_base64::engine::general_purpose::STANDARD.decode(secret_key_b64.trim())?;
     let seed: [u8; SECRET_KEY_LENGTH] = bytes.try_into().map_err(|v: Vec<u8>| {
         anyhow::anyhow!(
             "secret key must decode to {} bytes (got {})",
@@ -279,15 +315,53 @@ fn run_sign_cli_manifest(args: SignCliManifestArgs) -> Result<()> {
             v.len()
         )
     })?;
-    let signing = SigningKey::from_bytes(&seed);
-    let (digest, size) = sha256_file(&args.artifact)?;
-    let name = args
-        .artifact
+    let (digest, size) = sha256_file(artifact)?;
+    let name = artifact
         .file_name()
         .and_then(|v| v.to_str())
         .context("artifact filename is not UTF-8")?
         .to_string();
-    if name != args.platform {
+    Ok((
+        SigningKey::from_bytes(&seed),
+        perry_update_manifest::CliUpdateArtifact {
+            name,
+            url: url.to_string(),
+            sha256: perry_hex::encode(digest),
+            size,
+        },
+    ))
+}
+
+fn run_sign_target_manifest(args: SignTargetManifestArgs) -> Result<()> {
+    if args.release_version.is_empty() || args.key_id.is_empty() || args.triple.is_empty() {
+        bail!("version, key-id, and triple must be non-empty");
+    }
+    let (signing, artifact) =
+        manifest_signing_inputs(&args.url, &args.secret_key_b64, &args.artifact)?;
+    let expected = format!("perry-target-{}-{}.tgz", args.triple, args.release_version);
+    if artifact.name != expected {
+        bail!("artifact filename must be {expected} to prevent target confusion");
+    }
+    let mut manifest = perry_update_manifest::TargetPackageManifest {
+        schema_version: 1,
+        key_id: args.key_id,
+        version: args.release_version,
+        target_triple: args.triple,
+        artifact,
+        signature: String::new(),
+    };
+    perry_update_manifest::sign_target_manifest(&mut manifest, &signing)?;
+    println!("{}", serde_json::to_string_pretty(&manifest)?);
+    Ok(())
+}
+
+fn run_sign_cli_manifest(args: SignCliManifestArgs) -> Result<()> {
+    if args.release_version.is_empty() || args.key_id.is_empty() || args.platform.is_empty() {
+        bail!("version, key-id, and platform must be non-empty");
+    }
+    let (signing, artifact) =
+        manifest_signing_inputs(&args.url, &args.secret_key_b64, &args.artifact)?;
+    if artifact.name != args.platform {
         bail!("artifact filename must equal --platform to prevent platform confusion");
     }
     let mut manifest = perry_update_manifest::CliUpdateManifest {
@@ -295,12 +369,7 @@ fn run_sign_cli_manifest(args: SignCliManifestArgs) -> Result<()> {
         key_id: args.key_id,
         version: args.release_version,
         platform: args.platform,
-        artifact: perry_update_manifest::CliUpdateArtifact {
-            name,
-            url: args.url,
-            sha256: perry_hex::encode(digest),
-            size,
-        },
+        artifact,
         signature: String::new(),
     };
     perry_update_manifest::sign_cli_manifest(&mut manifest, &signing)?;

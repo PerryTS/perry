@@ -23,7 +23,7 @@ async function main(): Promise<void> {
     manifest.packages.length !== ALL_PACKAGES.length ||
     !ALL_PACKAGES.every(name => manifest.packages.some(pkg => pkg.name === name))
   ) {
-    throw new Error('the CI package manifest does not contain Perry\'s exact nine-package set')
+    throw new Error('the CI package manifest does not contain Perry\'s exact package set')
   }
 
   const ctx = await preflightSocketScanAuth()

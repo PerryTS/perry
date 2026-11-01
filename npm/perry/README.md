@@ -37,6 +37,25 @@ npm install --force @perryts/perry-linux-x64-musl   # or -arm64-musl
 
 The launcher tells you this (with the exact command) instead of letting the binary fail in the dynamic loader. The static build is the same compiler; the one thing it cannot do is build `perry/ui` GTK4 desktop apps. The glibc package includes GTK4 support, whose system development libraries must be available when linking a UI app.
 
+## Cross targets
+
+The libraries for cross-compiling ship in one package per target, installed next to perry at **the same version**:
+
+```bash
+npm install -g @perryts/perry-target-aarch64-linux-android@<perry version>   # perry --target android
+```
+
+| `--target` | Package |
+|---|---|
+| `android` | `@perryts/perry-target-aarch64-linux-android` |
+| `android-x86_64` | `@perryts/perry-target-x86_64-linux-android` |
+| `ios` | `@perryts/perry-target-aarch64-apple-ios` |
+| `ios-simulator` | `@perryts/perry-target-aarch64-apple-ios-sim` |
+| `wasi` | `@perryts/perry-target-wasm32-wasip2` |
+| `wasip1` | `@perryts/perry-target-wasm32-wasip1` |
+
+`perry compile --target <t>` prints the exact command when the package is missing or of another version. Without npm, `perry target add <t>` installs the same package from the GitHub release into `~/.perry/targets`. After upgrading perry, install the matching target version again.
+
 ## Host requirements
 
 Perry produces native binaries by linking its runtime and stdlib (shipped as static archives in the platform package) into your code. That link step uses your system C toolchain, so you need:
