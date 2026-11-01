@@ -95,4 +95,8 @@ register({
     },
     checkpoint() { collect(); return { dropped, completed, failed, chunks, started }; },
   },
+  "perry:guest-endpoint-resources/mirror@1.0.0": {
+    "pass-payload"(value) { collect(); return value; },
+    "pass-future"(value) { collect(); return value; },
+  },
 });

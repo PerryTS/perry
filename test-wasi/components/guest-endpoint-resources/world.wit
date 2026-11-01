@@ -20,4 +20,9 @@ interface api {
     checkpoint: func() -> counts;
 }
 
-world plugin { export api; }
+interface mirror {
+    use api.{payload, pending};
+    pass-payload: func(value: payload) -> payload;
+    pass-future: func(value: pending) -> pending;
+}
+world plugin { export api; export mirror; }

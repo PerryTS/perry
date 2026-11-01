@@ -104,7 +104,8 @@ def main():
             diagnostic = json.loads(diagnostic.rsplit("Error: ", 1)[1])
             assert "missing_instances=[\"perry:missing/api@1.0.0\"]" in diagnostic
         run(kind + "-contract", [args.p3_contract.resolve(), "--reactor", component,
-                                 "--instance-export=" + interface])
+                                 "--instance-export=" + interface,
+                                 "--instance-export=perry:guest-endpoint-resources/mirror@1.0.0"])
         imports = [line for line in (out / (kind + "-contract.log")).read_text().splitlines()
                    if line.startswith("import ")]
         assert len(imports) == 18 and all(line.endswith("@0.3.0") for line in imports)

@@ -15,6 +15,7 @@ use std::{
 };
 
 const API: &str = "perry:guest-endpoint-resources/api@1.0.0";
+const MIRROR: &str = "perry:guest-endpoint-resources/mirror@1.0.0";
 
 struct GuestDiagnostics(perry_wasi::pipe::MemoryOutputPipe);
 impl Drop for GuestDiagnostics {
@@ -235,6 +236,11 @@ fn main() -> Result<()> {
     let reader = call(&mut driver, &client, "make-future", &[input.clone()])?;
     let returned = result(&mut driver, &mut client.read_async_value(&reader, None)?)?
         .context("resource future")?;
+    let returned = result(
+        &mut driver,
+        &mut client.call(MIRROR, "pass-payload", &[returned])?,
+    )?
+    .context("shared exported record alias")?;
     stale(&mut driver, &client, &input["first"])?;
     counts(&mut driver, &client, dropped, 1)?;
     dropped += verify_and_drop(&mut driver, &client, &returned, 2)?;
@@ -265,6 +271,11 @@ fn main() -> Result<()> {
     eprintln!("resource case: actual guest future read");
     let input = payload(&mut driver, &client, 40)?;
     let (reader, writer) = pair(&mut driver, &client, &world, "read-future")?;
+    let reader = result(
+        &mut driver,
+        &mut client.call(MIRROR, "pass-future", &[reader])?,
+    )?
+    .context("shared exported future alias")?;
     let mut pending = client.call(API, "read-future", &[reader])?;
     ensure!(call(&mut driver, &client, "checkpoint", &[])?["started"] == 1);
     ensure!(block_on(poll_once(&mut pending)).is_none());
