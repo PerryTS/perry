@@ -61,7 +61,7 @@ fn live(wrapper: f64) -> f64 {
 fn schema(owner: f64, ty: u32) -> Result<Value, &'static str> {
     let key = format!("{}{}", if ty & 1 == 0 { 't' } else { 'e' }, ty / 2);
     let world = unsafe { &(*context::get(owner)).world };
-    let schema = producer::expanded_schema(world, &world["types"][key]["ty"], 0)?;
+    let schema = crate::component::producer::expanded_schema(world, &world["types"][key]["ty"], 0)?;
     if !matches!(schema["kind"].as_str(), Some("future" | "stream")) {
         return Err("Unknown guest async value type");
     }
