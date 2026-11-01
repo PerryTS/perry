@@ -1,6 +1,11 @@
 //! Authenticated manifest format for the Perry CLI self-updater. It lives
 //! outside `perry-updater` (the desktop-app updater, which links
 //! perry-runtime) so the CLI links no runtime code.
+//!
+//! The same key signs a second kind, the target-package manifest that
+//! `perry target add` verifies. The kinds are disjoint twice over: each has
+//! its own signing domain, and each struct denies the other's fields, so a
+//! CLI update manifest can never pass as a target manifest or the reverse.
 
 use anyhow::{bail, Context, Result};
 use ed25519_dalek::{Signature, Signer, Verifier, VerifyingKey};
@@ -12,6 +17,7 @@ use std::io::Read;
 use std::path::Path;
 
 const DOMAIN: &[u8] = b"perry-cli-update-manifest-v1\0";
+const TARGET_DOMAIN: &[u8] = b"perry-target-package-manifest-v1\0";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -116,6 +122,107 @@ pub fn verify_cli_manifest(
     public_key
         .verify(&cli_manifest_signing_payload(manifest)?, &signature)
         .context("CLI update manifest signature verification failed")
+}
+
+/// The signed manifest of one `@perryts/perry-target-<triple>` tarball
+/// attached to a GitHub release (the byte-identical npm tarball).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TargetPackageManifest {
+    pub schema_version: u32,
+    pub key_id: String,
+    /// The perry version the package belongs to; it must equal the
+    /// installing perry's version exactly.
+    pub version: String,
+    pub target_triple: String,
+    pub artifact: CliUpdateArtifact,
+    /// Base64 Ed25519 signature over `target_manifest_signing_payload`.
+    pub signature: String,
+}
+
+pub fn target_manifest_signing_payload(manifest: &TargetPackageManifest) -> Result<Vec<u8>> {
+    if manifest.schema_version != 1 {
+        bail!(
+            "unsupported target package manifest schema {}",
+            manifest.schema_version
+        );
+    }
+    if manifest.key_id.is_empty()
+        || manifest.version.is_empty()
+        || manifest.target_triple.is_empty()
+        || manifest.artifact.name.is_empty()
+        || manifest.artifact.url.is_empty()
+    {
+        bail!("target package manifest contains an empty security-critical field");
+    }
+    Version::parse(manifest.version.trim_start_matches('v'))
+        .context("manifest version is not valid semver")?;
+    let digest = decode_sha256(&manifest.artifact.sha256)?;
+    let mut out = Vec::with_capacity(192 + manifest.artifact.url.len());
+    out.extend_from_slice(TARGET_DOMAIN);
+    out.extend_from_slice(&manifest.schema_version.to_be_bytes());
+    for field in [
+        &manifest.key_id,
+        &manifest.version,
+        &manifest.target_triple,
+        &manifest.artifact.name,
+        &manifest.artifact.url,
+    ] {
+        let bytes = field.as_bytes();
+        let len = u32::try_from(bytes.len()).context("manifest field is too long")?;
+        out.extend_from_slice(&len.to_be_bytes());
+        out.extend_from_slice(bytes);
+    }
+    out.extend_from_slice(&digest);
+    out.extend_from_slice(&manifest.artifact.size.to_be_bytes());
+    Ok(out)
+}
+
+pub fn sign_target_manifest(
+    manifest: &mut TargetPackageManifest,
+    signing_key: &ed25519_dalek::SigningKey,
+) -> Result<()> {
+    manifest.signature = perry_base64::engine::general_purpose::STANDARD.encode(
+        signing_key
+            .sign(&target_manifest_signing_payload(manifest)?)
+            .to_bytes(),
+    );
+    Ok(())
+}
+
+/// Verify a target manifest for `expected_triple` and this perry's exact
+/// `current_version` (a target package of any other version is useless, so
+/// newer is rejected as firmly as older).
+pub fn verify_target_manifest(
+    manifest: &TargetPackageManifest,
+    expected_triple: &str,
+    current_version: &str,
+    trusted_keys: &[(&str, &str)],
+) -> Result<()> {
+    if manifest.target_triple != expected_triple {
+        bail!(
+            "manifest target {} does not match {}",
+            manifest.target_triple,
+            expected_triple
+        );
+    }
+    if manifest.version.trim_start_matches('v') != current_version.trim_start_matches('v') {
+        bail!(
+            "manifest version {} is not this perry's version {}",
+            manifest.version,
+            current_version
+        );
+    }
+    let key_b64 = trusted_keys
+        .iter()
+        .find(|(id, _)| *id == manifest.key_id)
+        .map(|(_, key)| *key)
+        .with_context(|| format!("manifest key id {:?} is not trusted", manifest.key_id))?;
+    let public_key = decode_public_key(key_b64)?;
+    let signature = decode_signature(&manifest.signature)?;
+    public_key
+        .verify(&target_manifest_signing_payload(manifest)?, &signature)
+        .context("target package manifest signature verification failed")
 }
 
 pub fn verify_cli_artifact(path: &Path, artifact: &CliUpdateArtifact) -> Result<()> {
@@ -256,6 +363,71 @@ mod tests {
             assert!(cli_manifest_signing_payload(&invalid).is_err());
             assert!(verify_cli_manifest(&invalid, &m.platform, "1.0.0", &trusted).is_err());
         }
+    }
+
+    fn signed_target() -> (TargetPackageManifest, String) {
+        let signing = SigningKey::from_bytes(&[7; 32]);
+        let public = perry_base64::engine::general_purpose::STANDARD
+            .encode(signing.verifying_key().to_bytes());
+        let mut m = TargetPackageManifest {
+            schema_version: 1,
+            key_id: "release-2026".into(),
+            version: "0.5.1700".into(),
+            target_triple: "wasm32-wasip1".into(),
+            artifact: CliUpdateArtifact {
+                name: "perry-target-wasm32-wasip1-0.5.1700.tgz".into(),
+                url: "https://example.invalid/perry-target-wasm32-wasip1-0.5.1700.tgz".into(),
+                sha256: perry_hex::encode(Sha256::digest(b"artifact")),
+                size: 8,
+            },
+            signature: String::new(),
+        };
+        sign_target_manifest(&mut m, &signing).unwrap();
+        (m, public)
+    }
+
+    #[test]
+    fn target_manifest_binds_triple_exact_version_and_artifact() {
+        let (m, public) = signed_target();
+        let keys = [("release-2026", public.as_str())];
+        verify_target_manifest(&m, "wasm32-wasip1", "0.5.1700", &keys).unwrap();
+        assert!(verify_target_manifest(&m, "wasm32-wasip2", "0.5.1700", &keys).is_err());
+        assert!(verify_target_manifest(&m, "wasm32-wasip1", "0.5.1699", &keys).is_err());
+        assert!(verify_target_manifest(&m, "wasm32-wasip1", "0.5.1701", &keys).is_err());
+        for mutate in [0, 1, 2, 3] {
+            let mut bad = m.clone();
+            match mutate {
+                0 => bad.signature = "AAAA".into(),
+                1 => bad.artifact.sha256 = "00".repeat(32),
+                2 => bad.artifact.size += 1,
+                _ => bad.artifact.url = "https://example.invalid/other.tgz".into(),
+            }
+            assert!(verify_target_manifest(&bad, "wasm32-wasip1", "0.5.1700", &keys).is_err());
+        }
+    }
+
+    #[test]
+    fn a_cli_manifest_never_passes_as_a_target_manifest_or_back() {
+        let (cli, public) = signed();
+        let keys = [("release-2026", public.as_str())];
+        // Field sets are disjoint: neither JSON parses as the other kind.
+        let cli_json = serde_json::to_string(&cli).unwrap();
+        assert!(serde_json::from_str::<TargetPackageManifest>(&cli_json).is_err());
+        let (target, _) = signed_target();
+        let target_json = serde_json::to_string(&target).unwrap();
+        assert!(serde_json::from_str::<CliUpdateManifest>(&target_json).is_err());
+        // And the domains differ: a CLI signature over the same fields fails.
+        let mut forged = TargetPackageManifest {
+            schema_version: 1,
+            key_id: cli.key_id.clone(),
+            version: cli.version.clone(),
+            target_triple: cli.platform.clone(),
+            artifact: cli.artifact.clone(),
+            signature: cli.signature.clone(),
+        };
+        assert!(verify_target_manifest(&forged, &cli.platform, &cli.version, &keys).is_err());
+        forged.signature = target.signature.clone();
+        assert!(verify_target_manifest(&forged, &cli.platform, &cli.version, &keys).is_err());
     }
 
     #[test]

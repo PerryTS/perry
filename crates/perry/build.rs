@@ -19,6 +19,14 @@ fn main() {
         workspace.display()
     );
 
+    // The triple this binary runs on. Its own libraries ship with it, so
+    // the library search never looks for a target package for it, and
+    // `perry target add` refuses it.
+    println!(
+        "cargo:rustc-env=PERRY_HOST_TRIPLE={}",
+        std::env::var("TARGET").expect("cargo sets TARGET for build scripts")
+    );
+
     if std::env::var_os("CARGO_CFG_TARGET_OS").as_deref() != Some(std::ffi::OsStr::new("windows")) {
         return;
     }

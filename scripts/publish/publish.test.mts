@@ -298,6 +298,8 @@ test('compareSemver: major/minor/patch ordering', () => {
 const MAIN_GUARDED_ENTRYPOINTS = [
   'pipeline.mts',
   'auth-posture.mts',
+  'constants.mts',
+  'stage-target.mts',
   'brew/tap-publish.mts',
   'cargo/ffi-publish.mts',
 ] as const

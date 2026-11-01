@@ -732,6 +732,11 @@ jobs:
       # Public, rotation-capable CLI update keyring baked into every release.
       # It is intentionally a repository variable (not fetched at runtime).
       PERRY_CLI_UPDATE_PUBLIC_KEYS: ${{ vars.PERRY_CLI_UPDATE_PUBLIC_KEYS }}
+      # Baked into perry too: a target package's target.json must name this
+      # exact commit (a nightly and a stable build can share a version), and
+      # `perry target add` downloads from this release (nightly tags differ).
+      PERRY_SOURCE_REVISION: ${{ needs.preflight.outputs.checkout-sha }}
+      PERRY_RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
       PERRY_RELEASE_WASI: ${{ matrix.wasi && needs.build-wasi.outputs.enabled == 'true' && '1' || '0' }}
       PERRY_RELEASE_WASIP1: ${{ matrix.wasi && needs.build-wasi.outputs.wasip1 == 'true' && '1' || '0' }}
       # Pin the macOS deployment target so bottle object files carry a
@@ -1032,6 +1037,8 @@ jobs:
             --env PERRY_ABORT_TARGET_DIR=/work/target-glibc231-abort \
             --env PERRY_RELEASE_WASI \
             --env PERRY_CLI_UPDATE_PUBLIC_KEYS \
+            --env PERRY_SOURCE_REVISION \
+            --env PERRY_RELEASE_TAG \
             --volume "$HOME/.cargo:/tmp/cargo-home" \
             --volume "$HOME/.rustup:/tmp/rustup-home" \
             --volume "$mbx_bin:/usr/local/bin/mbx:ro" \
@@ -1108,6 +1115,8 @@ jobs:
             --env CARGO_TARGET_DIR=/work/target-musl \
             --env PERRY_ABORT_TARGET_DIR=/work/target-musl-abort \
             --env PERRY_CLI_UPDATE_PUBLIC_KEYS \
+            --env PERRY_SOURCE_REVISION \
+            --env PERRY_RELEASE_TAG \
             --volume "$HOME/.cargo:/tmp/cargo-home" \
             --volume "$HOME/.rustup:/tmp/rustup-home" \
             --volume "$mbx_bin:/usr/local/bin/mbx:ro" \
@@ -1771,7 +1780,10 @@ jobs:
   #   libperry_runtime.a    (the cross-compiled runtime)
   #   libperry_stdlib.a     (the cross-compiled stdlib)
   #   libperry_ui_<plat>.a  (the cross-compiled UI backend, when applicable)
-  #   manifest.json         (perry_version + target_triple + sha256+size per file)
+  #   manifest.json         (schema_version, perry_version, source_revision,
+  #                          target_triple, sha256+size per file)
+  # The android and iOS bundles (and build-wasi's two) also become the
+  # @perryts/perry-target-<triple> npm packages (scripts/stage-npm.sh).
   #
   # Each matrix entry runs on the natural host runner for its toolchain:
   #   - Apple targets: macos-15 (real Xcode + SDKs)
@@ -2051,6 +2063,8 @@ jobs:
       - name: Stage cross artifacts + manifest (Unix)
         if: runner.os != 'Windows'
         shell: bash
+        env:
+          SOURCE_REVISION: ${{ needs.preflight.outputs.checkout-sha }}
         run: |
           set -euo pipefail
           TARGET="${{ matrix.target }}"
@@ -2102,8 +2116,11 @@ jobs:
               --argjson size "$(sz "$STAGING/$f")" \
               '$acc + [{path: $path, sha256: $sha, size: $size}]')
           done
-          jq -n --arg v "$PERRY_VERSION" --arg t "$TARGET" --argjson files "$files_json" \
-            '{perry_version: $v, target_triple: $t, files: $files}' \
+          # The WASI bundle schema: stage-npm.sh turns this into the target
+          # package's target.json, which perry matches against its own build.
+          jq -n --arg v "$PERRY_VERSION" --arg t "$TARGET" --arg r "$SOURCE_REVISION" \
+            --argjson files "$files_json" \
+            '{schema_version: 1, perry_version: $v, source_revision: $r, target_triple: $t, files: $files}' \
             > "$STAGING/manifest.json"
           cat "$STAGING/manifest.json"
           tar czf "perry-cross-${TARGET}.tar.gz" -C "$STAGING" .
@@ -2111,6 +2128,8 @@ jobs:
       - name: Stage cross artifacts + manifest (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          SOURCE_REVISION: ${{ needs.preflight.outputs.checkout-sha }}
         run: |
           $ErrorActionPreference = 'Stop'
           $target = "${{ matrix.target }}"
@@ -2141,9 +2160,11 @@ jobs:
             $entries += [pscustomobject]@{ path = $lib; sha256 = $hash; size = $size }
           }
           $manifest = [pscustomobject]@{
-            perry_version = $perryVersion
-            target_triple = $target
-            files         = $entries
+            schema_version  = 1
+            perry_version   = $perryVersion
+            source_revision = $env:SOURCE_REVISION
+            target_triple   = $target
+            files           = $entries
           }
           $manifest | ConvertTo-Json -Depth 5 | Out-File -Encoding utf8 (Join-Path $staging "manifest.json")
           Get-Content (Join-Path $staging "manifest.json")
@@ -2419,7 +2440,7 @@ jobs:
   # upload semantics where a red cross leg didn't sink the release.
   # ---------------------------------------------------------------------------
   publish-assets:
-    needs: [preflight, build, build-cross, build-wasi, create-release, create-nightly]
+    needs: [preflight, build, build-cross, build-wasi, create-release, create-nightly, npm-pack-check, npm-publish]
     if: >
       !cancelled() &&
       needs.preflight.outputs.tag != '' &&
@@ -2483,6 +2504,52 @@ jobs:
           pattern: perry-cross-*
           merge-multiple: true
           path: assets/
+
+      - name: Download the target package tarballs
+        # From npm-publish (cut/release/republish) or npm-pack-check
+        # (nightly); absent when neither packed (republish without npm).
+        continue-on-error: true
+        uses: ./.github/actions/perry/actions/download-artifact # v8
+        with:
+          name: npm-target-packages
+          path: npm-targets/
+
+      - name: Sign the target packages for `perry target add`
+        # Each npm tarball goes up as perry-target-<triple>-<version>.tgz with
+        # a .sha256 and a manifest signed by the CLI-update key under the
+        # target domain (`perry updater sign-target-manifest`), which perry
+        # verifies before installing into ~/.perry/targets.
+        env:
+          PERRY_CLI_UPDATE_SIGNING_KEY: ${{ secrets.PERRY_CLI_UPDATE_SIGNING_KEY }}
+          PERRY_CLI_UPDATE_KEY_ID: ${{ vars.PERRY_CLI_UPDATE_KEY_ID }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          tarballs=(npm-targets/*/*.tgz)
+          if [ "${#tarballs[@]}" -eq 0 ]; then
+            echo "::notice::no target package tarballs in this run; none attached to $TAG"
+            exit 0
+          fi
+          : "${PERRY_CLI_UPDATE_SIGNING_KEY:?configure the protected 32-byte base64 Ed25519 signing secret}"
+          : "${PERRY_CLI_UPDATE_KEY_ID:?configure the matching trusted public-key id}"
+          signer="$RUNNER_TEMP/signer"
+          mkdir -p "$signer"
+          tar xzf assets/perry-linux-x86_64.tar.gz -C "$signer" ./perry
+          for tgz in "${tarballs[@]}"; do
+            triple=$(tar -xzOf "$tgz" package/target.json | jq -r .target_triple)
+            version=$(tar -xzOf "$tgz" package/target.json | jq -r .perry_version)
+            name="perry-target-${triple}-${version}.tgz"
+            cp "$tgz" "assets/$name"
+            (cd assets && sha256sum "$name" > "$name.sha256")
+            "$signer/perry" updater sign-target-manifest \
+              --artifact "assets/$name" --triple "$triple" \
+              --url "https://github.com/${REPO}/releases/download/${TAG}/${name}" \
+              --release-version "$version" --key-id "$PERRY_CLI_UPDATE_KEY_ID" \
+              --secret-key-b64 "$PERRY_CLI_UPDATE_SIGNING_KEY" > "assets/$name.update.json"
+            echo "signed $name"
+          done
 
       - name: Upload all assets to the release
         env:
@@ -3137,31 +3204,82 @@ jobs:
           path: release-artifacts/
 
       - name: Materialize npm packages
+        env:
+          PERRY_SOURCE_REVISION: ${{ needs.preflight.outputs.checkout-sha }}
         run: ./scripts/stage-npm.sh release-artifacts/
 
       - name: Pack the exact publication tarballs (size budget enforced)
         run: node scripts/publish/prepare-ci-packages.mts
 
+      # Nightlies skip npm, but `perry target add` on a nightly downloads the
+      # same tarballs from its GitHub release: publish-assets signs and
+      # attaches these.
+      - name: Keep the target package tarballs for publish-assets
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
+        with:
+          name: npm-target-packages
+          path: npm/perry-target-*/*.tgz
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Install the WASI toolchain for the target package smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          toolchain_env="$(./scripts/wasi_toolchain.sh "$RUNNER_TEMP/wasi")"
+          eval "$toolchain_env"
+          echo "WASI_SDK_PATH=$WASI_SDK_PATH" >> "$GITHUB_ENV"
+
+      - name: Smoke-test a target package from a global npm install
+        # The exact tarballs: wrapper + linux-x64 host + wasm32-wasip2 target in
+        # a scratch global prefix. perry must find the target package beside
+        # itself (no NDK or SDK path needed), and must refuse to work without it.
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix="$RUNNER_TEMP/npm-global"
+          tgz() { find "npm/$1" -maxdepth 1 -name '*.tgz' -print -quit; }
+          npm install -g --prefix "$prefix" --omit=optional --ignore-scripts --no-audit --no-fund \
+            "./$(tgz perry)" "./$(tgz perry-linux-x64)"
+          # The packed host binary itself: npm may still nest a registry copy of
+          # the host package under the wrapper when this version is already public.
+          perry="$prefix/lib/node_modules/@perryts/perry-linux-x64/bin/perry"
+          work="$RUNNER_TEMP/target-smoke"
+          mkdir -p "$work"
+          printf 'console.log("target package ok")\n' > "$work/hello.ts"
+          if "$perry" compile --target wasi "$work/hello.ts" -o "$work/hello.wasm" > "$work/missing.log" 2>&1; then
+            echo "::error::perry compiled --target wasi with no target package installed" >&2
+            exit 1
+          fi
+          grep -F "npm install -g @perryts/perry-target-wasm32-wasip2@" "$work/missing.log"
+          npm install -g --prefix "$prefix" --ignore-scripts --no-audit --no-fund \
+            "./$(tgz perry-target-wasm32-wasip2)"
+          "$perry" compile --target wasi "$work/hello.ts" -o "$work/hello.wasm"
+          test -s "$work/hello.wasm"
+
   # ---------------------------------------------------------------------------
-  # Publish npm packages (@perryts/perry + 8 per-platform packages)
+  # Publish npm packages (@perryts/perry, the per-platform packages and the
+  # per-target @perryts/perry-target-<triple> packages)
   #
   # Uses OIDC / Trusted Publishers (no npm login, long-lived NPM_TOKEN, or
   # GitHub Environment). release-packages.yml is the one publisher identity
   # shared by every @perryts/* package.
   # ---------------------------------------------------------------------------
   npm-publish:
-    # The irreversible leg. Every build must be green in canonical cut-release
-    # mode. It runs BEFORE create-release; only exact registry verification can
-    # unblock the tag. Release-event and explicit republish modes stay
-    # idempotent for already-existing releases.
+    # The irreversible leg. Every build must be green, build-cross included,
+    # in every mode: the cross bundles are the target packages, and the
+    # wrapper never ships without its targets. It runs BEFORE create-release;
+    # only exact registry verification can unblock the tag. Release-event and
+    # explicit republish modes stay idempotent for already-existing releases.
     needs: [preflight, build, build-cross]
     if: >
       !cancelled() &&
       needs.build.result == 'success' &&
+      needs.build-cross.result == 'success' &&
       (
-        (needs.preflight.outputs.mode == 'cut-release' && needs.build-cross.result == 'success') ||
-        (needs.preflight.outputs.mode == 'release' && contains(fromJSON('["success", "failure"]'), needs.build-cross.result)) ||
-        (needs.preflight.outputs.mode == 'republish' && inputs.publish_npm && contains(fromJSON('["success", "failure"]'), needs.build-cross.result))
+        needs.preflight.outputs.mode == 'cut-release' ||
+        needs.preflight.outputs.mode == 'release' ||
+        (needs.preflight.outputs.mode == 'republish' && inputs.publish_npm)
       )
     runs-on: ubuntu-latest
     permissions:
@@ -3222,12 +3340,24 @@ jobs:
           path: release-artifacts/
 
       - name: Materialize npm packages
+        env:
+          PERRY_SOURCE_REVISION: ${{ needs.preflight.outputs.checkout-sha }}
         run: ./scripts/stage-npm.sh release-artifacts/
 
       - name: Pack the exact publication tarballs
         # Fails on NPM_PACKED_SIZE_BUDGET before any `npm publish` below, so an
         # oversize package can never leave a cut half-published.
         run: node scripts/publish/prepare-ci-packages.mts
+
+      # publish-assets attaches these to the GitHub release, byte-identical to
+      # what npm gets, for `perry target add`.
+      - name: Keep the target package tarballs for publish-assets
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
+        with:
+          name: npm-target-packages
+          path: npm/perry-target-*/*.tgz
+          if-no-files-found: error
+          compression-level: 0
 
       - name: Install the Socket scan SDK
         if: env.SOCKET_SCAN == 'true'

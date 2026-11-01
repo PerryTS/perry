@@ -3,7 +3,7 @@
  *
  * npm run publish:release dispatches the exact candidate to GitHub Actions.
  * The existing Publish to npm / GitHub Release workflow builds, optionally Socket-scans, and
- * directly publishes the exact nine tarballs through npm Trusted Publisher /
+ * directly publishes the exact tarballs through npm Trusted Publisher /
  * OIDC. It verifies their public registry shasums and only then creates the tag
  * + GitHub Release. Back on the maintainer machine, this script independently
  * verifies the retained proof and final release receipt. No npm account
@@ -174,7 +174,7 @@ async function downloadPublishProof(runId: string): Promise<string | undefined> 
     !existsSync(path.join(artifactDir, CI_PACKAGE_MANIFEST))
   ) {
     logger.fail(
-      `Workflow run ${runId} did not retain the exact nine-package proof. ` +
+      `Workflow run ${runId} did not retain the exact package proof. ` +
         `Missing/ambiguous: ${missing.join(', ') || CI_PACKAGE_MANIFEST}.`,
     )
     return undefined
