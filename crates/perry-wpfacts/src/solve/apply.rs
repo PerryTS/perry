@@ -706,6 +706,7 @@ impl Model {
                         self.note_shared(SharedWrite::Accessor(s, k));
                     }
                     self.note_fnproto_write(t, Some(Key::Named(key)), "accessor");
+                    self.note_array_member_write(t, Some(Key::Named(key)), None, "accessor");
                     builtins::note_native_write(self, t, Some(Key::Named(key)), "accessor");
                     if t == TOP || self.is_chain_proto(t) {
                         self.reshape(Some(key));

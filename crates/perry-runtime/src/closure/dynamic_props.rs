@@ -281,100 +281,14 @@ pub(crate) fn closure_get_dynamic_prop_keyed(
         let name = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
         return crate::value::js_nanbox_string(name as i64);
     }
-    // #36 / #321: own prop miss — walk the closure's static prototype chain
-    // (`Object.setPrototypeOf(closure, protoObj)`). Reads a string-keyed field
-    // off the proto object. Lets effect's `TagClass._op` resolve to "Tag" on
-    // the proto. Bounded depth guards against an accidental cycle.
-    let mut cur = ptr;
-    let mut depth = 0usize;
-    while depth < 8 {
-        let Some(proto_bits) = closure_static_prototype(cur) else {
-            break;
-        };
-        let proto_f64 = f64::from_bits(proto_bits);
-        let proto_ptr = crate::value::js_nanbox_get_pointer(proto_f64) as usize;
-        if proto_ptr == 0 || proto_ptr == cur {
-            break;
+    // #36 / #321: own prop miss on a closure with a recorded [[Prototype]]
+    // (`Object.setPrototypeOf(closure, protoObj)`): that chain's [[Get]], out
+    // of line ([`closure_proto_chain_get`]), so this read's common path does
+    // not carry the walk.
+    if let Some(proto_bits) = closure_static_prototype(ptr) {
+        if let Some(v) = closure_proto_chain_get(ptr, proto_bits, prop, key) {
+            return v;
         }
-        // The proto may itself be a closure (rare) or a regular object. For a
-        // regular object, read the named field via the field getter; for a
-        // closure, recurse via its own props. Distinguish by CLOSURE_MAGIC.
-        if is_closure_ptr(proto_ptr) {
-            // #5039: the proto may carry accessor properties — chalk's style
-            // proto is `Object.defineProperties(() => {}, styles)` where every
-            // style is `{ get() {...} }`. Invoke the getter with the ORIGINAL
-            // receiver (`ptr`, not the proto) so chalk's
-            // `Object.defineProperty(this, styleName, {value: builder})`
-            // caches the builder on the chalk instance, and nested builders
-            // chain their stylers off the right `this`.
-            if let Some(acc) = crate::object::get_accessor_descriptor(proto_ptr, prop) {
-                if acc.get == 0 {
-                    return f64::from_bits(crate::value::TAG_UNDEFINED);
-                }
-                let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-                let receiver = this_scope.root_nanbox_f64(
-                    crate::object::field_get_set::accessor_receiver_override_take()
-                        .unwrap_or_else(|| crate::value::js_nanbox_pointer(ptr as i64)),
-                );
-                let getter_bits = clone_closure_rebind_this(acc.get, receiver.get_nanbox_f64());
-                let getter = (getter_bits & crate::value::POINTER_MASK)
-                    as *const crate::closure::ClosureHeader;
-                if getter.is_null() {
-                    return f64::from_bits(crate::value::TAG_UNDEFINED);
-                }
-                return crate::closure::js_closure_call0(
-                    getter,
-                    crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
-                );
-            }
-            if let Some(p) = closure_get_own_dynamic_prop(proto_ptr, prop) {
-                return p;
-            }
-            cur = proto_ptr;
-            depth += 1;
-            continue;
-        }
-        // #5039: an accessor on the proto object must run with the ORIGINAL
-        // closure as receiver, not the proto. chalk's style getters live on
-        // `createChalk.prototype` and cache the built style via
-        // `Object.defineProperty(this, styleName, {value: builder})` — with
-        // `this` = proto that's a TypeError (redefining the non-configurable
-        // accessor) instead of an own-property cache on the chalk instance.
-        if let Some(acc) = crate::object::get_accessor_descriptor(proto_ptr, prop) {
-            if acc.get == 0 {
-                return f64::from_bits(crate::value::TAG_UNDEFINED);
-            }
-            let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-            let receiver = this_scope.root_nanbox_f64(
-                crate::object::field_get_set::accessor_receiver_override_take()
-                    .unwrap_or_else(|| crate::value::js_nanbox_pointer(ptr as i64)),
-            );
-            let getter_bits = clone_closure_rebind_this(acc.get, receiver.get_nanbox_f64());
-            let getter =
-                (getter_bits & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
-            if getter.is_null() {
-                return f64::from_bits(crate::value::TAG_UNDEFINED);
-            }
-            return crate::closure::js_closure_call0(
-                getter,
-                crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
-            );
-        }
-        {
-            // The thread's canonical interned header: no allocation per read,
-            // and one stable key identity, so the read below can be served by
-            // (and prime) the inherited-read cache instead of minting a fresh
-            // key string that no cache entry can ever match again.
-            let key_hdr = crate::string::canonical_key(prop.as_bytes());
-            let v = crate::object::js_object_get_field_by_name(
-                proto_ptr as *const crate::object::ObjectHeader,
-                key_hdr as *const crate::StringHeader,
-            );
-            if !v.is_undefined() && !v.is_null() {
-                return f64::from_bits(v.bits());
-            }
-        }
-        break;
     }
     // #3655 + spec: a DELETED own `name`/`length` is not an own property any
     // more, so the read continues on the prototype — `Function.prototype`
@@ -419,6 +333,138 @@ pub(crate) fn closure_get_dynamic_prop_keyed(
     }
     function_prototype_inherited_get(ptr, prop, receiver)
         .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED))
+}
+
+/// The [[Get]] of `prop` on a function whose own lookup missed and whose
+/// [[Prototype]] is the recorded `proto_bits` (`Object.setPrototypeOf(fn,
+/// proto)`; effect's `TagClass._op`, chalk's styles, ArkType's callable class
+/// instances): `Some` is the read's value, `None` leaves the function-object
+/// fallbacks of [`closure_get_dynamic_prop_keyed`] (a chain of functions that
+/// ends without a recorded prototype, a self link, a cycle bound).
+///
+/// An ordinary object hop is that object's `OrdinaryGet(key, Receiver)` with
+/// the function as `Receiver`, and its answer is final: a data `null` or
+/// `undefined` is the value (the object's chain, not `%Function.prototype%`,
+/// is what follows). The layouts answer it first in one walk
+/// (`runtime_read_site::get_with_receiver`: data, or the getter called on the
+/// function); the complete read stays for what they decline.
+///
+/// Out of line and cold: only a function given a recorded prototype reaches
+/// it, so the keyed read's common path does not carry the walk.
+#[cold]
+#[inline(never)]
+fn closure_proto_chain_get(
+    ptr: usize,
+    proto_bits: u64,
+    prop: &str,
+    key: *const crate::StringHeader,
+) -> Option<f64> {
+    let mut cur = ptr;
+    let mut proto_bits = proto_bits;
+    // Bounded depth guards against an accidental cycle.
+    for depth in 0..8usize {
+        if depth > 0 {
+            proto_bits = closure_static_prototype(cur)?;
+        }
+        let proto_f64 = f64::from_bits(proto_bits);
+        let proto_ptr = crate::value::js_nanbox_get_pointer(proto_f64) as usize;
+        if proto_ptr == 0 || proto_ptr == cur {
+            return None;
+        }
+        // The proto may itself be a closure (rare) or a regular object. For a
+        // regular object, read the named field via the field getter; for a
+        // closure, recurse via its own props. Distinguish by CLOSURE_MAGIC.
+        if is_closure_ptr(proto_ptr) {
+            // #5039: the proto may carry accessor properties — chalk's style
+            // proto is `Object.defineProperties(() => {}, styles)` where every
+            // style is `{ get() {...} }`. Invoke the getter with the ORIGINAL
+            // receiver (`ptr`, not the proto) so chalk's
+            // `Object.defineProperty(this, styleName, {value: builder})`
+            // caches the builder on the chalk instance, and nested builders
+            // chain their stylers off the right `this`.
+            if let Some(acc) = crate::object::get_accessor_descriptor(proto_ptr, prop) {
+                if acc.get == 0 {
+                    return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
+                }
+                let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+                let receiver = this_scope.root_nanbox_f64(
+                    crate::object::field_get_set::accessor_receiver_override_take()
+                        .unwrap_or_else(|| crate::value::js_nanbox_pointer(ptr as i64)),
+                );
+                let getter_bits = clone_closure_rebind_this(acc.get, receiver.get_nanbox_f64());
+                let getter = (getter_bits & crate::value::POINTER_MASK)
+                    as *const crate::closure::ClosureHeader;
+                if getter.is_null() {
+                    return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
+                }
+                return Some(crate::closure::js_closure_call0(
+                    getter,
+                    crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
+                ));
+            }
+            if let Some(p) = closure_get_own_dynamic_prop(proto_ptr, prop) {
+                return Some(p);
+            }
+            cur = proto_ptr;
+            continue;
+        }
+        // Every arm of an object hop consumes the caller's receiver: the
+        // getter that answers runs on it, not on the proto that holds it.
+        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+        let receiver = this_scope.root_nanbox_f64(
+            crate::object::field_get_set::accessor_receiver_override_take()
+                .unwrap_or_else(|| crate::value::js_nanbox_pointer(ptr as i64)),
+        );
+        if let Some(obj) =
+            crate::object::field_get_set::runtime_read_site::object_receiver(proto_f64)
+        {
+            // SAFETY: a live ordinary object above the handle band; the
+            // receiver is rooted in `this_scope`.
+            if let Some(v) = unsafe {
+                crate::object::field_get_set::runtime_read_site::get_with_receiver(
+                    obj,
+                    prop.as_bytes(),
+                    key,
+                    receiver.get_nanbox_f64(),
+                )
+            } {
+                return Some(v);
+            }
+        }
+        // #5039: an accessor on the proto object must run with the ORIGINAL
+        // closure as receiver, not the proto. chalk's style getters live on
+        // `createChalk.prototype` and cache the built style via
+        // `Object.defineProperty(this, styleName, {value: builder})` — with
+        // `this` = proto that's a TypeError (redefining the non-configurable
+        // accessor) instead of an own-property cache on the chalk instance.
+        if let Some(acc) = crate::object::get_accessor_descriptor(proto_ptr, prop) {
+            if acc.get == 0 {
+                return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
+            }
+            let getter_bits = clone_closure_rebind_this(acc.get, receiver.get_nanbox_f64());
+            let getter =
+                (getter_bits & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
+            if getter.is_null() {
+                return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
+            }
+            return Some(crate::closure::js_closure_call0(
+                getter,
+                crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
+            ));
+        }
+        // The proto object's [[Get]](key, Receiver) with the ORIGINAL closure
+        // as receiver: an accessor further up its chain runs on the closure
+        // too, not on the proto that holds the chain (ArkType's `rawIn`, a
+        // getter two levels up). The thread's canonical interned header: one
+        // stable key identity, no allocation per read.
+        let key_hdr = crate::string::canonical_key(prop.as_bytes());
+        return Some(crate::proxy::js_reflect_get(
+            proto_f64,
+            crate::value::js_nanbox_string(key_hdr as i64),
+            receiver.get_nanbox_f64(),
+        ));
+    }
+    None
 }
 
 /// `[[Get]]` of `prop` on the real `%Function.prototype%` object, for a

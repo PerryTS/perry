@@ -359,7 +359,7 @@ pub(crate) unsafe fn instance_chain_getter_value(
     Some(invoke_instance_getter(acc, this_of()))
 }
 
-unsafe fn invoke_instance_getter(acc: Accessor, this: f64) -> (crate::JSValue, usize) {
+pub(crate) unsafe fn invoke_instance_getter(acc: Accessor, this: f64) -> (crate::JSValue, usize) {
     if acc.raw_get != 0 {
         let scope = crate::gc::RuntimeHandleScope::new();
         let this = scope.root_nanbox_f64(this);

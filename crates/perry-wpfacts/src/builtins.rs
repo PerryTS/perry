@@ -11,6 +11,7 @@ mod collections;
 mod members;
 mod native_protocol;
 use collections::{array_method, bobj_method, function_method, iterate};
+pub(crate) use collections::to_prim;
 pub(crate) use collections::{WK_ITERATOR, WK_PREFIX};
 use members::{Family, Mem};
 pub use native_protocol::{
@@ -941,7 +942,7 @@ fn seed_family(m: &Model, t: Tok) -> Option<Family> {
             _ if m.virt_protos.contains_key(&t) => None,
             TmplKind::Arr { .. } => Some(Family::Array),
             TmplKind::BObj { what, .. } => Some(members::bobj_family(what)),
-            TmplKind::Lit { .. } => Some(Family::Object),
+            TmplKind::Lit { .. } | TmplKind::Args { .. } => Some(Family::Object),
         },
         TokKind::Proto(tm) => {
             let tm = &m.tmpls[*tm as usize];
@@ -2007,6 +2008,9 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             let c = m.calls[call as usize].clone();
             if let Some(&src) = c.args.first() {
                 m.cons(src, Cons::ShareBuffer { ta: o });
+                if ns == BuiltinNs::TypedArray {
+                    collections::typed_array_source_elements(m, call, src);
+                }
             }
             if ns == BuiltinNs::ArrayBuffer && c.args.len() > 1 {
                 // B4: `new ArrayBuffer(n, { maxByteLength })` is resizable.

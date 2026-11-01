@@ -177,6 +177,13 @@ pub struct ProgramFacts {
     /// aborted solve answers `Some`). Interpreted code is
     /// [`ProgramFacts::interp_guard`]'s.
     pub fnproto_bind_written: Option<String>,
+    /// #13645: an array's `@@iterator` may not be the builtin, and why
+    /// (`Model::array_iteration_writes`); `None`: compiled code never
+    /// changes it. Interpreted code is [`ProgramFacts::interp_guard`]'s.
+    pub array_iteration_written: Option<String>,
+    /// #13645: `%ArrayIteratorPrototype%`'s chain may gain or change `next`
+    /// or `return`, and why; `None`: compiled code never does.
+    pub array_iterator_close_written: Option<String>,
     /// Constructors whose live [[Prototype]] cannot be relinked by any reachable operation.
     pub super_unrelinked: std::collections::BTreeSet<u32>,
     pub dynamic_code_reach: perry_hir::dynamic_code::DynamicCodeReach,
@@ -680,6 +687,11 @@ fn compute_act<'a>(
             .collect()
     } else {
         Vec::new()
+    };
+    let (array_iteration_written, array_iterator_close_written) = if stats.aborted {
+        (Some("solve aborted".to_string()), Some("solve aborted".to_string()))
+    } else {
+        g.m.array_iteration_writes()
     };
     let fnproto_bind_written = if stats.aborted {
         Some("solve aborted".to_string())
@@ -1647,6 +1659,8 @@ fn compute_act<'a>(
         active_bodies,
         super_unrelinked,
         fnproto_bind_written,
+        array_iteration_written,
+        array_iterator_close_written,
         module_paths: sorted.iter().map(|(p, _)| p.to_string()).collect(),
         templates,
         sites,

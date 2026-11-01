@@ -238,7 +238,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, method: &str, args: &[Expr]) -> Result<
             let value = lower_expr(ctx, input)?;
             ctx.block().store_volatile(DOUBLE, &value, &r.fields[0]);
             let counted = matches!(args.get(1), Some(Expr::Bool(true)));
-            let writable = crate::expr::array_iteration_facts().to_string();
+            let writable = crate::expr::array_iteration_facts(&ctx.wpfacts).to_string();
             let verdict = ctx.block().call(
                 I32,
                 "js_array_record_stack_enter",
@@ -342,6 +342,30 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, method: &str, args: &[Expr]) -> Result<
             let Some(r) = ctx.array_stack_records.get(&id).cloned() else {
                 return Ok(None);
             };
+            // #13645: with no `return` on the array iterator chain only the
+            // protocol arm completes through the dispatcher; the array arm's
+            // IteratorClose is unobservable, and the plan's exit release
+            // ends the record's custody of the payload.
+            let elide = method == "arrayRecordFinish" && ctx.wpfacts.array_iterator_close_unwritten;
+            let throwing = matches!(args[6], Expr::Bool(true));
+            let mut skip = None;
+            if elide {
+                let skipped = if throwing {
+                    lower_expr(ctx, &args[5])?
+                } else {
+                    crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                };
+                let flag = lower_expr(ctx, &Expr::LocalGet(r.mode))?;
+                let bits = ctx.block().bitcast_double_to_i64(&flag);
+                let protocol = ctx.block().icmp_eq(I64, &bits, crate::nanbox::TAG_TRUE_I64);
+                let close_idx = ctx.new_block("arec.close");
+                let join_idx = ctx.new_block("arec.closed");
+                let (close_label, join_label) = (ctx.block_label(close_idx), ctx.block_label(join_idx));
+                let skip_pred = ctx.block().label.clone();
+                ctx.block().cond_br(&protocol, &close_label, &join_label);
+                ctx.current_block = close_idx;
+                skip = Some((join_idx, skipped, skip_pred));
+            }
             // Payload and traversal mode already live in the range. The
             // cold edge writes only its cursor and completion state.
             let index = lower_expr(ctx, &args[2])?;
@@ -371,6 +395,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, method: &str, args: &[Expr]) -> Result<
             let value = dispatch(ctx, &r, op);
             if method == "arrayRecordAbrupt" {
                 ctx.block().unreachable();
+            }
+            if let Some((join_idx, skipped, skip_pred)) = skip {
+                let close_pred = ctx.block().label.clone();
+                let join_label = ctx.block_label(join_idx);
+                ctx.block().br(&join_label);
+                ctx.current_block = join_idx;
+                let value = ctx
+                    .block()
+                    .phi(DOUBLE, &[(&value, &close_pred), (&skipped, &skip_pred)]);
+                return Ok(Some(value));
             }
             return Ok(Some(value));
         }
