@@ -46,11 +46,15 @@ fn user_method(module: &Module, receiver: &Expr, property: &str) -> bool {
                         .iter()
                         .all(|stmt| matches!(stmt, Stmt::Return(None | Some(Expr::This))))
             })
-            && class.methods.iter().all(|method| {
-                method.decorators.is_empty()
-                    && !perry_hir::analysis::body_reads_dynamic_this(&method.body)
-                    && method.params.iter().all(|param| param.default.is_none())
-            })
+            && class
+                .methods
+                .iter()
+                .chain(&class.static_methods)
+                .all(|method| {
+                    method.decorators.is_empty()
+                        && !perry_hir::analysis::body_reads_dynamic_this(&method.body)
+                        && method.params.iter().all(|param| param.default.is_none())
+                })
             && class.extends.is_none()
             && class.extends_name.is_none()
             && class.extends_expr.is_none()

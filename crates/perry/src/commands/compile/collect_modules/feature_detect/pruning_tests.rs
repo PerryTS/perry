@@ -123,3 +123,16 @@ fn signal_callback_code_is_still_scanned_for_regex() {
     assert!(!ctx.uses_proc_ipc);
     assert!(ctx.uses_regex);
 }
+
+#[test]
+fn static_initializers_can_expose_the_constructor_through_this() {
+    let ctx = detect_for_source(
+        r#"
+        let escaped: any;
+        function keep(value: any) { escaped = value; }
+        class Probe { static { keep(this); } search() { return 1; } }
+        console.log(escaped.name, new Probe().search());
+    "#,
+    );
+    assert!(ctx.uses_regex);
+}

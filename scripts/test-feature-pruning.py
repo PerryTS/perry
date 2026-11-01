@@ -65,6 +65,7 @@ SOURCES = {
     "search": 'class Probe { search(): number { return 1; } } console.log(new Probe().search());',
     "find": 'class Probe { findValue(): number { return 1; } } console.log(new Probe().findValue());',
     "match": 'class Probe { match(): number { return 1; } } console.log(new Probe().match());',
+    "escaped-class": 'let saved: any; function keep(value: any) { saved = value; } class Probe { static { keep(this); } search(): number { return 1; } } console.log(saved.name.length > 0 ? new Probe().search() : 0);',
     "regex": 'console.log("abc".search("b"));',
     "unknown": 'function search(value: any) { return value.search("b"); } console.log(search("abc"));',
     "steady": '''process.on("SIGINT", () => {});
@@ -200,7 +201,7 @@ def main():
                 binary = compile_source(executable, directory, name, source)
                 regex = has_regex(binary)
                 if label == "candidate":
-                    assert regex == (name in ("regex", "unknown")), (name, regex)
+                    assert regex == (name in ("regex", "unknown", "escaped-class")), (name, regex)
                 else:
                     assert regex == (name not in ("control", "find")), ("baseline", name, regex)
                 stdout = run([str(binary)], timeout=10).stdout
