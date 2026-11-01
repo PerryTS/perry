@@ -22,6 +22,8 @@ struct State {
     pings: usize,
     watched_transfer: Option<Value>,
     early_commit: bool,
+    dispose_consumed: bool,
+    drain: Vec<Value>,
 }
 struct Frame {
     state: *mut State,
@@ -141,6 +143,14 @@ unsafe extern "C" fn callback(
             output(out, b"guest destructor rejected".to_vec());
             return ERROR;
         }
+        output(out, b"null".to_vec());
+        return OK;
+    }
+    if bytes(function, function_len).unwrap() == b"consume" && state.dispose_consumed {
+        // The embedding disposes the owned argument inside its callback.
+        let args: Value = serde_json::from_slice(bytes(args, args_len).unwrap()).unwrap();
+        let value = &args[0];
+        state.drain.push(json!({"token":value["$hostResource"],"type":value["type"],"generation":value["generation"]}));
         output(out, b"null".to_vec());
         return OK;
     }
@@ -471,6 +481,12 @@ unsafe extern "C" fn resource_callback(
             b"ownership committed before borrower execution".to_vec(),
         );
         return ERROR;
+    }
+    if event["kind"] == "drain" && !state.drain.is_empty() {
+        let pending = std::mem::take(&mut state.drain);
+        state.resources.push((event, origin, frame.marker));
+        output(out, serde_json::to_vec(&pending).unwrap());
+        return OK;
     }
     let reject = (event["kind"] == "drop" && state.reject_drop)
         || (event["kind"] == "lower" && state.reject_lower);
