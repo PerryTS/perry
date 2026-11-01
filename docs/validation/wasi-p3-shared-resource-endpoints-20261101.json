@@ -1,0 +1,414 @@
+{
+  "date": "2026-11-01",
+  "source": "239f12b84cdd8944343dd72451c0d4d7dce3113e",
+  "scope": "Linux x86_64 experimental imported/exported resource-bearing future/stream I/O, shared imported records, and local record/future aliases across exported interfaces",
+  "fullWasi030Qualified": false,
+  "integratedMain": "ee0d9183d4496489dd4532247a64c66b57969230",
+  "abi": {
+    "guestVersion": 2,
+    "endpointOperationsVersion": 1,
+    "additiveProducerOperationsVersion": 1,
+    "existingLayoutsUnchanged": true,
+    "sdk": "wasi-sdk 34.0"
+  },
+  "build": {
+    "freshCoherentOrdinaryNativeSource": "239f12b84cdd8944343dd72451c0d4d7dce3113e",
+    "nativeInstruments": false,
+    "nativeSidecarsBuilt": true,
+    "packages": [
+      "perry",
+      "perry-runtime-static",
+      "perry-stdlib-static",
+      "perry-component-host",
+      "perry-wit",
+      "perry-gc-effects"
+    ],
+    "feature": "perry/target-wasi",
+    "p3RuntimeArchiveSource": "75e11196ee862e94d1611f71b10689d74794124b",
+    "p3ArchiveReuseProof": "Exact complete production subtree/blob identity against immutable archive build source; current native cohort built fresh.",
+    "rustflagsEnvironmentModified": false
+  },
+  "units": {
+    "witSource": "239f12b84cdd8944343dd72451c0d4d7dce3113e",
+    "witPassed": 40,
+    "ignoredFixtureProducers": 2,
+    "runtimeSource": "a8dad22b7e8e2a6211bb89078118f9176b789e4d",
+    "normalDevComponentRuntimePassed": 125,
+    "runtimeUnitsReexecutedAtActualSource": false,
+    "directRuntimeProductionTreeBlobEqualityVerified": true,
+    "fullRuntimeSuiteQualified": false,
+    "debugAssertionsEnabled": true,
+    "serial": true,
+    "nativeAsanUbsanReadCases": 26,
+    "nativeAsanUbsanWriteCases": 30,
+    "facadeStorageAndBorrowRetirementSanitizer": true
+  },
+  "profiles": {
+    "acceptance": {
+      "phases": [
+        {
+          "phase": "build-probes",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "public-guard",
+          "exitCode": 1,
+          "passed": true
+        },
+        {
+          "phase": "generate",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "facade-link",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-compile",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-link",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-compose",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "reject-wasi-application-declaration",
+          "exitCode": 1,
+          "passed": true
+        },
+        {
+          "phase": "reject-undeclared-interface",
+          "exitCode": 1,
+          "passed": true
+        },
+        {
+          "phase": "reject-missing-interface",
+          "exitCode": 1,
+          "passed": true
+        },
+        {
+          "phase": "plain-contract",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-execute",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-rejects-instrument-grant",
+          "exitCode": 1,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-compile",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-link",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-compose",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-contract",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-execute",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "moving",
+          "exitCode": 0,
+          "passed": true
+        }
+      ],
+      "moving": {
+        "guestCopiedObjects": 17811,
+        "guestEvacuationVerified": true
+      }
+    },
+    "owned-acceptance": {
+      "phases": [
+        {
+          "phase": "build-probes",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "public-guard",
+          "exitCode": 1,
+          "passed": true
+        },
+        {
+          "phase": "generate",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "facade-link",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-compile",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-link",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-compose",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "reject-missing-interface",
+          "exitCode": 1,
+          "passed": true
+        },
+        {
+          "phase": "plain-contract",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-execute",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-rejects-instrument-grant",
+          "exitCode": 1,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-compile",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-link",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-compose",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-contract",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-execute",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "moving",
+          "exitCode": 0,
+          "passed": true
+        }
+      ],
+      "moving": {
+        "guestCopiedObjects": 17607,
+        "guestEvacuationVerified": true
+      }
+    },
+    "transport-acceptance": {
+      "phases": [
+        {
+          "phase": "build-probes",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "public-guard",
+          "exitCode": 1,
+          "passed": true
+        },
+        {
+          "phase": "generate",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "facade-link",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-compile",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-link",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-compose",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "reject-undeclared-types",
+          "exitCode": 1,
+          "passed": true
+        },
+        {
+          "phase": "plain-contract",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-execute",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "plain-rejects-instrument-grant",
+          "exitCode": 1,
+          "passed": true
+        },
+        {
+          "phase": "c-task-context-link",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "c-task-context-compose",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "c-task-context-execute",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-compile",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-link",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-compose",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-contract",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "instrumented-execute",
+          "exitCode": 0,
+          "passed": true
+        },
+        {
+          "phase": "moving",
+          "exitCode": 0,
+          "passed": true
+        }
+      ],
+      "moving": {
+        "guestCopiedObjects": 12870,
+        "guestEvacuationVerified": true
+      }
+    }
+  },
+  "resourceBehavior": {
+    "payload": "record(first: own<item>, second: option<own<item>>, text: string, bytes: list<u8>)",
+    "importedNativeResourceConstructorAndBorrowMethod": true,
+    "exactlyOnceResourceDropsPerRun": 33,
+    "completedProducerCount": 4,
+    "producerFailureCount": 0,
+    "minimumPartialWriteChunks": 10,
+    "hostNativeResourceReadMinimum": 56,
+    "partialOwnerSuffixRetry": true,
+    "cancelRecovery": true,
+    "closeDiscard": true,
+    "staleAndDuplicateDropRejection": true,
+    "storeReuse": true,
+    "syncFactoryPostReturnProgressWithoutAnotherGuestExport": true,
+    "sharedImportedRecordAlias": true,
+    "sharedLocalExportedRecordAlias": true,
+    "sharedFutureReaderBetweenExportedInterfaces": true
+  },
+  "contract": {
+    "exactWasiVersion": "0.3.0",
+    "wasiInterfaceImports": 18,
+    "declaredApplicationInterface": "perry:guest-endpoint-imports/foreign@1.0.0",
+    "publicExports": [
+      "perry:guest-endpoint-imports/api@1.0.0",
+      "perry:guest-endpoint-imports/mirror@1.0.0"
+    ],
+    "missingInterfaceRejected": true,
+    "undeclaredApplicationInterfaceRejected": true,
+    "wasiCannotBeDeclaredAsApplicationInterface": true,
+    "plainArchiveRejectsInstrumentationGrant": true,
+    "publicAsyncGenerationGuardRetained": true
+  },
+  "evidence": {
+    "archive": "wasi-030-v145-evidence.tar.gz",
+    "bytes": 228839978,
+    "sha256": "24780240eeab60569beece2ee328201b4a743f2442e43db9364f4ef9da07fc8d",
+    "indexedFiles": 368,
+    "localArchive": "reports/2026-10-27-wasi-030/v145/wasi-030-v145-evidence.tar.gz",
+    "allIndexedFileSizesAndHashesVerified": true,
+    "exactIndexedRegularFileSetVerified": true,
+    "nativeCohortRecordedByHashNotBundled": true
+  },
+  "runtimeArchives": {
+    "plain": {
+      "bytes": 46159670,
+      "sha256": "399bdf83fa36874e1af971a7f36f12e25e45fa1478310eaf172897b0d3991c8b"
+    },
+    "instrumented": {
+      "bytes": 46966504,
+      "sha256": "fe0285d8b2647c707ae0a50a92a8a8e0fc02d7ab5a6b8082f79f2285f19a70e0"
+    }
+  },
+  "exclusions": [
+    "Repeated import labels implementing the same canonical interface ID",
+    "Async imports initiated by synchronous exports",
+    "Full lifecycle/hook/ALS/teardown and private-name/cancellation matrix",
+    "Public async CLI integration",
+    "Complete current provider/HTTP matrix",
+    "Current nine-command and distinct instrumented native profiles",
+    "macOS ARM64 and Windows x64 installed packages",
+    "Full lint, required CI, latest-main integration and landing"
+  ]
+}
