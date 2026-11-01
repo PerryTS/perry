@@ -1,0 +1,167 @@
+{
+  "date": "2026-10-28",
+  "source": "c84fb548a86343cf68b65e8b295e1edabe5e816e",
+  "scope": "Guest temporary-argument root release and regressions on Linux x86_64; not full WASI 0.3.0",
+  "change": {
+    "symbol": "perry_component_frame_task_release_arguments",
+    "signature": "i32(frame*, u32 first_result_slot)",
+    "existingClientsRetainOldSlotLifetimes": true,
+    "preserves": [
+      "error slot",
+      "first and later results",
+      "saved task ALS",
+      "active canonical borrow lifetime"
+    ],
+    "rejectsBeforeMutation": [
+      "non-task frames",
+      "no successful first call",
+      "wrong first result",
+      "pending resource custody"
+    ]
+  },
+  "nativeUnits": {
+    "profile": "dev",
+    "normalCargoTests": true,
+    "panicAbortTestsFlag": false,
+    "taskTestsPassed": 8,
+    "componentTestsPassed": 111,
+    "stdlibSelectedByComponentFilter": 0,
+    "witPassed": 28,
+    "witIgnoredFixtureProducers": 2
+  },
+  "actualPhases": [
+    {
+      "phase": "component-runtime-units",
+      "exitCode": 0
+    },
+    {
+      "phase": "resource-host-check",
+      "exitCode": 0
+    },
+    {
+      "phase": "native-build",
+      "exitCode": 0
+    },
+    {
+      "phase": "native-sidecars",
+      "exitCode": 0
+    },
+    {
+      "phase": "wasi-plain-build",
+      "exitCode": 0
+    },
+    {
+      "phase": "wasi-plain-symbols",
+      "exitCode": 0
+    },
+    {
+      "phase": "wasi-instrumented-build",
+      "exitCode": 0
+    },
+    {
+      "phase": "wasi-instrumented-symbols",
+      "exitCode": 0
+    },
+    {
+      "phase": "actual-resource-cancel",
+      "exitCode": 0
+    },
+    {
+      "phase": "actual-async-cancellation",
+      "exitCode": 0
+    },
+    {
+      "phase": "actual-async-exports",
+      "exitCode": 0
+    },
+    {
+      "phase": "actual-basic-resources",
+      "exitCode": 0
+    },
+    {
+      "phase": "actual-compound-resources",
+      "exitCode": 0
+    }
+  ],
+  "movingWitnesses": {
+    "resource-cancel/resource-guest/moving.log": {
+      "copiedObjects": 6985,
+      "evacuationVerified": true
+    },
+    "resource-cancel/moving.log": {
+      "copiedObjects": 9364,
+      "evacuationVerified": true
+    },
+    "async-cancellation/moving.log": {
+      "copiedObjects": 8257,
+      "evacuationVerified": true
+    },
+    "async-exports/moving.log": {
+      "copiedObjects": 25915,
+      "evacuationVerified": true
+    },
+    "compound-resources/moving.log": {
+      "copiedObjects": 14441,
+      "evacuationVerified": true
+    }
+  },
+  "resourceWitnesses": {
+    "duplicateOwnersRejected": 24,
+    "exactDrops": 188,
+    "liveSiblings": 32
+  },
+  "evidenceArchive": {
+    "archive": "wasi-030-v028-evidence.tar.gz",
+    "bytes": 62031457,
+    "sha256": "776dfd0e2315398f064e8dc0de169772ee68efb0ffde9a8fff8940c5da6592f4",
+    "indexedFiles": 264
+  },
+  "artifacts": {
+    "native/perry": {
+      "bytes": 340698312,
+      "sha256": "49de973e71887f9ba8dc4467cc89908f79d1c2381e32e670ebfa9516b445a9c8"
+    },
+    "native/perry-gc-effects": {
+      "bytes": 44627960,
+      "sha256": "28e5e4445492714658db0e035be173d949b8b8de036dbf16da9835404c15de7e"
+    },
+    "native/libperry_runtime.a.gc-effects": {
+      "bytes": 331776,
+      "sha256": "1fc012241311d2eabf3e659d4a5ac5e9b0b6ffdd7f17bc7443faf7d456aa3720"
+    },
+    "native/libperry_runtime.a": {
+      "bytes": 400450440,
+      "sha256": "43eb82bb6b125a4401ab5288f7e483f1e96d48da7e77bd1efba381d405001dcd"
+    },
+    "native/libperry_component_host.a": {
+      "bytes": 595180670,
+      "sha256": "2824fc60def3c6394fa350ec47a5409572a8e48e55b44e8ef1fbf08780d6915c"
+    },
+    "native/OWNER": {
+      "bytes": 80,
+      "sha256": "2ab32d5aa5f41dd24df6368364eba5935b62c9543483a2372b60086ae487fcc0"
+    },
+    "native/libperry_stdlib.a": {
+      "bytes": 681152232,
+      "sha256": "9974e98ab22b1be743f4e5c032e4806c6aeb45828e0fa656232f9307a0db98fb"
+    },
+    "native/perry-wit": {
+      "bytes": 27872912,
+      "sha256": "9f345144be9d672d637669e408bcef1162b649f979e0cb52f06740b5dcaa1ec0"
+    },
+    "wasi/plain/libperry_runtime.a": {
+      "bytes": 53648824,
+      "sha256": "0bc75dd2ed978de293cff11ae2ef323eb69fbad9d52d93c10c6cff83940fe5e2"
+    },
+    "wasi/instrumented/libperry_runtime.a": {
+      "bytes": 54459484,
+      "sha256": "3e63ec1621a652054dc064d1e7fec056d09d28aedbd65059f5a1ac007d74830b"
+    }
+  },
+  "limits": [
+    "Public async guest CLI and future/stream values remain guarded.",
+    "The new synchronous producer experiments are not included in this qualification.",
+    "This receipt predates the WASIp3 entropy dependency backports; those changes require separate qualification.",
+    "It does not qualify the shared-provider regression, macOS/Windows execution, installed packages, the full provider/HTTP matrix or a public WASI0.3 command output profile."
+  ]
+}

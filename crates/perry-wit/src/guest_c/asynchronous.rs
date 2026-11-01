@@ -146,6 +146,10 @@ impl Generator<'_> {
         emitter
             .source
             .push_str("perry_require(!perry_component_frame_failed(f));\n");
+        writeln!(
+            emitter.source,
+            "perry_require(perry_component_frame_task_release_arguments(f, {value}) == 0);"
+        )?;
         if async_ {
             writeln!(
                 emitter.source,

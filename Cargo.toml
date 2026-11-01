@@ -99,6 +99,7 @@ exclude = [
     "third_party/wac-graph",
     "third_party/turnloop",
     "test-wasi/p1-host",
+    "third_party/getrandom",
 ]
 
 # Build only the host-independent product set by default: the compiler and
@@ -669,3 +670,5 @@ codegen-units = 1
 [patch.crates-io]
 turnloop = { path = "third_party/turnloop/turnloop" }
 turnloop-http = { path = "third_party/turnloop/turnloop-http" }
+getrandom02 = { package = "getrandom", path = "third_party/getrandom/0.2.17" }
+getrandom03 = { package = "getrandom", path = "third_party/getrandom/0.3.4" }

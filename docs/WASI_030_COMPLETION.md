@@ -15,6 +15,15 @@ then qualifies the actual experimental entry point and runtime relocation on
 Linux at source `456ebaf95d4b9313de0de9e1ef15b9ccdbf4e328`. Later Android-only
 stub cleanup is source-audited separately and does not claim Android execution.
 
+The [argument-root receipt](validation/wasi-guest-argument-roots-20261028.json)
+qualifies explicit release of generated temporary inputs after the first call,
+while retaining JS captures, results, task ALS and active borrow lifetimes.
+It records 111 normal-mode component runtime tests, 28 WIT tests and actual
+plain/instrumented async and resource regressions at `c84fb548a86343cf68b65e8b295e1edabe5e816e`.
+This is a prerequisite for collecting abandoned guest endpoints; it does not
+implement future/stream values. Later P3 entropy backports still need their own
+qualification.
+
 | Requirement | Required evidence | Current state |
 | --- | --- | --- |
 | Canonical async imports and exports | Public generated components compose in both directions; overlapping calls, immediate/delayed completion, errors, post-return work and Store reuse | Experimental scalar/compound profile qualified; public CLI guarded |

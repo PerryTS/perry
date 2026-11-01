@@ -64,6 +64,11 @@ int32_t perry_component_frame_promise_poll(void *, uint32_t, uint32_t *);
    runnable jobs; it is not a waitable. No timer or foreign I/O is driven. */
 void *perry_component_frame_task_new(void);
 uint32_t perry_component_frame_task_call(void *, uint32_t, uint32_t, uint32_t);
+/* Opt in after the first successful call, before suspension/checkpointing.
+   Clear temporary input slots below that call's result; never read them again.
+   Preserve the result, task context and borrow lifetime. Returns 0/-1.
+   Pending resource custody rejects the operation before clearing any slot. */
+int32_t perry_component_frame_task_release_arguments(void *, uint32_t);
 int32_t perry_component_frame_task_checkpoint(void *);
 int32_t perry_component_frame_task_ready(void *);
 int32_t perry_component_frame_task_cancel(void *);

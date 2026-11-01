@@ -83,10 +83,18 @@ fn main() -> Result<(), String> {
         return Err("stdlib provider is bound to a different runtime image".into());
     }
 
+    // The shared full provider supplies its feature installer. The generated
+    // app prologue runs it after binding the app layout and before user code.
+    let register: unsafe extern "C" fn(extern "C" fn()) =
+        unsafe { symbol(stdlib, "js_stdlib_register_feature_installer")? };
+    let install: extern "C" fn() = unsafe { symbol(stdlib, "js_stdlib_install_compiled")? };
+    unsafe { register(install) };
+
     let module_init: ModuleInit = unsafe { symbol(app, "perry_module_init")? };
     let entry: Entry = unsafe { symbol(app, &arguments[4])? };
     unsafe {
-        gc_init();
+        // Let the generated prologue bind the app's layout image before any
+        // GC initialization commits the agent to the runtime-only prefix.
         module_init();
     }
 

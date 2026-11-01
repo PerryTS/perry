@@ -1,0 +1,89 @@
+package perry:async-guest-values@1.0.0;
+
+interface foreign {
+    resource item {
+        constructor(value: u32);
+        read: func() -> u32;
+    }
+
+    flags colors { red, green, blue }
+    enum flavor { plain, pear, plum }
+    record scalars {
+        enabled: bool,
+        signed8: s8,
+        unsigned8: u8,
+        signed16: s16,
+        unsigned16: u16,
+        signed32: s32,
+        unsigned32: u32,
+        signed64: s64,
+        unsigned64: u64,
+        single: f32,
+        double: f64,
+        letter: char,
+        text: string,
+        colors: colors,
+        flavor: flavor,
+    }
+    variant choice {
+        nothing,
+        text(string),
+        values(tuple<scalars, list<own<item>>>),
+    }
+    record parcel {
+        id: u32,
+        data: scalars,
+        choice: choice,
+        optional: option<own<item>>,
+        bytes: list<u8>,
+    }
+    type reply = result<parcel, list<own<item>>>;
+    type reply-future = future<reply>;
+    type reply-stream = stream<reply>;
+    type nested = future<stream<reply-future>>;
+
+    gate: async func(id: u32);
+    exchange: async func(id: u32, values: reply-stream) -> reply-future;
+    rejected: func(id: u32);
+}
+
+world plugin {
+    import foreign;
+    use foreign.{item, scalars, choice, parcel, reply, reply-future, reply-stream, nested};
+
+    export transfer-future: func(value: reply-future) -> reply-future;
+    export transfer-stream: func(value: reply-stream) -> reply-stream;
+    // The reader can escape a synchronous factory while its writer is kept
+    // by the guest. Producer progress must not depend on a later guest call.
+    export make-stream: func(id: u32) -> reply-stream;
+    export exchange: async func(id: u32, values: reply-stream) -> reply-future;
+    export character: async func(value: future<char>) -> future<char>;
+    export empty: async func(value: future) -> future;
+    export units: async func(values: stream) -> stream;
+    export bytes: async func(values: stream<u8>) -> stream<u8>;
+    export nested-value: async func(value: nested) -> nested;
+    export status: func() -> u32;
+}
+
+world provider {
+    export foreign;
+}
+
+world supervisor {
+    import foreign;
+    use foreign.{item, scalars, choice, parcel, reply, reply-future, reply-stream, nested};
+    import subject: interface {
+        use foreign.{reply-future, reply-stream, nested};
+        transfer-future: func(value: reply-future) -> reply-future;
+        transfer-stream: func(value: reply-stream) -> reply-stream;
+        make-stream: func(id: u32) -> reply-stream;
+        exchange: async func(id: u32, values: reply-stream) -> reply-future;
+        character: async func(value: future<char>) -> future<char>;
+        empty: async func(value: future) -> future;
+        units: async func(values: stream) -> stream;
+        bytes: async func(values: stream<u8>) -> stream<u8>;
+        nested-value: async func(value: nested) -> nested;
+        status: func() -> u32;
+    }
+    export run: async func(mode: u32, id: u32) -> u32;
+}

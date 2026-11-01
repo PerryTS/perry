@@ -5,8 +5,10 @@ const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 const CHECK_INTERVAL: usize = 256;
 const GROWTH_FLOOR: u64 = 1024 * 1024;
-const SERIAL_CALLS: usize = 16_384;
-const CONCURRENT_CALLS: usize = 16_384;
+// Leave headroom for allocator/layout changes while retaining the minimum
+// collection and reclaimed-byte witnesses checked by finish().
+const SERIAL_CALLS: usize = 32_768;
+const CONCURRENT_CALLS: usize = 32_768;
 const EXPECTED_BODY: &[u8] = br#"{"runtime":"perry","iterations":100,"checksum":3726872593}"#;
 
 #[cfg(target_os = "linux")]
@@ -196,7 +198,9 @@ fn executor(
     retained: Handler,
 ) {
     unsafe {
-        (api.gc_init)();
+        // The app initializer binds its layout image before creating the
+        // agent's shape slab. Initializing GC first would freeze the smaller
+        // runtime-only prefix and reject this later-loaded app.
         module_init();
     }
     let mut stats = RunStats {
@@ -279,6 +283,11 @@ fn main() -> Result<(), String> {
     if unsafe { probe() } != api.gc_init as usize {
         return Err("stdlib provider is bound to a different runtime image".into());
     }
+    // Dispatch initializes on the executor after its app layout is bound.
+    let register: unsafe extern "C" fn(extern "C" fn()) =
+        unsafe { symbol(stdlib, "js_stdlib_register_feature_installer")? };
+    let install: extern "C" fn() = unsafe { symbol(stdlib, "js_stdlib_install_compiled")? };
+    unsafe { register(install) };
     let module_init: ModuleInit = unsafe { symbol(app, "perry_module_init")? };
     let temporary: Handler = unsafe { symbol(app, &arguments[4])? };
     let retained: Handler = unsafe { symbol(app, &arguments[5])? };

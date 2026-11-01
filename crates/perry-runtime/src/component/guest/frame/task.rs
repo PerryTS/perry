@@ -6,6 +6,7 @@ use crate::async_context::{self as als, job_domain};
 pub(super) struct TaskContext {
     domain: job_domain::JobDomain,
     snapshot: u32,
+    first_result: Option<u32>,
 }
 
 impl Frame {
@@ -52,6 +53,7 @@ pub extern "C" fn perry_component_frame_task_new() -> *mut c_void {
     frame.task = Some(TaskContext {
         domain: job_domain::JobDomain::new(),
         snapshot,
+        first_result: None,
     });
     Box::into_raw(frame).cast()
 }
@@ -68,7 +70,62 @@ pub unsafe extern "C" fn perry_component_frame_task_call(
     function: u32,
     args: u32,
 ) -> u32 {
-    frame(pointer).task_guard(|frame| call_export(frame, interface, function, args))
+    let owner = frame(pointer);
+    let result = owner.task_guard(|frame| call_export(frame, interface, function, args));
+    if !owner.failed {
+        owner
+            .task
+            .as_mut()
+            .unwrap()
+            .first_result
+            .get_or_insert(result);
+    }
+    result
+}
+
+/// Release the generated adapter's temporary input roots after its first call.
+/// JS closures, jobs and the result retain their own edges. The saved task
+/// context and borrow-lifetime cell survive until canonical return/cancel.
+/// Older clients retain their slots unless they explicitly opt into this API.
+/// # Safety
+/// `pointer` is an open task frame, exclusively borrowed on its creating agent.
+/// `first_result` is the first successful task_call's result slot. The caller
+/// must never read input slots below it after this operation.
+#[no_mangle]
+pub unsafe extern "C" fn perry_component_frame_task_release_arguments(
+    pointer: *mut c_void,
+    first_result: u32,
+) -> i32 {
+    let owner = frame(pointer);
+    owner.guard(|owner| {
+        let task = owner
+            .task
+            .as_ref()
+            .unwrap_or_else(|| fail("Expected a component task frame"));
+        if task.first_result != Some(first_result) {
+            fail("Expected the first component task result slot");
+        }
+        if !owner.transfers.is_empty()
+            || !owner.borrows.is_empty()
+            || !owner.borrow_states.is_empty()
+            || !owner.committed_borrows.is_empty()
+        {
+            fail("Cannot release component arguments with pending resource custody");
+        }
+        let snapshot = task.snapshot;
+        let scope = RuntimeHandleScope::new();
+        let values = scope.root_nanbox_f64(owner.values());
+        for slot in 1..first_result {
+            if slot != snapshot && Some(slot) != owner.lifetime {
+                crate::array::js_array_set_f64(array(values.get_nanbox_f64()), slot, undefined());
+            }
+        }
+    });
+    if owner.failed {
+        -1
+    } else {
+        0
+    }
 }
 
 /// Drain this task's ready Promise, nextTick and cleanup jobs. Timers and
@@ -166,6 +223,8 @@ pub unsafe extern "C" fn perry_component_frame_task_resume(
     }
 }
 
+#[cfg(test)]
+mod argument_tests;
 #[cfg(test)]
 mod cancellation_tests;
 #[cfg(test)]

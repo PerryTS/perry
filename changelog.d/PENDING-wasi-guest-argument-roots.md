@@ -1,0 +1,1 @@
+Release generated async component argument roots after the first guest call, while retaining JavaScript captures, results, task context and canonical borrow lifetimes. Existing frame clients retain their slot lifetimes unless they opt into the new operation. Guest future/stream values and public async generation remain guarded.

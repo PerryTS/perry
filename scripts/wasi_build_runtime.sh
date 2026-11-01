@@ -10,7 +10,7 @@
 # An optional argument selects the other WASI target, wasm32-wasip1.
 #
 # Needs wasi-sdk's C compiler for the runtime's C sources (CC_wasm32_wasip2
-# or CC_wasm32_wasip1 and friends, as printed by wasi_toolchain.sh). Liveness: requires Cargo to
+# or CC_wasm32_wasip1/CC_wasm32_wasip3 and friends, as printed by wasi_toolchain.sh). Liveness: requires Cargo to
 # report a WASI static-archive artifact, including
 # a fresh cache hit (a valid cached build need not change the archive mtime).
 

@@ -9,7 +9,7 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parent.parent
-TARGETS = ("wasm32-wasip2", "wasm32-wasip1")
+TARGETS = ("wasm32-wasip2", "wasm32-wasip1", "wasm32-wasip3")
 
 
 def runtime_features() -> list[str]:

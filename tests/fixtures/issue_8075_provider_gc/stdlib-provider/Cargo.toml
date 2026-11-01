@@ -3,6 +3,7 @@ name = "issue-8075-stdlib-provider"
 version = "0.0.0"
 edition = "2021"
 publish = false
+build = "build.rs"
 
 [lib]
 name = "issue_8075_stdlib"
@@ -10,6 +11,8 @@ crate-type = ["cdylib"]
 
 [dependencies]
 perry-stdlib = { path = "../../../../crates/perry-stdlib", default-features = false, features = ["full"] }
+# The full stdlib dispatch table references the Turnloop HTTP/net providers.
+perry-ext-http = { path = "../../../../crates/perry-ext-http" }
 
 # The gate builds this provider with `--profile provider` below, but a bare
 # `cargo build --release` here must not silently produce an unwind runtime:
@@ -29,3 +32,10 @@ panic = "abort"
 strip = false
 
 [workspace]
+
+# Cargo patches are scoped to workspace roots, even when the dependencies
+# inherit Perry's workspace versions. Keep this isolated provider on the same
+# qualified Turnloop sources as the runtime provider and the seeded lockfile.
+[patch.crates-io]
+turnloop = { path = "../../../../third_party/turnloop/turnloop" }
+turnloop-http = { path = "../../../../third_party/turnloop/turnloop-http" }

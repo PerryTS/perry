@@ -37,7 +37,8 @@ if [[ -n "$target" ]]; then
   args+=(--target "$target")
   sub="$target/$profile_dir"
 fi
-unset RUSTFLAGS
+# Inherit the ordinary build's compiler flags. The instrumented variant must
+# keep the same unwind and target settings while changing its build-script cfgs.
 if [[ "${PERRY_INSTR_PACKAGES:-}" == "runtime" ]]; then
   # Runtime and stdlib only (no wrapper archives), for jobs that never route a
   # module to a wrapper.
