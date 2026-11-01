@@ -294,12 +294,12 @@ impl CopyingNurseryCollector {
     }
 
     /// The dirty scan has already admitted an old or malloc parent and
-    /// filtered weak targets. Reuse those facts instead of reclassifying the
-    /// same parent and its weak-holder class for every slot.
+    /// classified its weak-holder brand once. Reuse those facts for each slot.
     pub(super) unsafe fn visit_remembered_slot<const DIAGNOSTICS: bool>(
         &mut self,
         slot: GcMutableSlot,
         parent_header: *mut GcHeader,
+        weak_holder: bool,
         external: bool,
     ) {
         debug_assert!(!parent_header.is_null());
@@ -308,16 +308,16 @@ impl CopyingNurseryCollector {
             assert!(barrier_parent_needs_remembering(
                 (parent_header as *mut u8).add(GC_HEADER_SIZE) as usize
             ));
-            assert!(!crate::weakref::is_weak_target_trace_slot(
-                parent_header,
-                slot.slot
-            ));
+            assert_eq!(
+                weak_holder,
+                crate::weakref::is_weak_holder_header(parent_header)
+            );
         }
         let skip = self.skip_remembering;
         self.visit_slot_core::<DIAGNOSTICS>(
             slot,
             parent_header,
-            false,
+            weak_holder,
             move || !skip,
             move || external,
         );

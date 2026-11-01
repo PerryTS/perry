@@ -1259,12 +1259,12 @@ pub(super) fn run_copied_minor_attempt<const DIAGNOSTICS: bool>(
         let remembered_stats = scan_remembered_dirty_slots_copying::<DIAGNOSTICS>(
             &snapshot,
             Some(&mut dirty_scan_covered),
-            |slot, header, external, stats| unsafe {
+            |slot, header, weak_holder, external, stats| unsafe {
                 if let Some(d) = collector.survival.as_mut().filter(|_| DIAGNOSTICS) {
                     d.remembered_parent_type = (*header).obj_type;
                 }
                 let before = slot.read();
-                collector.visit_remembered_slot::<DIAGNOSTICS>(slot, header, external);
+                collector.visit_remembered_slot::<DIAGNOSTICS>(slot, header, weak_holder, external);
                 if slot.read() != before {
                     stats.newly_marked += 1;
                 }
