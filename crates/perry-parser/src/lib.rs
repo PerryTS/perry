@@ -440,6 +440,15 @@ fn normalize_unicode_identifier_escapes(source: &str) -> String {
 }
 
 fn normalize_unicode_identifier_escapes_with_metadata(source: &str) -> NormalizedSource {
+    // The only edit this pass makes is replacing a `\u` escape found in code
+    // position, so a source with no `\u` byte pair has nothing to rewrite.
+    if !source.contains("\\u") {
+        return NormalizedSource::unchanged(source);
+    }
+    scan_unicode_identifier_escapes(source)
+}
+
+fn scan_unicode_identifier_escapes(source: &str) -> NormalizedSource {
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum State {
         Code,
@@ -707,6 +716,19 @@ struct NormalizedSource {
 }
 
 impl NormalizedSource {
+    /// A pass that made no edit: the source text and no offset mapping.
+    fn unchanged(source: &str) -> Self {
+        Self {
+            source: source.to_string(),
+            edit_stages: Vec::new(),
+        }
+    }
+
+    /// True when no pass edited the text, so every offset maps to itself.
+    fn is_identity(&self) -> bool {
+        self.edit_stages.iter().all(Vec::is_empty)
+    }
+
     fn then(mut self, next: Self) -> Self {
         self.source = next.source;
         self.edit_stages.extend(next.edit_stages);
@@ -740,6 +762,9 @@ impl NormalizedSource {
     }
 
     fn remap_module_spans(&self, module: &mut Module, file_start: BytePos) {
+        if self.is_identity() {
+            return;
+        }
         struct RemapSpans<'a> {
             normalized: &'a NormalizedSource,
             file_start: BytePos,
@@ -784,6 +809,19 @@ fn original_offset_for_edits(normalized_offset: usize, edits: &[NormalizedSource
 /// String/comment contents are masked before tokenization, so source text that
 /// merely mentions these spellings is never rewritten.
 fn normalize_swc_class_syntax_with_metadata(source: &str) -> NormalizedSource {
+    // Both rewrites need two specific tokens to be present: `class` followed
+    // by `await`, or `static` before a method named `constructor`. Raw text
+    // is a superset of the masked tokens, so a source lacking either pair of
+    // words has no replacement and the masking and tokenizing can be skipped.
+    let may_rewrite = (source.contains("await") && source.contains("class"))
+        || (source.contains("constructor") && source.contains("static"));
+    if !may_rewrite {
+        return NormalizedSource::unchanged(source);
+    }
+    scan_swc_class_syntax(source)
+}
+
+fn scan_swc_class_syntax(source: &str) -> NormalizedSource {
     #[derive(Clone, Copy)]
     struct Token<'a> {
         start: usize,
@@ -923,6 +961,44 @@ pub fn swc_span_to_span(swc_span: swc_common::Span, file_id: FileId) -> Span {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The gates in front of the two normalizer scans must only skip sources
+    /// the scans would leave untouched: running the scan itself on each of
+    /// these gated-out sources changes nothing and records no edit.
+    #[test]
+    fn normalizer_gates_skip_only_sources_the_scans_leave_alone() {
+        let plain = [
+            "",
+            "(function anonymous(a,b\n) {\nreturn a+b;\n})",
+            "var s = \"class await { static constructor() {} }\";",
+            "// class await\nclass A { constructor() {} }",
+            "class A { static x() {} constructor() {} }",
+            "var o = { await: 1, class: 2 };",
+            "const t = `\\u0061`; const e = \"é€\";",
+        ];
+        for source in plain {
+            let class = normalize_swc_class_syntax_with_metadata(source);
+            let scanned = scan_swc_class_syntax(source);
+            assert_eq!(class.source, source);
+            assert_eq!(scanned.source, source, "class gate input: {source}");
+            assert!(class.is_identity());
+        }
+        let no_escape = ["", "var a = 1;", "/re/.test(\"x\"); // \\ u", "x = '\\x41';"];
+        for source in no_escape {
+            let gated = normalize_unicode_identifier_escapes_with_metadata(source);
+            let scanned = scan_unicode_identifier_escapes(source);
+            assert_eq!(gated.source, source);
+            assert_eq!(scanned.source, source, "unicode gate input: {source}");
+            assert!(scanned.is_identity());
+        }
+        // Inputs the gates let through still rewrite.
+        let class = normalize_swc_class_syntax_with_metadata("var C = class await {};");
+        assert!(!class.is_identity());
+        let class = normalize_swc_class_syntax_with_metadata("class A { static constructor() {} }");
+        assert!(!class.is_identity());
+        let esc = normalize_unicode_identifier_escapes_with_metadata("var \\u0061 = 1;");
+        assert!(!esc.is_identity());
+    }
 
     #[test]
     fn explicit_resource_management_has_no_diagnostics_for_supported_extensions() {

@@ -55,6 +55,8 @@ pub(crate) enum ExcludingFact {
     /// The family is never a collection element.
     P6,
     /// The family is never a constructor-return override.
+    // No reason is excluded by P7 today; the numbering is the design's.
+    #[allow(dead_code)]
     P7,
     /// The family's class has no evaluation brand.
     P8,

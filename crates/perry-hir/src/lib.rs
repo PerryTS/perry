@@ -33,6 +33,7 @@ pub mod native_profile;
 mod number;
 pub use number::js_number_to_string;
 pub mod patched_builtins;
+pub mod private_names;
 pub mod solid_jsx;
 pub mod source_remap;
 pub mod stable_hash;

@@ -472,6 +472,7 @@ impl BundleFunctionNames<'_> {
         });
         count
     }
+    #[cfg(test)]
     pub(crate) fn contains_key(&self, address: &usize) -> bool {
         let mut found = false;
         self.visit(&mut |code, _| {

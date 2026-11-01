@@ -1812,6 +1812,14 @@ impl<'a> Gen<'a> {
                     {
                         continue;
                     }
+                    // A class private field (`#x`) has no name outside its
+                    // class body: no other unit's code names it, and no
+                    // reflection lists it (`Model::private_atom`). Only the
+                    // class's own members read it, all in this unit; what it
+                    // holds leaves only as they let it. It does not leave.
+                    if self.m.is_private_atom(a) {
+                        continue;
+                    }
                     let mut ok = !self.sunk_fields.contains(&(tm, a));
                     let mut inner: Vec<(TmplId, Tok)> = Vec::new();
                     let mut prim = false;
