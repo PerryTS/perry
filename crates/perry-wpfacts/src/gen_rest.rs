@@ -1806,6 +1806,9 @@ impl<'a> Gen<'a> {
                 let nt = self.expr(fx, new_target);
                 let r = self.m.reason("E11 Reflect.construct newTarget");
                 self.m.cons(nt, Cons::NewTargetHard { reason: r });
+                // A new target picks the prototype of whatever the target
+                // constructs, an Array exotic object included (#13645).
+                self.m.array_member_write.get_or_insert(r);
                 let (call, ret) = self.new_call(ThisArg::Undef, vec![], vec![a]);
                 self.m.cons(t, Cons::New { call });
                 ret

@@ -1202,7 +1202,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // the constant `false`; otherwise one read of `%Array.prototype%`'s
         // fixed `Symbol.iterator` slot, PER LOOP, never per iteration.
         Expr::ArrayIterationPatched => {
-            let facts = super::array_iteration_facts();
+            let facts = super::array_iteration_facts(&ctx.wpfacts);
             if facts == 0 {
                 return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_FALSE)));
             }

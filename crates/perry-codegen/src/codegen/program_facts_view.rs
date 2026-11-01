@@ -214,6 +214,17 @@ pub struct ElisionFacts {
     /// base-shape function needs no `Pristine(Function)` test, only the
     /// `interp_guard` word when that is set (`expr/function_bind.rs`).
     pub fnproto_bind_unwritten: bool,
+    /// #13645: compiled code never changes which `@@iterator` an array
+    /// finds (wpfacts `array_iteration_written`), and no interpreted code
+    /// runs: array iteration needs no iteration-member read
+    /// (`expr::array_iteration_facts`).
+    pub array_iteration_unwritten: bool,
+    /// #13645: `%ArrayIteratorPrototype%` and its chain never gain or change
+    /// `next` or `return` (wpfacts `array_iterator_close_written`), and no
+    /// interpreted code runs: an array record never checks `next`, and its
+    /// IteratorClose finds no `return` (the closing of an array record is
+    /// unobservable and emitted as nothing).
+    pub array_iterator_close_unwritten: bool,
     /// Whole-program constructor heritage proofs, keyed by class identity.
     pub super_unrelinked: std::collections::BTreeSet<u32>,
 }

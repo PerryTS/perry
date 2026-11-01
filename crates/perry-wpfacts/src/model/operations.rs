@@ -1,6 +1,140 @@
 use super::*;
 
 impl Model {
+    /// May `t` be an array, or a prototype on an array's chain other than
+    /// the builtin prototypes (an Array subclass's)?
+    pub fn tok_on_array_chain(&self, t: Tok) -> bool {
+        match self.toks[t as usize] {
+            TokKind::Top => true,
+            TokKind::Obj(tm, _) | TokKind::Proto(tm) => self.tmpl_may_be_array(tm),
+            _ => false,
+        }
+    }
+
+    /// May an instance of `tm` be an Array exotic object: an array site, or
+    /// a class whose heritage may reach `Array` (an unknown parent value
+    /// included)?
+    pub fn tmpl_may_be_array(&self, mut tm: TmplId) -> bool {
+        for _ in 0..=self.tmpls.len() {
+            let tpl = &self.tmpls[tm as usize];
+            match &tpl.kind {
+                TmplKind::Arr { .. } => return true,
+                TmplKind::Class { .. } => {}
+                _ => return false,
+            }
+            if tpl.parent_value.is_some() {
+                return true;
+            }
+            if let Some((_, n)) = &tpl.native_parent {
+                return n == "Array";
+            }
+            match tpl.parent {
+                Some(p) => tm = p,
+                None => return false,
+            }
+        }
+        true
+    }
+
+    /// Record a write under `key` (`None`: a definition or prototype change
+    /// whose key the model does not keep) onto `t` that may change which
+    /// `@@iterator` an array finds ([`Model::array_member_write`]). The
+    /// builtin prototypes and ⊤ are in `native_writes`
+    /// ([`Model::array_iteration_writes`]).
+    pub fn note_array_member_write(
+        &mut self,
+        t: Tok,
+        key: Option<Key>,
+        site: Option<SiteId>,
+        what: &str,
+    ) {
+        if self.array_member_write.is_some() || t == TOP || !self.tok_on_array_chain(t) {
+            return;
+        }
+        let hits = match key {
+            // A computed store's key is decided when the solve is done (its
+            // site may record the key node only after this store applied).
+            Some(Key::Any) if site.is_some() => {
+                let s = site.unwrap();
+                if !self.array_keyed_stores.iter().any(|&(x, _)| x == s) {
+                    let on = self.tok_name(t);
+                    let r = self.reason(&format!("{what} under a computed key on {on}"));
+                    self.array_keyed_stores.push((s, r));
+                }
+                false
+            }
+            None | Some(Key::Any) => true,
+            Some(Key::Named(a)) => matches!(
+                self.atoms[a as usize].as_str(),
+                crate::builtins::WK_ITERATOR | "__proto__" | crate::STAR_KEY
+            ),
+        };
+        if hits {
+            let on = self.tok_name(t);
+            self.array_member_write = Some(self.reason(&format!("{what} on {on}")));
+        }
+    }
+
+    /// #13645: the program facts array iteration rests on, each `None` when
+    /// compiled code never breaks it. `.0`: an array's `@@iterator` may not
+    /// be the builtin (a write under `Symbol.iterator`, `__proto__` or any
+    /// key on a builtin prototype or ⊤, [`Model::array_member_write`], or an
+    /// Array subclass that defines a computed or `@@iterator` member).
+    /// `.1`: `%ArrayIteratorPrototype%` or a prototype on its chain may gain
+    /// or change `next` or `return` (a write under one of them or under any
+    /// key, or a prototype change, on a builtin prototype (they collapse
+    /// into `ObjectProto`) or ⊤).
+    pub fn array_iteration_writes(&self) -> (Option<String>, Option<String>) {
+        let objproto = self.tok_index.get(&TokKind::ObjectProto).copied();
+        let mut member: Option<u32> = None;
+        let mut close: Option<u32> = None;
+        // The first reason by id, so the answer does not depend on hashing.
+        let first = |slot: &mut Option<u32>, r: u32| *slot = Some(slot.map_or(r, |s| s.min(r)));
+        for (&(t, k), &r) in &self.native_writes {
+            if t != TOP && Some(t) != objproto {
+                continue;
+            }
+            let name = k.map(|a| self.atoms[a as usize].as_str());
+            if matches!(name, None | Some("next" | "return")) {
+                first(&mut close, r);
+            }
+            if matches!(name, None | Some(crate::builtins::WK_ITERATOR | "__proto__")) {
+                first(&mut member, r);
+            }
+        }
+        let keyed = self.array_keyed_stores.iter().find_map(|&(s, r)| {
+            let Some(k) = self.stores[s as usize].key_value else {
+                return Some(r);
+            };
+            let n = &self.nodes[k as usize];
+            (n.dropped || !n.pts.is_empty() || n.prim & (prim::STR | prim::SYMBOL) != 0).then_some(r)
+        });
+        let mut member = member
+            .or(self.array_member_write)
+            .or(keyed)
+            .map(|r| self.reasons[r as usize].clone());
+        if member.is_none() {
+            let wk = self.atom_index.get(crate::builtins::WK_ITERATOR).copied();
+            member = (0..self.tmpls.len() as TmplId)
+                .find(|&tm| {
+                    let tpl = &self.tmpls[tm as usize];
+                    matches!(tpl.kind, TmplKind::Class { .. })
+                        && (tpl.has_computed_members
+                            || wk.is_some_and(|a| {
+                                tpl.proto_members.contains(&a) || tpl.accessor_keys.contains(&a)
+                            }))
+                        && self.tmpl_may_be_array(tm)
+                })
+                .map(|tm| {
+                    format!(
+                        "Array subclass {} defines a computed or @@iterator member",
+                        self.tmpls[tm as usize].display
+                    )
+                });
+        }
+        (member, close.map(|r| self.reasons[r as usize].clone()))
+    }
+
     /// Record a write under `key` onto `t` that may reach
     /// `%Function.prototype%`'s `bind`, `name` or `length`
     /// ([`Model::fnproto_write`]). `key` `None`: an operation whose key the
