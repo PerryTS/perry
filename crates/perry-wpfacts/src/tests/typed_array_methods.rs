@@ -105,3 +105,20 @@ fn typed_unknown_receiver_stays_conservative() {
         false,
     );
 }
+
+/// A species-made result fed back to the call that made it settles: the
+/// objects it constructs are the call's own templates, one per site, not one
+/// per run (a fresh one each time never reaches a fixpoint).
+#[test]
+fn a_species_result_fed_back_to_its_call_settles() {
+    let src = r#"
+        function g(a: any) { return a.marker; }
+        class Svc { marker = 3; }
+        let t: any = new Uint8Array(8);
+        for (let i = 0; i < 3; i++) { t = t.slice(1); t = t.subarray(1); t = t.map((x: number) => x + 1); }
+        console.log(g(new Svc()), t.length);
+    "#;
+    let pf = facts(src);
+    assert!(!pf.stats.aborted, "{:?}", pf.stats);
+    assert!(pf.stats.templates < 60, "templates {}", pf.stats.templates);
+}

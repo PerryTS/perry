@@ -37,18 +37,20 @@ fn species(m: &mut Model, t: Tok, call: CallId, args: Vec<NodeId>) {
     let sa = m.atom("@@__perry_wk_species");
     let sp = load(m, ctor, Key::Named(sa));
     let c = m.calls[call as usize].clone();
-    let site = m.calls.len() as CallId;
-    m.solver_call(
+    // The construct call keeps its origin's source site: the objects it
+    // makes are the method call's own templates, not a fresh one per run
+    // (a result fed back to the same call would otherwise never settle).
+    let made = m.solver_call(
         call,
         CallSite {
             this: ThisArg::Undef,
             args,
             spread: vec![],
             ret: c.ret,
-            site,
+            site: c.site,
         },
     );
-    m.cons(sp, Cons::New { call: site });
+    m.cons(sp, Cons::New { call: made });
 }
 
 fn fresh(m: &mut Model, call: CallId) -> Tok {
