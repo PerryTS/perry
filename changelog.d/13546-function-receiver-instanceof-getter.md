@@ -1,4 +1,5 @@
-Function objects keep a reset prototype in the closure side table, so
-`instanceof` ignored it and fell back to the builtin check;
-`has_recorded_prototype` now consults both tables. An inherited getter reached
-through a function receiver also now runs with that function as `this`.
+`instanceof` on a function object whose prototype was reset
+(`Object.setPrototypeOf(fn, C.prototype)`) now follows that chain: `fn
+instanceof C` is true, and `fn instanceof Function` is false unless the new
+chain reaches `Function.prototype`. Function objects keep a reset prototype
+in the closure side table, which these checks ignored.

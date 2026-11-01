@@ -282,15 +282,21 @@ fn native_instanceof(
     // has `Function.prototype` in its prototype chain. Keep `CLASS_ID_FUNCTION`
     // in sync with perry-codegen/src/expr/instance_misc1.rs.
     if class_id == CLASS_ID_FUNCTION {
-        if value_is_callable(value) {
+        let addr = value_addr(value);
+        // A function whose prototype was reset (`Object.setPrototypeOf(fn,
+        // proto)`) answers by its actual chain, which need not reach
+        // `Function.prototype`.
+        let reset_callable =
+            addr != 0 && crate::closure::closure_static_prototype(addr).is_some();
+        if value_is_callable(value) && !reset_callable {
             return true_val;
         }
         // An ordinary object whose recorded chain reaches a function
         // (`Object.create(fn)`) has `Function.prototype` on it too.
-        let addr = value_addr(value);
-        if addr != 0
-            && unsafe { crate::object::prototype_chain::meta_capable_object(addr) }.is_some()
-            && crate::object::prototype_chain::object_static_prototype(addr).is_some()
+        if reset_callable
+            || (addr != 0
+                && unsafe { crate::object::prototype_chain::meta_capable_object(addr) }.is_some()
+                && crate::object::prototype_chain::object_static_prototype(addr).is_some())
         {
             let function = constructor
                 .as_ref()
