@@ -37,21 +37,21 @@ extern "C-unwind" fn ignore_and_capture(
         crate::fn_info!(unwind complete, 0),
         3,
     ));
-    crate::closure::js_closure_set_capture_f64(
-        callback.get_raw_mut_ptr(),
-        0,
-        retained.get_nanbox_f64(),
-    );
-    crate::closure::js_closure_set_capture_f64(
-        callback.get_raw_mut_ptr(),
-        1,
-        crate::value::js_nanbox_pointer(promise.get_raw_mut_ptr::<crate::promise::Promise>() as i64),
-    );
-    crate::closure::js_closure_set_capture_f64(callback.get_raw_mut_ptr(), 2, token);
-    crate::builtins::js_queue_microtask(
-        callback.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
-    );
-    crate::value::js_nanbox_pointer(promise.get_raw_mut_ptr::<crate::promise::Promise>() as i64)
+    callback.with_mut_ptr::<crate::closure::ClosureHeader, _>(|callback| {
+        crate::closure::js_closure_set_capture_f64(callback, 0, retained.get_nanbox_f64());
+        promise.with_mut_ptr::<crate::promise::Promise, _>(|promise| {
+            crate::closure::js_closure_set_capture_f64(
+                callback,
+                1,
+                crate::value::js_nanbox_pointer(promise as i64),
+            );
+        });
+        crate::closure::js_closure_set_capture_f64(callback, 2, token);
+        crate::builtins::js_queue_microtask(callback as i64);
+    });
+    promise.with_mut_ptr::<crate::promise::Promise, _>(|promise| {
+        crate::value::js_nanbox_pointer(promise as i64)
+    })
 }
 
 fn with_exports(body: impl FnOnce(&RuntimeHandleScope)) {
@@ -75,18 +75,14 @@ fn with_exports(body: impl FnOnce(&RuntimeHandleScope)) {
         crate::fn_info!(unwind ignore_and_capture, 2),
         1,
     ));
-    crate::closure::js_closure_set_capture_f64(
-        callback.get_raw_mut_ptr(),
-        0,
-        storage.token() as f64,
-    );
-    set_field(
-        exports.get_nanbox_f64(),
-        b"start",
-        crate::value::js_nanbox_pointer(
-            callback.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
-        ),
-    );
+    callback.with_mut_ptr::<crate::closure::ClosureHeader, _>(|callback| {
+        crate::closure::js_closure_set_capture_f64(callback, 0, storage.token() as f64);
+        set_field(
+            exports.get_nanbox_f64(),
+            b"start",
+            crate::value::js_nanbox_pointer(callback as i64),
+        );
+    });
     unsafe {
         bag::store(
             object_pointer(registry.get_nanbox_f64()).unwrap() as usize,

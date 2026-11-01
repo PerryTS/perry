@@ -78,8 +78,15 @@ fn settled_eof() -> f64 {
         f64::from_bits(JSValue::bool(true).bits()),
     );
     let promise = scope.root_raw_mut_ptr(crate::promise::js_promise_new());
-    crate::promise::js_promise_resolve(promise.get_raw_mut_ptr(), result.get_nanbox_f64());
-    crate::value::js_nanbox_pointer(promise.get_raw_mut_ptr::<crate::promise::Promise>() as i64)
+    // This fresh promise has no observers except those installed by init
+    // hooks. With hooks active, js_promise_new uses nonmoving malloc storage.
+    // Without hooks, this immediate settlement cannot enter user callbacks.
+    promise.with_mut_ptr(|promise| {
+        crate::promise::js_promise_resolve(promise, result.get_nanbox_f64());
+    });
+    promise.with_mut_ptr::<crate::promise::Promise, _>(|promise| {
+        crate::value::js_nanbox_pointer(promise as i64)
+    })
 }
 
 fn begin(wrapper: f64, capacity: f64) -> f64 {
@@ -167,11 +174,12 @@ fn begin_operation(wrapper: f64, argument: f64, writing: bool) -> f64 {
                 .as_pointer::<crate::promise::Promise>()
                 .cast_mut()
         };
-        crate::promise::set_promise_context_snapshot(pointer(), unsafe {
-            (*saved.get_raw_mut_ptr::<als::AsyncSnapshotHolder>())
-                .snapshot
-                .clone()
-        });
+        crate::promise::set_promise_context_snapshot(
+            pointer(),
+            saved.with_const_ptr::<als::AsyncSnapshotHolder, _>(|saved| unsafe {
+                (*saved).snapshot.clone()
+            }),
+        );
         let weak = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
             crate::weakref::js_weakref_new(promise.get_nanbox_f64()) as i64,
         ));
@@ -181,9 +189,9 @@ fn begin_operation(wrapper: f64, argument: f64, writing: bool) -> f64 {
         for (index, value) in [
             weak.get_nanbox_f64(),
             fields.get_nanbox_f64(),
-            crate::value::js_nanbox_pointer(
-                saved.get_raw_mut_ptr::<als::AsyncSnapshotHolder>() as i64
-            ),
+            saved.with_const_ptr::<als::AsyncSnapshotHolder, _>(|saved| {
+                crate::value::js_nanbox_pointer(saved as i64)
+            }),
             undefined(),
             if writing {
                 argument.get_nanbox_f64()
@@ -436,8 +444,9 @@ fn complete(frame: &mut Frame, value: u32, flags: u32) {
             text.as_ptr(),
             text.len() as u32,
         ));
-        let error =
-            crate::error::js_error_new_with_name_message(b"AbortError", message.get_raw_mut_ptr());
+        let error = message.with_mut_ptr(|message| {
+            crate::error::js_error_new_with_name_message(b"AbortError", message)
+        });
         crate::promise::js_promise_reject(pointer(), crate::value::js_nanbox_pointer(error as i64));
     } else {
         crate::promise::assimilate::promise_resolve_assimilating(pointer(), frame.get(value));

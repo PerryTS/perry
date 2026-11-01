@@ -83,11 +83,13 @@ fn guest_read_retains_observed_temporaries_through_real_relocation_and_releases_
                 crate::fn_info!(observed, 1),
                 0,
             ));
-            crate::promise::then::js_promise_attach_handlers(
-                promise(result.get_nanbox_f64()),
-                handler.get_raw_const_ptr(),
-                std::ptr::null(),
-            );
+            handler.with_const_ptr(|handler| {
+                crate::promise::then::js_promise_attach_handlers(
+                    promise(result.get_nanbox_f64()),
+                    handler,
+                    std::ptr::null(),
+                );
+            });
         }
         let (frame, ty, handle, capacity) = take();
         assert_eq!((ty, handle, capacity), (0, 0, 1));
@@ -293,18 +295,14 @@ fn guest_read_rechecks_disposal_after_a_collecting_promise_init_hook_before_nati
         crate::fn_info!(dispose_in_init, 4),
         1,
     ));
-    crate::closure::js_closure_set_capture_f64(
-        callback.get_raw_mut_ptr(),
-        0,
-        wrapper.get_nanbox_f64(),
-    );
-    let hook = scope.root_nanbox_f64(hook(
-        &scope,
-        b"init",
-        crate::value::js_nanbox_pointer(
-            callback.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
-        ),
-    ));
+    let hook = scope.root_nanbox_f64(callback.with_mut_ptr(|callback| {
+        crate::closure::js_closure_set_capture_f64(callback, 0, wrapper.get_nanbox_f64());
+        hook(
+            &scope,
+            b"init",
+            crate::value::js_nanbox_pointer(callback as i64),
+        )
+    }));
     enable(hook.get_nanbox_f64());
     let domain = job_domain::JobDomain::new();
     let outcome = domain
@@ -378,18 +376,14 @@ fn guest_read_completion_and_cancel_restore_creation_als_and_preserve_a_sibling_
             crate::fn_info!(change_als_in_init, 4),
             1,
         ));
-        crate::closure::js_closure_set_capture_f64(
-            callback.get_raw_mut_ptr(),
-            0,
-            storage.token() as f64,
-        );
-        let init = scope.root_nanbox_f64(hook(
-            &scope,
-            b"init",
-            crate::value::js_nanbox_pointer(
-                callback.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
-            ),
-        ));
+        let init = scope.root_nanbox_f64(callback.with_mut_ptr(|callback| {
+            crate::closure::js_closure_set_capture_f64(callback, 0, storage.token() as f64);
+            hook(
+                &scope,
+                b"init",
+                crate::value::js_nanbox_pointer(callback as i64),
+            )
+        }));
         enable(init.get_nanbox_f64());
         let result =
             scope.root_nanbox_f64(origin.run(|| begin(wrapper.get_nanbox_f64(), undefined())));
@@ -404,19 +398,15 @@ fn guest_read_completion_and_cancel_restore_creation_als_and_preserve_a_sibling_
                 crate::fn_info!(record_als, 1),
                 3,
             ));
-            for (capture, value) in [storage.token() as f64, log.get_nanbox_f64(), index as f64]
-                .into_iter()
-                .enumerate()
-            {
-                crate::closure::js_closure_set_capture_f64(
-                    callback.get_raw_mut_ptr(),
-                    capture as u32,
-                    value,
-                );
-            }
-            callbacks.push(scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
-                callback.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
-            )));
+            callbacks.push(scope.root_nanbox_f64(callback.with_mut_ptr(|callback| {
+                for (capture, value) in [storage.token() as f64, log.get_nanbox_f64(), index as f64]
+                    .into_iter()
+                    .enumerate()
+                {
+                    crate::closure::js_closure_set_capture_f64(callback, capture as u32, value);
+                }
+                crate::value::js_nanbox_pointer(callback as i64)
+            })));
         }
         als::enter_with(storage.token(), 44.0);
         sibling.run(|| unsafe {

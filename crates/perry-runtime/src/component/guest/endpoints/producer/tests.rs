@@ -128,11 +128,13 @@ fn guest_observed_writer_moves_and_releases_temporary_capability_after_settlemen
                 crate::fn_info!(observed, 1),
                 0,
             ));
-            crate::promise::then::js_promise_attach_handlers(
-                promise(result.get_nanbox_f64()),
-                callback.get_raw_const_ptr(),
-                std::ptr::null(),
-            );
+            callback.with_const_ptr(|callback| {
+                crate::promise::then::js_promise_attach_handlers(
+                    promise(result.get_nanbox_f64()),
+                    callback,
+                    std::ptr::null(),
+                );
+            });
         }
         let (frame, ty, writer_handle, _) = take();
         assert_eq!((ty, writer_handle), (0, 1));

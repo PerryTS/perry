@@ -62,21 +62,17 @@ pub(super) fn wrap(ty: u32, handle: u32) -> f64 {
         (b"dispose".as_slice(), crate::fn_info!(dispose, 0)),
     ] {
         let method = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(info, 1));
-        crate::closure::js_closure_set_capture_f64(
-            method.get_raw_mut_ptr(),
-            0,
-            wrapper.get_nanbox_f64(),
-        );
-        crate::object::set_builtin_closure_non_constructable(
-            method.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
-        );
-        set_field(
-            wrapper.get_nanbox_f64(),
-            name,
-            crate::value::js_nanbox_pointer(
-                method.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
-            ),
-        );
+        // Capture/flag writes do not collect; publication roots the closure
+        // before allocating its property key, with no later pointer access.
+        method.with_mut_ptr::<crate::closure::ClosureHeader, _>(|method| {
+            crate::closure::js_closure_set_capture_f64(method, 0, wrapper.get_nanbox_f64());
+            crate::object::set_builtin_closure_non_constructable(method as usize);
+            set_field(
+                wrapper.get_nanbox_f64(),
+                name,
+                crate::value::js_nanbox_pointer(method as i64),
+            );
+        });
     }
     if stream {
         let close = scope.root_nanbox_f64(field(wrapper.get_nanbox_f64(), b"dispose"));

@@ -92,9 +92,9 @@ fn register(wrapper: f64, fields: f64) {
             0,
         ));
         registry.set_nanbox_f64(crate::value::js_nanbox_pointer(
-            crate::weakref::js_finreg_new(crate::value::js_nanbox_pointer(
-                callback.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
-            )) as i64,
+            callback.with_mut_ptr::<crate::closure::ClosureHeader, _>(|callback| {
+                crate::weakref::js_finreg_new(crate::value::js_nanbox_pointer(callback as i64))
+            }) as i64,
         ));
         unsafe {
             bag::store(
@@ -159,36 +159,30 @@ fn wrap(ty: u32, handle: u32) -> f64 {
         },
         1,
     ));
-    crate::closure::js_closure_set_capture_f64(read.get_raw_mut_ptr(), 0, wrapper.get_nanbox_f64());
-    crate::object::set_builtin_closure_non_constructable(
-        read.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
-    );
-    set_field(
-        wrapper.get_nanbox_f64(),
-        b"read",
-        crate::value::js_nanbox_pointer(
-            read.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64
-        ),
-    );
+    // Capture/flag writes do not collect. set_field roots both arguments
+    // before allocating its key; the pointer is not used after publication.
+    read.with_mut_ptr::<crate::closure::ClosureHeader, _>(|read| {
+        crate::closure::js_closure_set_capture_f64(read, 0, wrapper.get_nanbox_f64());
+        crate::object::set_builtin_closure_non_constructable(read as usize);
+        set_field(
+            wrapper.get_nanbox_f64(),
+            b"read",
+            crate::value::js_nanbox_pointer(read as i64),
+        );
+    });
     let dispose = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
         crate::fn_info!(dispose, 0),
         1,
     ));
-    crate::closure::js_closure_set_capture_f64(
-        dispose.get_raw_mut_ptr(),
-        0,
-        wrapper.get_nanbox_f64(),
-    );
-    crate::object::set_builtin_closure_non_constructable(
-        dispose.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
-    );
-    set_field(
-        wrapper.get_nanbox_f64(),
-        b"dispose",
-        crate::value::js_nanbox_pointer(
-            dispose.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64
-        ),
-    );
+    dispose.with_mut_ptr::<crate::closure::ClosureHeader, _>(|dispose| {
+        crate::closure::js_closure_set_capture_f64(dispose, 0, wrapper.get_nanbox_f64());
+        crate::object::set_builtin_closure_non_constructable(dispose as usize);
+        set_field(
+            wrapper.get_nanbox_f64(),
+            b"dispose",
+            crate::value::js_nanbox_pointer(dispose as i64),
+        );
+    });
     register(wrapper.get_nanbox_f64(), fields.get_nanbox_f64());
     wrapper.get_nanbox_f64()
 }
