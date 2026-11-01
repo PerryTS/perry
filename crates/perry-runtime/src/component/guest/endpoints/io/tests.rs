@@ -247,3 +247,235 @@ fn guest_read_rejects_out_of_task_bad_capacity_and_foreign_completion() {
     });
     assert_eq!(get(data(wrapper.get_nanbox_f64()), PENDING), 0.0);
 }
+
+extern "C" fn dispose_in_init(
+    closure: *const crate::closure::ClosureHeader,
+    _: crate::closure::JsThis,
+    _: f64,
+    kind: f64,
+    _: f64,
+    _: f64,
+) -> f64 {
+    if string(kind) == "PROMISE" {
+        release(data(crate::closure::js_closure_get_capture_f64(closure, 0)));
+        crate::gc::gc_collect_minor();
+    }
+    undefined()
+}
+
+fn hook(scope: &RuntimeHandleScope, phase: &[u8], callback: f64) -> f64 {
+    let callback = scope.root_nanbox_f64(callback);
+    let options = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::object::js_object_alloc(0, 0) as i64,
+    ));
+    set_field(options.get_nanbox_f64(), phase, callback.get_nanbox_f64());
+    crate::async_hooks::js_async_hooks_create_hook(options.get_nanbox_f64())
+}
+fn enable(hook: f64) {
+    crate::async_hooks::js_async_hook_enable(crate::value::js_nanbox_get_pointer(hook));
+}
+fn disable(hook: f64) {
+    crate::async_hooks::js_async_hook_disable(crate::value::js_nanbox_get_pointer(hook));
+}
+
+#[test]
+fn guest_read_rechecks_disposal_after_a_collecting_promise_init_hook_before_native_adoption() {
+    let _nursery = crate::gc::CopyingNurseryTestGuard::new(0);
+    let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _evacuate = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
+    crate::gc::gc_init();
+    let _ops = Ops::new();
+    let scope = RuntimeHandleScope::new();
+    let _registry = Registry::new(&scope);
+    let wrapper = scope.root_nanbox_f64(wrap(0, 17));
+    let before = wrapper.get_nanbox_f64().to_bits();
+    let callback = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+        crate::fn_info!(dispose_in_init, 4),
+        1,
+    ));
+    crate::closure::js_closure_set_capture_f64(
+        callback.get_raw_mut_ptr(),
+        0,
+        wrapper.get_nanbox_f64(),
+    );
+    let hook = scope.root_nanbox_f64(hook(
+        &scope,
+        b"init",
+        crate::value::js_nanbox_pointer(
+            callback.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
+        ),
+    ));
+    enable(hook.get_nanbox_f64());
+    let domain = job_domain::JobDomain::new();
+    let outcome = domain
+        .run(|| crate::exception::catch_js_throw(|| begin(wrapper.get_nanbox_f64(), undefined())));
+    disable(hook.get_nanbox_f64());
+    assert!(
+        outcome.is_err(),
+        "init-hook disposal must reject before C adopts the frame"
+    );
+    assert_ne!(
+        wrapper.get_nanbox_f64().to_bits(),
+        before,
+        "the hook must actually relocate its captured capability"
+    );
+    assert_eq!(get(data(wrapper.get_nanbox_f64()), STATE), CLOSED);
+    assert_eq!(get(data(wrapper.get_nanbox_f64()), PENDING), 0.0);
+    STARTED.with(|calls| assert!(calls.borrow().is_empty()));
+}
+
+extern "C" fn change_als_in_init(
+    closure: *const crate::closure::ClosureHeader,
+    _: crate::closure::JsThis,
+    _: f64,
+    kind: f64,
+    _: f64,
+    _: f64,
+) -> f64 {
+    if string(kind) == "PROMISE" {
+        let token = crate::closure::js_closure_get_capture_f64(closure, 0) as i64;
+        als::enter_with(token, 22.0);
+        crate::gc::gc_collect_minor();
+    }
+    undefined()
+}
+extern "C" fn record_als(
+    closure: *const crate::closure::ClosureHeader,
+    _: crate::closure::JsThis,
+    _: f64,
+) -> f64 {
+    let scope = RuntimeHandleScope::new();
+    let token = crate::closure::js_closure_get_capture_f64(closure, 0) as i64;
+    let log = scope.root_nanbox_f64(crate::closure::js_closure_get_capture_f64(closure, 1));
+    let index = crate::closure::js_closure_get_capture_f64(closure, 2) as u32;
+    crate::gc::gc_collect_minor();
+    set(
+        log.get_nanbox_f64(),
+        index,
+        als::get_store(token).expect("read callback ALS"),
+    );
+    undefined()
+}
+
+#[test]
+fn guest_read_completion_and_cancel_restore_creation_als_and_preserve_a_sibling_observer() {
+    let _nursery = crate::gc::CopyingNurseryTestGuard::new(0);
+    let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _evacuate = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
+    crate::gc::gc_init();
+    let _ops = Ops::new();
+    let scope = RuntimeHandleScope::new();
+    let _registry = Registry::new(&scope);
+    let mut previous = als::capture_context();
+    let previous_roots = als::root_snapshot(&scope, &previous);
+    let storage = als::AsyncLocalStoragePayload::default();
+    for cancelled in [false, true] {
+        let origin = job_domain::JobDomain::new();
+        let sibling = job_domain::JobDomain::new();
+        als::enter_with(storage.token(), 11.0);
+        let wrapper = scope.root_nanbox_f64(wrap(0, 41));
+        let callback = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+            crate::fn_info!(change_als_in_init, 4),
+            1,
+        ));
+        crate::closure::js_closure_set_capture_f64(
+            callback.get_raw_mut_ptr(),
+            0,
+            storage.token() as f64,
+        );
+        let init = scope.root_nanbox_f64(hook(
+            &scope,
+            b"init",
+            crate::value::js_nanbox_pointer(
+                callback.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
+            ),
+        ));
+        enable(init.get_nanbox_f64());
+        let result =
+            scope.root_nanbox_f64(origin.run(|| begin(wrapper.get_nanbox_f64(), undefined())));
+        disable(init.get_nanbox_f64());
+        assert_eq!(als::get_store(storage.token()), Some(22.0));
+        let log = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::array::js_array_alloc_with_length(2) as i64,
+        ));
+        let mut callbacks = Vec::new();
+        for index in 0..2 {
+            let callback = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+                crate::fn_info!(record_als, 1),
+                3,
+            ));
+            for (capture, value) in [storage.token() as f64, log.get_nanbox_f64(), index as f64]
+                .into_iter()
+                .enumerate()
+            {
+                crate::closure::js_closure_set_capture_f64(
+                    callback.get_raw_mut_ptr(),
+                    capture as u32,
+                    value,
+                );
+            }
+            callbacks.push(scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+                callback.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
+            )));
+        }
+        als::enter_with(storage.token(), 44.0);
+        sibling.run(|| unsafe {
+            let callback = JSValue::from_bits(callbacks[1].get_nanbox_f64().to_bits())
+                .as_pointer::<crate::closure::ClosureHeader>();
+            crate::promise::then::js_promise_attach_handlers(
+                promise(result.get_nanbox_f64()),
+                callback,
+                callback,
+            );
+        });
+        let resolve = scope.root_nanbox_f64(hook(
+            &scope,
+            b"promiseResolve",
+            callbacks[0].get_nanbox_f64(),
+        ));
+        enable(resolve.get_nanbox_f64());
+        als::enter_with(storage.token(), 33.0);
+        let depth = als::context_guard_depth();
+        let (frame, _, _, _) = take();
+        if cancelled {
+            origin.cancel();
+            sibling.run(|| unsafe {
+                assert_eq!(perry_component_frame_endpoint_status(frame), 0);
+                assert_eq!(perry_component_frame_endpoint_finish(frame, 0, 2), 0);
+            });
+        } else {
+            origin.run(|| unsafe {
+                assert_eq!(perry_component_frame_endpoint_prepare(frame), 1);
+                let value = perry_component_frame_number(frame, 42.0);
+                assert_eq!(perry_component_frame_endpoint_finish(frame, value, 1), 0);
+            });
+        }
+        disable(resolve.get_nanbox_f64());
+        unsafe { perry_component_frame_drop(frame) };
+        assert_eq!(
+            get(log.get_nanbox_f64(), 0),
+            11.0,
+            "settlement hooks use context captured before Promise init hooks"
+        );
+        assert_eq!(als::get_store(storage.token()), Some(33.0));
+        assert_eq!(als::context_guard_depth(), depth);
+        sibling.run(crate::promise::microtasks::guest_task_checkpoint);
+        assert_eq!(
+            get(log.get_nanbox_f64(), 1),
+            44.0,
+            "a sibling observer survives origin cancellation in its own context"
+        );
+        assert_eq!(als::get_store(storage.token()), Some(33.0));
+        assert_eq!(als::context_guard_depth(), depth);
+        assert_eq!(
+            unsafe { (*promise(result.get_nanbox_f64())).state },
+            if cancelled {
+                crate::promise::PromiseState::Rejected
+            } else {
+                crate::promise::PromiseState::Fulfilled
+            }
+        );
+    }
+    als::refresh_snapshot_from_roots(&mut previous, &previous_roots);
+    als::restore_context(previous);
+}
