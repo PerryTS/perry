@@ -354,7 +354,8 @@ pub(super) fn bobj_family(what: &str) -> Family {
         "IterResult" | "settledRecord" | "CjsParent" | "require.cache" | "require.extensions" => {
             Family::Object
         }
-        "primbox" | "keys" | "json" | "descriptor" | "descriptors" | "groups" | "fromEntries" => {
+        "primbox" | "arraybox" | "keys" | "json" | "descriptor" | "descriptors" | "groups"
+        | "fromEntries" => {
             Family::Box
         }
         "Object()" | "Object(prim)" | "BoxedPrimitive" => Family::Wrapper,
@@ -548,7 +549,10 @@ fn ns_statics(ns: BuiltinNs) -> Option<&'static [(&'static str, Mem)]> {
             ("parseInt", FN),
         ],
         BuiltinNs::String => &[("fromCharCode", FN), ("fromCodePoint", FN), ("raw", FN)],
-        BuiltinNs::Boolean | BuiltinNs::Function | BuiltinNs::ObjectProtoMethod => &[],
+        BuiltinNs::Boolean
+        | BuiltinNs::Function
+        | BuiltinNs::ObjectProtoMethod
+        | BuiltinNs::ObjectProtoOwn(_) => &[],
         // Map/WeakMap and Set/WeakSet.
         BuiltinNs::Map => &[("groupBy", FN), ("@@__perry_wk_species", Mem::Ctor)],
         BuiltinNs::Set => &[("@@__perry_wk_species", Mem::Ctor)],

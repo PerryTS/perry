@@ -600,11 +600,15 @@ impl<'a> Gen<'a> {
                     );
                 }
                 None => {
-                    if f.is_private {
-                        // `#x`: a private slot, never reachable by name.
-                        continue;
-                    }
-                    let a = self.m.atom(&f.name);
+                    // `#x`: the class's private field, a key apart from
+                    // every public one (`Model::private_atom`).
+                    let a = match f.is_private {
+                        true => {
+                            let key = self.private_field_key(mi, c, &f.name);
+                            self.m.private_atom(&key)
+                        }
+                        false => self.m.atom(&f.name),
+                    };
                     let thisn = self.m.node_l("field-this");
                     self.m.edge(fthis, thisn);
                     self.m.cons(
@@ -641,9 +645,15 @@ impl<'a> Gen<'a> {
             // A declared static field (`Model::static_fields`), whether the
             // walk sees its initializer here or where a nested class is
             // evaluated.
+            let named = match f.is_private {
+                true => {
+                    let key = self.private_field_key(mi, c, &f.name);
+                    self.m.private_atom(&key)
+                }
+                false => self.m.atom(&f.name),
+            };
             if f.key_expr.is_none() {
-                let a = self.m.atom(&f.name);
-                self.m.static_fields.insert((tm, a));
+                self.m.static_fields.insert((tm, named));
             }
             if c.is_nested && (f.init.is_some() || f.key_expr.is_some()) {
                 // A nested class's static initializers run where the class
@@ -657,13 +667,12 @@ impl<'a> Gen<'a> {
                 Some(e) => self.expr(&sfx, e),
                 None => self.prim_node(prim::UNDEF),
             };
-            let a = self.m.atom(&f.name);
             let fl = match &f.key_expr {
                 Some(k) => {
                     let _ = self.expr(&sfx, k);
                     self.m.field_any(cobj)
                 }
-                None => self.m.field(cobj, a),
+                None => self.m.field(cobj, named),
             };
             self.m.edge(v, fl);
         }

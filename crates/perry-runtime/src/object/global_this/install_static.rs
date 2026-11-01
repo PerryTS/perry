@@ -411,6 +411,9 @@ const NUMBER_STATIC_DATA: [(&str, f64); 8] = [
 /// statics with simple f64-in / f64-out shapes are reified here; the long
 /// tail (`Object.defineProperty`, `Object.getOwnPropertyDescriptor`, …)
 /// stays unreified on the rebound value and is a known scope gap.
+// Only intrinsic construction calls this; the installed functions keep the
+// runtime's speed optimization and ordinary inlining policy (#13662).
+#[optimize(size)]
 pub(crate) fn install_builtin_constructor_statics(
     name: &str,
     ctor: *mut crate::closure::ClosureHeader,

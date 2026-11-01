@@ -464,7 +464,9 @@ impl<'a> Gen<'a> {
         // functions.
         if !(value.builtins.is_empty()
             && value.arrays.is_empty()
+            && value.made_arrays.is_empty()
             && value.boxes.is_empty()
+            && value.arrayboxes.is_empty()
             && value.indexed_owners.is_empty()
             && value.fns.is_empty())
         {
@@ -495,6 +497,10 @@ impl<'a> Gen<'a> {
     pub(super) fn reach_into(&mut self, holder: NodeId, out: NodeId, label: &str, name: &str) {
         let q = self.m.node_named("reach", || format!("{label}({name})"));
         self.m.own(q);
+        // Of the run of the node it feeds (a stand-in's result is one run,
+        // DECISIONS 44 (b)): what the caller passed comes back relative to
+        // the call, not as a marker crossing out of that run.
+        self.m.nodes[q as usize].frame = self.m.nodes[out as usize].frame;
         self.m.cons(
             holder,
             Cons::Load {
@@ -527,6 +533,9 @@ impl<'a> Gen<'a> {
     ) {
         let q = self.m.node_named("reach", || format!("reach.{k}({name})"));
         self.m.own(q);
+        // Of the run of the result it feeds, as `reach_into`'s.
+        let run = self.m.nodes[ret as usize].frame;
+        self.m.nodes[q as usize].frame = run;
         let a = self.m.atom(k);
         self.m.cons(
             holder,
@@ -550,6 +559,7 @@ impl<'a> Gen<'a> {
                             .m
                             .node_named("reach", || format!("reach.{k}.{j}({name})"));
                         self.m.own(n);
+                        self.m.nodes[n as usize].frame = run;
                         let key = match sk {
                             Some(s) => crate::model::Key::Named(self.m.atom(s)),
                             None => crate::model::Key::Any,
@@ -584,6 +594,7 @@ impl<'a> Gen<'a> {
         };
         let r = self.m.node_named("reach", || format!("reach.{k}*({name})"));
         self.m.own(r);
+        self.m.nodes[r as usize].frame = run;
         for key in keys {
             self.m.cons(q, Cons::Load { key, dst: r });
             self.m.cons(r, Cons::Load { key, dst: r });

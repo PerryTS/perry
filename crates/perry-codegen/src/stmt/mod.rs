@@ -62,6 +62,8 @@ mod range_loop_dense_store_tests;
 pub(crate) mod region_loop;
 pub(crate) mod stable_packed_accumulator;
 pub(crate) mod stable_packed_loop;
+#[cfg(all(test, feature = "llvm-inprocess"))]
+mod stable_packed_loop_tests;
 mod stable_packed_typed_array;
 mod string_length_loop;
 mod switch_stmt;

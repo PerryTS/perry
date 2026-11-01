@@ -970,6 +970,11 @@ unsafe fn try_function_store(
     {
         return None;
     }
+    // A plain data key on a described function: a key-add on its shape
+    // (`function_own_put`), no generic tail.
+    if let Some(stored) = super::function_own_put::function_own_put(target, key, value, false) {
+        return Some(stored);
+    }
     let closure = ptr as *const crate::closure::ClosureHeader;
     let descriptor = shapes::shape_descriptor_of_receiver(((*closure).shape_id).0)?;
     if crate::closure::shape::is_class_info((*closure).info) {
@@ -984,9 +989,16 @@ unsafe fn try_function_store(
         return super::try_existing_own_data_overwrite_by_content(bag, key, name.as_bytes(), value)
             .then_some(value);
     }
+    // A bound function keeps its own keys in the same bag as any function
+    // (its intrinsic `name`/`length` were declined above), and its shape
+    // names its [[Prototype]] as any described function's does.
     if !matches!(
         descriptor.object_kind,
-        shapes::ShapeObjectKind::Function | shapes::ShapeObjectKind::FunctionDictionary
+        shapes::ShapeObjectKind::Function
+            | shapes::ShapeObjectKind::FunctionDictionary
+            | shapes::ShapeObjectKind::FunctionBound
+            | shapes::ShapeObjectKind::FunctionBoundCall
+            | shapes::ShapeObjectKind::FunctionBoundApply
     ) || flags & (crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND) != 0
     {
         return None;

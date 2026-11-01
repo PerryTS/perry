@@ -157,7 +157,7 @@ fn emit_detached_static_put(
 }
 
 fn private_static_storage_name(class_id: u32, field_name: &str) -> String {
-    format!("#<perry:private-value:{class_id}:{field_name}>")
+    perry_hir::private_names::private_value_key(class_id, field_name)
 }
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {

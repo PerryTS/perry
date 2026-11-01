@@ -144,7 +144,40 @@ pub enum BuiltinNs {
     /// `hasOwnProperty`, `valueOf`, `__defineGetter__` ... A call runs each
     /// one's effect on its receiver (`proto_method`); none is a constructor.
     ObjectProtoMethod,
+    /// `Object.prototype`'s own method under its own key, read as a value
+    /// (`Object.prototype.hasOwnProperty`): one no builtin prototype
+    /// overrides ([`ProtoOwn`]), so every builtin prototype
+    /// reads it there. A call is that method's call on its receiver
+    /// (`object_proto_own_call`); `call`/`apply`/`bind` are
+    /// `Function.prototype`'s. Not a constructor.
+    ///
+    /// The method is named by [`ProtoOwn`], not by an atom: builtin tokens
+    /// are shared between the units' models, whose atom tables differ.
+    ObjectProtoOwn(ProtoOwn),
     Other,
+}
+
+/// The `Object.prototype` methods no builtin prototype overrides
+/// (`BuiltinNs::ObjectProtoOwn`): under their key every builtin prototype
+/// chain reads `Object.prototype`'s own. Each only reads: `hasOwnProperty` /
+/// `propertyIsEnumerable` convert their key (ToPropertyKey) and test an own
+/// property of ToObject(this); `isPrototypeOf` walks its argument's chain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ProtoOwn {
+    HasOwnProperty,
+    PropertyIsEnumerable,
+    IsPrototypeOf,
+}
+
+impl ProtoOwn {
+    pub fn of_name(name: &str) -> Option<ProtoOwn> {
+        Some(match name {
+            "hasOwnProperty" => ProtoOwn::HasOwnProperty,
+            "propertyIsEnumerable" => ProtoOwn::PropertyIsEnumerable,
+            "isPrototypeOf" => ProtoOwn::IsPrototypeOf,
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -372,6 +405,14 @@ pub struct Template {
     /// stand-in has no members and no prototype, so a lookup through it ends
     /// there and never reaches `Object.prototype`.
     pub null_proto: bool,
+    /// An array a builtin made with ArraySpeciesCreate (ECMA-262 10.4.2.3:
+    /// `slice`, `splice`, `concat`, `map`, `filter`, `flat`, `flatMap`): the
+    /// node of the constructors the algorithm may take, each receiver's
+    /// `constructor` and that value's `@@species`
+    /// (`builtins::array_species`). It is an Array exotic only while no
+    /// object but `%Array%` is among them (`derive::exact_array`). `None`:
+    /// born by ArrayCreate, or no array.
+    pub species: Option<NodeId>,
 }
 
 #[derive(Clone, Debug)]
@@ -1237,6 +1278,9 @@ pub struct Model {
     pub max_nodes: usize,
     pub atoms: Vec<String>,
     pub atom_index: FxHashMap<String, Atom>,
+    /// The atoms of class private names (`Model::private_atom`), by their
+    /// storage key: a key apart from every public key of that spelling.
+    pub private_atoms: FxHashMap<String, Atom>,
     pub calls: Vec<CallSite>,
     pub stores: Vec<StoreSite>,
     /// (target fns node, bound this, bound args)
@@ -1253,6 +1297,9 @@ pub struct Model {
     pub star_from: FxHashMap<Tok, Vec<Tok>>,
     pub ns_own: crate::pts::FxHashSet<(Tok, Atom)>,
     pub all_fields: FxHashMap<Tok, NodeId>,
+    /// `Model::private_field`: what a class private field holds on any
+    /// object the class's code finds it on.
+    pub private_fields: FxHashMap<Atom, NodeId>,
     /// `Model::num_fields`: the fields a number key may name.
     pub num_fields: FxHashMap<Tok, NodeId>,
     pub proto_node: FxHashMap<Tok, NodeId>,
@@ -1433,6 +1480,13 @@ pub struct Model {
     pub thrown: NodeId,
     /// E14: interpreted code can run (and patch `Object.prototype`).
     pub dyn_eval: Option<String>,
+    /// The dyn-eval interpreter is linked (the driver's link decision): a
+    /// solved call or construct that may be the Function constructor then
+    /// runs interpreted code (DECISIONS 235).
+    pub interp_linked: bool,
+    /// Interpreted code may run: its global writes and its catch of thrown
+    /// values are in the solve (`builtins::interpreted_code_runs`).
+    pub interp_runs: bool,
     /// No interpreted code can run in the program (no dynamic code, no
     /// dynamic code reach, no direct eval scope): what this unit publishes
     /// reaches compiled units only, which use another unit's stand-in
@@ -1542,6 +1596,10 @@ pub struct Model {
     /// site, reason) of the `DefineAll`, checked again once the worklist is
     /// empty (`settle_define`).
     pub define_runs: Vec<(Tok, NodeId, NodeId, NodeId, SiteId, u32)>,
+    /// (runtime object or ⊤, prototype node) of each `setPrototypeOf` that
+    /// may give a runtime object a new prototype: its lookups may now reach
+    /// the keys of that prototype's chain (`settle_native_given`).
+    pub native_given: Vec<(Tok, NodeId)>,
     /// (descs, map) defined under any key; descs whose E5 and store under
     /// any key are attached.
     pub define_any: crate::pts::FxHashSet<(NodeId, Tok)>,
@@ -1551,7 +1609,8 @@ pub struct Model {
     pub desc_runs: Vec<(Tok, NodeId, Atom, SiteId, u32)>,
     /// (o, key, descriptor) defined as data.
     pub desc_data: crate::pts::FxHashSet<(NodeId, Atom, Tok)>,
-    /// (o, key, data) whose `DefineKey` is attached.
+    /// (o, key, data): a key defined on `o` (`STAR_KEY`: under a computed
+    /// key); a named key has its `DefineKey` attached.
     pub define_on: crate::pts::FxHashSet<(NodeId, Atom, bool)>,
     /// The node a `Cons::Store` runs on, while it runs.
     pub store_at: Option<NodeId>,
