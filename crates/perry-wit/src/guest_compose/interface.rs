@@ -13,8 +13,12 @@ pub(super) fn compose(
 ) -> Result<NodeId> {
     let mut wrapper = CompositionGraph::new();
     *wrapper.types_mut() = outer.types().clone();
-    let source_name = "perry-original";
-    let original = wrapper.import(source_name, ItemKind::Instance(api))?;
+    let source_name = wrapper.types()[api]
+        .id
+        .clone()
+        .unwrap_or_else(|| "perry:original/api".into());
+    wrapper.types_mut()[api].id = Some(source_name.clone());
+    let original = wrapper.import(&source_name, ItemKind::Instance(api))?;
     let mut bindings = Vec::new();
     for (name, value, forwarded) in members {
         let node = if *forwarded {
@@ -39,7 +43,7 @@ pub(super) fn compose(
     )?;
     let package = outer.register_package(package)?;
     let instance = outer.instantiate(package);
-    outer.set_instantiation_argument(instance, source_name, source)?;
+    outer.set_instantiation_argument(instance, &source_name, source)?;
     for (name, value) in bindings {
         outer.set_instantiation_argument(instance, &name, value)?;
     }

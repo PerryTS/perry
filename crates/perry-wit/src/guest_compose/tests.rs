@@ -135,7 +135,13 @@ fn sibling_facade_rebuilds_public_interfaces_without_replacing_their_resource_id
         !types[make].is_async,
         "the facade must preserve the synchronous factory"
     );
-    assert_eq!(types[make].result, Some(ValueType::Own(resource)));
+    let Some(ValueType::Own(result)) = types[make].result else {
+        panic!("owned resource result")
+    };
+    assert_eq!(
+        types.resolve_resource(result),
+        types.resolve_resource(resource)
+    );
     let ItemKind::Func(later) = exports["later"] else {
         panic!("async function")
     };
