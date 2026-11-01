@@ -154,11 +154,33 @@ pub(crate) fn family_method_word(
     if fam.keys.iter().any(|(k, _)| k == property) {
         return None;
     }
+    family_layout_id(ctx, class_id)
+}
+
+/// The i32 layout id of class `class_id`'s family descriptor, loaded from the
+/// descriptor's `layout_id` word (written once at startup, before user code);
+/// `None` without layouts or a family. 0 when the runtime could not register
+/// the layout (then no birth uses it): compare it against 0 before use.
+pub(crate) fn family_layout_id(ctx: &mut FnCtx<'_>, class_id: u32) -> Option<String> {
+    if !crate::layout_desc::layouts_enabled("executable", ctx.target_triple) {
+        return None;
+    }
+    ctx.program_layouts.families.get(&class_id)?;
     let desc = crate::layout_desc::note_family_desc_use(class_id);
     let offset = crate::layout_desc::DESC_LAYOUT_ID_OFFSET.to_string();
     let blk = ctx.block();
     let id_ptr = blk.gep(I8, &desc, &[(I64, &offset)]);
     Some(blk.load(I32, &id_ptr))
+}
+
+/// May a clone compiled for class `class_name`'s birth layout (the proven-`this`
+/// clone body, fixed slot offsets) run on every object of the class? A class
+/// born on a family is told by the family word, so the family must hold the birth
+/// layout ([`family_holds_birth_layout`]); a class with no family is born on the
+/// birth pair itself.
+pub(crate) fn births_match_clone_layout(ctx: &FnCtx<'_>, class_name: &str, class_id: u32) -> bool {
+    !ctx.program_layouts.families.contains_key(&class_id)
+        || family_holds_birth_layout(ctx, class_name, class_id)
 }
 
 /// Does class `class_name`'s family layout hold exactly the instance its
