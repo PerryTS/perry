@@ -27,4 +27,16 @@ world plugin {
     export dispose-pending: async func(value: future<u32>) -> bool;
     export abandon-read: async func(value: future<u32>) -> bool;
     export read-held: async func() -> u32;
+    export make-future: async func(value: payload) -> pending;
+    export make-values: async func(value: list<payload>) -> values;
+    export make-character: async func() -> future<char>;
+    export make-empty: async func() -> future;
+    export make-units: async func() -> stream;
+    export make-bytes: async func() -> stream<u8>;
+    export make-nested: async func() -> future<future<u32>>;
+    export make-cancelled: async func() -> stream<u32>;
+    export make-closed: async func() -> stream<u32>;
+    export writes-completed: func() -> u32;
+    export writes-failed: func() -> u32;
+    export write-chunks: func() -> u32;
 }

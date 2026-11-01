@@ -1,6 +1,6 @@
 //! Actual Perry-authored P3 library: owned future/stream readers cross generated
-//! C/JS adapters. Independent host writers/readers prove the returned endpoints
-//! are usable. Guest endpoint I/O and guest-created writers remain separate.
+//! C/JS adapters. Independent host writers/readers exercise actual JS endpoint
+//! I/O, including guest-created producers progressing after the export returns.
 use anyhow::{bail, ensure, Context, Result};
 use futures_lite::future::{block_on, poll_once};
 use perry_component_host::{
@@ -256,6 +256,65 @@ fn guest_reads(
     Ok(())
 }
 
+fn guest_writes(driver: &mut Driver, client: &DriverClient, payload: Value) -> Result<()> {
+    ensure!(call(driver, client, "writes-completed", &[])? == 0);
+    for (name, args, expected) in [
+        ("make-future", vec![payload.clone()], Some(payload.clone())),
+        ("make-character", vec![], Some(json!("🍐"))),
+        ("make-empty", vec![], None),
+    ] {
+        let reader = call(driver, client, name, &args)?;
+        // Deliberately no guest export between factory return and these reads.
+        // Only the host's canonical read may advance the blocked producer.
+        ensure!(
+            result(driver, &mut client.read_async_value(&reader, None)?)? == expected,
+            "{name} payload"
+        );
+    }
+    for (name, args, expected) in [
+        (
+            "make-values",
+            vec![json!(vec![payload.clone(); 5])],
+            json!(vec![payload; 5]),
+        ),
+        ("make-units", vec![], json!(vec![Value::Null; 5])),
+        ("make-bytes", vec![], json!([0, 1, 128, 255, 17])),
+        ("make-cancelled", vec![], json!([17, 18, 19])),
+        ("make-closed", vec![], json!([])),
+    ] {
+        let reader = call(driver, client, name, &args)?;
+        let mut received = Vec::new();
+        let mut reads = 0;
+        loop {
+            let chunk = result(driver, &mut client.read_async_value(&reader, Some(2))?)?
+                .context("guest-produced stream chunk")?;
+            if chunk["done"] == true {
+                break;
+            }
+            let values = chunk["value"]
+                .as_array()
+                .context("produced payload array")?;
+            ensure!(!values.is_empty() && values.len() <= 2);
+            received.extend(values.iter().cloned());
+            reads += 1;
+        }
+        ensure!(json!(received) == expected, "{name} payload");
+        if name != "make-closed" {
+            ensure!(reads >= 2, "host must really consume partial writes");
+        }
+    }
+    let outer = call(driver, client, "make-nested", &[])?;
+    let inner = result(driver, &mut client.read_async_value(&outer, None)?)?
+        .context("guest-produced nested future")?;
+    ensure!(result(driver, &mut client.read_async_value(&inner, None)?)? == Some(json!(42)));
+    ensure!(call(driver, client, "writes-failed", &[])? == 0);
+    ensure!(call(driver, client, "writes-completed", &[])? == 9);
+    ensure!(call(driver, client, "write-chunks", &[])?
+        .as_u64()
+        .is_some_and(|n| n >= 11));
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     ensure!(
@@ -387,7 +446,8 @@ fn main() -> Result<()> {
         "Store must remain usable"
     );
     guest_reads(&mut driver, &client, &world, payload.clone())?;
+    guest_writes(&mut driver, &client, payload)?;
     ensure!(call(&mut driver, &client, "checkpoint", &[])? == 73);
-    println!("PASS: actual Perry P3 endpoint transport and guest reads, compound/char/void/unit/byte/nested values, partial chunks, cancellation, abandoned-read retry and Store reuse");
+    println!("PASS: actual Perry P3 endpoint transport and guest reads/writes, compound/char/void/unit/byte/nested values, guest factories, post-return producers, partial chunks, cancellation, abandoned-read retry and Store reuse");
     Ok(())
 }

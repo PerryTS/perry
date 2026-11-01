@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Execute actual P3 guest endpoint custody; guest read/write APIs stay pending."""
+"""Execute actual P3 guest endpoint custody, reads, writes and async factories."""
 import argparse
 import hashlib
 import json
@@ -60,7 +60,7 @@ def main():
     libraries = []
     components = []
     control_files = []
-    marker = "PASS: actual Perry P3 endpoint transport and guest reads, compound/char/void/unit/byte/nested values, partial chunks, cancellation, abandoned-read retry and Store reuse"
+    marker = "PASS: actual Perry P3 endpoint transport and guest reads/writes, compound/char/void/unit/byte/nested values, guest factories, post-return producers, partial chunks, cancellation, abandoned-read retry and Store reuse"
 
     def link(directory, archive, component):
         return [args.wasi_sdk.resolve() / "bin" / ("clang" + suffix),
@@ -92,6 +92,9 @@ def main():
                                  "units", "bytes", "nested-value", "dispose", "forget", "checkpoint",
                                  "read-started", "read-future", "read-values", "read-character", "read-empty",
                                  "read-units", "read-bytes", "read-nested", "dispose-pending", "abandon-read", "read-held",
+                                 "make-future", "make-values", "make-character", "make-empty",
+                                 "make-units", "make-bytes", "make-nested", "make-cancelled", "make-closed",
+                                 "writes-completed", "writes-failed", "write-chunks",
                                  "--type-import=payload", "--type-import=pending",
                                  "--type-import=values", "--type-import=pair"])
         run(kind + "-execute", [binaries / ("guest_endpoint_transport" + suffix), guest / "world.wit", component])
