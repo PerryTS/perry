@@ -86,7 +86,7 @@ pub(super) fn tower_pshape_route(
 /// kept in a contract build (which checks the facts at run time), with
 /// interpreted code present (`interp_guard`), and for every class the facts
 /// do not list as fixed.
-pub(super) fn tower_layout_proven(ctx: &FnCtx<'_>, owner: &str, cid: u32) -> bool {
+pub(super) fn tower_layout_proven(ctx: &FnCtx<'_>, cid: u32) -> bool {
     let proved = !ctx.wpfacts_off
         && !ctx.wpfacts.interp_guard
         && !crate::codegen::helpers::check_contracts()
@@ -94,9 +94,7 @@ pub(super) fn tower_layout_proven(ctx: &FnCtx<'_>, owner: &str, cid: u32) -> boo
             .wpfacts
             .classes
             .get(&cid)
-            .is_some_and(|class| class.fixed_layout)
-        // The unchecked call enters a clone compiled for the birth layout.
-        && crate::lower_call::direct_method_guard::births_match_clone_layout(ctx, owner, cid);
+            .is_some_and(|class| class.fixed_layout);
     if proved {
         crate::facts_consumed::used();
     }
