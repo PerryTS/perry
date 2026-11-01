@@ -27,6 +27,7 @@ pub(crate) fn cp_register(target: f64, event: f64, cb: f64) {
     };
     let arr = crate::array::js_array_push_f64(arr, cb);
     cp_set_field(target, &key, cp_box_ptr(arr as *const u8));
+    super::paused_read::cp_listener_added(target, &name);
 }
 
 /// Invoke every listener registered on `target` for `event`. Returns whether
@@ -102,6 +103,14 @@ mod relocation_tests;
 /// Deliver real pipe EOF and retain it for readers attaching after the event.
 /// Keep this separate from public `.emit("end")`, which is not a pipe EOF.
 pub(crate) fn cp_readable_end(stream: f64) {
+    if super::paused_read::cp_paused_eof(stream) {
+        return;
+    }
+    cp_readable_end_now(stream);
+}
+
+/// Emit `end` and record it on the stream.
+pub(crate) fn cp_readable_end_now(stream: f64) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let stream = scope.root_nanbox_f64(stream);
     crate::node_stream::async_iterator::mark_foreign_readable_ended(stream.get_nanbox_f64());
@@ -286,14 +295,6 @@ pub(crate) extern "C" fn cp_method_remove_all_listeners(
         }
     }
     this
-}
-
-pub(crate) extern "C" fn cp_method_read(
-    _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
-    _n: f64,
-) -> f64 {
-    TAG_NULL_F64
 }
 
 /// `child.stdout.pipe(dest)` — forward every `data` chunk to `dest.write(chunk)`
