@@ -770,6 +770,7 @@ impl Model {
             parent_value: None,
             parent_links: Vec::new(),
             null_proto: false,
+            species: None,
         });
         self.fn_inst.insert(f, id);
         // DECISIONS 210: a layout made for a function that already left.
@@ -1330,6 +1331,7 @@ impl Model {
             parent_value: None,
             parent_links: Vec::new(),
             null_proto: false,
+            species: None,
         });
         let recv = self.tok(TokKind::Obj(rt, NO_CTX));
         let any = self.field_any(recv);

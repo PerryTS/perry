@@ -435,6 +435,51 @@ fn iterator_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
     }
 }
 
+/// ArraySpeciesCreate (ECMA-262 10.4.2.3) of array template `tm` from the
+/// receivers in node `src`: the receivers' `constructor` is read, and its
+/// `@@species` when it is an object. Both values flow into the template's
+/// species node (`Template::species`): the constructor it is made with is
+/// one of them (or `undefined`). Neither is called here: the array stays
+/// the builtin's result (a constructor other than `%Array%` only takes the
+/// verdicts that need an Array away, `derive::exact_array`).
+pub(crate) fn array_species(m: &mut Model, tm: TmplId, src: NodeId) {
+    let sc = match m.tmpls[tm as usize].species {
+        Some(n) => n,
+        None => {
+            let n = m.node_l("array-species");
+            m.tmpls[tm as usize].species = Some(n);
+            n
+        }
+    };
+    let k = m.atom("constructor");
+    let cn = m.node_l("array-species-constructor");
+    m.cons(
+        src,
+        Cons::Load {
+            key: Key::Named(k),
+            dst: cn,
+        },
+    );
+    m.edge(cn, sc);
+    let sp = m.atom("@@__perry_wk_species");
+    m.cons(
+        cn,
+        Cons::Load {
+            key: Key::Named(sp),
+            dst: sc,
+        },
+    );
+}
+
+/// `out` (a call's array) is made from receiver `t` with ArraySpeciesCreate
+/// (`array_species`).
+fn species_from(m: &mut Model, out: Tok, t: Tok) {
+    let tm = m.tmpl_of(out).expect("site template");
+    let src = m.node_l("array-species-receiver");
+    m.add_tok(src, t);
+    array_species(m, tm, src);
+}
+
 pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
     if let Some(name) = name {
         if matches!(members::member(Family::Array, name), Some(Mem::Fn)) {
@@ -463,8 +508,25 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
             let it = iter_over(m, call, elems);
             ret_tok(m, call, it);
         }
-        // Any other computed-key method.
-        None => ret_tok(m, call, t),
+        // Any other computed-key method: one that returns the receiver, or
+        // one that makes an array through its `constructor` (`splice`, `map`
+        // ...). A runtime protocol's call (`Model::protocol_calls`) is made
+        // per touched value and its result goes back to the runtime only:
+        // an array made there holds the receiver's elements, which the
+        // touch of the receiver already reaches, so the receiver stands
+        // for it (an array per such call would be touched in turn, without
+        // end).
+        None => {
+            ret_tok(m, call, t);
+            if m.protocol_calls.contains(&call) {
+                return;
+            }
+            let out = site_tmpl(m, call, "Array");
+            let ofa = m.field_any(out);
+            m.edge(elems, ofa);
+            species_from(m, out, t);
+            ret_tok(m, call, out);
+        }
         // Arrays and strings are iterables, not iterators: no `next`,
         // `return` or `throw` (a call throws; `Gen::iterate` tries `next`
         // on every iterable).
@@ -488,11 +550,17 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
             m.edge(elems, c.ret);
             ret_prim(m, call, prim::UNDEF);
         }
+        // The removed elements, in an array made through the receiver's
+        // `constructor`.
         Some("splice") => {
             for &a in c.args.iter().skip(2) {
                 m.edge(a, elems);
             }
-            ret_tok(m, call, t);
+            let out = site_tmpl(m, call, "Array");
+            let ofa = m.field_any(out);
+            m.edge(elems, ofa);
+            species_from(m, out, t);
+            ret_tok(m, call, out);
         }
         Some("fill") => {
             if let Some(&a) = c.args.first() {
@@ -508,6 +576,9 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         // `copy[i] = v`).
         Some("slice" | "concat" | "toReversed" | "flat" | "with" | "toSpliced") => {
             let out = site_tmpl(m, call, "Array");
+            if matches!(name, Some("slice" | "concat" | "flat")) {
+                species_from(m, out, t);
+            }
             let ofa = m.field_any(out);
             m.edge(elems, ofa);
             let added: &[NodeId] = match name {
@@ -572,6 +643,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
             match name {
                 Some("map" | "flatMap") => {
                     let out = site_tmpl(m, call, "Array");
+                    species_from(m, out, t);
                     let ofa = m.field_any(out);
                     m.edge(r, ofa);
                     if name == Some("flatMap") {
@@ -588,6 +660,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
                 // A new array of some of the receiver's elements.
                 Some("filter") => {
                     let out = site_tmpl(m, call, "Array");
+                    species_from(m, out, t);
                     let ofa = m.field_any(out);
                     m.edge(elems, ofa);
                     ret_tok(m, call, out);
@@ -894,7 +967,8 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             ret_tok(m, call, pb);
         }
         (
-            "primbox" | "keys" | "json" | "descriptor" | "descriptors" | "groups" | "fromEntries",
+            "primbox" | "arraybox" | "keys" | "json" | "descriptor" | "descriptors" | "groups"
+            | "fromEntries",
             Some(n),
         ) => array_method(m, t, Some(n), call),
         (_, Some(n)) => undescribed_method(

@@ -15,6 +15,7 @@ mod native_protocol;
 pub(crate) mod string_methods;
 pub(crate) mod typed_array_methods;
 use collections::{array_method, bobj_method, function_method, iterate};
+pub(crate) use collections::array_species;
 pub(crate) use collections::{WK_ITERATOR, WK_PREFIX};
 use members::{Family, Mem};
 pub use native_protocol::{
@@ -231,6 +232,7 @@ fn site_tmpl(m: &mut Model, call: CallId, what: &'static str) -> Tok {
         parent_value: None,
         parent_links: Vec::new(),
         null_proto: false,
+        species: None,
     });
     let t = m.tok(TokKind::Obj(tm, NO_CTX));
     m.site_tmpls.insert(key, t);
@@ -896,7 +898,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     (Key::Named(a), Some(_)) => {
                         // A container of primitives (split/match results,
                         // keys …) holds them under every key.
-                        if what == "primbox" {
+                        if what == "primbox" || what == "arraybox" {
                             m.add_prim(dst, prim::ALL);
                         }
                         family_load(m, fam, a, dst);
@@ -1797,10 +1799,16 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
             }
             ret_tok(m, call, p);
         }
-        (BuiltinNs::Reflect, "ownKeys" | "has") => {
+        // An Array of the target's own keys.
+        (BuiltinNs::Reflect, "ownKeys") => {
             implicit_args(m, call, "ToPropertyKey", Protocol::ToPrimitive);
-            let pb = site_tmpl(m, call, "primbox");
+            let pb = site_tmpl(m, call, "arraybox");
+            let fa = m.field_any(pb);
+            m.add_prim(fa, prim::STR | prim::SYMBOL);
             ret_tok(m, call, pb);
+        }
+        (BuiltinNs::Reflect, "has") => {
+            implicit_args(m, call, "ToPropertyKey", Protocol::ToPrimitive);
             ret_prim(m, call, prim::BOOL);
         }
         (BuiltinNs::Error, "captureStackTrace") => {
