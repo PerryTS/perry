@@ -19,7 +19,8 @@ pub fn enable() -> bool {
             }
         }
         let mut raw = current;
-        // cfmakeraw equivalent (Node's setRawMode does roughly this).
+        // Raw input must preserve c_oflag: stdout may share this terminal
+        // and still need OPOST/ONLCR to translate newlines (#13644).
         raw.c_iflag &= !(libc::IGNBRK
             | libc::BRKINT
             | libc::PARMRK
@@ -28,7 +29,6 @@ pub fn enable() -> bool {
             | libc::IGNCR
             | libc::ICRNL
             | libc::IXON);
-        raw.c_oflag &= !libc::OPOST;
         raw.c_lflag &= !(libc::ECHO | libc::ECHONL | libc::ICANON | libc::ISIG | libc::IEXTEN);
         raw.c_cflag &= !(libc::CSIZE | libc::PARENB);
         raw.c_cflag |= libc::CS8;
@@ -50,3 +50,7 @@ pub fn disable() -> bool {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "termios_unix_tests.rs"]
+mod tests;

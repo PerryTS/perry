@@ -327,7 +327,8 @@ fn set_fd_raw_mode(fd: i32, enabled: bool) -> bool {
                 | libc::IGNCR
                 | libc::ICRNL
                 | libc::IXON);
-            raw.c_oflag &= !libc::OPOST;
+            // Preserve output processing (including OPOST/ONLCR): raw input
+            // must not break newline rendering on a shared terminal (#13644).
             raw.c_lflag &= !(libc::ECHO | libc::ECHONL | libc::ICANON | libc::ISIG | libc::IEXTEN);
             raw.c_cflag &= !(libc::CSIZE | libc::PARENB);
             raw.c_cflag |= libc::CS8;
@@ -1309,6 +1310,10 @@ pub extern "C" fn js_tty_resize_drain() -> i32 {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+#[cfg(all(test, unix))]
+#[path = "tty/raw_mode_tests.rs"]
+mod raw_mode_tests;
 
 #[cfg(test)]
 mod tests {
