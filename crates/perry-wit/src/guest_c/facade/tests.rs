@@ -1,5 +1,43 @@
 use super::*;
 
+#[test]
+fn private_forward_names_preserve_public_world_type_identities() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("world.wit");
+    std::fs::write(
+        &path,
+        r#"package test:facade-names;
+        world plugin {
+            record perry-forward-0 { value: u32 }
+            record perry-source-0 { wide: u64, text: string }
+            export inspect: func(value: perry-forward-0) -> u32;
+            export later: async func(value: perry-source-0) -> perry-source-0;
+        }"#,
+    )
+    .unwrap();
+    let files = experimental_async_guest(&path, None).unwrap();
+    let plan: Plan = serde_json::from_slice(&files["perry_producer_facade.json"]).unwrap();
+    assert_eq!(plan.forwards.len(), 1);
+    assert_eq!(plan.forwards[0].function, "inspect");
+    let (_, metadata) =
+        wit_component::metadata::decode(&files["perry_producer_facade_component_type.o"]).unwrap();
+    let world = &metadata.resolve.worlds[metadata.world];
+    let WorldItem::Type { id, .. } = world.imports[&WorldKey::Name("perry-forward-0".into())]
+    else {
+        panic!("the public record must remain a type import");
+    };
+    let WorldItem::Function(forwarded) =
+        &world.exports[&WorldKey::Name(plan.forwards[0].export.clone())]
+    else {
+        panic!("the private forward must remain callable");
+    };
+    assert_eq!(forwarded.params[0].ty, wit_parser::Type::Id(id));
+    assert!(matches!(
+        metadata.resolve.types[id].kind,
+        TypeDefKind::Record(_)
+    ));
+}
+
 #[cfg(unix)]
 #[test]
 fn typed_facade_preserves_sync_calls_and_imported_exported_nominal_resources() {
