@@ -1069,10 +1069,9 @@ unsafe fn exotic_get<const ABSENT: bool>(
             // identity (`%Function.prototype%` until a link moves it).
             // A bound function's intrinsic `name` and `length` are its
             // target's, not static data of a body: those keys decline.
-            let linked = plain || bound_on_described_shape(c, hash);
             (
                 (*c).props as *const ObjectHeader,
-                linked
+                plain
                     .then(|| crate::object::shapes::shape_proto_id((*c).shape_id))
                     .flatten(),
                 plain,
@@ -1098,6 +1097,16 @@ unsafe fn exotic_get<const ABSENT: bool>(
             Err(false) => return hole(),
         }
     }
+    // A bound function is asked only after its bag missed (an own key is
+    // the common read).
+    let proto = match proto {
+        None if (*header).obj_type == crate::gc::GC_TYPE_CLOSURE
+            && bound_on_described_shape(obj.cast(), hash) =>
+        {
+            crate::object::shapes::shape_proto_id((*obj.cast::<crate::closure::ClosureHeader>()).shape_id)
+        }
+        proto => proto,
+    };
     let Some(serial) = proto else {
         return hole();
     };
