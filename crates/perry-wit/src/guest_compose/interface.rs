@@ -7,9 +7,14 @@ use wac_graph::types::{Type, Types};
 mod names;
 
 /// Rename all value types together with their public resource aliases.
-pub(super) fn shape(types: &Types, api: InterfaceId) -> Result<Vec<u8>> {
+pub(super) fn shape(types: &Types, api: InterfaceId) -> Result<wasm_encoder::InstanceType> {
+    use wasm_encoder::reencode::{ReencodeComponent, RoundtripReencoder};
+    use wasmparser::{ComponentType, ComponentTypeDeclaration};
     let mut graph = CompositionGraph::new();
     *graph.types_mut() = types.clone();
+    if graph.types()[api].id.is_none() {
+        graph.types_mut()[api].id = Some("perry:public/interface".into());
+    }
     let resources = graph.types()[api]
         .exports
         .values()
@@ -34,13 +39,23 @@ pub(super) fn shape(types: &Types, api: InterfaceId) -> Result<Vec<u8>> {
                     section.count() == 1 && shape.is_none(),
                     "Public interface type is not closed"
                 );
-                let range = section.range();
-                shape = Some(
-                    bytes
-                        .get(usize::try_from(range.start)?..usize::try_from(range.end)?)
-                        .context("Invalid public interface type range")?
-                        .to_vec(),
-                );
+                let ComponentType::Component(declarations) = section
+                    .into_iter()
+                    .next()
+                    .context("Missing public interface wrapper type")??
+                else {
+                    anyhow::bail!("Expected public interface wrapper type");
+                };
+                for declaration in declarations {
+                    match declaration {
+                        ComponentTypeDeclaration::Type(ComponentType::Instance(declarations)) => {
+                            ensure!(shape.is_none(), "Multiple public interface types");
+                            shape = Some(RoundtripReencoder.component_instance_type(declarations)?);
+                        }
+                        ComponentTypeDeclaration::Export { .. } => {}
+                        _ => anyhow::bail!("Public interface type requires external type bindings"),
+                    }
+                }
             }
             Payload::Version { .. }
             | Payload::End(_)
