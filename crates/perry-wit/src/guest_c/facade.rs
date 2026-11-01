@@ -34,8 +34,6 @@ pub(super) fn generate(
     let mut resolve = resolve.clone();
     let original = resolve.worlds[world].clone();
     let mut facade = original.clone();
-    facade.name = "perry-producer-facade".into();
-    facade.package = None;
     facade.exports.clear();
     facade
         .imports
@@ -108,7 +106,11 @@ pub(super) fn generate(
             ));
         }
     }
-    let facade_id = resolve.worlds.alloc(facade);
+    // Keep the selected world ID and package in this private Resolve clone.
+    // Root types belong to that world, and metadata encoding requires both
+    // their owner and the package's world mapping to remain valid.
+    resolve.worlds[world] = facade;
+    let facade_id = world;
     let mut files = Files::default();
     wit_bindgen_c::Opts {
         no_sig_flattening: true,
@@ -148,7 +150,7 @@ pub(super) fn generate(
         &generator.endpoints,
         &world_name,
     );
-    let mut source = format!("#include \"{world_name}.h\"\n");
+    let mut source = String::from("#include \"perry_producer_facade.h\"\n");
     let WorldItem::Function(actor_function) = &resolve.worlds[facade_id].imports[&renamed[&actor]]
     else {
         unreachable!()
@@ -218,10 +220,26 @@ pub(super) fn generate(
         }
         source.push_str("}\n");
     }
-    let mut output: BTreeMap<String, Vec<u8>> = files
-        .iter()
-        .map(|(name, bytes)| (name.to_string(), bytes.to_vec()))
-        .collect();
+    // Producer and facade use separate core modules. Their SDK symbol names
+    // may coincide, but their files share one output directory.
+    let mut output = BTreeMap::new();
+    for (name, bytes) in files.iter() {
+        let suffix = name
+            .strip_prefix(&world_name)
+            .context("Unexpected facade backend file")?;
+        let name = format!("perry_producer_facade{suffix}");
+        let bytes = if name.ends_with(".c") {
+            String::from_utf8(bytes.to_vec())?
+                .replace(
+                    &format!("\"{world_name}.h\""),
+                    "\"perry_producer_facade.h\"",
+                )
+                .into_bytes()
+        } else {
+            bytes.to_vec()
+        };
+        output.insert(name, bytes);
+    }
     output.insert("perry_producer_forward.c".into(), source.into_bytes());
     let plan = Plan {
         schema_version: 1,
