@@ -19,12 +19,11 @@ pub(crate) const PRIV_OP_WRITE: u8 = 1;
 pub(crate) fn private_storage_property(ctx: &LoweringContext, field_name: &str) -> String {
     match ctx.resolve_private(field_name) {
         Some((_, class_id, member)) => {
-            let family = if member.kind == super::super::PrivKind::Field {
-                "value"
+            if member.kind == super::super::PrivKind::Field {
+                crate::private_names::private_value_key(class_id, field_name)
             } else {
-                "member"
-            };
-            format!("#<perry:private-{family}:{class_id}:{field_name}>")
+                format!("#<perry:private-member:{class_id}:{field_name}>")
+            }
         }
         None => field_name.to_string(),
     }
