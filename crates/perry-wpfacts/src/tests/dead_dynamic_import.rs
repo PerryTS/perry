@@ -318,3 +318,81 @@ fn a_callback_given_through_a_builtin_prototype_method_value_runs() {
         assert!(oxmark_runs(src), "{src}");
     }
 }
+
+/// `(name, source, import() targets)` as the compile driver hands them: each
+/// `import()` site in order gets its target, the target a dynamic import
+/// entry, relative sources resolved to `<name>.ts`.
+fn program(mods: &[(&str, &str, &[&str])]) -> Vec<(String, perry_hir::Module)> {
+    mods.iter()
+        .map(|(name, src, targets)| {
+            let path = format!("{name}.ts");
+            let module = perry_parser::parse_typescript(src, &path).expect("parses");
+            let mut hir = perry_hir::lower_module(&module, name, &path).expect("lowers");
+            let mut next = targets.iter();
+            perry_hir::for_each_dynamic_import_mut(&mut hir, &mut |e| {
+                if let perry_hir::Expr::DynamicImport { paths: p, .. } = e {
+                    *p = vec![next.next().expect("a target per site").to_string()];
+                }
+            });
+            for t in *targets {
+                hir.imports.push(perry_hir::Import {
+                    source: t.to_string(),
+                    specifiers: Vec::new(),
+                    is_native: false,
+                    module_kind: Default::default(),
+                    resolved_path: None,
+                    type_only: false,
+                    runtime_erased: false,
+                    is_dynamic: true,
+                    is_dynamic_target: false,
+                    is_deferred_require: false,
+                    is_adopted_require: false,
+                });
+            }
+            for imp in &mut hir.imports {
+                if let Some(n) = imp.source.strip_prefix("./") {
+                    imp.resolved_path = Some(format!("{}.ts", n.trim_end_matches(".js")));
+                }
+            }
+            (path, hir)
+        })
+        .collect()
+}
+
+#[test]
+fn a_re_export_source_loads_with_the_module_that_re_exports_it() {
+    // main loads e by `import()`; e re-exports from package b, which the
+    // driver resolves (`export_sources`; @supabase/typegen re-exporting its
+    // languages); b imports c at module scope. b loads with e, so its
+    // `import()` runs.
+    let hirs = program(&[
+        (
+            "b",
+            "export const f = 1;\nimport(\"./c.js\").then((m: any) => console.log(m.v));\n",
+            &["./c.js"],
+        ),
+        ("c", "export const v = 2;\n", &[]),
+        ("e", "export { f } from \"b-pkg\";\n", &[]),
+        (
+            "main",
+            "import(\"./e.js\").then((m: any) => console.log(m.f));\n",
+            &["./e.js"],
+        ),
+    ]);
+    let list: Vec<(String, &perry_hir::Module)> =
+        hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
+    let mut cfg = FactsConfig::default();
+    cfg.export_sources
+        .entry("e.ts".to_string())
+        .or_default()
+        .insert("b-pkg".to_string(), "b.ts".to_string());
+    let live = crate::live_dynamic_imports(&list, &cfg).expect("in bound");
+    assert!(
+        live.contains(&("main.ts".to_string(), "./e.js".to_string())),
+        "{live:?}"
+    );
+    assert!(
+        live.contains(&("b.ts".to_string(), "./c.js".to_string())),
+        "{live:?}"
+    );
+}

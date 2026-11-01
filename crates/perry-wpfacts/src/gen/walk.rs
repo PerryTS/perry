@@ -77,22 +77,7 @@ impl<'a> Gen<'a> {
         let mut succ: Vec<Vec<u32>> = vec![Vec::new(); n];
         for mi in 0..n {
             let imports = self.imports_of(mi);
-            let path = self.modules[mi].0;
-            // A re-export source as the compile driver resolved it
-            // (`export_sources`), else through an import of the same source.
-            let target = |source: &str| {
-                self.export_sources
-                    .get(path)
-                    .and_then(|m| m.get(source))
-                    .and_then(|r| self.path_index.get(r).copied())
-                    .or_else(|| {
-                        imports
-                            .iter()
-                            .find(|i| i.source == source)
-                            .and_then(|i| i.resolved_path.as_ref())
-                            .and_then(|r| self.path_index.get(r).copied())
-                    })
-            };
+            let target = |source: &str| self.reexport_target(mi as u32, source);
             for i in &imports {
                 if i.type_only || i.runtime_erased {
                     continue;
@@ -156,8 +141,26 @@ impl<'a> Gen<'a> {
         (0..n as u32).filter(|&m| !eager[m as usize]).collect()
     }
 
+    /// A re-export source of module `mi` as the compile driver resolved it
+    /// (`export_sources`), else through an import of the same source.
+    fn reexport_target(&self, mi: u32, source: &str) -> Option<u32> {
+        let path = self.modules[mi as usize].0;
+        self.export_sources
+            .get(path)
+            .and_then(|m| m.get(source))
+            .and_then(|r| self.path_index.get(r).copied())
+            .or_else(|| {
+                self.imports_of(mi as usize)
+                    .iter()
+                    .find(|i| i.source == source)
+                    .and_then(|i| i.resolved_path.as_ref())
+                    .and_then(|r| self.path_index.get(r).copied())
+            })
+    }
+
     /// The body of module `mi`: its globals, top-level statements, functions
-    /// and classes. A module it loads statically loads with it.
+    /// and classes. A module it loads statically, by an import or a
+    /// re-export, loads with it (`dynamic_only_modules` counts both).
     pub(crate) fn walk_module(&mut self, mi: u32, init_fn: FnIdx) {
         if !self.dynamic_only.is_empty() {
             for i in self.imports_of(mi as usize) {
@@ -172,6 +175,24 @@ impl<'a> Gen<'a> {
                     let f = self.init_fn_of[&t];
                     self.m.activate(f, "import");
                 }
+            }
+            let sources: Vec<u32> = self.modules[mi as usize]
+                .1
+                .exports
+                .iter()
+                .filter_map(|e| match e {
+                    perry_hir::Export::ReExport { source, .. }
+                    | perry_hir::Export::ExportAll { source }
+                    | perry_hir::Export::NamespaceReExport { source, .. } => {
+                        self.reexport_target(mi, source)
+                    }
+                    perry_hir::Export::Named { .. } => None,
+                })
+                .filter(|t| self.dynamic_only.contains(t))
+                .collect();
+            for t in sources {
+                let f = self.init_fn_of[&t];
+                self.m.activate(f, "import");
             }
         }
         self.m.note_walked(init_fn);
