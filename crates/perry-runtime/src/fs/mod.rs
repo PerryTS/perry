@@ -74,7 +74,8 @@ pub(crate) const CLASS_ID_FS_FILEHANDLE: u32 = 0xFFFF_008C;
 /// `fs::File`s and closes them when an entry is dropped (`closeSync`, thread
 /// teardown), and that must never take the process's actual stdout with it.
 /// The duplicate shares the open file description, so reads and writes land on
-/// the same terminal/pipe.
+/// the same terminal/pipe. The duplicate is close-on-exec so spawned children
+/// (detached ones included) never inherit extra copies of the parent's stdio.
 fn std_fd_registry() -> StdHashMap<i32, fs::File> {
     #[allow(unused_mut)] // populated only by the Unix descriptor-duplication arm
     let mut map = StdHashMap::new();
@@ -82,9 +83,10 @@ fn std_fd_registry() -> StdHashMap<i32, fs::File> {
     {
         use std::os::fd::FromRawFd;
         for fd in 0..=2 {
-            // SAFETY: `dup` returns a fresh descriptor we exclusively own, so
-            // handing it to `File` (which closes on drop) cannot double-close.
-            let duped = unsafe { libc::dup(fd) };
+            // SAFETY: `F_DUPFD_CLOEXEC` returns a fresh descriptor we
+            // exclusively own, so handing it to `File` (which closes on drop)
+            // cannot double-close.
+            let duped = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0) };
             if duped >= 0 {
                 map.insert(fd, unsafe { fs::File::from_raw_fd(duped) });
             }

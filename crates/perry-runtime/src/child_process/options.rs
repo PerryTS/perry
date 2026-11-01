@@ -359,7 +359,7 @@ pub(crate) fn cp_stdio_from_fd(fd: i32) -> Stdio {
         return Stdio::from(file);
     }
 
-    let dup_fd = unsafe { libc::dup(fd) };
+    let dup_fd = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0) };
     if dup_fd < 0 {
         return Stdio::null();
     }
