@@ -3,7 +3,7 @@
 //! from the original instance, preserving nominal identity across interfaces.
 use crate::guest_c::facade::Plan;
 use anyhow::{ensure, Context, Result};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use wac_graph::{
     types::{ItemKind, Package},
     CompositionGraph, EncodeOptions, NodeId,
@@ -29,19 +29,52 @@ pub fn compose_experimental_guest(producer: &[u8], facade: &[u8], plan: &[u8]) -
     let mut graph = CompositionGraph::new();
     let package = Package::from_bytes("perry:producer", None, producer, graph.types_mut())?;
     let original_exports = graph.types()[package.ty()].exports.clone();
+    let original_imports = graph.types()[package.ty()]
+        .imports
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let mut planned = BTreeSet::new();
+    for forward in &plan.forwards {
+        ensure!(
+            planned.insert((&forward.interface, &forward.function)),
+            "Duplicate synchronous facade function"
+        );
+    }
     ensure!(
         original_exports.contains_key(&plan.actor) && original_exports.contains_key(&plan.signal),
         "Missing generated producer actor"
     );
     let producer = graph.register_package(package)?;
     let package = Package::from_bytes("perry:facade", None, facade, graph.types_mut())?;
+    let facade_imports = graph.types()[package.ty()]
+        .imports
+        .keys()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
     let facade = graph.register_package(package)?;
+    let mut bound = BTreeSet::new();
+    for binding in &plan.imports {
+        ensure!(
+            bound.insert(&binding.local),
+            "Duplicate facade import binding"
+        );
+    }
+    for name in &facade_imports {
+        ensure!(
+            bound.contains(name) || original_imports.contains(name),
+            "Unbound private facade import: {name}"
+        );
+    }
     let producer = graph.instantiate(producer);
     let facade = graph.instantiate(facade);
     // Bind original interfaces first: later root function signatures can refer
     // to their nominal resource aliases.
     for interface_pass in [true, false] {
         for binding in &plan.imports {
+            if !facade_imports.contains(&binding.local) {
+                continue;
+            }
             let ty = original_exports
                 .get(&binding.original)
                 .context("Missing original facade import")?;
@@ -52,6 +85,7 @@ pub fn compose_experimental_guest(producer: &[u8], facade: &[u8], plan: &[u8]) -
             graph.set_instantiation_argument(facade, &binding.local, value)?;
         }
     }
+    let forwarding = graph.alias_instance_export(facade, &plan.forward_interface)?;
     let mut temporary = HashMap::<NodeId, String>::new();
     fn expose(
         graph: &mut CompositionGraph,
@@ -67,6 +101,7 @@ pub fn compose_experimental_guest(producer: &[u8], facade: &[u8], plan: &[u8]) -
         Ok(name)
     }
     let mut exports = Vec::new();
+    let mut forwarded_count = 0;
     for (name, kind) in original_exports {
         if name == plan.actor || name == plan.signal {
             continue;
@@ -80,12 +115,18 @@ pub fn compose_experimental_guest(producer: &[u8], facade: &[u8], plan: &[u8]) -
                 .collect::<Vec<_>>();
             let mut members = Vec::new();
             for field in fields {
-                let node = if let Some(forward) = plan
+                let forward = plan
                     .forwards
                     .iter()
-                    .find(|f| f.interface == name && f.function == field)
-                {
-                    graph.alias_instance_export(facade, &forward.export)?
+                    .find(|f| f.interface == name && f.function == field);
+                let synchronous = matches!(graph.types()[id].exports[&field], ItemKind::Func(f) if !graph.types()[f].is_async);
+                ensure!(
+                    forward.is_some() == synchronous,
+                    "Missing or invalid synchronous facade function: {name}/{field}"
+                );
+                let node = if let Some(forward) = forward {
+                    forwarded_count += 1;
+                    graph.alias_instance_export(forwarding, &forward.export)?
                 } else {
                     graph.alias_instance_export(original, &field)?
                 };
@@ -97,12 +138,18 @@ pub fn compose_experimental_guest(producer: &[u8], facade: &[u8], plan: &[u8]) -
                 item: String::new(),
             });
         } else {
-            let node = if let Some(forward) = plan
+            let forward = plan
                 .forwards
                 .iter()
-                .find(|f| f.interface.is_empty() && f.function == name)
-            {
-                graph.alias_instance_export(facade, &forward.export)?
+                .find(|f| f.interface.is_empty() && f.function == name);
+            let synchronous = matches!(kind, ItemKind::Func(f) if !graph.types()[f].is_async);
+            ensure!(
+                forward.is_some() == synchronous,
+                "Missing or invalid synchronous facade function: {name}"
+            );
+            let node = if let Some(forward) = forward {
+                forwarded_count += 1;
+                graph.alias_instance_export(forwarding, &forward.export)?
             } else {
                 original
             };
@@ -113,6 +160,10 @@ pub fn compose_experimental_guest(producer: &[u8], facade: &[u8], plan: &[u8]) -
             });
         }
     }
+    ensure!(
+        forwarded_count == plan.forwards.len(),
+        "Unknown synchronous facade function"
+    );
     let encoded = graph.encode(EncodeOptions::default())?;
     publish(&encoded, &exports)
 }

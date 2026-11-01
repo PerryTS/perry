@@ -22,16 +22,23 @@ fn sibling_facade_rebuilds_public_interfaces_without_replacing_their_resource_id
         (import "source" (instance $api (type $api)))
         (import "kick" (func async))
         (alias export $api "make" (func $make))
-        (export "forward" (func $make)))"#
+        (instance $forward (export "forward" (func $make)))
+        (export "forwarder" (instance $forward)))"#
     ))
     .unwrap();
     let plan = serde_json::to_vec(&serde_json::json!({
-        "schema_version":1, "actor":"actor", "signal":"signal",
+        "schema_version":1, "actor":"actor", "signal":"signal", "forward_interface":"forwarder",
         "imports":[{"local":"source","original":"api"},{"local":"kick","original":"actor"}],
         "forwards":[{"interface":"api","function":"make","export":"forward"}]
     }))
     .unwrap();
     let bytes = compose_experimental_guest(&producer, &facade, &plan).unwrap();
+    let mut missing: serde_json::Value = serde_json::from_slice(&plan).unwrap();
+    missing["forwards"] = serde_json::json!([]);
+    let error =
+        compose_experimental_guest(&producer, &facade, &serde_json::to_vec(&missing).unwrap())
+            .unwrap_err();
+    assert!(error.to_string().contains("synchronous facade function"));
     let mut types = Types::default();
     let package = Package::from_bytes("test:composed", None, bytes, &mut types).unwrap();
     let exports = &types[package.ty()].exports;

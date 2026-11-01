@@ -5,6 +5,7 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 #[cfg(test)]
 mod tests;
+mod types;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Forward {
@@ -19,6 +20,7 @@ pub(crate) struct Plan {
     pub signal: String,
     pub forwards: Vec<Forward>,
     pub imports: Vec<Binding>,
+    pub forward_interface: String,
 }
 #[derive(Serialize, Deserialize)]
 pub(crate) struct Binding {
@@ -41,35 +43,81 @@ pub(super) fn generate(
         .retain(|_, item| !matches!(item, WorldItem::Function(_)));
     // Types imported by the original remain shared imports. Public interfaces
     // become imports here, so their exported resources retain their identity.
-    let mut imports = Vec::new();
-    let mut renamed = BTreeMap::new();
-    for (key, item) in &original.exports {
-        if resolve.name_world_key(key) != anchor {
-            let mut n = imports.len();
-            let local = loop {
-                let local = format!("perry-source-{n}");
-                if !facade.imports.contains_key(&WorldKey::Name(local.clone())) {
-                    break local;
-                }
-                n += 1;
-            };
-            let mut item = item.clone();
-            if let WorldItem::Function(function) = &mut item {
-                function.name = local.clone();
+    let sources = original
+        .exports
+        .iter()
+        .map(|(key, item)| (key.clone(), resolve.name_world_key(key), item.clone()))
+        .collect::<Vec<_>>();
+    // Give exported source interfaces private canonical names in this clone.
+    // This keeps distinct input/output resource interfaces from colliding when
+    // the private forwarding interface imports both of them.
+    for (_, _, item) in &sources {
+        if let WorldItem::Interface { id, .. } = item {
+            if resolve.interfaces[*id].clone_of.is_none() {
+                continue;
             }
-            let original = resolve.name_world_key(key);
-            renamed.insert(original.clone(), WorldKey::Name(local.clone()));
-            facade.imports.insert(WorldKey::Name(local.clone()), item);
-            imports.push(Binding { local, original });
+            let old = resolve.interfaces[*id].name.clone();
+            let package = resolve.interfaces[*id].package.unwrap();
+            if let Some(old) = old {
+                if resolve.packages[package].interfaces.get(&old) == Some(id) {
+                    resolve.packages[package].interfaces.shift_remove(&old);
+                }
+            }
+            let name = format!("perry-producer-source-{}", id.index());
+            resolve.packages[package]
+                .interfaces
+                .insert(name.clone(), *id);
+            resolve.interfaces[*id].name = Some(name);
+            resolve.interfaces[*id].clone_of = None;
         }
     }
+    let mut imports = Vec::new();
+    let mut renamed = BTreeMap::new();
+    for (_, original_name, item) in &sources {
+        if original_name == anchor {
+            continue;
+        }
+        let key = if let WorldItem::Interface { id, .. } = item {
+            WorldKey::Interface(*id)
+        } else {
+            let mut n = imports.len();
+            loop {
+                let key = WorldKey::Name(format!("perry-source-{n}"));
+                if !facade.imports.contains_key(&key) {
+                    break key;
+                }
+                n += 1;
+            }
+        };
+        let local = resolve.name_world_key(&key);
+        let mut item = item.clone();
+        if let WorldItem::Function(function) = &mut item {
+            function.name = local.clone();
+        }
+        renamed.insert(original_name.clone(), key.clone());
+        facade.imports.insert(key, item);
+        imports.push(Binding {
+            local,
+            original: original_name.clone(),
+        });
+    }
+    let forwarding = resolve.interfaces.alloc(wit_parser::Interface {
+        name: None,
+        types: Default::default(),
+        functions: Default::default(),
+        docs: Default::default(),
+        stability: Default::default(),
+        package: original.package,
+        span: Default::default(),
+        clone_of: None,
+    });
+    let forward_interface = "perry-producer-forward".to_string();
+    let forward_key = WorldKey::Name(forward_interface.clone());
+    let mut mapped = BTreeMap::new();
     let actor = asynchronous::actor_name(anchor);
     let mut entries = Vec::new();
     for interface in &public.exports {
-        let key = original
-            .exports
-            .keys()
-            .find(|key| resolve.name_world_key(key) == interface.name);
+        let source_interface = sources.iter().find(|(_, name, _)| name == &interface.name);
         for function in interface.functions.iter().filter(|f| !f.async_) {
             let (key, source) = if interface.name.is_empty() {
                 let local = &renamed[&function.name];
@@ -78,8 +126,8 @@ pub(super) fn generate(
                 };
                 (None, source.clone())
             } else {
-                let key = key.expect("public interface");
-                let WorldItem::Interface { id, .. } = &original.exports[key] else {
+                let (_, _, item) = source_interface.expect("public interface");
+                let WorldItem::Interface { id, .. } = item else {
                     unreachable!()
                 };
                 (
@@ -91,10 +139,16 @@ pub(super) fn generate(
             let mut forwarded = source.clone();
             forwarded.name = export.clone();
             forwarded.kind = wit_parser::FunctionKind::Freestanding;
-            facade.exports.insert(
-                WorldKey::Name(export.clone()),
-                WorldItem::Function(forwarded.clone()),
-            );
+            for param in &mut forwarded.params {
+                param.ty = types::remap(&mut resolve, forwarding, &mut mapped, param.ty)?;
+            }
+            forwarded.result = forwarded
+                .result
+                .map(|ty| types::remap(&mut resolve, forwarding, &mut mapped, ty))
+                .transpose()?;
+            resolve.interfaces[forwarding]
+                .functions
+                .insert(export.clone(), forwarded.clone());
             entries.push((
                 Forward {
                     interface: interface.name.clone(),
@@ -110,7 +164,22 @@ pub(super) fn generate(
     // Keep the selected world ID and package in this private Resolve clone.
     // Root types belong to that world, and metadata encoding requires both
     // their owner and the package's world mapping to remain valid.
+    facade.imports.insert(
+        forward_key.clone(),
+        WorldItem::Interface {
+            id: forwarding,
+            stability: Default::default(),
+            docs: Default::default(),
+            span: Default::default(),
+            external_id: None,
+        },
+    );
     resolve.worlds[world] = facade;
+    resolve.exportize(
+        world,
+        Some(original.name.clone()),
+        Some(&|key, _| key == &forward_key),
+    )?;
     let facade_id = world;
     let mut files = Files::default();
     wit_bindgen_c::Opts {
@@ -142,16 +211,25 @@ pub(super) fn generate(
         }
     }
     let mut live = LiveTypes::default();
-    live.add_world(&resolve, facade_id);
+    for item in resolve.worlds[facade_id].imports.values() {
+        match item {
+            WorldItem::Type { id, .. } => live.add_type_id(&resolve, *id),
+            WorldItem::Function(f) => live.add_func(&resolve, f),
+            WorldItem::Interface { .. } => {}
+        }
+    }
     generator.define(live, None, true);
-    let emitter = values::Emitter::new(
+    let mut live = LiveTypes::default();
+    live.add_interface(&resolve, forwarding);
+    generator.define(live, Some((forwarding, &forward_key)), false);
+    let mut emitter = values::Emitter::new(
         &resolve,
         &generator.names,
         &generator.resources,
         &generator.endpoints,
         &world_name,
     );
-    let mut source = String::from("#include \"perry_producer_facade.h\"\n");
+    let mut source = String::from("#include \"perry_producer_facade.h\"\n#include <string.h>\n");
     let WorldItem::Function(actor_function) = &resolve.worlds[facade_id].imports[&renamed[&actor]]
     else {
         unreachable!()
@@ -170,7 +248,7 @@ pub(super) fn generate(
             false,
             &resolve,
             &world_name,
-            None,
+            Some(&forward_key),
             forwarded,
             &HashMap::new(),
         );
@@ -188,18 +266,17 @@ pub(super) fn generate(
         let result = forwarded.result.map(|ty| emitter.ctype(ty));
         let mut params = Vec::new();
         let mut args = Vec::new();
-        for (n, param) in forwarded.params.iter().enumerate() {
-            let pointer = if wit_bindgen_c::is_arg_by_pointer(&resolve, &param.ty) {
-                "*"
-            } else {
-                ""
-            };
-            params.push(format!("{} {pointer}arg{n}", emitter.ctype(param.ty)));
-            args.push(format!("arg{n}"));
+        let mut conversion = String::new();
+        for (n, (param, original)) in forwarded.params.iter().zip(&original.params).enumerate() {
+            let pointer = wit_bindgen_c::is_arg_by_pointer(&resolve, &param.ty);
+            let ty = emitter.ctype(param.ty);
+            let native = emitter.ctype(original.ty);
+            params.push(format!("{ty} {}arg{n}", if pointer { "*" } else { "" }));
+            writeln!(conversion, "_Static_assert(sizeof({ty}) == sizeof({native}) && _Alignof({ty}) == _Alignof({native}), \"Facade ABI mismatch\");\n{native} native{n};\nmemcpy(&native{n}, {}arg{n}, sizeof(native{n}));", if pointer { "" } else { "&" })?;
+            args.push(format!("{}native{n}", if pointer { "&" } else { "" }));
         }
         if indirect {
             params.push(format!("{} *result", result.as_ref().unwrap()));
-            args.push("result".into());
         }
         if params.is_empty() {
             params.push("void".into());
@@ -209,15 +286,36 @@ pub(super) fn generate(
         } else {
             result.as_deref().unwrap_or("void")
         };
-        writeln!(source, "{ret} {name}({}) {{", params.join(", "))?;
+        writeln!(
+            source,
+            "{ret} {name}({}) {{\n{conversion}",
+            params.join(", ")
+        )?;
+        let native_result = original.result.map(|ty| emitter.ctype(ty));
+        if let Some(ty) = &native_result {
+            writeln!(source, "{ty} native_result;")?;
+            if indirect {
+                args.push("&native_result".into());
+            }
+        }
         if result.is_some() && !indirect {
-            writeln!(source, "{ret} result = {target}({});", args.join(", "))?;
+            writeln!(source, "native_result = {target}({});", args.join(", "))?;
         } else {
             writeln!(source, "{target}({});", args.join(", "))?;
         }
+        for (n, param) in original.params.iter().enumerate() {
+            emitter.free(param.ty, &format!("&native{n}"));
+        }
+        source.push_str(&std::mem::take(&mut emitter.source));
         writeln!(source, "{world_name}_subtask_status_t status = {kick}();\nif ({upper}_SUBTASK_STATE(status) != {upper}_SUBTASK_RETURNED) __builtin_trap();\n{world_name}_subtask_t task = {upper}_SUBTASK_HANDLE(status);\nif (task) {world_name}_subtask_drop(task);")?;
-        if result.is_some() && !indirect {
-            source.push_str("return result;\n");
+        if let Some(ty) = &result {
+            let native = native_result.as_ref().unwrap();
+            writeln!(source, "_Static_assert(sizeof({ty}) == sizeof({native}) && _Alignof({ty}) == _Alignof({native}), \"Facade result ABI mismatch\");")?;
+            if indirect {
+                source.push_str("memcpy(result, &native_result, sizeof(native_result));\n");
+            } else {
+                writeln!(source, "{ty} result;\nmemcpy(&result, &native_result, sizeof(result));\nreturn result;")?;
+            }
         }
         source.push_str("}\n");
     }
@@ -251,6 +349,7 @@ pub(super) fn generate(
             .map(|(forward, _, _, _)| forward)
             .collect(),
         imports,
+        forward_interface,
     };
     output.insert(
         "perry_producer_facade.json".into(),
