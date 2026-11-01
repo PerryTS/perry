@@ -54,6 +54,7 @@ mod run_once_closed;
 mod regexp_exec;
 mod runtime_helpers;
 mod summary;
+mod typed_array_exact;
 mod super_heritage;
 mod unit_alias;
 mod unit_cjs;
