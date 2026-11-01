@@ -306,7 +306,7 @@ impl Generator<'_> {
         )?;
         self.source.push_str("static const perry_guest_ops perry_ops = {2, sizeof(perry_guest_ops), perry_contract, sizeof(perry_contract), perry_import, perry_resource};\n");
         if !self.endpoint_operations.is_empty() {
-            self.source.push_str("static void perry_endpoint_install(void) { if (!js_component_set_guest_endpoint_ops(&perry_endpoint_ops)) __builtin_trap(); }\n");
+            self.source.push_str("static void perry_endpoint_install(void) { if (!js_component_set_guest_endpoint_ops(&perry_endpoint_ops) || !js_component_set_guest_producer_ops(&perry_producer_ops)) __builtin_trap(); }\n");
         } else {
             self.source
                 .push_str("static void perry_endpoint_install(void) {}\n");
@@ -385,6 +385,7 @@ static void *perry_initialize(void) {
                     // is active. Exported interfaces deliberately prune and
                     // rebuild these maps; readers retain the emitted C code.
                     self.reader_adapter(ty, id, &name)?;
+                    self.writer_adapter(ty, id, &name)?;
                     self.endpoint_operations.insert(ty, name);
                 }
             }

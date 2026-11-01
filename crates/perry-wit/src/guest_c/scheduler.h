@@ -3,7 +3,7 @@ typedef struct perry_task perry_task;
 typedef struct perry_io {
     void *frame;
     struct perry_io *next;
-    uint32_t type, reader;
+    uint32_t type, reader, operation;
     $W_event_code_t event;
     $W_waitable_status_t status;
     bool complete, cancelled, claimed, joined;
@@ -147,7 +147,8 @@ static void perry_io_sweep(perry_task *t) {
 static void perry_io_close(uint32_t type, uint32_t reader) {
     for (perry_task *t = perry_tasks; t; t = t->next) {
         for (perry_io *io = t->io; io; io = io->next) {
-            if (io->complete || io->cancelled || io->type != type || io->reader != reader) continue;
+            if (io->complete || io->cancelled || io->type != type || io->reader != reader ||
+                (io->event != $U_EVENT_STREAM_READ && io->event != $U_EVENT_FUTURE_READ)) continue;
             perry_io_cancel(t, io);
             return;
         }
@@ -232,7 +233,8 @@ static void perry_child_complete(void *pointer) {
 }
 static void perry_task_event(perry_task *t, $W_event_t *event) {
     perry_require(t && t->waiting);
-    if (event->event == $U_EVENT_STREAM_READ || event->event == $U_EVENT_FUTURE_READ) {
+    if (event->event == $U_EVENT_STREAM_READ || event->event == $U_EVENT_FUTURE_READ ||
+        event->event == $U_EVENT_STREAM_WRITE || event->event == $U_EVENT_FUTURE_WRITE) {
         for (perry_io *io = t->io; io; io = io->next) {
             if (io->complete || !io->joined || io->reader != event->waitable || io->event != event->event) continue;
             $W_waitable_join(io->reader, 0);

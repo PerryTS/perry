@@ -10,6 +10,116 @@ struct Typescript<'a> {
 }
 
 impl Typescript<'_> {
+    fn guest_producers(&self, out: &mut String) {
+        fn reachable<'a>(
+            world: &'a World,
+            ty: &'a Type,
+            keys: &mut std::collections::BTreeSet<&'a str>,
+        ) {
+            match ty {
+                Type::Ref(key) => {
+                    if keys.insert(key) {
+                        reachable(world, &world.types[key].ty, keys);
+                    }
+                }
+                Type::Record(fields) => {
+                    for field in fields {
+                        reachable(world, &field.ty, keys);
+                    }
+                }
+                Type::Tuple(types) => {
+                    for ty in types {
+                        reachable(world, ty, keys);
+                    }
+                }
+                Type::Variant(cases) => {
+                    for case in cases {
+                        if let Some(ty) = &case.ty {
+                            reachable(world, ty, keys);
+                        }
+                    }
+                }
+                Type::Result { ok, err } => {
+                    for ty in ok.iter().chain(err) {
+                        reachable(world, ty, keys);
+                    }
+                }
+                Type::Option(ty) | Type::List(ty) => reachable(world, ty, keys),
+                Type::Future(ty) | Type::Stream(ty) => {
+                    if let Some(ty) = ty {
+                        reachable(world, ty, keys);
+                    }
+                }
+                Type::Bool
+                | Type::U8
+                | Type::U16
+                | Type::U32
+                | Type::U64
+                | Type::S8
+                | Type::S16
+                | Type::S32
+                | Type::S64
+                | Type::F32
+                | Type::F64
+                | Type::Char
+                | Type::String
+                | Type::Flags(_)
+                | Type::Enum(_)
+                | Type::Resource
+                | Type::Own(_)
+                | Type::Borrow(_) => {}
+            }
+        }
+        let mut keys = std::collections::BTreeSet::new();
+        for function in self
+            .world
+            .imports
+            .iter()
+            .chain(&self.world.exports)
+            .flat_map(|interface| &interface.functions)
+        {
+            for ty in function
+                .params
+                .iter()
+                .map(|field| &field.ty)
+                .chain(function.result.iter())
+            {
+                reachable(self.world, ty, &mut keys);
+            }
+        }
+        out.push_str("\n// Synchronous canonical factories; writers remain in this guest instance.\nexport const asyncTypes = {\n");
+        for key in keys {
+            let definition = &self.world.types[key];
+            let (kind, inner) = match &definition.ty {
+                Type::Future(inner) => ("future", inner),
+                Type::Stream(inner) => ("stream", inner),
+                _ => continue,
+            };
+            let payload = inner
+                .as_deref()
+                .map_or_else(|| "void".to_string(), |ty| self.ty(ty));
+            let chunk = if inner.as_deref().is_some_and(|ty| self.is_byte(ty)) {
+                "Uint8Array".to_string()
+            } else {
+                format!("Array<{payload}>")
+            };
+            let reader = if kind == "future" {
+                format!("ComponentFuture<{payload}>")
+            } else {
+                format!("ComponentStream<{payload}, {chunk}>")
+            };
+            let writer = if kind == "future" {
+                format!("ComponentFutureWriter<{payload}>")
+            } else {
+                format!("ComponentStreamWriter<{payload}, {chunk}>")
+            };
+            let result = format!("{{ kind: \"{kind}\"; value: {reader}; writer: {writer}; }}");
+            let schema = serde_json::to_string(&definition.ty).unwrap();
+            writeln!(out, "  {}: {{ kind: \"{kind}\", type: {}, schema: {}, create: (): {result} => createComponentAsyncValue({}) as {result} }},", quoted(&self.alias(key)), quoted(key), quoted(&schema), quoted(key)).unwrap();
+        }
+        out.push_str("};\n");
+    }
+
     fn alias(&self, key: &str) -> String {
         let name = &self.world.types[key].name;
         let suffix: String = name
@@ -274,10 +384,10 @@ fn generate(world: &World, guest: bool) -> String {
     let mut out = String::from("// Generated from WIT by perry-wit. Do not edit.\n");
     if guest {
         out.push_str(
-            "import { registerComponentExports, callComponentImport, createComponentResource, getComponentResourceValue } from \"perry/component\";\n",
+            "import { registerComponentExports, callComponentImport, createComponentResource, getComponentResourceValue, createComponentAsyncValue } from \"perry/component\";\n",
         );
         out.push_str(
-            "import type { OwnedResource, BorrowedResource, ComponentFuture, ComponentStream } from \"perry/component\";\n\n",
+            "import type { OwnedResource, BorrowedResource, ComponentFuture, ComponentStream, ComponentFutureWriter, ComponentStreamWriter } from \"perry/component\";\n\n",
         );
     } else {
         out.push_str(
@@ -331,6 +441,7 @@ fn generate(world: &World, guest: bool) -> String {
             out.push_str("  },\n");
         }
         out.push_str("};\n");
+        generator.guest_producers(&mut out);
     } else {
         generator.interface(
             &mut out,

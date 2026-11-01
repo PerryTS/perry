@@ -62,7 +62,12 @@ pub(super) fn add_wake_anchor(resolve: &mut Resolve, id: WorldId) -> Result<Stri
 }
 
 pub(super) fn scheduler(world: &str, anchor: &str, signal: &str) -> String {
-    include_str!("scheduler.h")
+    let source = format!(
+        "{}\n{}",
+        include_str!("scheduler.h"),
+        include_str!("endpoints/producer.h")
+    );
+    source
         .replace("$W", world)
         .replace("$S", signal)
         .replace("$U", &world.to_uppercase())

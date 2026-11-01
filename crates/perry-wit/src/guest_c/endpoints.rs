@@ -3,6 +3,7 @@ use super::*;
 #[cfg(all(test, target_os = "linux"))]
 mod custody_tests;
 mod read;
+mod write;
 
 impl Generator<'_> {
     pub(super) fn endpoint_adapters(&mut self) -> Result<()> {
@@ -19,6 +20,20 @@ impl Generator<'_> {
             )?;
         }
         self.source.push_str("default: perry_bad(f, \"Unknown guest endpoint type\"); return -1;\n}\n}\nstatic const perry_guest_endpoint_ops perry_endpoint_ops = {1, sizeof(perry_guest_endpoint_ops), perry_endpoint_operation};\n");
+        self.source.push_str(
+            "static uint32_t perry_producer_create(void *f, uint32_t type) {\nswitch (type) {\n",
+        );
+        for ty in self.endpoint_operations.keys() {
+            writeln!(self.source, "case {ty}: return perry_new_{ty}(f);")?;
+        }
+        self.source.push_str("default: perry_bad(f, \"Unknown guest producer type\"); return 0;\n}\n}\nstatic int32_t perry_producer_write(void *f, uint32_t type, uint32_t handle, uint32_t operation, uint32_t input) {\nswitch (type) {\n");
+        for ty in self.endpoint_operations.keys() {
+            writeln!(
+                self.source,
+                "case {ty}: return perry_write_{ty}_start(f, handle, operation, input);"
+            )?;
+        }
+        self.source.push_str("default: perry_bad(f, \"Unknown guest producer type\"); return -1;\n}\n}\nstatic const perry_guest_producer_ops perry_producer_ops = {1, sizeof(perry_guest_producer_ops), perry_producer_create, perry_producer_write, perry_producer_notify};\n");
         self.source.push_str("static bool perry_endpoint_flushing;\nstatic void perry_endpoint_flush(void) {\nif (perry_endpoint_flushing) return;\nperry_endpoint_flushing = true;\nfor (perry_task *t = perry_tasks; t; t = t->next) perry_io_sweep(t);\nvoid *f = perry_component_frame_new();\nuint32_t type = 0, handle = 0;\nint32_t status;\nwhile ((status = perry_component_frame_endpoint_pop(f, &type, &handle)) > 0) {\nperry_io_close(type, handle);\nswitch (type) {\n");
         for (ty, name) in &self.endpoint_operations {
             let key = format!("{}{}", if ty & 1 == 0 { 't' } else { 'e' }, ty / 2);
@@ -32,7 +47,7 @@ impl Generator<'_> {
                 "case {ty}: {stem}_drop_readable(handle); break;"
             )?;
         }
-        self.source.push_str("default: __builtin_trap();\n}\n}\nperry_component_frame_drop(f);\nif (status < 0) __builtin_trap();\nperry_endpoint_flushing = false;\n}\n");
+        self.source.push_str("default: __builtin_trap();\n}\nperry_producer_reader_dropped(type, handle);\n}\nperry_component_frame_drop(f);\nif (status < 0) __builtin_trap();\nperry_producer_flush();\nperry_endpoint_flushing = false;\n}\n");
         Ok(())
     }
 }

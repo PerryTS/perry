@@ -115,7 +115,7 @@ impl Generator<'_> {
     }
 }
 
-fn is_byte(resolve: &Resolve, ty: Type) -> bool {
+pub(super) fn is_byte(resolve: &Resolve, ty: Type) -> bool {
     match ty {
         Type::U8 => true,
         Type::Id(id) => match resolve.types[id].kind {

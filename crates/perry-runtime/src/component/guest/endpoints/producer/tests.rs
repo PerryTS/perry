@@ -168,7 +168,8 @@ fn guest_write_commit_drops_input_expando_cycles_and_old_retirement_cannot_clear
     let scope = RuntimeHandleScope::new();
     let _registry = Registry::new(&scope);
     unsafe {
-        (*context::get(super::super::super::registry())).world["types"]["t0"]["ty"]["value"] =
+        let context = &mut *context::get(super::super::super::registry());
+        context.world["types"]["t0"]["ty"]["value"] =
             serde_json::json!({"kind":"record","value":[{"name":"value","ty":{"kind":"u32"}}]});
     }
     let pair = scope.root_nanbox_f64(factory("t0"));
