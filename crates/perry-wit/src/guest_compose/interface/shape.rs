@@ -2,7 +2,7 @@
 //! Only the schema's local type indices change when outer aliases are added.
 use super::*;
 use wasm_encoder::{
-    reencode::{Reencode, ReencodeComponent, RoundtripReencoder},
+    reencode::{Reencode, ReencodeComponent},
     Alias, ComponentOuterAliasKind, ComponentTypeRef, ComponentTypeSection, InstanceType,
     TypeBounds,
 };
@@ -24,7 +24,7 @@ impl ReencodeComponent for Indices {
     }
 }
 
-pub(super) fn bind_shape(
+pub(in super::super) fn bind_shape(
     shape: &InstanceType,
     resources: &BTreeMap<String, u32>,
 ) -> Result<InstanceType> {
@@ -87,8 +87,5 @@ pub(super) fn bind_shape(
         used.len() == resources.len(),
         "Unused producer resource binding"
     );
-    // Keep the trait's standard primitive conversions linked independently of
-    // our index mapping; no custom ABI representation is introduced here.
-    let _ = RoundtripReencoder;
     Ok(output)
 }
