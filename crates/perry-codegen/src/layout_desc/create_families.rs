@@ -24,26 +24,28 @@ use crate::expr::FnCtx;
 use crate::rooting::{self, Repr};
 use crate::types::{DOUBLE, I32, I64, I8, PTR};
 
+mod emission;
 mod models;
 mod site;
-mod emission;
 
 pub(crate) use emission::{
     after_stmt, before_stmt, emission, emit_holder_load, lower_add, lower_assign, lower_binding,
     lower_create, lower_holder_read, ImageDesc,
 };
 
-pub(crate) use site::{add_site, create_site, holder_read, site};
 use site::literal_add_site;
+pub(crate) use site::{add_site, create_site, holder_read, site};
 
+use models::{exportable, plain_data};
 pub(crate) use models::{Add, Create, CreateState, HolderRead, Site};
 pub use models::{ExportFact, ImageEntry, ImageKey, ProtoExports};
-use models::{exportable, plain_data};
 use models::{ACCESSOR, HAS_GET, HAS_SET, NON_CONFIGURABLE, NON_ENUMERABLE, NON_WRITABLE};
 
 mod proto_exports;
 use proto_exports::program_exports;
-pub use proto_exports::{program_proto_exports, program_proto_exports_key, set_program_proto_exports};
+pub use proto_exports::{
+    program_proto_exports, program_proto_exports_key, set_program_proto_exports,
+};
 
 /// What a prototype binding's initializer makes (§3.6): which keys of the
 /// object are, or may be, accessors or non-writable, and its [[Prototype]].
@@ -617,9 +619,6 @@ fn binding_family(m: &ModuleCreateFamilies, a: u32, p: u32, rest: &[Stmt]) -> Op
     })
 }
 
-
-
-
 /// The most keys one binding's family holds.
 const MAX_CREATE_KEYS: usize = 16;
 
@@ -1065,5 +1064,3 @@ fn static_store(e: &Expr) -> Option<(u32, &str)> {
         _ => None,
     }
 }
-
-

@@ -356,8 +356,8 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
     // iteration facts for every program (the for-of gap tests that replace
     // an iterator, `next` or `return` must fail).
     let iteration_sabotage = pf.sabotage.as_deref() == Some("array-iteration-unwritten");
-    out.array_iteration_unwritten = iteration_sabotage
-        || (pf.interp_guard.is_none() && pf.array_iteration_written.is_none());
+    out.array_iteration_unwritten =
+        iteration_sabotage || (pf.interp_guard.is_none() && pf.array_iteration_written.is_none());
     out.array_iterator_close_unwritten = iteration_sabotage
         || (pf.interp_guard.is_none() && pf.array_iterator_close_written.is_none());
     let Some(mb) = pf.bindings_for(path) else {

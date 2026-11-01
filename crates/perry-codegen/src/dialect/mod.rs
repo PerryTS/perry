@@ -312,7 +312,11 @@ fn parse_header(header: &str) -> Result<ParsedHeader> {
     if let Some(pos) = attr_str.find("section \"") {
         let tail = attr_str[pos..].to_string();
         attr_str = attr_str[..pos].trim_end().to_string();
-        let name = tail.trim_start_matches("section ").trim().trim_matches('"').to_string();
+        let name = tail
+            .trim_start_matches("section ")
+            .trim()
+            .trim_matches('"')
+            .to_string();
         if name.is_empty() {
             bail!("malformed section clause: {tail}");
         }
@@ -862,7 +866,10 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
         &mut self,
         ty: &str,
         tok: &str,
-    ) -> Result<(BasicMetadataValueEnum<'ctx>, inkwell::types::BasicMetadataTypeEnum<'ctx>)> {
+    ) -> Result<(
+        BasicMetadataValueEnum<'ctx>,
+        inkwell::types::BasicMetadataTypeEnum<'ctx>,
+    )> {
         if ty == "metadata" {
             let node = inline_metadata(self.ctx, tok)?;
             return Ok((node.into(), self.ctx.metadata_type().into()));

@@ -3,7 +3,6 @@
 //! read and reset the table. Nothing here is on a hot path.
 use super::*;
 
-
 /// `(live nodes, nodes ever minted, nodes reaped)`. The census reads this;
 /// nothing branches on it.
 pub(crate) fn canonical_stats() -> (usize, u64, u64) {

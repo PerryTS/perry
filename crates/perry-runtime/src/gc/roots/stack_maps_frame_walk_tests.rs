@@ -199,11 +199,7 @@ fn index_for(state: &State, with_inner: bool) -> StackMapIndex {
     functions.sort_by_key(|function| function.0);
     let origin = functions[0].0 as usize;
     let blob = super::lazy::test_blob_multi_at(origin as u64, &functions);
-    let mut index = super::build_index_from_sections(
-        vec![blob],
-        &[origin],
-        super::IndexMode::Lazy,
-    );
+    let mut index = super::build_index_from_sections(vec![blob], &[origin], super::IndexMode::Lazy);
     // The outer probe stands in for `main`: the walk ends after it, instead of
     // stepping the test harness's thread start.
     let (start, end) = crate::eh_walker::cfi_function_extent(outer_fn as u64)

@@ -294,11 +294,9 @@ pub(crate) fn lower_let(
     // `new C()` where a constructor on C's chain returns a value yields an
     // object that is not laid out as C: the binding keeps no class identity.
     let refined_ty = match (init, &refined_ty) {
-        (
-            Some(perry_hir::Expr::New { class_name, .. }),
-            perry_hir::types::Type::Named(named),
-        ) if crate::lower_call::ctor_chain_has_value_return(ctx.classes, named)
-            || crate::lower_call::ctor_chain_has_value_return(ctx.classes, class_name) =>
+        (Some(perry_hir::Expr::New { class_name, .. }), perry_hir::types::Type::Named(named))
+            if crate::lower_call::ctor_chain_has_value_return(ctx.classes, named)
+                || crate::lower_call::ctor_chain_has_value_return(ctx.classes, class_name) =>
         {
             perry_hir::types::Type::Object(Default::default())
         }
@@ -323,9 +321,7 @@ pub(crate) fn lower_let(
             Some(perry_hir::Expr::New { class_name, .. })
                 if crate::lower_call::ctor_chain_has_value_return(ctx.classes, class_name)
         );
-        let proven = if value_returning_new
-            && matches!(proven, perry_hir::types::Type::Named(_))
-        {
+        let proven = if value_returning_new && matches!(proven, perry_hir::types::Type::Named(_)) {
             perry_hir::types::Type::Object(Default::default())
         } else {
             proven

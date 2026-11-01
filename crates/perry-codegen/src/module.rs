@@ -1589,8 +1589,8 @@ impl LlModule {
             .flat_map(|(bi, names)| names.iter().map(move |n| (n.as_str(), bi)))
             .collect();
         for gi in 0..all_globals.len() {
-            let Some(&bi) = crate::fn_record::record_body(all_globals[gi])
-                .and_then(|body| body_unit.get(body))
+            let Some(&bi) =
+                crate::fn_record::record_body(all_globals[gi]).and_then(|body| body_unit.get(body))
             else {
                 continue;
             };

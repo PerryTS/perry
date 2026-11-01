@@ -897,9 +897,9 @@ fn build_index_from_sections(
     // Sized exactly before the build: the table lives for the process, and a
     // doubling Vec would leave up to half of it (and the copies it made on the
     // way) resident for nothing.
-    let capacity = sections
-        .iter()
-        .fold(0usize, |sum, section| sum.saturating_add(decode::entry_count(section)));
+    let capacity = sections.iter().fold(0usize, |sum, section| {
+        sum.saturating_add(decode::entry_count(section))
+    });
     let mut functions = Vec::with_capacity(capacity);
     for (index, section) in sections.iter().enumerate() {
         let origin = origins[index];

@@ -65,7 +65,10 @@ fn split_js_text(module: &Module<'_>) {
     let js_text = crate::codegen::helpers::JS_TEXT_SECTION_NAME;
     for f in defined_functions(module) {
         let global = f.as_global_value();
-        if global.get_section().is_some_and(|s| s.to_bytes() == js_text.as_bytes()) {
+        if global
+            .get_section()
+            .is_some_and(|s| s.to_bytes() == js_text.as_bytes())
+        {
             let name = f.get_name().to_string_lossy();
             global.set_section(Some(&format!(
                 "{}{name}",

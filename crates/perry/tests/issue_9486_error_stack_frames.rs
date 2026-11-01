@@ -217,7 +217,9 @@ fn a_deep_stack_through_runtime_frames_keeps_ten_named_js_frames() {
     let frames = names(&stdout, "DEEP");
     assert_eq!(frames.len(), 10, "{frames:?}\n{stdout}");
     assert!(
-        frames.iter().all(|f| f.contains("dive") || f.contains("step")),
+        frames
+            .iter()
+            .all(|f| f.contains("dive") || f.contains("step")),
         "only the recursion's own frames: {frames:?}"
     );
     assert!(frames.iter().any(|f| f.contains("step")), "{frames:?}");

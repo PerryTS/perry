@@ -286,8 +286,7 @@ fn native_instanceof(
         // A function whose prototype was reset (`Object.setPrototypeOf(fn,
         // proto)`) answers by its actual chain, which need not reach
         // `Function.prototype`.
-        let reset_callable =
-            addr != 0 && crate::closure::closure_static_prototype(addr).is_some();
+        let reset_callable = addr != 0 && crate::closure::closure_static_prototype(addr).is_some();
         if value_is_callable(value) && !reset_callable {
             return true_val;
         }

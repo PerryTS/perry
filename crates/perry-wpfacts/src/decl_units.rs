@@ -300,7 +300,10 @@ fn expr_refs(e: &Expr, r: &mut Refs) {
         Expr::PropertyGet { .. } => {
             let mut path: Vec<String> = Vec::new();
             let mut o: &Expr = e;
-            while let Expr::PropertyGet { object, property, .. } = o {
+            while let Expr::PropertyGet {
+                object, property, ..
+            } = o
+            {
                 path.push(property.clone());
                 o = object;
             }

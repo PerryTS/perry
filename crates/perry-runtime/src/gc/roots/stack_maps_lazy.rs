@@ -747,7 +747,10 @@ pub(super) fn test_blob_multi_at(origin: u64, functions: &[TestFunction]) -> &'s
 /// them in a section of their own; the decoder finds both through the
 /// entry's self-relative offset). Only the entries are returned.
 #[cfg(test)]
-pub(super) fn test_section_at(origin: u64, maps: &[(u64, u32, Vec<u32>, Vec<u8>)]) -> &'static [u8] {
+pub(super) fn test_section_at(
+    origin: u64,
+    maps: &[(u64, u32, Vec<u32>, Vec<u8>)],
+) -> &'static [u8] {
     let entry = super::decode::FUNCTION_ENTRY_BYTES;
     let entries_len = maps.len() * entry;
     let mut bytes = vec![0u8; entries_len];

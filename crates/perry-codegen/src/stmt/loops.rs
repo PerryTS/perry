@@ -6977,7 +6977,6 @@ pub(super) fn lower_for_tiers(
     update: Option<&perry_hir::Expr>,
     body: &[Stmt],
 ) -> Result<()> {
-
     // #9160: `sum += strings[maskedIndex].length`. A one-time receiver,
     // window, element-tag, and accumulator check admits a clone whose array
     // access is a raw boxed-slot load and whose length dispatch is SSO/heap

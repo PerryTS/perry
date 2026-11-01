@@ -53,7 +53,12 @@ fn next_value_is_the_yielded_value() {
 fn a_delegated_generator_yields_its_values() {
     let pf = facts_of("function* outer() { yield* inner(); }");
     let s = site(&pf, "size");
-    assert!(s.receivers.iter().any(|r| r.contains("Svc")), "{:?} {:?}", s.receivers, s.verdict);
+    assert!(
+        s.receivers.iter().any(|r| r.contains("Svc")),
+        "{:?} {:?}",
+        s.receivers,
+        s.verdict
+    );
 }
 
 /// node: prints `1`, `2`. A yielded value reaches its consumer: the site
@@ -76,7 +81,12 @@ fn a_yielded_value_joins_the_receivers() {
     cfg.max_work.get_or_insert(50_000_000);
     let pf = compute(&[("t.ts".to_string(), &hir)], &cfg);
     let s = site(&pf, "k");
-    assert!(s.receivers.iter().any(|r| r.contains(":B")), "{:?} {:?}", s.receivers, s.verdict);
+    assert!(
+        s.receivers.iter().any(|r| r.contains(":B")),
+        "{:?} {:?}",
+        s.receivers,
+        s.verdict
+    );
 }
 
 /// node (`hostIter = [{ size: 'x' }]`): prints `x`.
@@ -85,4 +95,3 @@ fn a_delegate_from_unmodeled_code_yields_top() {
     let v = verdict("function* outer() { yield* (globalThis as any).hostIter; }");
     assert!(!proven(&v), "{v:?}");
 }
-

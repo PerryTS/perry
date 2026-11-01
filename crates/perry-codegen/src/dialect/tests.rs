@@ -376,9 +376,16 @@ entry:
     // them must be the same nodes too.
     let tail = |m: &inkwell::module::Module<'_>| {
         let text = m.print_to_string().to_string();
-        text.lines().filter(|l| l.starts_with('!')).map(str::to_string).collect::<Vec<_>>()
+        text.lines()
+            .filter(|l| l.starts_with('!'))
+            .map(str::to_string)
+            .collect::<Vec<_>>()
     };
-    assert_eq!(tail(&llvm_module), tail(&module), "scope metadata trees differ");
+    assert_eq!(
+        tail(&llvm_module),
+        tail(&module),
+        "scope metadata trees differ"
+    );
 }
 
 /// The `format!` templates `expr/channel.rs` emits for its `<4 x i32>` SIMD

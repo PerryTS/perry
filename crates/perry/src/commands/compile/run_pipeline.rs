@@ -3115,9 +3115,10 @@ pub fn run_with_parse_cache(
         let self_namespace_import = hir_module.imports.iter().any(|import| {
             !import.type_only
                 && !import.runtime_erased
-                && import.specifiers.iter().any(|spec| {
-                    matches!(spec, perry_hir::ImportSpecifier::Namespace { .. })
-                })
+                && import
+                    .specifiers
+                    .iter()
+                    .any(|spec| matches!(spec, perry_hir::ImportSpecifier::Namespace { .. }))
                 && import
                     .resolved_path
                     .as_deref()
@@ -6210,7 +6211,6 @@ pub fn run_with_parse_cache(
             // function that enumerates it. Per-member reads already worked,
             // which is why the undefined value stayed silent.
             namespace_self_import: ctx.native_modules.get(path).is_some_and(|hir_module| {
-
                 hir_module.imports.iter().any(|import| {
                     !import.type_only
                         && !import.runtime_erased

@@ -213,9 +213,8 @@ fn lower_array_arm(
     arm: ArrayArm<'_>,
     protocol: (Option<&Stmt>, &Expr, &Expr, &[Stmt]),
 ) -> Result<bool> {
-    let set_state = |value: f64| {
-        Stmt::Expr(Expr::LocalSet(arm.state, Box::new(Expr::Number(value))))
-    };
+    let set_state =
+        |value: f64| Stmt::Expr(Expr::LocalSet(arm.state, Box::new(Expr::Number(value))));
     // Completion state 2 while Get runs: a throwing getter on a hole does not
     // close (IteratorStepValue errors complete the record). The record body
     // then sets 0 before the user statements.
@@ -224,10 +223,25 @@ fn lower_array_arm(
     // the declared element type of the source picks its lowering, exactly as
     // for `const x = a[i]`; the read's own guards prove it.
     let binding = match user.first() {
-        Some(Stmt::Let { id, name, ty, mutable, init: Some(Expr::LocalGet(value)) })
-            if *value == arm.output && !user[1..].iter().any(|s| stmt_reads_local(s, arm.output)) =>
+        Some(Stmt::Let {
+            id,
+            name,
+            ty,
+            mutable,
+            init: Some(Expr::LocalGet(value)),
+        }) if *value == arm.output
+            && !user[1..].iter().any(|s| stmt_reads_local(s, arm.output)) =>
         {
-            Some((Stmt::Let { id: *id, name: name.clone(), ty: ty.clone(), mutable: *mutable, init: Some(arm.element.clone()) }, ty.clone()))
+            Some((
+                Stmt::Let {
+                    id: *id,
+                    name: name.clone(),
+                    ty: ty.clone(),
+                    mutable: *mutable,
+                    init: Some(arm.element.clone()),
+                },
+                ty.clone(),
+            ))
         }
         _ => None,
     };
@@ -240,7 +254,10 @@ fn lower_array_arm(
             ty
         }
         None => {
-            array_body.push(Stmt::Expr(Expr::LocalSet(arm.output, Box::new(arm.element.clone()))));
+            array_body.push(Stmt::Expr(Expr::LocalSet(
+                arm.output,
+                Box::new(arm.element.clone()),
+            )));
             array_body.extend(arm.body[1..].iter().cloned());
             perry_hir::types::Type::Any
         }
@@ -253,7 +270,8 @@ fn lower_array_arm(
     let protocol_label = ctx.block_label(protocol_idx);
     let array_label = ctx.block_label(array_idx);
     let merge_label = ctx.block_label(merge_idx);
-    ctx.block().cond_br(&protocol_mode, &protocol_label, &array_label);
+    ctx.block()
+        .cond_br(&protocol_mode, &protocol_label, &array_label);
 
     ctx.current_block = array_idx;
     // Entry proved the payload an Array on this arm; its element hint is
@@ -278,7 +296,13 @@ fn lower_array_arm(
             right: Box::new(arm.length.clone()),
         }
     };
-    lower_for_tiers(ctx, Some(arm.init), Some(&condition), Some(arm.update), &array_body)?;
+    lower_for_tiers(
+        ctx,
+        Some(arm.init),
+        Some(&condition),
+        Some(arm.update),
+        &array_body,
+    )?;
     if let Some((ty, rebound)) = previous {
         match ty {
             Some(ty) => ctx.local_types.insert(arm.array, ty),
@@ -309,7 +333,14 @@ fn lower_array_arm(
     }
 
     ctx.current_block = protocol_idx;
-    lower_for_after_init(ctx, protocol.0, Some(protocol.1), Some(protocol.2), protocol.3, "for")?;
+    lower_for_after_init(
+        ctx,
+        protocol.0,
+        Some(protocol.1),
+        Some(protocol.2),
+        protocol.3,
+        "for",
+    )?;
     if !ctx.block().is_terminated() {
         ctx.block().br(&merge_label);
     }
@@ -322,8 +353,8 @@ fn lower_array_arm(
 /// record's own releases, inlined before each exit.)
 fn stmt_reads_local(stmt: &Stmt, id: u32) -> bool {
     fn names(e: &Expr, id: u32) -> bool {
-        let mut found = matches!(e, Expr::LocalGet(l) if *l == id)
-            || matches!(e, Expr::Closure { .. });
+        let mut found =
+            matches!(e, Expr::LocalGet(l) if *l == id) || matches!(e, Expr::Closure { .. });
         if !found {
             perry_hir::walker::walk_expr_children(e, &mut |c| found |= names(c, id));
         }
@@ -675,51 +706,105 @@ mod tests {
             index: Box::new(rt("arrayRecordIndex", vec![Expr::LocalGet(2)])),
         };
         m.init = vec![
-            local(0, Type::Array(Box::new(Type::String)),
-                Expr::Array(vec![Expr::String("ab".into()), Expr::String("c".into())], None)),
-            local(1, Type::Boolean,
-                rt("arrayRecordNeedsIterator", vec![Expr::LocalSet(0, Box::new(Expr::LocalGet(0)))])),
+            local(
+                0,
+                Type::Array(Box::new(Type::String)),
+                Expr::Array(
+                    vec![Expr::String("ab".into()), Expr::String("c".into())],
+                    None,
+                ),
+            ),
+            local(
+                1,
+                Type::Boolean,
+                rt(
+                    "arrayRecordNeedsIterator",
+                    vec![Expr::LocalSet(0, Box::new(Expr::LocalGet(0)))],
+                ),
+            ),
             local(3, Type::Any, Expr::Undefined),
             local(4, Type::Number, Expr::Number(0.0)),
             local(5, Type::Number, Expr::Number(0.0)),
             Stmt::For {
-                init: Some(Box::new(local(2, Type::Number, rt("arrayRecordIndex", vec![Expr::Integer(0)])))),
+                init: Some(Box::new(local(
+                    2,
+                    Type::Number,
+                    rt("arrayRecordIndex", vec![Expr::Integer(0)]),
+                ))),
                 condition: Some(Expr::Compare {
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(2)),
-                    right: Box::new(rt("arrayRecordForBound", vec![
-                        mode.clone(),
-                        rt("arrayRecordLength", vec![Expr::LocalGet(0)]),
-                        Expr::LocalGet(2),
-                        rt("iteratorStep", vec![Expr::Undefined, Expr::Undefined,
-                            Expr::LocalSet(3, Box::new(Expr::Undefined))]),
-                        Expr::LocalSet(4, Box::new(Expr::Number(2.0))),
-                    ])),
+                    right: Box::new(rt(
+                        "arrayRecordForBound",
+                        vec![
+                            mode.clone(),
+                            rt("arrayRecordLength", vec![Expr::LocalGet(0)]),
+                            Expr::LocalGet(2),
+                            rt(
+                                "iteratorStep",
+                                vec![
+                                    Expr::Undefined,
+                                    Expr::Undefined,
+                                    Expr::LocalSet(3, Box::new(Expr::Undefined)),
+                                ],
+                            ),
+                            Expr::LocalSet(4, Box::new(Expr::Number(2.0))),
+                        ],
+                    )),
                 }),
-                update: Some(rt("arrayRecordForUpdate", vec![mode.clone(),
-                    Expr::Update { id: 2, op: UpdateOp::Increment, prefix: false }])),
+                update: Some(rt(
+                    "arrayRecordForUpdate",
+                    vec![
+                        mode.clone(),
+                        Expr::Update {
+                            id: 2,
+                            op: UpdateOp::Increment,
+                            prefix: false,
+                        },
+                    ],
+                )),
                 body: vec![
-                    Stmt::Expr(Expr::LocalSet(3, Box::new(rt("arrayRecordForValue",
-                        vec![mode, Expr::LocalGet(3), element])))),
+                    Stmt::Expr(Expr::LocalSet(
+                        3,
+                        Box::new(rt(
+                            "arrayRecordForValue",
+                            vec![mode, Expr::LocalGet(3), element],
+                        )),
+                    )),
                     Stmt::Expr(Expr::LocalSet(4, Box::new(Expr::Number(0.0)))),
-                    Stmt::Let { id: 8, name: "word".into(), ty: Type::String, mutable: false,
-                        init: Some(Expr::LocalGet(3)) },
-                    Stmt::Expr(Expr::LocalSet(5, Box::new(Expr::Binary {
-                        op: BinaryOp::Add,
-                        left: Box::new(Expr::LocalGet(5)),
-                        right: Box::new(Expr::PropertyGet { byte_offset: 0, byte_end: 0,
-                            object: Box::new(Expr::LocalGet(8)), property: "length".into() }),
-                    }))),
+                    Stmt::Let {
+                        id: 8,
+                        name: "word".into(),
+                        ty: Type::String,
+                        mutable: false,
+                        init: Some(Expr::LocalGet(3)),
+                    },
+                    Stmt::Expr(Expr::LocalSet(
+                        5,
+                        Box::new(Expr::Binary {
+                            op: BinaryOp::Add,
+                            left: Box::new(Expr::LocalGet(5)),
+                            right: Box::new(Expr::PropertyGet {
+                                byte_offset: 0,
+                                byte_end: 0,
+                                object: Box::new(Expr::LocalGet(8)),
+                                property: "length".into(),
+                            }),
+                        }),
+                    )),
                 ],
             },
         ];
         let ir = String::from_utf8(
-            crate::compile_module(&m, crate::CompileOptions {
-                emit_ir_only: true,
-                is_entry_module: true,
-                target: Some("x86_64-unknown-linux-gnu".into()),
-                ..Default::default()
-            })
+            crate::compile_module(
+                &m,
+                crate::CompileOptions {
+                    emit_ir_only: true,
+                    is_entry_module: true,
+                    target: Some("x86_64-unknown-linux-gnu".into()),
+                    ..Default::default()
+                },
+            )
             .unwrap(),
         )
         .unwrap();
@@ -729,7 +814,11 @@ mod tests {
         let arm = ir.find("\nrecord.indexed.").expect(ir);
         let protocol = ir.find("\nrecord.protocol.").expect(ir);
         assert!(ir.contains("record.merge."), "{ir}");
-        assert_eq!(ir.matches("@js_iterator_step(").count(), 1, "one protocol step: {ir}");
+        assert_eq!(
+            ir.matches("@js_iterator_step(").count(),
+            1,
+            "one protocol step: {ir}"
+        );
         assert!(arm != protocol, "{ir}");
     }
 }

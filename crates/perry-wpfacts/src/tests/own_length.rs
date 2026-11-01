@@ -19,7 +19,11 @@ fn run(source: &str, units: bool) -> ProgramFacts {
 /// The verdicts of the `length` reads, in source order.
 fn lengths(source: &str, units: bool) -> Vec<Verdict> {
     let pf = run(source, units);
-    let mut s: Vec<_> = pf.sites.iter().filter(|s| s.key == "length" && !s.is_call).collect();
+    let mut s: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| s.key == "length" && !s.is_call)
+        .collect();
     s.sort_by_key(|s| s.byte_offset);
     s.iter().map(|s| s.verdict.clone()).collect()
 }
@@ -114,7 +118,12 @@ fn an_array_made_through_a_written_constructor_is_no_array() {
             "ext(a);",
             "(Array.prototype as any).constructor = C;",
         ] {
-            for make in ["a.map((x) => x)", "a.slice()", "a.splice(0, 1)", "a.filter((x) => x > 0)"] {
+            for make in [
+                "a.map((x) => x)",
+                "a.slice()",
+                "a.splice(0, 1)",
+                "a.filter((x) => x > 0)",
+            ] {
                 let v = lengths(
                     &format!(
                         r#"
@@ -129,7 +138,10 @@ fn an_array_made_through_a_written_constructor_is_no_array() {
                     ),
                     units,
                 );
-                assert!(!own(v.last().unwrap()), "units={units} {write} {make}: {v:?}");
+                assert!(
+                    !own(v.last().unwrap()),
+                    "units={units} {write} {make}: {v:?}"
+                );
             }
         }
     }
@@ -167,7 +179,6 @@ fn containers_that_may_be_no_array_and_other_objects_are_not_own_length() {
         assert!(!v.iter().any(own), "units={units}: {v:?}");
     }
 }
-
 
 #[test]
 fn a_protocol_touch_of_an_array_ends() {

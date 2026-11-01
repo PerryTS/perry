@@ -149,7 +149,6 @@ pub(crate) unsafe fn adopt_image_key(
 mod records;
 pub(crate) use records::{CanonicalKeys, LiveObject, SharedLayout};
 
-
 /// No trie node: an owned (dictionary) list, or a list whose holder never
 /// learned one. Shared with `ObjectKeys` and the shape record's packed field.
 pub(crate) const NO_NODE: u32 = u32::MAX;

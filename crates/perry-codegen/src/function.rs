@@ -1548,7 +1548,11 @@ mod define_header_tests {
                 "{triple} named={named}: {header}"
             );
             let parsed = crate::dialect::parse_header_for_tests(&header).expect("parses");
-            assert_eq!(parsed.0.as_deref(), placed.then_some("perry_js_text"), "{header}");
+            assert_eq!(
+                parsed.0.as_deref(),
+                placed.then_some("perry_js_text"),
+                "{header}"
+            );
             assert!(!parsed.1.contains("section"), "{}", parsed.1);
         }
         crate::codegen::helpers::set_js_text_section_for_target("arm64-apple-macosx15.0.0");

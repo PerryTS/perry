@@ -89,7 +89,9 @@ pub(crate) fn push_compiler_used<'a>(ir: &mut String, lines: impl Iterator<Item 
 /// The body of a record global's IR name (`<body>$fnrec`), for the passes
 /// that see the final LLVM module rather than its text.
 pub(crate) fn body_of_record_name(name: &str) -> Option<&str> {
-    name.strip_prefix("\u{1}l_").unwrap_or(name).strip_suffix("$fnrec")
+    name.strip_prefix("\u{1}l_")
+        .unwrap_or(name)
+        .strip_suffix("$fnrec")
 }
 
 /// Bounds descriptor every registering module's owner names.
@@ -215,11 +217,19 @@ mod tests {
 
     #[test]
     fn a_record_names_its_body_for_the_unit_splitter() {
-        for format in [RecordFormat::Elf, RecordFormat::MachO, RecordFormat::Coff, RecordFormat::Wasm] {
+        for format in [
+            RecordFormat::Elf,
+            RecordFormat::MachO,
+            RecordFormat::Coff,
+            RecordFormat::Wasm,
+        ] {
             let line = record_line(format, "__perry_wrap_m__f");
             assert_eq!(record_body(&line), Some("__perry_wrap_m__f"), "{line}");
         }
-        assert_eq!(record_body("@__perry_wrap_m__f$info = internal constant i32 0"), None);
+        assert_eq!(
+            record_body("@__perry_wrap_m__f$info = internal constant i32 0"),
+            None
+        );
     }
 
     #[test]

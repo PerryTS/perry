@@ -1339,13 +1339,8 @@ impl<'a> Gen<'a> {
                 let a = self.expr(fx, array);
                 let _ = self.expr(fx, value);
                 if let Some(x) = from_index {
-                    let _ = self.prim_op(
-                        fx,
-                        &[x],
-                        prim::NUM,
-                        "search index",
-                        Protocol::ToPrimitive,
-                    );
+                    let _ =
+                        self.prim_op(fx, &[x], prim::NUM, "search index", Protocol::ToPrimitive);
                 }
                 let _ = self.elem_load(a);
                 match e {

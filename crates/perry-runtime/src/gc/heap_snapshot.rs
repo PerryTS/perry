@@ -131,7 +131,6 @@ fn include_referenced_image_strings(recs: &mut Vec<NodeRec>, idx_of: &mut HashMa
     }
 }
 
-
 fn json_escape_into(s: &str, out: &mut String) {
     for ch in s.chars() {
         match ch {
@@ -339,7 +338,6 @@ pub(crate) fn gc_build_v8_heap_snapshot_json_with_format(format: HeapSnapshotFor
     // Image strings live in linker-owned memory: neither allocator walk above
     // can enumerate them, so follow traced references before labelling nodes.
     include_referenced_image_strings(&mut recs, &mut idx_of);
-
 
     let mut strings = StringTable::new();
     let thread_id = crate::agent::current_thread_native_id();

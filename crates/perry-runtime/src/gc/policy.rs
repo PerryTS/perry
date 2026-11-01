@@ -5506,6 +5506,8 @@ pub(super) fn leaf_window_due(
     let eden = small_bytes.saturating_sub(survivor_bytes);
     (
         eden.saturating_add(leaf_bytes) >= window,
-        window.saturating_add(survivor_bytes).saturating_sub(leaf_bytes),
+        window
+            .saturating_add(survivor_bytes)
+            .saturating_sub(leaf_bytes),
     )
 }
