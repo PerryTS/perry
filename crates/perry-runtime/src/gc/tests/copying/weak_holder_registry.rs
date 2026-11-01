@@ -28,20 +28,24 @@ fn obj_bits(obj: *mut crate::ObjectHeader) -> u64 {
 fn old_weak_holder_repairs_two_moves_then_clears_a_dead_target() {
     let _guard = CopyingNurseryTestGuard::new(2);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    let old = unsafe {
-        let (old, _) = alloc_old_test_object(1);
-        (*old).class_id = crate::weakref::CLASS_ID_WEAKREF;
-        crate::object::shapes::restamp_object_proto_id(old);
-        old
-    };
+    let initial = crate::object::js_object_alloc(0, 0);
+    let holder = crate::weakref::js_weakref_new(f64::from_bits(obj_bits(initial)));
+    js_shadow_slot_set(0, obj_bits(holder));
+    let old = promote_rooted_to_old(0) as *mut crate::ObjectHeader;
     assert!(crate::arena::pointer_in_old_gen(old as usize));
-    js_shadow_slot_set(0, obj_bits(old));
-    crate::weakref::test_support::register_weak_holder_address(old as usize);
 
     let target = crate::object::js_object_alloc(0, 0);
     assert!(crate::arena::pointer_in_nursery(target as usize));
     js_shadow_slot_set(1, obj_bits(target));
+    // Install a younger referent into the real holder's private slot. Its
+    // named shape and brand come from the constructor; the ordinary store
+    // supplies the same generational barrier as a finalization record.
     crate::object::js_object_set_field(old, 0, crate::JSValue::pointer(target.cast()));
+    assert_eq!(
+        crate::weakref::js_weakref_deref(f64::from_bits(js_shadow_slot_get(0))).to_bits(),
+        js_shadow_slot_get(1),
+        "the fixture must expose the live target before any collection"
+    );
     let mut before = target as usize;
     for _ in 0..2 {
         let trace = collect_minor_trace(GcTriggerKind::Direct);
