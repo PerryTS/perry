@@ -868,6 +868,19 @@ fn lower_guarded_get(
             let chk_label = ctx.block_label(chk_idx);
             ctx.block().cond_br(&both, &chk_label, &miss_label);
             ctx.current_block = chk_idx;
+            // A literal family keeps its late keys and names class 0: its
+            // objects carry the family descriptor's layout word, not a class
+            // id (every other class is told by its class id alone).
+            let literals: Vec<u32> = p
+                .class_ids
+                .iter()
+                .copied()
+                .filter(|c| ctx.program_layouts.literal_families.contains(c))
+                .collect();
+            let literal_families: Vec<String> = literals
+                .into_iter()
+                .filter_map(|c| crate::lower_call::direct_method_guard::family_layout_id(ctx, c))
+                .collect();
             let blk = ctx.block();
             // Word 0 is an object's class id but also an array's or a
             // string's `length`: `[x]` would pass for a class whose id is 1.
@@ -888,6 +901,20 @@ fn lower_guarded_get(
                     Some(prev) => blk.or(crate::types::I1, &prev, &eq),
                     None => eq,
                 });
+            }
+            if !literal_families.is_empty() {
+                let word_ptr = super::receiver_range::emit_field_ptr(blk, &recv.biased, 4);
+                let word = blk.load(I32, &word_ptr);
+                for id in &literal_families {
+                    let eq = blk.icmp_eq(I32, &word, id);
+                    // 0: the runtime could not register the layout.
+                    let registered = blk.icmp_ne(I32, id, "0");
+                    let eq = blk.and(crate::types::I1, &eq, &registered);
+                    any = Some(match any {
+                        Some(prev) => blk.or(crate::types::I1, &prev, &eq),
+                        None => eq,
+                    });
+                }
             }
             ok = any.map(|any| blk.and(crate::types::I1, &is_object, &any));
         } else {

@@ -1113,29 +1113,10 @@ pub(super) fn try_local_array_methods(
                             .lookup_local_type(&arr_name)
                             .map(|ty| matches!(ty, Type::Named(name) if name == "TextEncoder"))
                             .unwrap_or(false);
-                        if is_text_encoder {
-                            if method_name == "encode" {
-                                if !args.is_empty() {
-                                    return Ok(Ok(Expr::TextEncoderEncode(Box::new(
-                                        args.into_iter().next().unwrap(),
-                                    ))));
-                                } else {
-                                    // encode() with no args encodes empty string
-                                    return Ok(Ok(Expr::TextEncoderEncode(Box::new(
-                                        Expr::String(String::new()),
-                                    ))));
-                                }
-                            }
-                            if method_name == "encodeInto" {
-                                let mut args = args.into_iter();
-                                let source =
-                                    args.next().unwrap_or_else(|| Expr::String(String::new()));
-                                let dest = args.next().unwrap_or(Expr::Undefined);
-                                return Ok(Ok(Expr::TextEncoderEncodeInto {
-                                    source: Box::new(source),
-                                    dest: Box::new(dest),
-                                }));
-                            }
+                        if is_text_encoder && matches!(method_name, "encode" | "encodeInto") {
+                            return Ok(Ok(super::textencoder::encoder_call(
+                                Expr::LocalGet(array_id), method_name, args, call,
+                            )));
                         }
 
                         // TextDecoder methods

@@ -424,19 +424,6 @@ pub(crate) fn call1(callback: i64, arg: f64) {
     }
 }
 
-pub(crate) fn call2(callback: i64, arg0: f64, arg1: f64) {
-    if callback == 0 {
-        return;
-    }
-    unsafe {
-        let raw = callback as *const RawClosureHeader;
-        let closure = JsClosure::from_raw(raw);
-        if !closure.is_null() {
-            let _ = closure.call2(perry_ffi::JsThis::UNDEFINED, arg0, arg1);
-        }
-    }
-}
-
 pub(crate) fn call3(callback: i64, arg0: f64, arg1: f64, arg2: f64) {
     if callback == 0 {
         return;

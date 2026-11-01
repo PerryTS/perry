@@ -72,6 +72,7 @@ mod static_edge_tests;
 // Cross-sibling helpers — siblings reach for these via `use super::*;`.
 use deferred_requires::deferred_require_specs_for_path;
 use detect::is_js_reserved_word;
+pub(super) use extract_exports::module_exports_is_opaque;
 use extract_exports::{
     export_key_is_own_binding, extract_exports_from_source, extract_named_exports_from_require,
     extract_object_literal_exports_from_require, extract_single_module_exports_assignment,

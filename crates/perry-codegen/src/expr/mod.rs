@@ -257,6 +257,8 @@ mod ek_prefix_tests;
 #[cfg(test)]
 mod entry_block_alloca_tests;
 #[cfg(test)]
+mod family_guard_tests;
+#[cfg(test)]
 mod hit_path_access_tests;
 #[cfg(test)]
 mod index_set_barrier_tests;

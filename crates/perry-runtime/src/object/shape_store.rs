@@ -970,6 +970,11 @@ unsafe fn try_function_store(
     {
         return None;
     }
+    // A plain data key on a described function: a key-add on its shape
+    // (`function_own_put`), no generic tail.
+    if let Some(stored) = super::function_own_put::function_own_put(target, key, value, false) {
+        return Some(stored);
+    }
     let closure = ptr as *const crate::closure::ClosureHeader;
     let descriptor = shapes::shape_descriptor_of_receiver(((*closure).shape_id).0)?;
     if crate::closure::shape::is_class_info((*closure).info) {

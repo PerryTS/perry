@@ -1508,6 +1508,7 @@ pub(super) fn gc_type_name(obj_type: u8) -> &'static str {
 
 mod validation;
 
+#[cfg(test)]
 pub(crate) use validation::{validate_gc_type_info, validate_gc_type_metadata};
 
 // Flag constants

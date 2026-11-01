@@ -640,6 +640,7 @@ fn a_layout_met_again_in_its_own_description_is_named_once() {
         literal_shape: true,
         facts: facts.clone(),
         methods: Vec::new(),
+        getters: Vec::new(),
         native_parent: None,
         parent: None,
         field_fns: Vec::new(),

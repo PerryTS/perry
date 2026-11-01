@@ -181,13 +181,21 @@ pub extern "C" fn perry_wpfacts_check_field(
         }
         (*(addr as *const ObjectHeader)).class_id
     };
+    let word = unsafe { (*(addr as *const ObjectHeader)).parent_class_id };
     let ids = [
         cids01 as u64 as u32,
         (cids01 as u64 >> 32) as u32,
         cids23 as u64 as u32,
         (cids23 as u64 >> 32) as u32,
     ];
-    if !ids.iter().any(|&c| c != u32::MAX && c == cid) {
+    // The receiver is a proven class by its class id, or by its layout word:
+    // a literal family keeps its late keys and names class 0, so its objects
+    // carry the family descriptor word of the proven class instead.
+    let admitted = ids.iter().any(|&c| {
+        c != u32::MAX
+            && (c == cid || crate::object::layout_desc::word_is_class_family_layout(word, c))
+    });
+    if !admitted {
         violate(
             site,
             "F4 receiver set",

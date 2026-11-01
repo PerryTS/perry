@@ -114,6 +114,19 @@ fn addon_files(root: &Path, dir: &Path, output: &mut Vec<PathBuf>) -> Result<()>
     Ok(())
 }
 
+/// True when `path` is a Node-API binary built for a known platform other
+/// than the compile target. A file that cannot be inspected is not claimed,
+/// so the regular validation reports it.
+pub(super) fn is_other_target_addon(path: &Path, target: Option<&str>) -> bool {
+    let Some(triple) = crate::commands::compile::rust_target_triple(target)
+        .or_else(crate::commands::compile::host_target_triple)
+    else {
+        return false;
+    };
+    (triple.starts_with("aarch64-") || triple.starts_with("x86_64-"))
+        && matches!(matches_target(path, triple), Ok(false))
+}
+
 fn matches_target(path: &Path, triple: &str) -> Result<bool> {
     let bytes = fs::read(path)?;
     let file = object::File::parse(&*bytes)
@@ -208,6 +221,87 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("unsupported symbol"));
+    }
+
+    #[test]
+    fn other_target_payload_edge_is_left_to_runtime() {
+        // A napi-rs loader names every platform's binary; the x64 one is not
+        // part of an aarch64 graph, approved or not, and records nothing.
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let payload = root.join("node_modules/demo-darwin-x64");
+        addon(&payload.join("demo.node"), false, "_napi_create_int32");
+        fs::write(
+            payload.join("package.json"),
+            r#"{"name":"demo-darwin-x64","version":"1"}"#,
+        )
+        .unwrap();
+        let mut ctx = CompilationContext::new(root.clone());
+        let binary = payload.join("demo.node");
+        assert!(
+            super::super::collect_or_refuse_node_addon(&mut ctx, &binary, Some("macos")).unwrap()
+        );
+        assert!(ctx.native_addons.is_empty());
+        // A binary for the target itself is still subject to the policy.
+        let native = root.join("node_modules/demo-darwin-arm64");
+        addon(&native.join("demo.node"), true, "_napi_create_int32");
+        fs::write(
+            native.join("package.json"),
+            r#"{"name":"demo-darwin-arm64","version":"1"}"#,
+        )
+        .unwrap();
+        let binary = native.join("demo.node");
+        assert!(
+            super::super::collect_or_refuse_node_addon(&mut ctx, &binary, Some("macos"))
+                .unwrap_err()
+                .to_string()
+                .contains("perry.nativeAddons")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn isolated_store_payload_inherits_the_wrapper_opt_in() {
+        // pnpm's global virtual store: the wrapper and each payload live in
+        // separate store directories; only the wrapper's own `node_modules`
+        // links the payload, and the project links the wrapper.
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let store = root.join("store");
+        let wrapper = store.join("demo/1/node_modules/@demo/addon");
+        let payload = store.join("demo-darwin-arm64/1/node_modules/@demo/addon-darwin-arm64");
+        fs::create_dir_all(&wrapper).unwrap();
+        addon(&payload.join("addon.node"), true, "_napi_create_int32");
+        fs::write(
+            wrapper.join("package.json"),
+            r#"{"name":"@demo/addon","optionalDependencies":{"@demo/addon-darwin-arm64":"1"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            payload.join("package.json"),
+            r#"{"name":"@demo/addon-darwin-arm64","version":"1"}"#,
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(&payload, wrapper.with_file_name("addon-darwin-arm64")).unwrap();
+        fs::write(wrapper.join("index.js"), "").unwrap();
+
+        let mut ctx = CompilationContext::new(root.join("app"));
+        ctx.native_addon_packages.insert("@demo/addon".into());
+        let binary = payload.join("addon.node");
+        // Unwalked, the wrapper grants nothing.
+        assert!(
+            super::super::collect_or_refuse_node_addon(&mut ctx, &binary, Some("macos"))
+                .unwrap_err()
+                .to_string()
+                .contains("perry.nativeAddons")
+        );
+        // The walk enters the wrapper's loader, then reaches the payload.
+        super::super::note_native_addon_wrapper(&mut ctx, &wrapper.join("index.js"));
+        assert!(
+            super::super::collect_or_refuse_node_addon(&mut ctx, &binary, Some("macos")).unwrap()
+        );
+        let record = &ctx.native_addons["@demo/addon-darwin-arm64/addon.node"];
+        assert_eq!(record.package, "@demo/addon");
     }
 
     #[test]

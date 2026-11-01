@@ -1,5 +1,5 @@
 use super::{facts, field, tmpl};
-use crate::{compute, gen::Gen, model::*, FactsConfig};
+use crate::{compute, FactsConfig};
 use perry_hir::{Expr, Stmt};
 
 fn capture_facts(unknown_in_constructor_slot: bool, snapshot: bool) -> crate::ProgramFacts {

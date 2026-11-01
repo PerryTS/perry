@@ -757,8 +757,10 @@ pub(super) fn an_escaped_value_beside_top_is_that_top() {
         // at each n; the existing quadratic storage behavior is unchanged.
         // DCE: `o.l{i} || (o.l{i} = ...)` joins its right operand when the
         // left one can be falsy (here ⊤), through an edge the solve makes,
-        // which takes no shared set: two entries per literal.
-        (1080, 2976, 9456),
+        // which takes no shared set: two entries per literal. Helper protocols
+        // (the string/array/Math/Error helper arms read their operands by
+        // protocol instead of escaping them): (1080, 2976, 9456) -> the pin.
+        (1061, 2941, 9389),
         "entries {e8} {e16} {e32}"
     );
 }

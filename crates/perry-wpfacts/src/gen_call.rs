@@ -93,6 +93,16 @@ impl<'a> Gen<'a> {
         self.call_with(fx, callee, a, vec![], byte_offset)
     }
 
+    /// The key of member access `object.property`: a guarded private
+    /// field access (`obj.#x`, lowered with the field's storage key) names
+    /// the private field, any other the public key of that spelling.
+    pub(crate) fn member_atom(&mut self, object: &Expr, property: &str) -> Atom {
+        match object {
+            Expr::PrivateGuard { kind: 0, .. } => self.m.private_atom(property),
+            _ => self.m.atom(property),
+        }
+    }
+
     pub(crate) fn call_with(
         &mut self,
         fx: &Fx,
@@ -113,7 +123,7 @@ impl<'a> Gen<'a> {
                     Some(o) => o,
                     None => self.expr(fx, object),
                 };
-                let a = self.m.atom(property);
+                let a = self.member_atom(object, property);
                 let off = if *pb != 0 { *pb } else { byte_offset };
                 if off != 0 {
                     self.read_sites.push(ReadSite {
@@ -149,6 +159,16 @@ impl<'a> Gen<'a> {
                         ret
                     }
                 }
+            }
+            // Direct host timer calls use the same guarded global lookup
+            // as globalThis.setTimeout. Import/module bindings shadow them.
+            Expr::ExternFuncRef { name, .. }
+                if matches!(name.as_str(), "setTimeout" | "setInterval" | "setImmediate" | "clearTimeout" | "clearInterval" | "clearImmediate" | "queueMicrotask")
+                    && !self.is_import(fx.module, name)
+                    && !self.mods[fx.module as usize].scope.contains_key(name) => {
+                let t = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+                let recv = self.tok_node(t); let key = self.m.atom(name);
+                self.mcall(recv, Key::Named(key), args, spread)
             }
             Expr::ExternFuncRef { name, .. } if self.is_runtime_extern(fx.module, name) => {
                 self.runtime_extern(fx, name, args, spread, vec![])
@@ -554,6 +574,7 @@ impl<'a> Gen<'a> {
                 if k.is_some() {
                     self.m.add_accessor_atom(a);
                 }
+                self.m.define_on.insert((o, a, false));
                 if let Some(tm) = birth_tm {
                     // An accessor is never a data field (E25).
                     crate::gen::push_unique(&mut self.m.tmpls[tm as usize].accessor_keys, a);
@@ -628,6 +649,8 @@ impl<'a> Gen<'a> {
                 // E5 on the target.
                 let r = self.m.reason("E5 defineProperty/__defineGetter__");
                 if let Some(o) = arg(0) {
+                    let star = self.m.atom(crate::STAR_KEY);
+                    self.m.define_on.insert((o, star, false));
                     self.m.cons(
                         o,
                         Cons::Hard {
@@ -751,7 +774,7 @@ impl<'a> Gen<'a> {
             // `yield*`'s pull (`perry-runtime` `iterator_close.rs`): Call(next,
             // iterator, « value »), or for a sync generator delegate stepped
             // through its intrinsic `next`, the value that result would carry
-            // (`value`), read from its record.
+            // (`value`), read from its record. The kind reads a record control.
             "js_iterator_delegate_step" => {
                 let (Some(it), Some(_next), Some(v)) = (arg(0), arg(1), arg(2)) else {
                     return self.extern_fail(name, &args, &spread);

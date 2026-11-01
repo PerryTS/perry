@@ -1456,6 +1456,19 @@ pub(crate) fn family_of_class(class_id: u32) -> Option<(u32, *const PerryLayoutD
     (actual == parent).then_some((index, desc))
 }
 
+/// Is `word` the layout word of class `class_id`'s own family descriptor
+/// (the layout its births are stamped with)? A literal family names class 0
+/// in its descriptor, so its objects are told by this word, not their class
+/// id. The class declaration owns the descriptor; the word's family record
+/// must be that descriptor.
+pub(crate) fn word_is_class_family_layout(word: u32, class_id: u32) -> bool {
+    let Some(declaration) = super::class_registry::declarations::class_declaration(class_id) else {
+        return false;
+    };
+    let desc = declaration.instance_layout;
+    !desc.is_null() && family_for_word(word) == Some(desc)
+}
+
 /// Is `d` a layout of class family `class_id` or of a family descending
 /// from it (its runtime parents, through their families)?
 pub(crate) fn family_descends(d: &PerryLayoutDesc, class_id: u32) -> bool {

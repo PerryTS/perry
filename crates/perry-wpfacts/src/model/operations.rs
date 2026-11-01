@@ -195,6 +195,26 @@ impl Model {
         a
     }
 
+    /// The key of a class private field, by its storage key
+    /// (`perry_hir::private_names`): its own atom, never a public key's.
+    /// The runtime keeps the entry apart from a public property of the same
+    /// spelling (`ENTRY_PRIVATE`), only the class body names it (through
+    /// `Expr::PrivateGuard`), and no reflection lists it.
+    pub fn private_atom(&mut self, storage: &str) -> Atom {
+        if let Some(&a) = self.private_atoms.get(storage) {
+            return a;
+        }
+        let a = self.atoms.len() as Atom;
+        self.atoms.push(storage.to_string());
+        self.private_atoms.insert(storage.to_string(), a);
+        a
+    }
+
+    /// `a` is a class private field's key (`private_atom`).
+    pub fn is_private_atom(&self, a: Atom) -> bool {
+        self.private_atoms.get(&self.atoms[a as usize]) == Some(&a)
+    }
+
     /// Record one relation line, tagged with the current phase.
     #[inline]
     pub fn rel(&mut self, line: impl FnOnce() -> String) {

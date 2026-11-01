@@ -134,6 +134,10 @@ pub(super) fn emit_tower_pshape_call(
     recv_handle: &str,
     case_arg_slices: &[(crate::types::LlvmType, &str)],
     layout_proven: bool,
+    // The receiver class of this case (`route` is its clone): a class born on
+    // a family carries the family word, not the keys global's static id.
+    owner: &str,
+    cid: u32,
 ) -> String {
     if layout_proven {
         return ctx.block().call(DOUBLE, &route.clone_fn, case_arg_slices);
@@ -150,6 +154,16 @@ pub(super) fn emit_tower_pshape_call(
         }
     };
 
+    // The family word instances carry when the family holds the birth layout:
+    // the clone's slot offsets are then the family's. Else a family-born
+    // instance never matches the birth id and the case takes the generic body.
+    let family_id =
+        if crate::lower_call::direct_method_guard::family_holds_birth_layout(ctx, owner, cid) {
+            crate::lower_call::direct_method_guard::family_layout_id(ctx, cid)
+        } else {
+            None
+        };
+
     let proven_idx = ctx.new_block(&format!("idispatch.case{}.pshape", case_no));
     let generic_idx = ctx.new_block(&format!("idispatch.case{}.generic", case_no));
     let join_idx = ctx.new_block(&format!("idispatch.case{}.join", case_no));
@@ -163,6 +177,7 @@ pub(super) fn emit_tower_pshape_call(
         &expected_shape_id,
         &proven_label,
         &generic_label,
+        family_id.as_deref(),
     );
 
     ctx.current_block = proven_idx;

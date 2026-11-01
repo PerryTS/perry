@@ -16,7 +16,7 @@ use swc_ecma_ast::Pass;
 use swc_ecma_transforms_base::resolver;
 use swc_ecma_visit::{Visit, VisitWith};
 
-use super::native_addon::collect_node_addon_request;
+use super::native_addon::{collect_node_addon_request, is_other_target_package_addon};
 use super::static_require_transform::resolve_static_require;
 use super::CompilationContext;
 
@@ -279,6 +279,7 @@ pub(super) fn rewrite_import_meta_require_addons(
     source: &str,
     module_path: &Path,
     ctx: &mut CompilationContext,
+    compile_target: Option<&str>,
 ) -> Result<String> {
     if !import_meta_require_may_apply(source) {
         return Ok(source.to_string());
@@ -352,7 +353,9 @@ pub(super) fn rewrite_import_meta_require_addons(
             }
             continue;
         };
-        if target.extension().and_then(|extension| extension.to_str()) != Some("node") {
+        if target.extension().and_then(|extension| extension.to_str()) != Some("node")
+            || is_other_target_package_addon(ctx, &target, compile_target)
+        {
             continue;
         }
         let Some(logical_id) = collect_node_addon_request(ctx, &target)? else {
@@ -429,7 +432,7 @@ const b = load("./native/addon.node");
 const c = load("/$bunfs/root/native/addon.node");
 const d = import.meta.require(new URL("./native/addon.node", import.meta.url).pathname);
 "#;
-        let rewritten = rewrite_import_meta_require_addons(source, &entry, &mut ctx).unwrap();
+        let rewritten = rewrite_import_meta_require_addons(source, &entry, &mut ctx, None).unwrap();
         assert_eq!(rewritten.matches(".dlopen(").count(), 4, "{rewritten}");
         assert_eq!(
             rewritten.matches("\"$project/native/addon.node\"").count(),
@@ -447,6 +450,7 @@ const d = import.meta.require(new URL("./native/addon.node", import.meta.url).pa
             "const load = import.meta.require; load(process.env.ADDON_PATH);",
             &entry,
             &mut ctx,
+            None,
         )
         .unwrap_err()
         .to_string();
@@ -460,7 +464,7 @@ const d = import.meta.require(new URL("./native/addon.node", import.meta.url).pa
         let entry = dir.path().join(relative_entry);
         let source = "import.meta.require(process.argv[2]); import.meta['require'](choosePath());";
         assert_eq!(
-            rewrite_import_meta_require_addons(source, &entry, &mut ctx).unwrap(),
+            rewrite_import_meta_require_addons(source, &entry, &mut ctx, None).unwrap(),
             source
         );
         assert!(ctx.native_addons.is_empty());
@@ -472,7 +476,7 @@ const d = import.meta.require(new URL("./native/addon.node", import.meta.url).pa
         let entry = dir.path().join(relative_entry);
         let source =
             r#"let load = import.meta.require; load = other; load("./native/addon.node");"#;
-        let rewritten = rewrite_import_meta_require_addons(source, &entry, &mut ctx).unwrap();
+        let rewritten = rewrite_import_meta_require_addons(source, &entry, &mut ctx, None).unwrap();
         assert_eq!(rewritten, source);
         assert!(ctx.native_addons.is_empty());
     }
@@ -485,6 +489,7 @@ const d = import.meta.require(new URL("./native/addon.node", import.meta.url).pa
             r#"const URL = CustomURL; const load = import.meta.require; load(new URL("./native/addon.node", import.meta.url).pathname);"#,
             &entry,
             &mut ctx,
+            None,
         )
         .unwrap_err()
         .to_string();
@@ -504,7 +509,7 @@ function unrelated(load) {
   return load("./native/addon.node");
 }
 "#;
-        let rewritten = rewrite_import_meta_require_addons(source, &entry, &mut ctx).unwrap();
+        let rewritten = rewrite_import_meta_require_addons(source, &entry, &mut ctx, None).unwrap();
         assert_eq!(rewritten.matches(".dlopen(").count(), 1, "{rewritten}");
         assert!(
             rewritten.contains("return load(\"./native/addon.node\");\n}"),
