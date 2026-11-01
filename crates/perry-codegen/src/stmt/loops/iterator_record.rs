@@ -254,110 +254,125 @@ fn lower_array_arm(
 
     // `lower_for` already ran the record's init (the cursor at 0).
     let protocol_mode = crate::lower_conditional::lower_test(ctx, protocol_test)?;
-    let head_idx = ctx.new_block("record.head");
-    let array_idx = ctx.new_block("record.indexed");
-    let array_get_idx = ctx.new_block("record.indexed.get");
-    let protocol_idx = ctx.new_block("record.protocol");
-    let body_idx = ctx.new_block("record.body");
-    let update_idx = ctx.new_block("record.update");
-    let exit_idx = ctx.new_block("record.exit");
-    let head_label = ctx.block_label(head_idx);
-    let array_label = ctx.block_label(array_idx);
-    let array_get_label = ctx.block_label(array_get_idx);
-    let protocol_label = ctx.block_label(protocol_idx);
-    let body_label = ctx.block_label(body_idx);
-    let update_label = ctx.block_label(update_idx);
-    let exit_label = ctx.block_label(exit_idx);
-    ctx.block().br(&head_label);
-    ctx.current_block = head_idx;
-    ctx.block().cond_br(&protocol_mode, &protocol_label, &array_label);
-
-    // Indexed head. Entry proved the payload an Array on this head. The
-    // payload's only other writes are the plan's releases, which run just
-    // before an exit leaves the loop, so in this head it is a stable
-    // binding of the source's declared element type.
-    ctx.current_block = array_idx;
-    let previous = (!matches!(element_hint, perry_hir::types::Type::Any)).then(|| {
-        let rebound = ctx.reassigned_locals.remove(&arm.array);
-        let ty = ctx.local_types.insert(
-            arm.array,
-            perry_hir::types::Type::Array(Box::new(element_hint)),
-        );
-        (ty, rebound)
-    });
-    // An unhinted head keeps the record's proven-array length lowering.
-    let condition = if previous.is_some() {
-        arm.condition.clone()
-    } else {
-        Expr::Compare {
-            op: CompareOp::Lt,
-            left: Box::new(Expr::LocalGet(arm.counter)),
-            right: Box::new(arm.length.clone()),
-        }
-    };
-    let indexed = (|| -> Result<()> {
-        lower_stmt(ctx, &set_state(2.0))?;
-        let ready = crate::lower_conditional::lower_test(ctx, &condition)?;
-        emit_gc_loop_safepoint(ctx, &[], &[&condition]);
-        ctx.block().cond_br(&ready, &array_get_label, &exit_label);
-        ctx.current_block = array_get_idx;
-        lower_stmt(
-            ctx,
-            &Stmt::Expr(Expr::LocalSet(arm.output, Box::new(arm.element.clone()))),
-        )?;
-        if !ctx.block().is_terminated() {
-            ctx.block().br(&body_label);
-        }
-        Ok(())
-    })();
-    if let Some((ty, rebound)) = previous {
-        match ty {
-            Some(ty) => ctx.local_types.insert(arm.array, ty),
-            None => ctx.local_types.remove(&arm.array),
-        };
-        if rebound {
-            ctx.reassigned_locals.insert(arm.array);
-        }
-    }
-    indexed?;
-
-    // Protocol head: the record's own condition. Step sets state 2, runs
-    // IteratorStepValue out of line and binds `output`.
-    ctx.current_block = protocol_idx;
-    let ready = crate::lower_conditional::lower_test(ctx, protocol_condition)?;
-    if sole_binding {
-        let value = lower_expr(ctx, &Expr::LocalGet(arm.output))?;
-        crate::expr::emit_string_addref_if_heap_string(ctx, &value);
-    }
-    emit_gc_loop_safepoint(ctx, &[], &[protocol_condition]);
-    ctx.block().cond_br(&ready, &body_label, &exit_label);
-
-    // One body. `continue` runs the shared update, `break` leaves through
-    // the plan's exits like any loop exit.
-    ctx.loop_targets
-        .push((update_label.clone(), exit_label.clone(), ctx.try_depth));
-    ctx.current_block = body_idx;
-    let lowered = lower_stmts(ctx, shared_body);
-    ctx.loop_targets.pop();
-    lowered?;
-    clear_loop_body_shadow_slots(ctx, shared_body);
-    if !ctx.block().is_terminated() && body_needs_asm_barrier(shared_body) {
-        ctx.block().asm_sideeffect_barrier();
-    }
-    if !ctx.block().is_terminated() {
-        emit_gc_loop_safepoint(ctx, shared_body, &[]);
-        ctx.block().br(&update_label);
-    }
-
-    // The record's own update: `i++` on the indexed head; the protocol
-    // completion never observes the cursor.
-    ctx.current_block = update_idx;
-    let _ = lower_expr(ctx, record_update)?;
-    emit_gc_loop_safepoint(ctx, &[], &[record_update]);
-    if !ctx.block().is_terminated() {
+    // The loop, lowered by the region tier like any counted loop: a
+    // per-iteration receiver bound by the body splits the body after its
+    // binding (the guard at the tail's top holds whichever head bound it),
+    // and an invariant receiver versions the loop at its preheader. The
+    // region plans both heads' work: the protocol Step and the element Get
+    // may run JS.
+    let mut emit = |ctx: &mut FnCtx<'_>| -> Result<()> {
+        let head_idx = ctx.new_block("record.head");
+        let array_idx = ctx.new_block("record.indexed");
+        let array_get_idx = ctx.new_block("record.indexed.get");
+        let protocol_idx = ctx.new_block("record.protocol");
+        let body_idx = ctx.new_block("record.body");
+        let update_idx = ctx.new_block("record.update");
+        let exit_idx = ctx.new_block("record.exit");
+        let head_label = ctx.block_label(head_idx);
+        let array_label = ctx.block_label(array_idx);
+        let array_get_label = ctx.block_label(array_get_idx);
+        let protocol_label = ctx.block_label(protocol_idx);
+        let body_label = ctx.block_label(body_idx);
+        let update_label = ctx.block_label(update_idx);
+        let exit_label = ctx.block_label(exit_idx);
         ctx.block().br(&head_label);
-    }
-    ctx.current_block = exit_idx;
+        ctx.current_block = head_idx;
+        ctx.block().cond_br(&protocol_mode, &protocol_label, &array_label);
+
+        // Indexed head. Entry proved the payload an Array on this head. The
+        // payload's only other writes are the plan's releases, which run just
+        // before an exit leaves the loop, so in this head it is a stable
+        // binding of the source's declared element type.
+        ctx.current_block = array_idx;
+        let previous = (!matches!(element_hint, perry_hir::types::Type::Any)).then(|| {
+            let rebound = ctx.reassigned_locals.remove(&arm.array);
+            let ty = ctx.local_types.insert(
+                arm.array,
+                perry_hir::types::Type::Array(Box::new(element_hint.clone())),
+            );
+            (ty, rebound)
+        });
+        // An unhinted head keeps the record's proven-array length lowering.
+        let condition = if previous.is_some() {
+            arm.condition.clone()
+        } else {
+            Expr::Compare {
+                op: CompareOp::Lt,
+                left: Box::new(Expr::LocalGet(arm.counter)),
+                right: Box::new(arm.length.clone()),
+            }
+        };
+        let indexed = (|| -> Result<()> {
+            lower_stmt(ctx, &set_state(2.0))?;
+            let ready = crate::lower_conditional::lower_test(ctx, &condition)?;
+            emit_gc_loop_safepoint(ctx, &[], &[&condition]);
+            ctx.block().cond_br(&ready, &array_get_label, &exit_label);
+            ctx.current_block = array_get_idx;
+            lower_stmt(
+                ctx,
+                &Stmt::Expr(Expr::LocalSet(arm.output, Box::new(arm.element.clone()))),
+            )?;
+            if !ctx.block().is_terminated() {
+                ctx.block().br(&body_label);
+            }
+            Ok(())
+        })();
+        if let Some((ty, rebound)) = previous {
+            match ty {
+                Some(ty) => ctx.local_types.insert(arm.array, ty),
+                None => ctx.local_types.remove(&arm.array),
+            };
+            if rebound {
+                ctx.reassigned_locals.insert(arm.array);
+            }
+        }
+        indexed?;
+
+        // Protocol head: the record's own condition. Step sets state 2, runs
+        // IteratorStepValue out of line and binds `output`.
+        ctx.current_block = protocol_idx;
+        let ready = crate::lower_conditional::lower_test(ctx, protocol_condition)?;
+        if sole_binding {
+            let value = lower_expr(ctx, &Expr::LocalGet(arm.output))?;
+            crate::expr::emit_string_addref_if_heap_string(ctx, &value);
+        }
+        emit_gc_loop_safepoint(ctx, &[], &[protocol_condition]);
+        ctx.block().cond_br(&ready, &body_label, &exit_label);
+
+        // One body. `continue` runs the shared update, `break` leaves through
+        // the plan's exits like any loop exit.
+        ctx.loop_targets
+            .push((update_label.clone(), exit_label.clone(), ctx.try_depth));
+        ctx.current_block = body_idx;
+        let lowered = lower_stmts(ctx, shared_body);
+        ctx.loop_targets.pop();
+        lowered?;
+        clear_loop_body_shadow_slots(ctx, shared_body);
+        if !ctx.block().is_terminated() && body_needs_asm_barrier(shared_body) {
+            ctx.block().asm_sideeffect_barrier();
+        }
+        if !ctx.block().is_terminated() {
+            emit_gc_loop_safepoint(ctx, shared_body, &[]);
+            ctx.block().br(&update_label);
+        }
+
+        // The record's own update: `i++` on the indexed head; the protocol
+        // completion never observes the cursor.
+        ctx.current_block = update_idx;
+        let _ = lower_expr(ctx, record_update)?;
+        emit_gc_loop_safepoint(ctx, &[], &[record_update]);
+        if !ctx.block().is_terminated() {
+            ctx.block().br(&head_label);
+        }
+        ctx.current_block = exit_idx;
+        Ok(())
+    };
+    let heads = Expr::Sequence(vec![protocol_condition.clone(), arm.element.clone()]);
+    let region =
+        crate::stmt::region_loop::begin(ctx, Some(&heads), shared_body, Some(record_update))?;
+    let lowered = crate::stmt::region_loop::lower_loop(ctx, region, &mut emit);
+    crate::stmt::region_loop::end(ctx, region);
+    lowered?;
     Ok(true)
 }
 
