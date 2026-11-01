@@ -101,6 +101,26 @@ impl<'a> Gen<'a> {
                 } else if m0 == "module" && method == "createRequire" && object.is_none() {
                     let t = self.m.tok(TokKind::Builtin(BuiltinNs::Require));
                     self.tok_node(t)
+                } else if let (true, Some(o)) = (
+                    module == "array"
+                        && matches!(method.as_str(), "push_single" | "push" | "push_field_single"),
+                    o,
+                ) {
+                    // `arr.push(x)` lowered to the runtime's append: no
+                    // unknown code runs. `push_single` and `push` append to
+                    // the receiver's elements (codegen folds them only on a
+                    // receiver typed an array); `push_field_single` checks
+                    // the receiver and runs its own `push` otherwise, which
+                    // is the method call itself.
+                    if method == "push_field_single" {
+                        let push = self.m.atom("push");
+                        self.mcall(o, Key::Named(push), a, vec![])
+                    } else {
+                        for v in a {
+                            self.elem_store(fx, o, v, "push");
+                        }
+                        self.prim_node(prim::NUM)
+                    }
                 } else {
                     if module == "vm" || module == "node:vm" {
                         crate::builtins::set_dyn_eval(&mut self.m, "E14 node:vm");
@@ -407,9 +427,6 @@ impl<'a> Gen<'a> {
             | Expr::PodLayoutOffsetOf { .. }
             | Expr::ChildProcessGetProcessStatus(..)
             | Expr::ChildProcessKillProcess(..)
-            | Expr::ArrayIndexOf { .. }
-            | Expr::ArrayLastIndexOf { .. }
-            | Expr::ArrayIncludes { .. }
             | Expr::StringFromCharCode(..)
             | Expr::StringFromCharCodeSpread(..)
             | Expr::StringFromCodePoint(..)
@@ -560,8 +577,40 @@ impl<'a> Gen<'a> {
                     Protocol::ToPrimitive,
                 ),
             // The spread is iterated, then each element is ToNumber'd.
-            Expr::MathMinSpread(..) | Expr::MathMaxSpread(..) => {
-                self.prim_kids(fx, e, prim::NUM, "spread Math operand", Protocol::Any)
+            Expr::MathMinSpread(s) | Expr::MathMaxSpread(s) => {
+                let s = self.expr(fx, s);
+                let it = self.iterate(s);
+                let r = self.m.reason("spread Math operand");
+                self.m.cons(it, Cons::Implicit { reason: r, proto: Protocol::ToPrimitive });
+                self.prim_node(prim::NUM)
+            }
+            // ECMA-262 23.1.3.16 / .17 / .20: the receiver's `length` and
+            // elements are read (an index accessor runs), the search value
+            // is compared (IsStrictlyEqual, SameValueZero: no lookup on it),
+            // and `fromIndex` is ToIntegerOrInfinity'd (ToPrimitive).
+            Expr::ArrayIndexOf {
+                array,
+                value,
+                from_index,
+            }
+            | Expr::ArrayLastIndexOf {
+                array,
+                value,
+                from_index,
+            }
+            | Expr::ArrayIncludes {
+                array,
+                value,
+                from_index,
+            } => {
+                let a = self.expr(fx, array);
+                let _ = self.expr(fx, value);
+                let _ = self.elem_load(a);
+                if let Some(fi) = from_index {
+                    let _ = self.prim_op(fx, &[fi.as_ref()], prim::NUM, "fromIndex", Protocol::ToPrimitive);
+                }
+                let p = if matches!(e, Expr::ArrayIncludes { .. }) { prim::BOOL } else { prim::NUM };
+                self.prim_node(p)
             }
             Expr::BigIntCoerce(..) => self.prim_kids(
                 fx,
@@ -578,8 +627,17 @@ impl<'a> Gen<'a> {
                 Protocol::ToPrimitive,
             ),
             // The elements are read and each is ToString'd.
-            Expr::ArrayJoin { .. } => {
-                self.prim_kids(fx, e, prim::STR, "array join operand", Protocol::Any)
+            // ECMA-262 23.1.3.18: ToString(separator), then `length` and each
+            // element, ToString'd unless undefined or null.
+            Expr::ArrayJoin { array, separator } => {
+                let a = self.expr(fx, array);
+                if let Some(sep) = separator {
+                    let _ = self.prim_op(fx, &[sep.as_ref()], prim::STR, "array join operand", Protocol::ToPrimitive);
+                }
+                let el = self.elem_load(a);
+                let r = self.m.reason("array join operand");
+                self.m.cons(el, Cons::Implicit { reason: r, proto: Protocol::ToPrimitive });
+                self.prim_node(prim::STR)
             }
             Expr::ObjectIs(..)
             | Expr::ObjectHasOwn(..)
@@ -1161,7 +1219,8 @@ impl<'a> Gen<'a> {
             | Expr::RangeErrorNew(..)
             | Expr::ReferenceErrorNew(..)
             | Expr::SyntaxErrorNew(..) => {
-                let _ = self.prim_kids(fx, e, prim::ALL, "Error message", Protocol::Any);
+                // ECMA-262 20.5.1.1 step 3: ToString(message), nothing else.
+                let _ = self.prim_kids(fx, e, prim::ALL, "Error message", Protocol::ToPrimitive);
                 self.error_obj(mi, None)
             }
             Expr::ErrorNewWithCause { message, cause } => {

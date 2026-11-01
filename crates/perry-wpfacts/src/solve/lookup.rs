@@ -265,6 +265,12 @@ impl Model {
                 self.add_prim(dst, prim::UNDEF);
                 return;
             }
+            // An element of ⊤ is ⊤. Its key is an index, never
+            // `constructor`: no Function constructor (DECISIONS 235).
+            if t == TOP {
+                self.add_tok(dst, TOP);
+                return;
+            }
             return self.load_from(origin, t, Key::Any, dst);
         }
         if t == TOP {

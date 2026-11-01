@@ -432,6 +432,7 @@ impl Model {
                     && !self.settle_bf_written()
                     && !self.settle_for_in()
                     && !self.settle_define()
+                    && !crate::builtins::settle_native_given(self)
                 {
                     break;
                 }

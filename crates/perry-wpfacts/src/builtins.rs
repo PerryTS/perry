@@ -17,7 +17,7 @@ use members::{Family, Mem};
 pub use native_protocol::{
     global_field, global_user_key, is_builtin_module, native_parent_ctor, native_parent_keys,
     native_parent_summarized, native_proto, native_written, note_global_in_top, note_native_write,
-    require_parts,
+    require_parts, settle_native_given,
 };
 use native_protocol::{native_method, native_skips};
 
@@ -76,6 +76,7 @@ const CONSOLE_METHODS: &[&str] = &[
 
 /// E14: interpreted code may run; it can patch `Object.prototype`.
 pub fn set_dyn_eval(m: &mut Model, why: &str) {
+    interpreted_code_runs(m);
     if m.dyn_eval.is_none() {
         m.dyn_eval = Some(why.to_string());
         m.rel(|| format!("dyneval {}", why.replace(' ', "\\s")));
@@ -86,6 +87,25 @@ pub fn set_dyn_eval(m: &mut Model, why: &str) {
         // interpreter, whose global reads and writes `compute` records up
         // front; without one the Function constructor throws.
     }
+}
+
+/// DECISIONS 235: interpreted code may run, from a real eval-like source
+/// site or a solved call or construct that may be the Function constructor
+/// (a ⊤ callee, the constructor token, the constructor given to unknown
+/// code). With the interpreter linked it reads and writes any global (E20;
+/// the prototype-write guard does not cover it) and catches what compiled
+/// code throws into its `try`. Without it the Function constructor throws.
+pub fn interpreted_code_runs(m: &mut Model) {
+    if !m.interp_linked || m.interp_runs {
+        return;
+    }
+    m.interp_runs = true;
+    let gt = m.tok(crate::model::TokKind::Builtin(BuiltinNs::GlobalThis));
+    note_native_write(m, gt, None, "interpreted code may run");
+    let r = m.reason("thrown where interpreted code can catch it");
+    let thrown = m.thrown;
+    m.thrown_reason = Some(r);
+    m.sink_node(thrown, r);
 }
 
 fn unknown_method(m: &mut Model, call: CallId, why: &str) {
@@ -160,14 +180,9 @@ fn all_arg_values(m: &mut Model, call: CallId) -> NodeId {
     for &a in &c.args {
         m.edge(a, out);
     }
+    let ek = m.elem_key();
     for &s in &c.spread {
-        m.cons(
-            s,
-            Cons::Load {
-                key: Key::Any,
-                dst: out,
-            },
-        );
+        m.cons(s, Cons::Load { key: ek, dst: out });
     }
     out
 }
@@ -385,7 +400,8 @@ fn builtin_fn(m: &mut Model, why: &'static str) -> Tok {
     if m.explain {
         *m.bf_mints.entry(why).or_insert(0) += 1;
     }
-    m.tok(TokKind::BuiltinFn)
+    let t = m.tok(TokKind::BuiltinFn);
+    t
 }
 
 /// The opaque member: what a key a store into ⊤ (or unmodeled code) may
@@ -416,6 +432,19 @@ fn undescribed_member(m: &mut Model, dst: NodeId) {
 pub fn intrinsic_proto_own(m: &mut Model, key: Key, dst: NodeId) {
     if m.is_constructor_key(key) {
         return;
+    }
+    // A method no builtin prototype overrides is `Object.prototype`'s on
+    // every one of them; replaced (DECISIONS 234's writes), it is the
+    // opaque member.
+    if let Key::Named(a) = key {
+        if members::object_proto_own(&m.atoms[a as usize]) {
+            let f = m.tok(TokKind::Builtin(BuiltinNs::ObjectProtoOwn(a)));
+            m.add_tok(dst, f);
+            if !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
+                opaque_member(m, dst);
+            }
+            return;
+        }
     }
     undescribed_member(m, dst);
 }
@@ -643,9 +672,15 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     m.add_tok(dst, bt);
                 }
                 _ => {
-                    // Any global, the Function constructor included (E14).
-                    let f = m.tok(TokKind::Builtin(BuiltinNs::Function));
-                    m.add_tok(dst, f);
+                    // A host global, or under a computed key any global: the
+                    // Function constructor only under a key that may be
+                    // "Function" (E14, DECISIONS 235). The program stores
+                    // into the global object only through `__` keys or as
+                    // an escape.
+                    if name.is_none() {
+                        let f = m.tok(TokKind::Builtin(BuiltinNs::Function));
+                        m.add_tok(dst, f);
+                    }
                     m.add_top(dst, |_| {
                         format!("globalThis.{}", name.as_deref().unwrap_or("[computed]"))
                     });
@@ -692,7 +727,9 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             }
         }
         // A method has no `prototype`.
-        TokKind::Builtin(BuiltinNs::ObjectProtoMethod) if name.as_deref() == Some("prototype") => {
+        TokKind::Builtin(BuiltinNs::ObjectProtoMethod | BuiltinNs::ObjectProtoOwn(_))
+            if name.as_deref() == Some("prototype") =>
+        {
             m.add_prim(dst, prim::UNDEF)
         }
         TokKind::Builtin(ns) => match name.as_deref() {
@@ -1203,6 +1240,13 @@ fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
         }
     }
     match m.toks[t as usize].clone() {
+        // `Function.prototype.call/apply/bind` of a described builtin
+        // method: its call, the receiver given.
+        TokKind::Builtin(BuiltinNs::ObjectProtoOwn(_))
+            if matches!(name.as_deref(), Some("call" | "apply" | "bind")) =>
+        {
+            function_method(m, t, name.as_deref(), call)
+        }
         TokKind::Builtin(ns) => ns_method(m, ns, name.as_deref(), call),
         TokKind::Func(_, _) | TokKind::Bound(_) => function_method(m, t, name.as_deref(), call),
         // A builtin function value's methods are `Function.prototype`'s
@@ -1285,6 +1329,23 @@ fn object_proto_method_call(m: &mut Model, call: CallId) {
         // A receiver node no token stands for: its values are unknown here.
         (None, _) => unknown_method(m, call, "call of an Object.prototype method"),
     }
+}
+
+/// A call of `BuiltinNs::ObjectProtoOwn(a)`, whatever its receiver
+/// (ToObject(this) throws on `undefined`/`null`, reads nothing else):
+/// `hasOwnProperty` / `propertyIsEnumerable` convert their key and answer
+/// a boolean; `isPrototypeOf` answers a boolean (its argument is only
+/// walked: no conversion).
+fn object_proto_own_call(m: &mut Model, a: Atom, call: CallId) {
+    if m.atoms[a as usize] != "isPrototypeOf" {
+        // The key only: further arguments are ignored.
+        let c = m.calls[call as usize].clone();
+        let r = m.reason("ToPropertyKey");
+        for &k in c.args.iter().take(1).chain(c.spread.iter()) {
+            m.cons(k, Cons::Implicit { reason: r, proto: Protocol::ToPrimitive });
+        }
+    }
+    ret_prim(m, call, prim::BOOL);
 }
 
 /// `Object.prototype`'s methods, one per distinct summary in
@@ -1537,10 +1598,11 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
                 }
                 for &s in &c.spread {
                     let inner = m.node_l("assign-src");
+                    let ek = m.elem_key();
                     m.cons(
                         s,
                         Cons::Load {
-                            key: Key::Any,
+                            key: ek,
                             dst: inner,
                         },
                     );
@@ -1847,6 +1909,7 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             unknown_method(m, call, "E14 dynamic code");
         }
         BuiltinNs::ObjectProtoMethod => object_proto_method_call(m, call),
+        BuiltinNs::ObjectProtoOwn(a) => object_proto_own_call(m, a, call),
         BuiltinNs::Error | BuiltinNs::AggregateError | BuiltinNs::RegExp => {
             new_builtin_ns(m, ns, call);
             if ns == BuiltinNs::RegExp {
@@ -2024,7 +2087,7 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             unknown_method(m, call, "E14 dynamic code");
         }
         // Not a constructor (TypeError).
-        BuiltinNs::ObjectProtoMethod => {}
+        BuiltinNs::ObjectProtoMethod | BuiltinNs::ObjectProtoOwn(_) => {}
         BuiltinNs::Array => call_builtin_ns(m, ns, call),
         BuiltinNs::Object => {
             let o = site_tmpl(m, call, "Object()");

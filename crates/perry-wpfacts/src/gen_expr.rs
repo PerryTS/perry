@@ -840,6 +840,15 @@ impl<'a> Gen<'a> {
                         self.mark_fn_phase(fx, e, target, site);
                         self.m.cons(kp, Cons::StoreKeyed { o, src: v, site });
                     }
+                } else if let Some(ks) = self.const_key_set(fx.module, key) {
+                    // One of a few constant keys: a named store under each.
+                    for s in ks {
+                        let key = Key::Named(self.m.atom(&s));
+                        for (o, what) in [(t, "putvalue"), (rv, "putvalue-receiver")] {
+                            let site = self.store_phased(fx, e, target, o, key, v, what.into(), owner);
+                            self.m.stores[site as usize].key_value = Some(k);
+                        }
+                    }
                 } else {
                     let key = self.key_of(key);
                     let site =
@@ -963,6 +972,12 @@ impl<'a> Gen<'a> {
                     let site = self.store_site(fx.module, fx.f, "[]=".into(), None, false);
                     self.mark_rooted(e, site);
                     self.m.cons(kp, Cons::StoreKeyed { o, src: v, site });
+                } else if let Some(ks) = self.const_key_set(fx.module, index) {
+                    // One of a few constant keys: a named store under each.
+                    for s in ks {
+                        let key = Key::Named(self.m.atom(&s));
+                        self.store_elem(fx, e, o, key, i, v, "[]=");
+                    }
                 } else {
                     let key = self.key_of(index);
                     self.store_elem(fx, e, o, key, i, v, "[]=");
@@ -1201,7 +1216,9 @@ impl<'a> Gen<'a> {
                 args,
                 byte_offset,
                 ..
-            } => self.call_expr(fx, callee, args, &[], *byte_offset),
+            } => {
+                self.call_expr(fx, callee, args, &[], *byte_offset)
+            }
             Expr::CallSpread { callee, args, .. } => {
                 let (a, s) = self.call_args(fx, args);
                 let _ = (&a, &s);

@@ -66,6 +66,10 @@ mod unit_mode;
 mod unit_namespace;
 mod unit_shared;
 mod unit_this;
+mod native_given_proto;
+mod const_key_set_store;
+mod interp_from_facts;
+mod spread_elements;
 mod own_key_shadow;
 
 use crate::{compute, FactsConfig, ProgramFacts, Verdict};
@@ -1727,3 +1731,7 @@ fn a_protocol_touch_of_an_argument_marker_reads_nothing() {
 }
 mod constructor_values;
 mod generator_results;
+mod native_push;
+mod helper_protocols;
+mod delegate_step;
+mod proto_own_call;

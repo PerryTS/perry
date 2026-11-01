@@ -39,10 +39,15 @@ pub(super) fn prune(ctx: &mut CompilationContext, roots: &[PathBuf]) -> Result<(
     let dynamic_code = perry_hir::has_deferred_dynamic_code_sites()
         || ctx.native_module_imports.contains("vm")
         || ctx.uses_data_url_dynamic_import;
+    // DECISIONS 235: a real eval-like source site.
+    let interpreted_sources = !perry_hir::interpreted_source_sites().is_empty()
+        || ctx.native_module_imports.contains("vm")
+        || ctx.uses_data_url_dynamic_import;
     let Some(live) = super::program_facts::live_dynamic_imports(
         &ctx.native_modules,
         super::program_facts::export_sources(ctx),
         dynamic_code,
+        interpreted_sources,
         &ctx.patched_builtins.dynamic_code_reach,
         roots.iter().map(|p| p.display().to_string()).collect(),
     ) else {

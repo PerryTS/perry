@@ -751,7 +751,7 @@ impl<'a> Gen<'a> {
             // `yield*`'s pull (`perry-runtime` `iterator_close.rs`): Call(next,
             // iterator, « value »), or for a sync generator delegate stepped
             // through its intrinsic `next`, the value that result would carry
-            // (`value`), read from its record.
+            // (`value`), read from its record. The kind reads a record control.
             "js_iterator_delegate_step" => {
                 let (Some(it), Some(_next), Some(v)) = (arg(0), arg(1), arg(2)) else {
                     return self.extern_fail(name, &args, &spread);

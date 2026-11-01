@@ -548,7 +548,10 @@ fn ns_statics(ns: BuiltinNs) -> Option<&'static [(&'static str, Mem)]> {
             ("parseInt", FN),
         ],
         BuiltinNs::String => &[("fromCharCode", FN), ("fromCodePoint", FN), ("raw", FN)],
-        BuiltinNs::Boolean | BuiltinNs::Function | BuiltinNs::ObjectProtoMethod => &[],
+        BuiltinNs::Boolean
+        | BuiltinNs::Function
+        | BuiltinNs::ObjectProtoMethod
+        | BuiltinNs::ObjectProtoOwn(_) => &[],
         // Map/WeakMap and Set/WeakSet.
         BuiltinNs::Map => &[("groupBy", FN), ("@@__perry_wk_species", Mem::Ctor)],
         BuiltinNs::Set => &[("@@__perry_wk_species", Mem::Ctor)],
@@ -573,6 +576,15 @@ pub(super) fn ns_member(ns: BuiltinNs, name: &str) -> Option<Option<Mem>> {
 /// function (a constructor, `require`, an `Object.prototype` method),
 /// `Object.prototype` for a namespace object (`Math`, `JSON`, `Reflect`,
 /// `console`, `process`, the global object).
+/// `Object.prototype`'s methods no builtin prototype overrides: under its
+/// key, every builtin prototype's chain reads `Object.prototype`'s own.
+/// Each reads only: `hasOwnProperty` / `propertyIsEnumerable` convert their
+/// key (ToPropertyKey) and test an own property of ToObject(this);
+/// `isPrototypeOf` walks its argument's chain.
+pub(crate) fn object_proto_own(name: &str) -> bool {
+    matches!(name, "hasOwnProperty" | "propertyIsEnumerable" | "isPrototypeOf")
+}
+
 pub(super) fn ns_chain(ns: BuiltinNs) -> Family {
     match ns {
         BuiltinNs::Math
