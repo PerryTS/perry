@@ -30,8 +30,9 @@ pub fn canonical_guest(path: &Path, selected: Option<&str>) -> Result<BTreeMap<S
 /// factories and post-return writers behind sync/async exports are qualified
 /// on Linux, including recorded imported/exported resource endpoint profiles
 /// and shared record/future aliases across interfaces. Repeated interface labels,
-/// synchronous-started async imports and the wider lifecycle matrix remain
-/// unqualified; see docs/WASI_030_COMPLETION.md.
+/// and the wider lifecycle matrix remain unqualified. The recorded Linux
+/// profile also qualifies async imports staged by sync exports with checked
+/// borrow lifetimes; see docs/WASI_030_COMPLETION.md.
 /// Public --guest-c async output and future/stream values remain guarded.
 #[doc(hidden)]
 pub fn experimental_async_guest(
