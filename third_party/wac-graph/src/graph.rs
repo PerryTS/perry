@@ -1593,6 +1593,34 @@ impl<'a> CompositionGraphEncoder<'a> {
         let mut cache = Default::default();
         let mut checker = SubtypeChecker::new(&mut cache);
 
+        // Prime every separately labeled interface before remapping anything.
+        // A dependent import can mention its types before the labeled instance
+        // itself is aggregated. Canonical names do not distinguish two such
+        // imports' nominal resources.
+        let mut preserve = |name: &str, kind: ItemKind| {
+            if let ItemKind::Instance(id) = kind {
+                if crate::encoding::implements_directive(&self.0.types, name, id).is_some() {
+                    aggregator.preserve_interface_identity(id);
+                }
+            }
+        };
+        for &index in &import_nodes {
+            let node = &self.0.graph[index];
+            if let NodeKind::Import(name) = &node.kind {
+                preserve(name, node.item_kind);
+            }
+        }
+        for node in self.0.graph.node_weights() {
+            if matches!(node.kind, NodeKind::Instantiation(_)) {
+                let package = &self.0[node.package.unwrap()];
+                for (index, (name, kind)) in self.0.types[package.ty()].imports.iter().enumerate() {
+                    if !node.is_arg_satisfied(index) {
+                        preserve(name, *kind);
+                    }
+                }
+            }
+        }
+
         log::debug!("populating implicit imports");
 
         // Enumerate the instantiation nodes and populate the import types

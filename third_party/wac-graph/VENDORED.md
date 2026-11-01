@@ -33,6 +33,10 @@ same concrete dependency identity. Perry's composition regression checks the
 exact public import set, preserves the selected record's resource identity,
 and rejects a facade that uses the other labeled instance's owner type.
 
+The graph primes every labeled import identity in the patched `wac-types`
+aggregator before it remaps dependencies. Canonical interface names remain
+metadata on those instances; ordinary canonical imports still merge by semver.
+
 This is a source fix to the pinned release, with no dependency version/soak
 exception. Remove the vendor after the fix is available in an upstream release
 that passes Perry's normal dependency soak and compatibility checks.

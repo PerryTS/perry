@@ -97,6 +97,7 @@ members = [
 exclude = [
     "third_party/windows-winui",
     "third_party/wac-graph",
+    "third_party/wac-types",
     "third_party/turnloop",
     "test-wasi/p1-host",
     "third_party/getrandom",
@@ -668,6 +669,7 @@ codegen-units = 1
 # Required provider APIs are not all present in published alpha.10. Keep the
 # exact sources qualified with the component engine; see vendor provenance.
 [patch.crates-io]
+wac-types = { path = "third_party/wac-types" }
 turnloop = { path = "third_party/turnloop/turnloop" }
 turnloop-http = { path = "third_party/turnloop/turnloop-http" }
 getrandom02 = { package = "getrandom", path = "third_party/getrandom/0.2.17" }

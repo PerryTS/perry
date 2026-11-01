@@ -1,0 +1,25 @@
+[package]
+name = "wac-types"
+description = "A library for the definition of WebAssembly component model types."
+version = { workspace = true }
+edition = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+categories = { workspace = true }
+keywords = { workspace = true }
+repository = { workspace = true }
+
+[dependencies]
+anyhow = { workspace = true }
+id-arena = { workspace = true }
+indexmap = { workspace = true }
+semver = { workspace = true }
+serde = { workspace = true, optional = true }
+wasmparser = { workspace = true }
+wasm-encoder = { workspace = true }
+
+[dev-dependencies]
+wat = { workspace = true }
+
+[features]
+serde = ["dep:serde"]
