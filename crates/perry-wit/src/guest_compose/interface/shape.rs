@@ -27,6 +27,7 @@ impl ReencodeComponent for Indices {
 pub(in super::super) fn bind_shape(
     shape: &InstanceType,
     resources: &BTreeMap<String, u32>,
+    externals: &BTreeMap<u32, u32>,
 ) -> Result<InstanceType> {
     let mut encoded = Component::new();
     let mut section = ComponentTypeSection::new();
@@ -66,7 +67,31 @@ pub(in super::super) fn bind_shape(
             });
             output.export(name.name, ComponentTypeRef::Type(TypeBounds::Eq(old)));
             indices.types.push(old + 1);
+        } else if let InstanceTypeDeclaration::Alias(wasmparser::ComponentAlias::Outer {
+            kind: wasmparser::ComponentOuterAliasKind::Type,
+            count: 1,
+            index,
+        }) = &declaration
+        {
+            let source = *externals
+                .get(index)
+                .context("Missing shared outer type binding")?;
+            output.alias(Alias::Outer {
+                kind: ComponentOuterAliasKind::Type,
+                count: 1,
+                index: source,
+            });
+            indices.types.push(old);
         } else {
+            if let InstanceTypeDeclaration::Export {
+                name,
+                ty: ParsedRef::Type(_),
+            } = &declaration
+            {
+                if resources.contains_key(name.name) {
+                    used.insert(name.name.to_string());
+                }
+            }
             // The maintained round-trip encoder owns all payload layouts.
             // Source schema references can only point to preceding indices.
             indices.parse_component_instance_type_declaration(&mut output, declaration)?;

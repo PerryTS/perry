@@ -2,6 +2,67 @@ use super::*;
 use wac_graph::types::{Type, Types, ValueType};
 
 #[test]
+fn imported_resource_records_and_future_types_keep_shared_interface_bindings() {
+    let foreign = r#"(type $foreign (instance
+        (export "item" (type $item (sub resource)))
+        (type $own (own $item))
+        (type $record (record (field "owner" $own) (field "label" string)))
+        (export "payload" (type $payload (eq $record)))))"#;
+    let api = r#"(type $api (instance
+        (alias outer 1 $payload (type $outer))
+        (export "payload" (type $value (eq $outer)))
+        (type $future (future $value))
+        (export "pending" (type $pending (eq $future)))
+        (export "make" (func (param "value" $value) (result $pending)))))"#;
+    let producer = wat::parse_str(format!(
+        r#"(component {foreign}
+        (import "test:shared/foreign" (instance $foreign (type $foreign)))
+        (import "test:shared/other" (instance (type $foreign)))
+        (alias export $foreign "payload" (type $payload))
+        {api}
+        (import "api-input" (instance $api (type $api)))
+        (import "start" (func $kick async))
+        (export "test:shared/api" (instance $api))
+        (export "actor" (func $kick))
+        (export "signal" (func $kick)))"#
+    ))
+    .unwrap();
+    let facade = |wrong: bool| {
+        wat::parse_str(format!(
+            r#"(component {foreign}
+        (import "test:shared/foreign" (instance $foreign (type $foreign)))
+        (import "test:shared/other" (instance $other (type $foreign)))
+        (alias export ${which} "payload" (type $payload))
+        {api}
+        (import "source" (instance $source (type $api)))
+        (import "kick" (func async))
+        (alias export $source "make" (func $make))
+        (instance $forward (export "forward" (func $make)))
+        (export "forwarder" (instance $forward)))"#,
+            which = if wrong { "other" } else { "foreign" }
+        ))
+        .unwrap()
+    };
+    let plan = serde_json::to_vec(&serde_json::json!({
+        "schema_version":1, "actor":"actor", "signal":"signal", "forward_interface":"forwarder",
+        "imports":[{"local":"source","original":"test:shared/api"},{"local":"kick","original":"actor"}],
+        "forwards":[{"interface":"test:shared/api","function":"make","export":"forward"}]
+    })).unwrap();
+    Validator::new_with_features(WasmFeatures::all())
+        .validate_all(&producer)
+        .unwrap();
+    let bytes = compose_experimental_guest(&producer, &facade(false), &plan).unwrap();
+    let mut types = Types::default();
+    let package = Package::from_bytes("test:shared-result", None, bytes, &mut types).unwrap();
+    assert_eq!(types[package.ty()].exports.len(), 1);
+    let error = compose_experimental_guest(&producer, &facade(true), &plan).unwrap_err();
+    assert!(
+        format!("{error:#}").to_lowercase().contains("resource"),
+        "{error:#}"
+    );
+}
+
+#[test]
 fn concrete_resource_future_payload_is_exported_with_its_enclosing_interface() {
     let api = r#"(type $api (instance
         (export "item" (type $item (sub resource)))
