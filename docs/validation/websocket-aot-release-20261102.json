@@ -1,0 +1,301 @@
+{
+  "date": "2026-11-02",
+  "source": "6ea71cc1a3675506869ea1ea3fe1cdff30d3fa7d",
+  "scope": "Linux x86_64 unchanged WebSocket state machine using fresh prod native and release P1/P3 runtimes",
+  "fullWasi030Qualified": false,
+  "performanceQualified": false,
+  "releasePlatformQualification": false,
+  "upstream": {
+    "repository": "https://github.com/guest271314/websocket-server",
+    "commit": "d7f94f5634f733415f1f52547fe45b3794d9d41a",
+    "sourceUnmodified": true,
+    "file": "websocket-server-wasm-debug.ts",
+    "sha256": "ea9269e655def8f0aa95c09c467a5cb048f71e55994d22d1c90285f513b5de49"
+  },
+  "build": {
+    "nativeProfile": "prod six-package union",
+    "wasiRuntimeProfile": "release plain P1 and P3",
+    "allArchivesFreshAtSource": true,
+    "node": "26.12.1",
+    "wasmtimeLibrary": "48.0.8",
+    "sdk": "wasi-sdk 34.0",
+    "rayonCompilerThreads": 4,
+    "rustflagsEnvironmentModified": false
+  },
+  "actual": {
+    "passedPhases": 27,
+    "realSocketClientPhases": 8,
+    "p3TextClientOriginalFourSecondDeadlinePassed": true,
+    "p1Imports": "standard wasi_snapshot_preview1 only; no custom allowances",
+    "p3Contract": "exact 0.3.0 command",
+    "phases": [
+      {
+        "phase": "node-version",
+        "exitCode": 0,
+        "passed": true,
+        "seconds": 0.003584671998396516,
+        "stdoutBytes": 9,
+        "expectedBytes": null
+      },
+      {
+        "phase": "node-text-control",
+        "exitCode": 0,
+        "passed": true,
+        "seconds": 0.04636464000213891,
+        "stdoutBytes": 171,
+        "expectedBytes": 171
+      },
+      {
+        "phase": "node-length-boundaries",
+        "exitCode": 0,
+        "passed": true,
+        "seconds": 0.7248812520119827,
+        "stdoutBytes": 1245755,
+        "expectedBytes": 1245755
+      },
+      {
+        "phase": "node-binary-20mib",
+        "exitCode": 0,
+        "passed": true,
+        "seconds": 11.313259982998716,
+        "stdoutBytes": 20974867,
+        "expectedBytes": 20974867
+      },
+      {
+        "phase": "native-compile",
+        "exitCode": 0,
+        "passed": true,
+        "seconds": 1.7408084819908254,
+        "stdoutBytes": 723,
+        "expectedBytes": null
+      },
+      {
+        "phase": "native-text-control",
+        "exitCode": 0,
+        "passed": true,
+        "seconds": 0.0017924970015883446,
+        "stdoutBytes": 171,
+        "expectedBytes": 171
+      },
+      {
+        "phase": "native-length-boundaries",
+        "exitCode": 0,
+        "passed": true,
+        "seconds": 0.5574151930049993,
+        "stdoutBytes": 1245755,
+        "expectedBytes": 1245755
+      },
+      {
+        "phase": "native-binary-20mib",
+        "exitCode": 0,
+        "passed": true,
+        "seconds": 9.430247599986615,
+        "stdoutBytes": 20974867,
+        "expectedBytes": 20974867
+      },
+      {
+        "phase": "p3-compile",
+        "exitCode": 0,
+        "passed": true,
+        "seconds": 0.9160155029967427,
+        "stdoutBytes": 633,
+        "expectedBytes": null
+      },
+      {
+        "phase": "p3-contract",
+        "exitCode": 0,
+        "passed": true,
+        "seconds": 0.00325013799010776,
+        "stdoutBytes": 697,
+        "expectedBytes": null
+      },
+      {
+        "phase": "p3-host-compile",
+        "exitCode": 0,
+        "passed": true,
+        "seconds": 2.624167406000197,
+        "stdoutBytes": 715,
+        "expectedBytes": null
+      },
+      {
+        "phase": "p3-text-control",
+        "exitCode": 0,
+        "passed": true,
+        "seconds": 1.4148495889967307,
+        "stdoutBytes": 171,
+        "expectedBytes": 171
+      },
+      {
+        "phase": "p3-length-boundaries",
+        "exitCode": 0,
+        "passed": true,
+        "seconds": 2.000602946005529,
+        "stdoutBytes": 1245755,
+        "expectedBytes": 1245755
+      },
+      {
+        "phase": "p3-binary-20mib",
+        "exitCode": 0,
+        "passed": true,
+        "seconds": 10.844196908001322,
+        "stdoutBytes": 20974867,
+        "expectedBytes": 20974867
+      },
+      {
+        "phase": "p1-compile",
+        "exitCode": 0,
+        "passed": true,
+        "seconds": 0.7510628169984557,
+        "stdoutBytes": 620,
+        "expectedBytes": null
+      },
+      {
+        "phase": "p1-contract",
+        "exitCode": 0,
+        "passed": true,
+        "seconds": 0.024637176014948636,
+        "stdoutBytes": 206,
+        "expectedBytes": null
+      },
+      {
+        "phase": "p1-text-control",
+        "exitCode": 0,
+        "passed": true,
+        "seconds": 0.04970433400012553,
+        "stdoutBytes": 171,
+        "expectedBytes": 171
+      },
+      {
+        "phase": "p1-length-boundaries",
+        "exitCode": 0,
+        "passed": true,
+        "seconds": 0.8680272699857596,
+        "stdoutBytes": 1245755,
+        "expectedBytes": 1245755
+      },
+      {
+        "phase": "p1-binary-20mib",
+        "exitCode": 0,
+        "passed": true,
+        "seconds": 13.642587480979273,
+        "stdoutBytes": 20974867,
+        "expectedBytes": 20974867
+      },
+      {
+        "phase": "socket-node-text",
+        "clientExit": 0,
+        "serverExit": 0,
+        "passed": true
+      },
+      {
+        "phase": "socket-node-binary",
+        "clientExit": 0,
+        "serverExit": 0,
+        "passed": true
+      },
+      {
+        "phase": "socket-native-text",
+        "clientExit": 0,
+        "serverExit": 0,
+        "passed": true
+      },
+      {
+        "phase": "socket-native-binary",
+        "clientExit": 0,
+        "serverExit": 0,
+        "passed": true
+      },
+      {
+        "phase": "socket-p1-text",
+        "clientExit": 0,
+        "serverExit": 0,
+        "passed": true
+      },
+      {
+        "phase": "socket-p1-binary",
+        "clientExit": 0,
+        "serverExit": 0,
+        "passed": true
+      },
+      {
+        "phase": "socket-p3-text",
+        "clientExit": 0,
+        "serverExit": 0,
+        "passed": true
+      },
+      {
+        "phase": "socket-p3-binary",
+        "clientExit": 0,
+        "serverExit": 0,
+        "passed": true
+      }
+    ]
+  },
+  "dependencyPolicy": {
+    "strictTokioBanPassed": true,
+    "noTokioException": true
+  },
+  "artifactIdentities": {
+    "websocket-acceptance/source/websocket-server-wasm-debug.ts": {
+      "bytes": 10841,
+      "sha256": "ea9269e655def8f0aa95c09c467a5cb048f71e55994d22d1c90285f513b5de49"
+    },
+    "websocket-acceptance/websocket-native": {
+      "bytes": 7542624,
+      "sha256": "c3468b43f176c28d37a3bae0b4bc3c452a5d4115f3863446a9ca239eff1b749a"
+    },
+    "websocket-acceptance/websocket-p3.component.wasm": {
+      "bytes": 6075064,
+      "sha256": "9465e432a007232350bdc0a1c03ac0672a57be94192a92e544c0393585cff911"
+    },
+    "websocket-acceptance/p3-host": {
+      "bytes": 33102952,
+      "sha256": "8c592b3e32264532cc8ddce27fc8f3a0d79720a3651efb1e9c24381b96b90ad3"
+    },
+    "websocket-acceptance/websocket-p1.wasm": {
+      "bytes": 5845114,
+      "sha256": "f1e9a314946d1c2732a25dd3cf8126d2b125fb6f5437d7a9890261694e3118cd"
+    },
+    "websocket-acceptance/p1-host.mjs": {
+      "bytes": 355,
+      "sha256": "9c548ce1ec482318d1de84924ae7c1b447697ce19a9fff44fc3cf52feb6f90b7"
+    },
+    "native/perry": {
+      "bytes": 112048928,
+      "sha256": "b667f45530a9b610997f5a8be9cdc28f6df9740f75319b329e38d90cc832a67f"
+    },
+    "native/libperry_runtime.a": {
+      "bytes": 84524768,
+      "sha256": "732a0a2a6918f22bae1d5a58057e75299b131bd04e194ab6fd5728e0ce662b14"
+    },
+    "p1/libperry_runtime.a": {
+      "bytes": 56861544,
+      "sha256": "2af254bbc63a7174234ef1c821c3fac7b360bac6eb92cf915f38b233f2359f8e"
+    },
+    "plain/libperry_runtime.a": {
+      "bytes": 46172204,
+      "sha256": "39bfa5470dfd3652e3074dfe5b265c0ebdc155985e7ab56b118e2515bf83ff9e"
+    }
+  },
+  "broaderQualification": {
+    "result": "incomplete",
+    "failingTest": "shared-resource forced moving GC, seed 313",
+    "failure": "stale forwarded array pointer in heap object field at minor 10",
+    "transportRegressionReached": false
+  },
+  "evidence": {
+    "archive": "websocket-release-v011-evidence.tar.gz",
+    "indexedFiles": 124,
+    "bytes": 478659251,
+    "sha256": "8ccd35ed56f96e45ac767e6b51980d54766a85958130b0e1816d79c8d6369ed5",
+    "exactRegularFileSetVerified": true,
+    "allIndexedSizesAndHashesVerified": true,
+    "containsSourceSnapshotAndBuildRecipe": true
+  },
+  "remaining": [
+    "reproduced competitor artifacts",
+    "fair cold-start, throughput and peak-memory measurements including host costs",
+    "runtime footprint reduction",
+    "full WASI 0.3 qualification"
+  ]
+}

@@ -7,28 +7,35 @@ The acceptance harness pins both the server and upstream clients by SHA-256.
 It exercises native output, a Preview 1 core module, and a WASI 0.3 command
 component against Node 26.12.1 and independently generated expected wire bytes.
 
-The [Linux acceptance receipt](validation/websocket-aot-20261101.json) qualifies
-27 functional phases at source `02cf3068ae`, including both unchanged upstream
+The [release build receipt](validation/websocket-aot-release-20261102.json) qualifies
+27 functional phases at source `6ea71cc1a3`, including both unchanged upstream
 clients on all three Perry output formats. The P3 text client keeps its original
 four-second deadline: the initial sequential host missed it, and enabling the
 pinned engine's parallel compiler passes it with four compiler threads. This
 compiler pool uses Rayon; guest I/O continues through Turnloop, with the strict
-Tokio ban passing. Eleven compiled P3 commands and 45 command regression phases
-also pass, including both stdin lifetime cases. All 505 indexed evidence files
-and their exact regular-file set were verified locally.
+Tokio ban passing. The native compiler and coherent native archives use `prod`;
+the P1 and plain P3 runtime archives use release. All were freshly built at the
+recorded source. All 124 indexed evidence files, their sizes and hashes, and
+their exact regular-file set were verified locally.
 
 | Functional build artifact | Bytes |
 | --- | ---: |
-| Native executable | 7,436,096 |
-| Preview 1 core module | 5,844,453 |
-| WASI 0.3 command component | 6,073,109 |
-| Optional native P3 command host | 35,380,360 |
+| Native executable | 7,542,624 |
+| Preview 1 core module | 5,845,114 |
+| WASI 0.3 command component | 6,075,064 |
+| Optional native P3 command host | 33,102,952 |
 
-These are functional build sizes, not a release performance comparison. The
-native archives use `perry-dev`; the separate WASI archives use release. Guest
-archives remain sourced at `e48d556ab6`, with exact selected target dependency,
-feature, lock-record and path-source equality proved against the newer native
-source. They were not restamped as newly built at the native source.
+These are measured release build sizes. Startup, throughput and peak memory
+have not been qualified against the other compilers. The
+[earlier functional receipt](validation/websocket-aot-20261101.json) retains its
+original source and build profiles; its separate 45 command regression phases
+and eleven compiled P3 commands were not reexecuted by this release workload.
+
+This application passes while broader WASI 0.3 qualification remains incomplete.
+A separate resource-bearing future factory fails evacuation verification under
+forced moving GC with the fresh instrumented runtime. Ordinary execution passes;
+the failing seed and full diagnostic log are included in the evidence archive.
+Passing this WebSocket workload does not qualify that resource profile.
 
 The stripped P1 artifact contains 5,347,131 bytes of code (91.49%) and 478,665
 bytes in its data section. A separate diagnostic build with names identifies
@@ -110,8 +117,8 @@ This ownership change does not repair arbitrary direct uses of the SDK's
 incorrect stdin destructor.
 
 Functional acceptance is the first comparison milestone. Fair performance
-qualification still requires release native archives, identical bridge/engine
-versions, repeated cold starts, throughput and peak memory, and stripped raw
+qualification still requires identical bridge/engine versions, repeated cold
+starts, throughput and peak memory, and stripped raw
 and compressed artifact sizes. Engine/host process costs must be reported
 alongside guest costs. The upstream README's js2wasm size is an upstream claim;
 we have not reproduced competitor artifacts. Smoke timings do not establish
@@ -121,7 +128,8 @@ The footprint comparison also spans different memory models. The
 [js2wasm project](https://github.com/loopdive/js2) emits WasmGC and requires
 post-MVP engine features. Perry's WASI output carries its linear-memory runtime
 and collector. Record required engine features and host memory alongside guest
-bytes when reproducing the comparison. The next Perry measurement should use
-current main's runtime pruning and fresh release archives, then attribute the
-remaining retained functions. A WasmGC backend would be a separate compiler
+bytes when reproducing the comparison. Fresh release archives incorporating
+the integrated runtime pruning still produce a roughly 5.85 MB P1 module;
+the large footprint remains a competitive gap. Further size work should
+attribute the remaining retained functions. A WasmGC backend would be a separate compiler
 project from completing the current WASI 0.3 component profile.
