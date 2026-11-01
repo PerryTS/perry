@@ -1,10 +1,23 @@
-//! Target packages: one cross triple's prebuilt libraries, installed apart
+//! Target and ext packages: one triple's prebuilt libraries, installed apart
 //! from perry itself.
 //!
-//! A target package is `@perryts/perry-target-<triple>`, the name derived
-//! from the triple [`rust_target_triple`](super::rust_target_triple) returns.
-//! Its root holds `target.json` and `lib/<archive>[.zst]` (+ the runtime's
-//! `.gc-effects` sidecar). The same layout is used in two places:
+//! A package is `@perryts/perry-<kind>-<triple>`, the name derived from the
+//! triple [`rust_target_triple`](super::rust_target_triple) returns (or, for
+//! perry's own platform, the triple it was built for). There are two kinds:
+//!
+//! - a **target** package (`perry-target-<triple>`) holds a cross triple's
+//!   runtime, stdlib and UI archives (+ the runtime's `.gc-effects` sidecar);
+//! - an **ext** package (`perry-ext-<triple>`) holds the triple's
+//!   native-extension archives (`libperry_ext_*.a`, the host functions behind
+//!   node:http, ws, zlib, ...). They are too big for the host package, so an
+//!   npm install fetches them only when a program needs one (see
+//!   `commands::target::ensure_ext_package`).
+//!
+//! Which triples have a package of each kind is one list,
+//! `npm/packaged-triples.json`, which the publish scripts stage from too.
+//!
+//! Both kinds have the same layout: `target.json` and `lib/<archive>[.zst]`,
+//! found in two places:
 //!
 //! - an npm install: `A/node_modules/@perryts/perry-target-<triple>/` for an
 //!   ancestor `A` of the perry binary's directory, nearest first. This is
@@ -12,8 +25,8 @@
 //!   install (unix `<prefix>/lib`, Windows `%APPDATA%\npm`), a project
 //!   install (hoisted or nested) and pnpm (the real `.pnpm/...` path of the
 //!   binary has the project as an ancestor);
-//! - `~/.perry/targets/<perry-version>/<triple>/`, written by
-//!   `perry target add`.
+//! - `~/.perry/<targets|ext>/<perry-version>/<triple>/`, written by
+//!   `perry target add [--ext]` and by the ext auto-fetch.
 //!
 //! A root counts only when its `target.json` names this perry's exact
 //! version, its source revision (when this binary was built with one) and
@@ -34,13 +47,67 @@ use sha2::{Digest, Sha256};
 /// The manifest at a target package's root.
 pub(crate) const TARGET_JSON: &str = "target.json";
 
-/// npm scope directory and name prefix of every target package.
-const NPM_SCOPE: &str = "@perryts";
-pub(crate) const PACKAGE_PREFIX: &str = "perry-target-";
+/// npm scope directory of every package.
+pub(crate) const NPM_SCOPE: &str = "@perryts";
 
-/// `aarch64-linux-android` → `@perryts/perry-target-aarch64-linux-android`.
-pub(crate) fn package_name(triple: &str) -> String {
-    format!("{NPM_SCOPE}/{PACKAGE_PREFIX}{triple}")
+/// A triple's two packages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PackageKind {
+    /// `perry-target-<triple>`: a cross triple's runtime, stdlib and UI.
+    Target,
+    /// `perry-ext-<triple>`: the triple's native-extension archives.
+    Ext,
+}
+
+impl PackageKind {
+    pub(crate) const ALL: [PackageKind; 2] = [PackageKind::Target, PackageKind::Ext];
+
+    /// The npm name prefix after the scope, and the release asset prefix.
+    pub(crate) fn prefix(self) -> &'static str {
+        match self {
+            PackageKind::Target => "perry-target-",
+            PackageKind::Ext => "perry-ext-",
+        }
+    }
+
+    /// The `~/.perry` directory that holds this kind, per version.
+    pub(crate) fn home_dir(self) -> &'static str {
+        match self {
+            PackageKind::Target => "targets",
+            PackageKind::Ext => "ext",
+        }
+    }
+}
+
+/// `(Target, aarch64-linux-android)` →
+/// `@perryts/perry-target-aarch64-linux-android`.
+pub(crate) fn package_name(kind: PackageKind, triple: &str) -> String {
+    format!("{NPM_SCOPE}/{}{triple}", kind.prefix())
+}
+
+/// The one list of packaged triples, shared with the publish scripts
+/// (`scripts/publish/constants.mts` reads the same file, and stage-npm.sh
+/// stages exactly these packages).
+const PACKAGED_TRIPLES_JSON: &str = include_str!("../../../../../npm/packaged-triples.json");
+
+#[derive(Deserialize)]
+struct PackagedTriples {
+    targets: Vec<String>,
+    ext: Vec<String>,
+}
+
+/// Whether perry releases publish a `kind` package for `triple`. A triple
+/// with none (a windows-msvc cross, a musl host's extensions) keeps the
+/// generic missing-library errors instead of naming a package that does not
+/// exist, and is never fetched.
+pub(crate) fn is_packaged(kind: PackageKind, triple: &str) -> bool {
+    let list: PackagedTriples = serde_json::from_str(PACKAGED_TRIPLES_JSON)
+        .expect("npm/packaged-triples.json is checked by the publish tests");
+    let triples = match kind {
+        PackageKind::Target => list.targets,
+        PackageKind::Ext => list.ext,
+    };
+    triples.iter().any(|t| t == triple)
 }
 
 /// The Rust triple of a perry `--target` name, for code outside `compile`.
@@ -118,14 +185,19 @@ impl TargetRoot {
     }
 }
 
-/// `~/.perry/targets`.
-pub(crate) fn perry_home_targets(home: &Path) -> PathBuf {
-    home.join(".perry").join("targets")
+/// `~/.perry/targets` or `~/.perry/ext`.
+pub(crate) fn perry_home_kind(home: &Path, kind: PackageKind) -> PathBuf {
+    home.join(".perry").join(kind.home_dir())
 }
 
-/// `~/.perry/targets/<version>/<triple>`.
-pub(crate) fn perry_home_root(home: &Path, version: &str, triple: &str) -> PathBuf {
-    perry_home_targets(home).join(version).join(triple)
+/// `~/.perry/<targets|ext>/<version>/<triple>`.
+pub(crate) fn perry_home_root(
+    home: &Path,
+    kind: PackageKind,
+    version: &str,
+    triple: &str,
+) -> PathBuf {
+    perry_home_kind(home, kind).join(version).join(triple)
 }
 
 /// The binary's real path: pnpm and npm's global bin link to it, and the
@@ -134,8 +206,9 @@ pub(crate) fn real_exe(exe: &Path) -> PathBuf {
     fs::canonicalize(exe).unwrap_or_else(|_| exe.to_path_buf())
 }
 
-/// Every existing package directory for `triple`, in search order.
+/// Every existing `kind` package directory for `triple`, in search order.
 pub(crate) fn root_dirs(
+    kind: PackageKind,
     triple: &str,
     exe: Option<&Path>,
     home: Option<&Path>,
@@ -148,14 +221,14 @@ pub(crate) fn root_dirs(
             let dir = ancestor
                 .join("node_modules")
                 .join(NPM_SCOPE)
-                .join(format!("{PACKAGE_PREFIX}{triple}"));
+                .join(format!("{}{triple}", kind.prefix()));
             if dir.is_dir() && !out.iter().any(|(seen, _)| *seen == dir) {
                 out.push((dir, RootSource::Npm));
             }
         }
     }
     if let Some(home) = home {
-        let dir = perry_home_root(home, version, triple);
+        let dir = perry_home_root(home, kind, version, triple);
         if dir.is_dir() {
             out.push((dir, RootSource::PerryHome));
         }
@@ -217,14 +290,15 @@ fn short(revision: &str) -> &str {
     revision.get(..12).unwrap_or(revision)
 }
 
-/// Every root for `triple` in search order, each with its status.
+/// Every `kind` root for `triple` in search order, each with its status.
 pub(crate) fn discover(
+    kind: PackageKind,
     triple: &str,
     exe: Option<&Path>,
     home: Option<&Path>,
     me: PerryIdentity<'_>,
 ) -> Vec<TargetRoot> {
-    root_dirs(triple, exe, home, me.version)
+    root_dirs(kind, triple, exe, home, me.version)
         .into_iter()
         .map(|(path, source)| {
             let status = check_root(&path, triple, me);
@@ -276,11 +350,33 @@ pub(crate) fn missing_target_message(
     home: Option<&Path>,
     me: PerryIdentity<'_>,
 ) -> String {
-    let package = format!("{}@{}", package_name(triple), me.version);
-    let mut out = format!(
-        "perry {} has no libraries for target `{target_name}` ({triple}).\nInstall them:\n",
-        me.version
-    );
+    format!(
+        "perry {} has no libraries for target `{target_name}` ({triple}).\n{}",
+        me.version,
+        install_hint(
+            PackageKind::Target,
+            triple,
+            &format!("perry target add {target_name}"),
+            exe,
+            home,
+            me
+        )
+    )
+}
+
+/// "Install them:" with the pinned npm command (when perry runs from an npm
+/// install), the `perry target add` command, and every root that was found
+/// but rejected, with why.
+pub(crate) fn install_hint(
+    kind: PackageKind,
+    triple: &str,
+    perry_command: &str,
+    exe: Option<&Path>,
+    home: Option<&Path>,
+    me: PerryIdentity<'_>,
+) -> String {
+    let package = format!("{}@{}", package_name(kind, triple), me.version);
+    let mut out = String::from("Install them:\n");
     match exe.and_then(npm_install) {
         Some(NpmInstall::Global) => {
             out.push_str(&format!("  npm install -g {package}\nor, without npm:\n"));
@@ -293,8 +389,8 @@ pub(crate) fn missing_target_message(
         }
         None => {}
     }
-    out.push_str(&format!("  perry target add {target_name}\n"));
-    for root in discover(triple, exe, home, me) {
+    out.push_str(&format!("  {perry_command}\n"));
+    for root in discover(kind, triple, exe, home, me) {
         if let Err(rejected) = &root.status {
             let found = rejected
                 .found_version
@@ -303,7 +399,7 @@ pub(crate) fn missing_target_message(
                 .unwrap_or_default();
             out.push_str(&format!(
                 "found {}{found} at {}, not used: {}\n",
-                package_name(triple),
+                package_name(kind, triple),
                 root.path.display(),
                 rejected.reason
             ));

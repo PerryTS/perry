@@ -6,7 +6,9 @@
 # into npm/perry-<platform>/{bin,lib}, and renders each package.json.tmpl
 # with the version substituted. Each cross target in TARGET_TRIPLES
 # (scripts/publish/constants.mts) becomes npm/perry-target-<triple>/ from its
-# perry-cross-<triple>.tar.gz bundle (scripts/publish/stage-target.mts).
+# perry-cross-<triple>.tar.gz bundle, and each host in EXT_TRIPLES gets
+# npm/perry-ext-<triple>/ from its release archive's libperry_ext_*.a
+# (scripts/publish/stage-target.mts).
 #
 # Usage:
 #   scripts/stage-npm.sh <artifact-dir>
@@ -65,19 +67,21 @@ fi
 echo "[stage-npm] version = $VERSION"
 
 # -----------------------------------------------------------------------------
-# Platform mapping: <npm-package-dir-suffix>:<release-artifact-name>:<ui-lib-basename>
+# Platform mapping: <npm-package-dir-suffix>:<release-artifact-name>:<ui-lib-basename>:<rust-triple>
 # Release artifact names match the `artifact:` field in release-packages.yml.
+# The triple is the one the perry binary in the archive is built for; it names
+# the host's ext package (@perryts/perry-ext-<triple>).
 # On Windows the ui lib has a .lib extension and the binary is perry.exe.
 # -----------------------------------------------------------------------------
 PLATFORMS=(
-  "darwin-arm64:perry-macos-aarch64:libperry_ui_macos.a"
-  "darwin-x64:perry-macos-x86_64:libperry_ui_macos.a"
-  "linux-x64:perry-linux-x86_64:libperry_ui_gtk4.a"
-  "linux-arm64:perry-linux-aarch64:libperry_ui_gtk4.a"
-  "linux-x64-musl:perry-linux-x86_64-musl:libperry_ui_gtk4.a"
-  "linux-arm64-musl:perry-linux-aarch64-musl:libperry_ui_gtk4.a"
-  "win32-x64:perry-windows-x86_64:perry_ui_windows.lib"
-  "win32-arm64:perry-windows-aarch64:perry_ui_windows.lib"
+  "darwin-arm64:perry-macos-aarch64:libperry_ui_macos.a:aarch64-apple-darwin"
+  "darwin-x64:perry-macos-x86_64:libperry_ui_macos.a:x86_64-apple-darwin"
+  "linux-x64:perry-linux-x86_64:libperry_ui_gtk4.a:x86_64-unknown-linux-gnu"
+  "linux-arm64:perry-linux-aarch64:libperry_ui_gtk4.a:aarch64-unknown-linux-gnu"
+  "linux-x64-musl:perry-linux-x86_64-musl:libperry_ui_gtk4.a:x86_64-unknown-linux-musl"
+  "linux-arm64-musl:perry-linux-aarch64-musl:libperry_ui_gtk4.a:aarch64-unknown-linux-musl"
+  "win32-x64:perry-windows-x86_64:perry_ui_windows.lib:x86_64-pc-windows-msvc"
+  "win32-arm64:perry-windows-aarch64:perry_ui_windows.lib:aarch64-pc-windows-msvc"
 )
 
 # Unix libs shared across platforms (runtime + stdlib). The UI lib is
@@ -177,6 +181,47 @@ compress_archives() {
   done
 }
 
+# Native-extension archives (`libperry_ext_*.a`): `perry compile` links one per
+# well-known module a program imports (http, ws, net, zlib, sharp, ...). They
+# total ~140-166 MB compressed per host, and the host packages are already
+# near the 180 MB packed budget, so they ship in a package of their own,
+# `@perryts/perry-ext-<triple>` at npm/perry-ext-<triple>, for every triple in
+# EXT_TRIPLES (constants.mts). perry finds it beside itself or fetches it from
+# the GitHub release on the first compile that needs it.
+# Args: $1 = host triple, $2 = source dir of the host's release archive.
+stage_ext_package() {
+  local triple="$1" src="$2"
+  local ext_dir="$NPM_DIR/perry-ext-$triple"
+  echo "[stage-npm] ext: $triple  <-  $(basename "$src")"
+  node "$REPO_ROOT/scripts/publish/stage-target.mts" --ext "$src" "$ext_dir" "$triple" "$VERSION"
+  compress_archives "$ext_dir/lib"
+}
+
+# Read one list from scripts/publish/constants.mts (one triple per line).
+# Args: $1 = --print-targets | --print-ext. Prints the triples.
+read_triples() {
+  local out
+  out="$(node "$REPO_ROOT/scripts/publish/constants.mts" "$1")"
+  if [ -z "$out" ]; then
+    echo "error: scripts/publish/constants.mts $1 printed no triples" >&2
+    exit 1
+  fi
+  printf '%s\n' "$out"
+}
+
+in_list() {
+  local needle="$1" item
+  shift
+  for item in "$@"; do
+    [ "$item" = "$needle" ] && return 0
+  done
+  return 1
+}
+
+EXT_TRIPLES=()
+while IFS= read -r triple; do EXT_TRIPLES+=("$triple"); done < <(read_triples --print-ext)
+staged_ext=0
+
 # -----------------------------------------------------------------------------
 # Stage wrapper package
 # -----------------------------------------------------------------------------
@@ -191,7 +236,7 @@ chmod +x "$NPM_DIR/perry/bin/perry.js"
 # Stage each platform package
 # -----------------------------------------------------------------------------
 for entry in "${PLATFORMS[@]}"; do
-  IFS=: read -r pkg_suffix artifact ui_lib <<< "$entry"
+  IFS=: read -r pkg_suffix artifact ui_lib host_triple <<< "$entry"
   pkg_dir="$NPM_DIR/perry-$pkg_suffix"
   echo "[stage-npm] platform: $pkg_suffix  <-  $artifact"
 
@@ -242,6 +287,11 @@ for entry in "${PLATFORMS[@]}"; do
     done
     stage_sidecars "$src_dir" "$pkg_dir/lib" "${UNIX_CORE_LIBS[@]}"
   fi
+  # The host's ext archives stay out of its package (see stage_ext_package).
+  if in_list "$host_triple" "${EXT_TRIPLES[@]}"; then
+    stage_ext_package "$host_triple" "$src_dir"
+    staged_ext=$((staged_ext + 1))
+  fi
 
   # Compress the static archives so the published npm tarball stays under
   # npm's registry upload limit (the raw archives total ~750 MB per platform;
@@ -273,12 +323,7 @@ done
 # triple, host-independent (no os/cpu). The list lives in constants.mts only.
 # -----------------------------------------------------------------------------
 TARGET_TRIPLES=()
-while IFS= read -r triple; do TARGET_TRIPLES+=("$triple"); done \
-  < <(node "$REPO_ROOT/scripts/publish/constants.mts" --print-targets)
-if [ "${#TARGET_TRIPLES[@]}" -eq 0 ]; then
-  echo "error: scripts/publish/constants.mts --print-targets printed no triples" >&2
-  exit 1
-fi
+while IFS= read -r triple; do TARGET_TRIPLES+=("$triple"); done < <(read_triples --print-targets)
 
 staged_targets=0
 for triple in "${TARGET_TRIPLES[@]}"; do
@@ -308,4 +353,10 @@ for triple in "${TARGET_TRIPLES[@]}"; do
   staged_targets=$((staged_targets + 1))
 done
 
-echo "[stage-npm] done. Version $VERSION staged across $(ls -d "$NPM_DIR"/perry-*/bin 2>/dev/null | wc -l | tr -d ' ') platform packages and $staged_targets target packages."
+# Every listed ext triple must have a PLATFORMS row (and so a release archive).
+if [ "$staged_ext" -ne "${#EXT_TRIPLES[@]}" ] && [ "${SKIP_MISSING:-0}" != "1" ]; then
+  echo "error: staged $staged_ext of ${#EXT_TRIPLES[@]} ext packages (${EXT_TRIPLES[*]}); each needs a PLATFORMS row" >&2
+  exit 1
+fi
+
+echo "[stage-npm] done. Version $VERSION staged across $(ls -d "$NPM_DIR"/perry-*/bin 2>/dev/null | wc -l | tr -d ' ') platform packages, $staged_ext ext packages and $staged_targets target packages."

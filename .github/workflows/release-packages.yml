@@ -2505,20 +2505,22 @@ jobs:
           merge-multiple: true
           path: assets/
 
-      - name: Download the target package tarballs
+      - name: Download the target and ext package tarballs
         # From npm-publish (cut/release/republish) or npm-pack-check
         # (nightly); absent when neither packed (republish without npm).
         continue-on-error: true
         uses: ./.github/actions/perry/actions/download-artifact # v8
         with:
-          name: npm-target-packages
+          name: npm-target-ext-packages
           path: npm-targets/
 
-      - name: Sign the target packages for `perry target add`
-        # Each npm tarball goes up as perry-target-<triple>-<version>.tgz with
-        # a .sha256 and a manifest signed by the CLI-update key under the
-        # target domain (`perry updater sign-target-manifest`), which perry
-        # verifies before installing into ~/.perry/targets.
+      - name: Sign the target and ext packages for `perry target add` and the ext auto-fetch
+        # Each npm tarball goes up as perry-target-<triple>-<version>.tgz or
+        # perry-ext-<triple>-<version>.tgz with a .sha256 and a manifest signed
+        # by the CLI-update key under the package domain (`perry updater
+        # sign-target-manifest [--ext]`), which perry verifies before
+        # installing into ~/.perry/targets or ~/.perry/ext. A compile that
+        # needs an ext archive fetches its ext package from here.
         env:
           PERRY_CLI_UPDATE_SIGNING_KEY: ${{ secrets.PERRY_CLI_UPDATE_SIGNING_KEY }}
           PERRY_CLI_UPDATE_KEY_ID: ${{ vars.PERRY_CLI_UPDATE_KEY_ID }}
@@ -2529,7 +2531,7 @@ jobs:
           shopt -s nullglob
           tarballs=(npm-targets/*/*.tgz)
           if [ "${#tarballs[@]}" -eq 0 ]; then
-            echo "::notice::no target package tarballs in this run; none attached to $TAG"
+            echo "::notice::no target or ext package tarballs in this run; none attached to $TAG"
             exit 0
           fi
           : "${PERRY_CLI_UPDATE_SIGNING_KEY:?configure the protected 32-byte base64 Ed25519 signing secret}"
@@ -2540,10 +2542,16 @@ jobs:
           for tgz in "${tarballs[@]}"; do
             triple=$(tar -xzOf "$tgz" package/target.json | jq -r .target_triple)
             version=$(tar -xzOf "$tgz" package/target.json | jq -r .perry_version)
-            name="perry-target-${triple}-${version}.tgz"
+            package=$(tar -xzOf "$tgz" package/package.json | jq -r .name)
+            case "$package" in
+              "@perryts/perry-target-$triple") kind=() ;;
+              "@perryts/perry-ext-$triple") kind=(--ext) ;;
+              *) echo "::error::$tgz is $package, not a target or ext package of $triple" >&2; exit 1 ;;
+            esac
+            name="${package#@perryts/}-${version}.tgz"
             cp "$tgz" "assets/$name"
             (cd assets && sha256sum "$name" > "$name.sha256")
-            "$signer/perry" updater sign-target-manifest \
+            "$signer/perry" updater sign-target-manifest "${kind[@]}" \
               --artifact "assets/$name" --triple "$triple" \
               --url "https://github.com/${REPO}/releases/download/${TAG}/${name}" \
               --release-version "$version" --key-id "$PERRY_CLI_UPDATE_KEY_ID" \
@@ -3211,14 +3219,16 @@ jobs:
       - name: Pack the exact publication tarballs (size budget enforced)
         run: node scripts/publish/prepare-ci-packages.mts
 
-      # Nightlies skip npm, but `perry target add` on a nightly downloads the
-      # same tarballs from its GitHub release: publish-assets signs and
-      # attaches these.
-      - name: Keep the target package tarballs for publish-assets
+      # Nightlies skip npm, but `perry target add` and the ext auto-fetch on a
+      # nightly download the same tarballs from its GitHub release:
+      # publish-assets signs and attaches these.
+      - name: Keep the target and ext package tarballs for publish-assets
         uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
-          name: npm-target-packages
-          path: npm/perry-target-*/*.tgz
+          name: npm-target-ext-packages
+          path: |
+            npm/perry-target-*/*.tgz
+            npm/perry-ext-*/*.tgz
           if-no-files-found: error
           compression-level: 0
 
@@ -3257,9 +3267,34 @@ jobs:
           "$perry" compile --target wasi "$work/hello.ts" -o "$work/hello.wasm"
           test -s "$work/hello.wasm"
 
+      - name: Smoke-test the ext package from a global npm install
+        # node:http links libperry_ext_http.a, which only the ext package has.
+        # With the fetch turned off perry must name both install commands;
+        # with the packed ext package installed beside it, it must link.
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix="$RUNNER_TEMP/npm-global"
+          tgz() { find "npm/$1" -maxdepth 1 -name '*.tgz' -print -quit; }
+          perry="$prefix/lib/node_modules/@perryts/perry-linux-x64/bin/perry"
+          work="$RUNNER_TEMP/ext-smoke"
+          mkdir -p "$work"
+          printf 'import * as http from "http";\nconst s = http.createServer((_q, r) => r.end("ok"));\nconsole.log("ext package ok", typeof s.listen);\n' > "$work/server.ts"
+          if PERRY_NO_AUTO_FETCH=1 "$perry" compile "$work/server.ts" -o "$work/server" > "$work/missing.log" 2>&1; then
+            echo "::error::perry linked node:http with no ext package and the fetch off" >&2
+            exit 1
+          fi
+          grep -F "npm install -g @perryts/perry-ext-x86_64-unknown-linux-gnu@" "$work/missing.log"
+          grep -F "perry target add --ext" "$work/missing.log"
+          npm install -g --prefix "$prefix" --ignore-scripts --no-audit --no-fund \
+            "./$(tgz perry-ext-x86_64-unknown-linux-gnu)"
+          PERRY_NO_AUTO_FETCH=1 "$perry" compile "$work/server.ts" -o "$work/server"
+          "$work/server" | grep -Fx "ext package ok function"
+
   # ---------------------------------------------------------------------------
-  # Publish npm packages (@perryts/perry, the per-platform packages and the
-  # per-target @perryts/perry-target-<triple> packages)
+  # Publish npm packages (@perryts/perry, the per-platform packages, the
+  # per-host @perryts/perry-ext-<triple> packages and the per-target
+  # @perryts/perry-target-<triple> packages)
   #
   # Uses OIDC / Trusted Publishers (no npm login, long-lived NPM_TOKEN, or
   # GitHub Environment). release-packages.yml is the one publisher identity
@@ -3350,12 +3385,14 @@ jobs:
         run: node scripts/publish/prepare-ci-packages.mts
 
       # publish-assets attaches these to the GitHub release, byte-identical to
-      # what npm gets, for `perry target add`.
-      - name: Keep the target package tarballs for publish-assets
+      # what npm gets, for `perry target add` and the ext auto-fetch.
+      - name: Keep the target and ext package tarballs for publish-assets
         uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
-          name: npm-target-packages
-          path: npm/perry-target-*/*.tgz
+          name: npm-target-ext-packages
+          path: |
+            npm/perry-target-*/*.tgz
+            npm/perry-ext-*/*.tgz
           if-no-files-found: error
           compression-level: 0
 

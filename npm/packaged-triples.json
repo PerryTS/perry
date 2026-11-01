@@ -1,0 +1,17 @@
+{
+  "comment": "The one list of triples perry publishes a package for. targets: @perryts/perry-target-<triple> (a cross target's runtime, stdlib and UI, from perry-cross-<triple>.tar.gz). ext: @perryts/perry-ext-<triple> (a host's native-extension archives, from its release tarball). Read by scripts/publish/constants.mts (and so stage-npm.sh) and compiled into perry (crates/perry/src/commands/compile/target_packages.rs).",
+  "targets": [
+    "aarch64-linux-android",
+    "x86_64-linux-android",
+    "aarch64-apple-ios",
+    "aarch64-apple-ios-sim",
+    "wasm32-wasip2",
+    "wasm32-wasip1"
+  ],
+  "ext": [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu"
+  ]
+}

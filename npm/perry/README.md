@@ -56,6 +56,19 @@ npm install -g @perryts/perry-target-aarch64-linux-android@<perry version>   # p
 
 `perry compile --target <t>` prints the exact command when the package is missing or of another version. Without npm, `perry target add <t>` installs the same package from the GitHub release into `~/.perry/targets`. After upgrading perry, install the matching target version again.
 
+## Native extensions (node:http, ws, zlib, sharp, ...)
+
+A program that imports one of perry's well-known native modules links its prebuilt extension archive. These archives (~140-170 MB per platform) ship in one package per host, `@perryts/perry-ext-<triple>` (macOS and Linux glibc), which is not installed with perry. The first compile that needs one downloads the package for your exact perry version from the GitHub release, verifies its signature and installs it into `~/.perry/ext`, and says so in one line; later compiles reuse it. Programs that use no native module never touch the network.
+
+Set `PERRY_NO_AUTO_FETCH=1` (offline machines, hermetic CI) to turn the download off; the compile then fails with the commands to install it yourself:
+
+```bash
+npm install -g @perryts/perry-ext-x86_64-unknown-linux-gnu@<perry version>   # next to perry
+perry target add --ext                                                      # without npm
+```
+
+An installed ext package is used only when its version and source revision match perry's.
+
 ## Host requirements
 
 Perry produces native binaries by linking its runtime and stdlib (shipped as static archives in the platform package) into your code. That link step uses your system C toolchain, so you need:
