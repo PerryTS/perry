@@ -78,7 +78,10 @@ pub(crate) const CLASS_ID_FS_FILEHANDLE: u32 = 0xFFFF_008C;
 fn std_fd_registry() -> StdHashMap<i32, fs::File> {
     #[allow(unused_mut)] // populated only on hosts with standard descriptors
     let mut map = StdHashMap::new();
-    #[cfg(any(unix, all(target_os = "wasi", any(target_env = "p2", target_env = "p3"))))]
+    #[cfg(any(
+        unix,
+        all(target_os = "wasi", any(target_env = "p2", target_env = "p3"))
+    ))]
     {
         use std::os::fd::FromRawFd;
         // wasi-sdk 34 implements dup for P2/P3 in its descriptor table, but

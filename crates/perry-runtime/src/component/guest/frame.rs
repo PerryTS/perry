@@ -19,8 +19,7 @@ use std::{
 };
 pub use suspended::{
     perry_component_frame_import_begin, perry_component_frame_import_begin_after_return,
-    perry_component_frame_import_reject,
-    perry_component_frame_import_resolve,
+    perry_component_frame_import_reject, perry_component_frame_import_resolve,
 };
 pub use task::{
     perry_component_frame_task_call, perry_component_frame_task_cancel,

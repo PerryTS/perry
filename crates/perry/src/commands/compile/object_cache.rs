@@ -464,7 +464,10 @@ fn compute_object_cache_key_with_env(
     h.field("tgt", opts.target.as_deref().unwrap_or("host"));
     #[cfg(feature = "target-wasi")]
     if opts.target.as_deref() == Some("wasip3") {
-        h.field("p3_abi_emitter", perry_codegen::wasi_toolchain::p3::cache_key());
+        h.field(
+            "p3_abi_emitter",
+            perry_codegen::wasi_toolchain::p3::cache_key(),
+        );
     }
     h.field("out", &opts.output_type);
     h.field(

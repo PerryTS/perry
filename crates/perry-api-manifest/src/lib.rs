@@ -508,8 +508,14 @@ mod tests {
     fn async_hooks_uses_runtime_for_both_import_specifiers() {
         for module in ["async_hooks", "node:async_hooks"] {
             assert!(super::is_runtime_only_module(module));
-            assert!(super::module_has_public_named_export(module, "AsyncLocalStorage"));
-            assert!(super::module_has_public_named_export(module, "AsyncResource"));
+            assert!(super::module_has_public_named_export(
+                module,
+                "AsyncLocalStorage"
+            ));
+            assert!(super::module_has_public_named_export(
+                module,
+                "AsyncResource"
+            ));
             assert!(super::module_has_public_named_export(module, "createHook"));
         }
     }

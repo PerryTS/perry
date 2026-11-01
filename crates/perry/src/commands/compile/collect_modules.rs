@@ -1595,7 +1595,10 @@ fn collect_module_one(
             // Runtime-owned optional installs still need feature selection
             // when their imports do not require a stdlib dispatcher. This
             // includes Bun's backends and async-hooks observation for ALS.
-            let normalized = import.source.strip_prefix("node:").unwrap_or(&import.source);
+            let normalized = import
+                .source
+                .strip_prefix("node:")
+                .unwrap_or(&import.source);
             if matches!(normalized, "bun" | "async_hooks") {
                 ctx.native_module_imports.insert(normalized.to_string());
             }
