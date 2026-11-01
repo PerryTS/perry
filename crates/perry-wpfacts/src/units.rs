@@ -16,6 +16,11 @@ pub(crate) struct ClassContract {
     pub literal_shape: bool,
     pub facts: TemplateFacts,
     pub methods: Vec<(String, String)>,
+    /// Its prototype getters (key, function name) along the same chain as
+    /// `methods`. A read under the key runs the getter: the reader sees the
+    /// owner's code returning an unknown value, and the owner lets what its
+    /// getters return leave beyond any contract (`Gen::fields_leave`).
+    pub getters: Vec<(String, String)>,
     pub native_parent: Option<(String, String)>,
     /// Its parent class when that class is another unit's (DECISIONS 104):
     /// the parent's display, its contract published beside this one. The
@@ -708,7 +713,7 @@ pub(crate) fn field_views<'c>(c: &'c ClassContract, k: &str) -> Vec<FieldView<'c
     c.facts
         .fields
         .iter()
-        .find(|f| f.key == k)
+        .find(|f| f.is(k, false))
         .map(FieldView::Plain)
         .into_iter()
         .collect()
@@ -981,6 +986,7 @@ impl ClassContract {
         }
         self.facts.join(&o.facts);
         union_into(&mut self.methods, &o.methods);
+        union_into(&mut self.getters, &o.getters);
         self.field_fns = field_fns;
         self.field_layouts = field_layouts;
         self.open_keys |= o.open_keys;

@@ -793,7 +793,7 @@ impl<'a> Gen<'a> {
                     Some(o) => o,
                     None => self.expr(fx, object),
                 };
-                let a = self.m.atom(property);
+                let a = self.member_atom(object, property);
                 if *byte_offset != 0 {
                     self.read_sites.push(ReadSite {
                         module: mi,
@@ -815,7 +815,7 @@ impl<'a> Gen<'a> {
             } => {
                 let o = self.expr(fx, object);
                 let v = self.expr(fx, value);
-                let a = self.m.atom(property);
+                let a = self.member_atom(object, property);
                 let owner = self.phase_owner(fx, e, object);
                 self.store_phased(
                     fx,
@@ -886,7 +886,7 @@ impl<'a> Gen<'a> {
                 object, property, ..
             } => {
                 let o = self.expr(fx, object);
-                let a = self.m.atom(property);
+                let a = self.member_atom(object, property);
                 let cur = self.load(o, Key::Named(a));
                 let r = self.m.reason("ToNumeric");
                 self.m.cons(
@@ -1326,7 +1326,7 @@ impl<'a> Gen<'a> {
                 field_name,
             } => {
                 let c = self.class_value(mi, class_name);
-                let a = self.m.atom(field_name);
+                let a = self.static_field_atom(mi, class_name, field_name);
                 self.load(c, Key::Named(a))
             }
             Expr::StaticFieldSet {
@@ -1336,7 +1336,7 @@ impl<'a> Gen<'a> {
             } => {
                 let c = self.class_value(mi, class_name);
                 let v = self.expr(fx, value);
-                let a = self.m.atom(field_name);
+                let a = self.static_field_atom(mi, class_name, field_name);
                 self.store(
                     fx,
                     c,
