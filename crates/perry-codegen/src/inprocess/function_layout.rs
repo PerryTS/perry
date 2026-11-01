@@ -152,7 +152,7 @@ fn back_hot_text(module: &Module<'_>) {
     let ctx = module.get_context();
     let ptr = ctx.ptr_type(AddressSpace::default());
     let mut bounds = Vec::new();
-    let mut bound = |name: &str| {
+    let bound = |name: &str| {
         let global = module
             .get_global(name)
             .unwrap_or_else(|| module.add_global(ctx.i8_type(), None, name));
