@@ -1,0 +1,27 @@
+package perry:guest-endpoint-imports@1.0.0;
+
+interface foreign {
+    resource item { constructor(value: u32); read: func() -> u32; }
+    record payload { first: own<item>, second: option<own<item>>, text: string, bytes: list<u8> }
+    drops: func() -> u32;
+}
+interface api {
+    use foreign.{item, payload as packet};
+    type pending = future<packet>;
+    type values = stream<packet>;
+    record counts { dropped: u32, completed: u32, failed: u32, chunks: u32, started: u32 }
+    make-resource: func(value: u32) -> own<item>;
+    resource-value: func(value: borrow<item>) -> u32;
+    make-future: func(value: packet) -> pending;
+    make-values: func(value: list<packet>) -> values;
+    make-cancelled: func(value: list<packet>) -> values;
+    make-closed: func(value: list<packet>) -> values;
+    read-future: async func(value: pending) -> packet;
+    read-values: async func(value: values) -> list<packet>;
+    checkpoint: func() -> counts;
+}
+interface mirror {
+    use api.{pending};
+    pass-future: func(value: pending) -> pending;
+}
+world plugin { import foreign; export api; export mirror; }

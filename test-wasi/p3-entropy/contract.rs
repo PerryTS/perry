@@ -15,6 +15,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let mut types = Vec::new();
     let mut instances = Vec::new();
+    let mut interfaces = Vec::new();
     required.retain(|arg| {
         if let Some(name) = arg.strip_prefix("--type-import=") {
             types.push(name.to_string());
@@ -22,15 +23,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else if let Some(name) = arg.strip_prefix("--instance-export=") {
             instances.push(name.to_string());
             false
+        } else if let Some(name) = arg.strip_prefix("--interface-import=") {
+            interfaces.push(name.to_string());
+            false
         } else {
             true
         }
     });
     if types
         .iter()
+        .chain(&interfaces)
         .any(|name| name.is_empty() || name.starts_with("wasi:"))
     {
-        return Err("invalid declared application type import".into());
+        return Err("invalid declared application import".into());
     }
     if (reactor && required.is_empty() && instances.is_empty()) || (!reactor && args.len() != 1) {
         return Err("invalid P3 contract profile arguments".into());
@@ -53,6 +58,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 for import in section {
                     let import = import?;
                     let name = import.name.name;
+                    if reactor && matches!(import.ty, ComponentTypeRef::Instance(_)) {
+                        if let Some(index) =
+                            interfaces.iter().position(|interface| interface == name)
+                        {
+                            interfaces.remove(index);
+                            println!("declared application interface {name}");
+                            continue;
+                        }
+                    }
                     // A typed reactor can also import the selected world's
                     // concrete structural types. Require exact declarations
                     // and equality bounds; no unlisted type or resource import
@@ -101,8 +115,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         || !required.is_empty()
         || !types.is_empty()
         || !instances.is_empty()
+        || !interfaces.is_empty()
     {
-        return Err(format!("incomplete P3 contract: depth={depth}, imports={imports}, run={command}, random={random}, missing_exports={required:?}, missing_types={types:?}, missing_instances={instances:?}").into());
+        return Err(format!("incomplete P3 contract: depth={depth}, imports={imports}, run={command}, random={random}, missing_exports={required:?}, missing_types={types:?}, missing_instances={instances:?}, missing_interfaces={interfaces:?}").into());
     }
     if reactor {
         println!("PASS: external WASI 0.3-only reactor contract and required function exports");
