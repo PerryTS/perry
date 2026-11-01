@@ -689,6 +689,7 @@ pub(crate) unsafe fn bound_function_lazy_name(ptr: usize) -> f64 {
 /// built without recording it, and `ptr` after the allocation. For the
 /// function's bag birth, which records it as the bag's intrinsic slot: a
 /// define from inside the birth would be born a bag of its own first.
+#[inline(never)]
 pub(crate) unsafe fn bound_function_name_value(ptr: usize) -> (f64, usize) {
     use crate::value::JSValue;
 
