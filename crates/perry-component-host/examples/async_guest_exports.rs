@@ -35,11 +35,13 @@ fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     ensure!(
         (2..=3).contains(&args.len()),
-        "usage: async_guest_exports <world.wit> <component.wasm> [--moving|--cancel]"
+        "usage: async_guest_exports <world.wit> <component.wasm> [--moving|--cancel|--instrument-denial]"
     );
     let world = perry_wit::parse_file(Path::new(&args[0]), None)?;
     let bytes = std::fs::read(&args[1])?;
-    let moving = args.get(2).is_some_and(|arg| arg == "--moving");
+    let moving = args
+        .get(2)
+        .is_some_and(|arg| matches!(arg.as_str(), "--moving" | "--instrument-denial"));
     let mut wasi = WasiOptions {
         inherit_stdout: true,
         inherit_stderr: true,
@@ -63,6 +65,9 @@ fn main() -> Result<()> {
     )?;
     eprintln!("Component compiled and instantiated");
     let (mut driver, client) = host.into_driver()?;
+    if args.get(2).is_some_and(|arg| arg == "--instrument-denial") {
+        return guest_diagnostics::plain_rejection(&mut driver, &client);
+    }
     if args.get(2).is_some_and(|arg| arg == "--cancel") {
         let input = json!({"text":"cancel", "bytes":[1], "owner":0});
         let cancelled = client.call("", "wait", &[json!(3), input.clone()])?;

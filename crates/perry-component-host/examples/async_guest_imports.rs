@@ -80,7 +80,7 @@ fn release(gates: &Gates, id: u32) {
 }
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
-    ensure!((2..=3).contains(&args.len()), "usage: async_guest_imports <world.wit> <component.wasm> [--moving|--cancel|--failure|--inline|--inline-moving]");
+    ensure!((2..=3).contains(&args.len()), "usage: async_guest_imports <world.wit> <component.wasm> [--moving|--cancel|--failure|--inline|--inline-moving|--instrument-denial]");
     let mode = args.get(2).map(String::as_str).unwrap_or("");
     let inline = matches!(mode, "--inline" | "--inline-moving");
     let world = perry_wit::parse_file(Path::new(&args[0]), None)?;
@@ -161,7 +161,7 @@ fn main() -> Result<()> {
     };
     let _diagnostics = guest_diagnostics::configure(
         &mut wasi,
-        matches!(mode, "--moving" | "--inline-moving"),
+        matches!(mode, "--moving" | "--inline-moving" | "--instrument-denial"),
         311,
     );
     let options = Options {
@@ -208,6 +208,9 @@ fn main() -> Result<()> {
     )?;
     eprintln!("Import component compiled and instantiated");
     let (mut driver, client) = host.into_driver()?;
+    if mode == "--instrument-denial" {
+        return guest_diagnostics::plain_rejection(&mut driver, &client);
+    }
     let mut status = client.call("", "status", &[])?;
     assert_eq!(result(&mut driver, &mut status), json!(10000));
     assert_eq!(

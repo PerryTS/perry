@@ -118,7 +118,7 @@ def main():
         run(kind + '-execute', [host, out / 'world.wit', component])
         assert marker in (out / (kind + '-execute.log')).read_text()
         if kind == 'plain':
-            run('plain-rejects-instrument-grant', [host, out / 'world.wit', component, '--moving'], expected=1)
+            run('plain-rejects-instrument-grant', [host, out / 'world.wit', component, '--instrument-denial'], expected=1)
             assert 'built without the GC instruments' in (out / 'plain-rejects-instrument-grant.log').read_text()
         else:
             modes = [('moving', '--moving'), ('cancel', '--cancel')]
