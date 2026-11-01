@@ -171,7 +171,15 @@ pub fn compose_experimental_guest(producer: &[u8], facade: &[u8], plan: &[u8]) -
         forwarded_count == plan.forwards.len(),
         "Unknown synchronous facade function"
     );
-    let encoded = graph.encode(EncodeOptions::default())?;
+    // These individual aliases are an internal serialization channel, not a
+    // component's public type surface. A function can mention a concrete
+    // resource-bearing value type whose enclosing instance is rebuilt below;
+    // exporting that function alone need not be a valid public contract.
+    // publish validates both the export-free graph and the final component.
+    let encoded = graph.encode(EncodeOptions {
+        validate: false,
+        ..EncodeOptions::default()
+    })?;
     publish(&encoded, &exports)
 }
 

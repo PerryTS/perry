@@ -2,6 +2,69 @@ use super::*;
 use wac_graph::types::{Type, Types, ValueType};
 
 #[test]
+fn concrete_resource_future_payload_is_exported_with_its_enclosing_interface() {
+    let api = r#"(type $api (instance
+        (export "item" (type $item (sub resource)))
+        (type $own (own $item))
+        (type $record (record (field "owner" $own) (field "text" string)))
+        (export "payload" (type $payload (eq $record)))
+        (type $future (future $payload))
+        (export "pending" (type $pending (eq $future)))
+        (export "make" (func (result $pending)))))"#;
+    let producer = wat::parse_str(r#"(component
+        (import "kick" (func $kick async))
+        (type $item (resource (rep i32)))
+        (type $own (own $item))
+        (type $payload (record (field "owner" $own) (field "text" string)))
+        (type $pending (future $payload))
+        (core module $m
+            (memory (export "memory") 1)
+            (func (export "make") (result i32) i32.const 0)
+            (func (export "realloc") (param i32 i32 i32 i32) (result i32) i32.const 0))
+        (core instance $m (instantiate $m))
+        (alias core export $m "memory" (core memory $memory))
+        (alias core export $m "make" (core func $make))
+        (alias core export $m "realloc" (core func $realloc))
+        (func $make (result $pending) (canon lift (core func $make) (memory $memory) (realloc $realloc)))
+        (instance $api
+            (export "item" (type $item))
+            (export "payload" (type $payload))
+            (export "pending" (type $pending))
+            (export "make" (func $make)))
+        (export "api" (instance $api))
+        (export "actor" (func $kick))
+        (export "signal" (func $kick)))"#).unwrap();
+    let facade = wat::parse_str(format!(
+        r#"(component {api}
+        (import "source" (instance $source (type $api)))
+        (import "kick" (func async))
+        (alias export $source "make" (func $make))
+        (instance $forward (export "forward" (func $make)))
+        (export "forwarder" (instance $forward)))"#
+    ))
+    .unwrap();
+    let plan = serde_json::to_vec(&serde_json::json!({
+        "schema_version":1, "actor":"actor", "signal":"signal", "forward_interface":"forwarder",
+        "imports":[{"local":"source","original":"api"},{"local":"kick","original":"actor"}],
+        "forwards":[{"interface":"api","function":"make","export":"forward"}]
+    }))
+    .unwrap();
+    let bytes = compose_experimental_guest(&producer, &facade, &plan).unwrap();
+    let mut types = Types::default();
+    let package = Package::from_bytes("test:concrete", None, bytes, &mut types).unwrap();
+    let exports = &types[package.ty()].exports;
+    assert_eq!(exports.len(), 1);
+    let ItemKind::Instance(api) = exports["api"] else {
+        panic!("public interface")
+    };
+    assert_eq!(types[api].exports.len(), 4);
+    let ItemKind::Func(make) = types[api].exports["make"] else {
+        panic!("sync factory")
+    };
+    assert!(!types[make].is_async);
+}
+
+#[test]
 fn sibling_facade_rebuilds_public_interfaces_without_replacing_their_resource_identity() {
     let interface = r#"(type $api (instance
         (export "item" (type $item (sub resource)))
