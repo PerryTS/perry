@@ -127,14 +127,34 @@ Git tree/blob equivalence. Actual resource-bearing Wasm I/O, named-interface
 factory interoperation, async imports started from synchronous exports, wider
 lifecycle coverage and public adapters remain unqualified.
 
+The [resource endpoint receipt](validation/wasi-p3-resource-endpoints-20261101.json)
+qualifies owned exported-resource payloads in actual future/stream I/O and
+synchronous named-interface factories at source 373e24f633. All 17 resource
+acceptance phases and all 20 earlier endpoint regression phases pass on Linux.
+An independent Rust host verifies compound own/optional-own resource payloads,
+partial suffix recovery, cancellation/retry, explicit close/discard, stale
+handle rejection and 33 exactly-once drops per resource run. No extra guest
+export is needed to advance producers after the synchronous factories return.
+Resource constructors/methods use typed forwarding components; public type
+annotations bind to the original nominal resources. Incoming facade borrows
+retire after the forwarded call and before storage cleanup/actor handoff;
+a missing-borrow-drop mutation must fail the sanitizer test. Thirty-eight
+WIT/C tests pass. The resource moving guest copies 17,356 objects; the full
+earlier endpoint moving regression copies 12,870, both with evacuation checks
+and native host controls off. The native cohort is freshly source matched;
+P3 archive reuse and the separately sourced 125 runtime unit results retain
+explicit unchanged-production-input proofs. Imported-resource endpoints,
+shared external interface/value type bindings, synchronous-started async
+imports, the wider lifecycle matrix and public generation remain open.
+
 | Requirement | Required evidence | Current state |
 | --- | --- | --- |
 | Canonical async imports and exports | Public generated components compose in both directions; overlapping calls, immediate/delayed completion, errors, post-return work and Store reuse | Experimental scalar/compound profile qualified; public CLI guarded |
 | Resource ownership across async calls | Imported/exported nominal resources, compound aliases, pre-start cancellation, returned-result races, borrow expiry at return/cancel, exactly-once drops and moving GC | Actual experimental entry point qualifies basic and compound C/Perry/C profiles on Linux, including 24 duplicate-owner rejections, 188 exactly-once drops, unclaimed results and moving GC; public async CLI remains guarded |
-| Guest `future<T>` and `stream<T>` | Readable/writable ownership, arbitrary supported WIT payloads, void, bounded writes, backpressure, final partial chunks, closure, cancellation and cleanup across suspension | Experimental reads/writes, async factories and synchronous root/world factories with private post-return producers qualified on Linux: latest receipt has 20 actual acceptance phases, 12,870 relocated guest objects, 125 component runtime tests, 37 WIT/C tests and 30 writer sanitizer cases (plus 26 read cases). Actual resource-bearing I/O, named-interface factories, async imports started in synchronous exports, wider lifecycle coverage and public adapters remain |
+| Guest `future<T>` and `stream<T>` | Readable/writable ownership, arbitrary supported WIT payloads, void, bounded writes, backpressure, final partial chunks, closure, cancellation and cleanup across suspension | Experimental reads/writes and sync/async factories qualified on Linux, including owned exported-resource records through named-interface factories: latest receipt has 17 resource phases plus 20 earlier-profile regressions, 17,356 and 12,870 relocated guest objects respectively, and 38 WIT/C tests. Runtime125 unit evidence is separately sourced with unchanged production inputs; 30 writer and 26 reader sanitizer cases pass. Imported-resource payloads/shared external type bindings, async imports started in synchronous exports, wider lifecycle coverage and public adapters remain |
 | WASI 0.3.0 command output | A public command/runtime profile with `wasi:cli/run@0.3.0`, explicit system-interface versions and execution in a host providing the declared 0.3.0 imports; no implicit reliance on P2 compatibility | Integration branch implements `--target wasip3`; nine Perry commands and 51 Linux acceptance phases pass, plus ten separate Wasm-guest GC phases; current runtime changes, native production variants, release/platform qualification and landing remain; `--target wasi` retains P2 |
 | Complete supported 0.3.0 WASI interfaces | Commands, clocks, randomness, filesystem, TCP/UDP/DNS and HTTP execute through Turnloop with capability checks, I/O cancellation and shutdown | Linux provider/command/HTTP receipts exist; complete current-profile matrix still required |
-| Cross-language interoperability | Public Perry output composed with independent Rust and maintained-C components, including resources and future/stream payloads | Scalar/compound and cancellation examples exist; missing value profiles unqualified |
+| Cross-language interoperability | Public Perry output composed with independent Rust and maintained-C components, including resources and future/stream payloads | Scalar/compound cancellation examples and current actual resource-bearing endpoint/named-interface factory profiles exist; imported-resource endpoint/shared-interface aliases and the wider value matrix remain unqualified |
 | Runtime integration | Promise/nextTick task isolation, rejection identity, ALS, suspended-value tracing, teardown and positive moving-GC witnesses | Public ALS constructors/methods link from runtime alone; recorded Linux imports/exports and moving-GC profiles pass. Actual P3 libraries now preserve agent TLS across SDK tasks, including canonical WAIT/resume. Shared-provider regression and wider platform/package coverage remain |
 | HTTP layouts | Current supported layouts and limitations explicitly tested; concurrent root handlers, nested/imported fallback, streaming bodies and cancellation | Linux supported layouts qualified; broader composition coverage open |
 | Platform and packaging | Current source-matched ordinary/instrumented artifacts and installed public tools run on Linux x86_64, macOS ARM64 and Windows x64 | Current Turnloop execution qualified on Linux; Windows compile only |

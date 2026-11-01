@@ -1,0 +1,348 @@
+{
+  "date": "2026-11-01",
+  "source": "373e24f6339014285b3d85530e78f11ade50e3c0",
+  "scope": "Linux x86_64 actual Perry P3 owned exported-resource payloads in future/stream reads and writes, named-interface synchronous factories, and full earlier endpoint regression profile",
+  "fullWasi030Qualified": false,
+  "integratedMain": "ee0d9183d4496489dd4532247a64c66b57969230",
+  "abi": {
+    "guestVersion": 2,
+    "endpointOperationsVersion": 1,
+    "additiveProducerOperationsVersion": 1,
+    "existingLayoutsUnchanged": true,
+    "sdk": "wasi-sdk 34.0",
+    "experimentalThreadingEnabled": false
+  },
+  "build": {
+    "freshCoherentOrdinaryNativeSource": "373e24f6339014285b3d85530e78f11ade50e3c0",
+    "packages": [
+      "perry",
+      "perry-runtime-static",
+      "perry-stdlib-static",
+      "perry-component-host",
+      "perry-wit",
+      "perry-gc-effects"
+    ],
+    "feature": "perry/target-wasi",
+    "nativeInstruments": false,
+    "nativeSidecarsBuilt": true,
+    "p3RuntimeArchiveSource": "75e11196ee862e94d1611f71b10689d74794124b",
+    "p3ArchiveReuseProof": "Exact per-path Git tree/blob equality against immutable runtime build source for complete runtime/stdlib/ABI/codegen/third_party subtrees, root Cargo manifests/lock, config/toolchain and runtime builder. Native cohort is freshly built at actual implementation source.",
+    "rustflagsEnvironmentModified": false
+  },
+  "units": {
+    "witSource": "373e24f6339014285b3d85530e78f11ade50e3c0",
+    "witPassed": 38,
+    "ignoredFixtureProducers": 2,
+    "runtimeSource": "a8dad22b7e8e2a6211bb89078118f9176b789e4d",
+    "normalDevComponentRuntimePassed": 125,
+    "runtimeResultsReusedWithUnchangedProductionInputs": true,
+    "runtimeUnitsReexecutedAtActualSource": false,
+    "debugAssertionsEnabled": true,
+    "serial": true,
+    "fullRuntimeSuiteQualified": false,
+    "nativeAsanUbsanReadCases": 26,
+    "nativeAsanUbsanWriteCases": 30,
+    "generatedFacadeStorageAndBorrowRetirementSanitizer": {
+      "positivePassed": true,
+      "borrowHandlesRetired": 3,
+      "directAndListBorrowInputs": true,
+      "ownedInputTransferredWithoutRepeatedDrop": true,
+      "inputBuffersFreedAfterBorrowRetirementBeforeActorKick": true,
+      "returnedStringRemainsValid": true,
+      "missingBufferFreeMutationRejected": true,
+      "missingBorrowDropMutationRejected": true
+    }
+  },
+  "resourceAcceptance": {
+    "script": "scripts/component_endpoint_resources_acceptance.py",
+    "phasesPassed": 17,
+    "phases": [
+      {
+        "phase": "build-probes",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "public-guard",
+        "exitCode": 1,
+        "passed": true
+      },
+      {
+        "phase": "generate",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "facade-link",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "plain-compile",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "plain-link",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "plain-compose",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "reject-missing-interface",
+        "exitCode": 1,
+        "passed": true
+      },
+      {
+        "phase": "plain-contract",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "plain-execute",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "plain-rejects-instrument-grant",
+        "exitCode": 1,
+        "passed": true
+      },
+      {
+        "phase": "instrumented-compile",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "instrumented-link",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "instrumented-compose",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "instrumented-contract",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "instrumented-execute",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "moving",
+        "exitCode": 0,
+        "passed": true
+      }
+    ],
+    "publicInterface": "perry:guest-endpoint-resources/api@1.0.0",
+    "payload": "record(first: own<item>, second: option<own<item>>, text: string, bytes: list<u8>)",
+    "resourceConstructorAndBorrowMethod": true,
+    "futureAndStreamGuestReadsAndWrites": true,
+    "independentRustHostReadersWritersAndResourceOwners": true,
+    "syncFactories": [
+      "make-future",
+      "make-values",
+      "make-cancelled",
+      "make-closed"
+    ],
+    "publicFactorySignaturesRemainSynchronous": true,
+    "postReturnProducersAdvanceWithoutAnotherGuestExport": true,
+    "completedProducerCount": 4,
+    "producerFailureCount": 0,
+    "minimumPartialWriteChunks": 10,
+    "exactlyOnceResourceDropsPerRun": 33,
+    "noPrematureResourceDropsBeforeReadout": true,
+    "oldTransferredDescriptorsRejected": true,
+    "duplicateHostDropsRejected": true,
+    "cancelRecoversEveryUnconsumedOwner": true,
+    "closeDiscardsEveryUnconsumedOwner": true,
+    "hostWritesRetryPartialOwnerSuffixes": true,
+    "streamEofAndStoreReuse": true,
+    "externalWasiVersions": [
+      "0.3.0"
+    ],
+    "externalWasiInterfaces": 18,
+    "missingPublicInterfaceNegativePassed": true,
+    "plainArchiveRejectsInstrumentationGrant": true,
+    "publicAsyncGenerationGuardRetained": true
+  },
+  "transportRegression": {
+    "script": "scripts/component_endpoint_transport_acceptance.py",
+    "source": "373e24f6339014285b3d85530e78f11ade50e3c0",
+    "phasesPassed": 20,
+    "phases": [
+      {
+        "phase": "build-probes",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "public-guard",
+        "exitCode": 1,
+        "passed": true
+      },
+      {
+        "phase": "generate",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "facade-link",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "plain-compile",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "plain-link",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "plain-compose",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "reject-undeclared-types",
+        "exitCode": 1,
+        "passed": true
+      },
+      {
+        "phase": "plain-contract",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "plain-execute",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "plain-rejects-instrument-grant",
+        "exitCode": 1,
+        "passed": true
+      },
+      {
+        "phase": "c-task-context-link",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "c-task-context-compose",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "c-task-context-execute",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "instrumented-compile",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "instrumented-link",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "instrumented-compose",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "instrumented-contract",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "instrumented-execute",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "moving",
+        "exitCode": 0,
+        "passed": true
+      }
+    ],
+    "fullEarlierReadAsyncWriteAndRootSyncFactoryProfilePassed": true,
+    "completedProducerCount": 11,
+    "producerFailureCount": 0,
+    "minimumPartialWriteChunks": 14,
+    "maintainedCCanonicalWaitResumeControl": true,
+    "undeclaredTypeNegative": true,
+    "plainArchiveRejectsInstrumentationGrant": true
+  },
+  "composition": {
+    "producerAndFacadeAreSiblings": true,
+    "publicResourceConstructorsAndMethodsUseTypedComponentContexts": true,
+    "publicInterfaceAscriptionsReferenceOriginalProducerResourceIdentities": true,
+    "constructorMethodAscriptionsValidatedAgainstOriginalFunctionTypes": true,
+    "exportFreeInternalsAndFinalPublicSurfaceValidated": true,
+    "privateSchedulerExportsHidden": true,
+    "incomingFacadeBorrowsRetiredBeforeActorHandoff": true,
+    "sharedExternalInterfaceTypeBindingsQualified": false
+  },
+  "gc": {
+    "nativeHostControlsOff": true,
+    "plainAndInstrumentedGuestOffControlsPassed": true,
+    "resourceGuestCopiedObjects": 17356,
+    "resourceGuestEvacuationVerified": true,
+    "transportRegressionGuestCopiedObjects": 12870,
+    "transportRegressionGuestEvacuationVerified": true,
+    "movingGuestStderrCaptureBytes": 16777216,
+    "physicalWasmPageProtectionClaimed": false
+  },
+  "runtimeArchives": {
+    "plain": {
+      "bytes": 46159670,
+      "sha256": "399bdf83fa36874e1af971a7f36f12e25e45fa1478310eaf172897b0d3991c8b"
+    },
+    "instrumented": {
+      "bytes": 46966504,
+      "sha256": "fe0285d8b2647c707ae0a50a92a8a8e0fc02d7ab5a6b8082f79f2285f19a70e0"
+    }
+  },
+  "noTokio": {
+    "strictOfflineInventoryPassed": true,
+    "optionalTransitiveDevBuildAndTargetDependenciesIncluded": true,
+    "newResolvedVersions": false
+  },
+  "evidence": {
+    "archive": "wasi-030-v138-evidence.tar.gz",
+    "bytes": 161810092,
+    "sha256": "b1ec5f729000b3e981f3d4d4dfe7bd00b9ce93fe83c2c909a8560c38e5199510",
+    "indexedFiles": 393,
+    "archiveAndEveryIndexedMemberVerifiedLocally": true,
+    "exactRegularFileSetVerified": true,
+    "nativeCohortRecordedByHashesRatherThanBundledArchives": true,
+    "actualWasmComponentsRuntimeArchivesGuestStaticlibsAndIndependentHostProbesBundled": true,
+    "failedDiagnosticsAndExactRecipesIncluded": true
+  },
+  "notQualifiedByThisReceipt": [
+    "Imported-resource endpoint payloads and shared external interface/value type bindings; the experimental composer currently rejects external annotation bindings",
+    "Async imports initiated by synchronous public exports",
+    "Full generic value, endpoint/actor cancellation, hook, ALS and teardown matrix",
+    "Private generated-name collision matrix and all cross-language component layouts",
+    "Public async generation and removal of existing guard",
+    "Complete current provider/HTTP/shared-provider Response subclass and ALS matrix",
+    "Current nine-command suite and instrumented native release artifacts",
+    "macOS ARM64 and Windows x64 installed packages, required CI, full lint, latest-main integration or merge"
+  ]
+}

@@ -27,8 +27,10 @@ pub fn canonical_guest(path: &Path, selected: Option<&str>) -> Result<BTreeMap<S
 
 /// Experimental async generation, including the Linux-qualified resource
 /// ownership/cancellation and guest endpoint read/write profiles. Typed
-/// factories and post-return writers behind async exports are qualified on
-/// Linux; synchronous background producer scheduling remains to implement.
+/// factories and post-return writers behind sync/async exports are qualified
+/// on Linux, including the recorded owned exported-resource endpoint profile.
+/// Imported-resource endpoints/shared external type bindings and the wider
+/// lifecycle matrix remain unqualified; see docs/WASI_030_COMPLETION.md.
 /// Public --guest-c async output and future/stream values remain guarded.
 #[doc(hidden)]
 pub fn experimental_async_guest(
