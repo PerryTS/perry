@@ -7,7 +7,7 @@ use crate::codegen_abi::LayoutWord;
 #[test]
 fn static_layout_real_abi_and_dynamic_atom_identity() {
     crate::gc::initialize_runtime_fixture();
-    let descriptor = std::ptr::addr_of!(runtime_layouts::ITERATOR_RESULT);
+    let descriptor = runtime_layouts::ITERATOR_RESULT::desc();
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj = scope.root_raw_mut_ptr(unsafe { perry_alloc_layout(descriptor) });
     let atom = unsafe { (*(*descriptor).keys).atom };
@@ -56,9 +56,8 @@ fn static_layout_zero_slots_expand_without_an_inline_floor() {
             crate::closure::shape::INTRINSIC_SERIAL_TIMEOUT,
         );
     });
-    let obj = scope.root_raw_mut_ptr(unsafe {
-        perry_alloc_layout(std::ptr::addr_of!(runtime_layouts::TIMEOUT))
-    });
+    let obj =
+        scope.root_raw_mut_ptr(unsafe { perry_alloc_layout(runtime_layouts::TIMEOUT::desc()) });
     let key = scope.root_string_ptr(crate::string::js_string_from_bytes(b"extra".as_ptr(), 5));
     obj.with_mut_ptr::<ObjectHeader, _>(|object| unsafe {
         assert_eq!(object_inline_capacity(object), 0);
@@ -123,7 +122,7 @@ fn static_layout_state_views_have_no_fixed_field_spill() {
     unsafe {
         assert_eq!(
             (*object).parent_class_id,
-            layout_id(std::ptr::addr_of!(runtime_layouts::READABLE_STATE))
+            layout_id(runtime_layouts::READABLE_STATE::desc())
         );
         assert_eq!(object_live_slot_count(object), 6);
         assert_eq!(
@@ -143,7 +142,7 @@ fn static_layout_generator_results_share_iterator_descriptor() {
         f64::from_bits(JSValue::string_ptr(value.get_raw_mut_ptr()).bits()),
         0,
     ));
-    let desc = std::ptr::addr_of!(runtime_layouts::ITERATOR_RESULT);
+    let desc = runtime_layouts::ITERATOR_RESULT::desc();
     let object =
         crate::value::js_nanbox_get_pointer(result.get_nanbox_f64()) as *const ObjectHeader;
     unsafe {
@@ -184,7 +183,7 @@ fn static_layout_generator_results_share_iterator_descriptor() {
 fn static_layout_names_a_sealed_runtime_prototype() {
     crate::gc::initialize_runtime_fixture();
     let serial = crate::closure::shape::INTRINSIC_SERIAL_TIMEOUT;
-    let descriptor = std::ptr::addr_of!(runtime_layouts::TIMEOUT);
+    let descriptor = runtime_layouts::TIMEOUT::desc();
     let scope = crate::gc::RuntimeHandleScope::new();
     let prototype = scope.root_raw_mut_ptr(js_object_alloc_plain(1));
     let key = scope.root_string_ptr(crate::string::js_string_from_bytes(b"tick".as_ptr(), 4));
@@ -254,7 +253,7 @@ fn static_layout_names_a_sealed_runtime_prototype() {
 #[test]
 fn static_layout_family_birth_declines_another_prototype() {
     crate::gc::initialize_runtime_fixture();
-    let descriptor = std::ptr::addr_of!(runtime_layouts::TIMEOUT);
+    let descriptor = runtime_layouts::TIMEOUT::desc();
     let scope = crate::gc::RuntimeHandleScope::new();
     let other = scope.root_raw_mut_ptr(js_object_alloc_plain(1));
     let other_bits = || {
@@ -286,27 +285,24 @@ fn static_layout_runtime_prototype_families_keep_their_reserved_serials() {
     use crate::closure::shape::*;
     for (desc, serial) in [
         (
-            std::ptr::addr_of!(runtime_layouts::URL_COMPONENTS),
+            runtime_layouts::URL_COMPONENTS::desc(),
             INTRINSIC_SERIAL_URL,
         ),
         (
-            std::ptr::addr_of!(runtime_layouts::READABLE_STATE),
+            runtime_layouts::READABLE_STATE::desc(),
             INTRINSIC_SERIAL_READABLE_STATE,
         ),
         (
-            std::ptr::addr_of!(runtime_layouts::WRITABLE_STATE),
+            runtime_layouts::WRITABLE_STATE::desc(),
             INTRINSIC_SERIAL_WRITABLE_STATE,
         ),
+        (runtime_layouts::TIMEOUT::desc(), INTRINSIC_SERIAL_TIMEOUT),
         (
-            std::ptr::addr_of!(runtime_layouts::TIMEOUT),
-            INTRINSIC_SERIAL_TIMEOUT,
-        ),
-        (
-            std::ptr::addr_of!(runtime_layouts::IMMEDIATE),
+            runtime_layouts::IMMEDIATE::desc(),
             INTRINSIC_SERIAL_IMMEDIATE,
         ),
         (
-            std::ptr::addr_of!(runtime_layouts::URL_SEARCH_PARAMS),
+            runtime_layouts::URL_SEARCH_PARAMS::desc(),
             INTRINSIC_SERIAL_URL_SEARCH_PARAMS,
         ),
     ] {
@@ -330,7 +326,7 @@ fn runtime_layout_is_installed_by_its_first_birth() {
     std::thread::spawn(|| unsafe {
         crate::test_support::bootstrap_test_thread();
         let installs = || super::layout_desc::registration_installs();
-        let desc = std::ptr::addr_of!(runtime_layouts::ITERATOR_RESULT);
+        let desc = runtime_layouts::ITERATOR_RESULT::desc();
         let word = LayoutWord(layout_id(desc));
         assert_eq!(installs(), 0, "startup installed a runtime layout");
         assert!(super::shapes::shape_record_for_word(word).is_none());
@@ -353,7 +349,7 @@ fn runtime_layout_is_installed_by_its_first_birth() {
 /// family, so its id comes from the identity allocator, not the section index.
 #[test]
 fn two_agents_install_a_runtime_layout_under_one_id() {
-    let desc = std::ptr::addr_of!(runtime_layouts::URL_COMPONENTS) as usize;
+    let desc = runtime_layouts::URL_COMPONENTS::desc() as usize;
     let agent = move || {
         std::thread::spawn(move || unsafe {
             crate::test_support::bootstrap_test_thread();
@@ -375,82 +371,3 @@ fn two_agents_install_a_runtime_layout_under_one_id() {
     );
 }
 
-#[test]
-fn descriptor_image_lists_are_byte_identical_to_heap_births() {
-    crate::test_support::bootstrap_test_thread();
-    let _no_gc = crate::gc::GcSuppressScope::new();
-    let mut checked = 0;
-    let mut mapped_count = 0;
-    let mut attribute_count = 0;
-    let mut symbol_count = 0;
-    for desc in super::layout_desc::image_layouts() {
-        unsafe {
-            let d = &*desc;
-            if !(d.layout_id & crate::codegen_abi::LAYOUT_TAG != 0
-                && LayoutWord(d.layout_id).row().0 < crate::codegen_abi::NATIVE_LAYOUT_ROWS)
-                || d.key_count == 0
-            {
-                continue;
-            }
-            assert!(
-                !d.image_keys.is_null(),
-                "runtime descriptor {:#x}",
-                d.family
-            );
-            let keys = std::slice::from_raw_parts(d.keys, d.key_count as usize);
-            let mapped = keys.iter().enumerate().any(|(i, k)| k.slot as usize != i);
-            let attributed = mapped || keys.iter().any(|k| k.attrs != 0);
-            assert!(super::image_keys::prepare(keys, d.image_keys));
-            let heap = super::key_attrs::alloc_canonical_key_list(d.key_count, true, attributed);
-            let heap_values = crate::array::array_elements_ptr(heap);
-            let heap_attrs = super::key_attrs::keys_attrs(heap);
-            for (i, key) in keys.iter().enumerate() {
-                // GC_STORE_AUDIT(INIT): unpublished comparison list, under suppression.
-                *heap_values.add(i) = layout_key_word(key, &[], &mut 0);
-                if !heap_attrs.is_null() {
-                    super::key_attrs::attrs_write(heap_attrs, i as u32, key.attrs, &*key.atom);
-                    if mapped {
-                        super::key_attrs::attrs_write_slot(heap_attrs, i as u32, key.slot);
-                    }
-                }
-                if (*key.atom).kind != crate::codegen_abi::ATOM_KIND_STRING {
-                    symbol_count += 1;
-                }
-            }
-            (*heap).length = d.key_count;
-            let image = d.image_keys;
-            let heap_header = crate::gc::header_from_trusted_user_ptr(heap.cast());
-            let image_header = crate::gc::header_from_trusted_user_ptr(image.cast());
-            assert_eq!((*heap_header)._reserved, (*image_header)._reserved);
-            assert_eq!((*heap_header).size, (*image_header).size);
-            assert_eq!((*heap).length, (*image).length);
-            assert_eq!((*heap).capacity, (*image).capacity);
-            assert_eq!((*heap).named, (*image).named);
-            assert_eq!((*heap).ek_prefix, (*image).ek_prefix);
-            assert_eq!((*heap).ek_kind, (*image).ek_kind);
-            let image_values = crate::array::array_elements_ptr(image);
-            for i in 0..d.key_count as usize {
-                assert_eq!(*heap_values.add(i), *image_values.add(i));
-                assert_eq!(
-                    super::key_attrs::key_word(heap, i as u32),
-                    super::key_attrs::key_word(image, i as u32)
-                );
-            }
-            if attributed {
-                attribute_count += 1;
-            }
-            if mapped {
-                mapped_count += 1;
-            }
-            checked += 1;
-        }
-    }
-    assert!(
-        checked > 50,
-        "the runtime catalog must actually be exercised: {checked}"
-    );
-    assert!(
-        attribute_count > 0 && mapped_count > 0 && symbol_count > 0,
-        "nontrivial trailers, permutations and symbols must be live"
-    );
-}

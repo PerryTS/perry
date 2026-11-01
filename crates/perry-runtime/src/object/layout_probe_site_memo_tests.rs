@@ -262,9 +262,9 @@ fn an_own_hole_reads_live_presence_before_using_its_tail() {
         let word = STRING_TAG | key as u64;
         let hash = crate::string::property_atom_hash(key);
         let proto = plain(b"error", 7.0);
-        let recv = crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(
-            crate::object::runtime_layouts::SPAWN_SYNC_RESULT
-        ));
+        let recv = crate::object::layout_desc::perry_alloc_layout(
+            crate::object::runtime_layouts::SPAWN_SYNC_RESULT::desc(),
+        );
         crate::object::prototype_chain::object_link_created_prototype(
             recv as usize,
             crate::value::js_nanbox_pointer(proto as i64).to_bits(),

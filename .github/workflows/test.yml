@@ -5416,6 +5416,16 @@ jobs:
           PERRY_RUNTIME_DIR: ${{ github.workspace }}/target/release
         run: python3 scripts/link_absence.py --perry target/release/perry --output target/link-absence
 
+      # WRT3p-A1 (DESIGN §3.2 items 9, 10): hello links exactly the runtime
+      # layout descriptors its realm reach R names, each tied to its own key
+      # list, and none of the test-only descriptor definitions. --self-test
+      # plants an out-of-R descriptor and the test marker; each must fail.
+      - name: Realm link graph (runtime layouts = R)
+        if: runner.os == 'Linux'
+        env:
+          PERRY_RUNTIME_DIR: ${{ github.workspace }}/target/release
+        run: python3 scripts/realm_wgraph_gate.py --perry target/release/perry --output target/realm-wgraph --self-test
+
       - name: Upload link absence evidence
         if: always()
         uses: ./.github/actions/perry/actions/upload-artifact # v7
