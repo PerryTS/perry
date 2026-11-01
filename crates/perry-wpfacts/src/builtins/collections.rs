@@ -183,6 +183,45 @@ fn cb_call(m: &mut Model, by: CallId, cb: NodeId, this: ThisArg, args: Vec<NodeI
     ret
 }
 
+/// The `RegExp.prototype` methods that run RegExpExec (22.2.7.1) on the
+/// receiver: `test` and `@@replace`/`@@match`/`@@search`.
+pub(super) fn regexp_runs_exec(name: &str) -> bool {
+    name == "test"
+        || name
+            .strip_prefix(WK_PREFIX)
+            .is_some_and(|s| matches!(s, "replace" | "match" | "search"))
+}
+
+/// RegExpExec: `exec` is read from the regexp as a property and called with
+/// the string, so an `exec` the program stored on it (or on `RegExp.prototype`)
+/// runs with the regexp as `this`.
+fn regexp_exec(m: &mut Model, t: Tok, call: CallId) {
+    let c = m.calls[call as usize].clone();
+    let recv = m.node_l("regexp");
+    m.add_tok(recv, t);
+    let a = m.atom("exec");
+    let ret = m.node_l("exec-ret");
+    m.nodes[ret as usize].frame = m.call_run(call);
+    let site = m.calls.len() as CallId;
+    m.solver_call(
+        call,
+        CallSite {
+            this: ThisArg::Node(recv),
+            args: c.args.first().copied().into_iter().collect(),
+            spread: vec![],
+            ret,
+            site,
+        },
+    );
+    m.cons(
+        recv,
+        Cons::MCall {
+            key: Key::Named(a),
+            call: site,
+        },
+    );
+}
+
 /// The values iterating `v` yields, as `Gen::iterate` models them for
 /// compiled code: array-like elements, then the protocol
 /// `v[Symbol.iterator]().next().value` (and `v.next().value`).
@@ -673,6 +712,9 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             Some(n),
         ) if !n.starts_with("on") && n != "addEventListener" => {
             implicit_args(m, call, "builtin method argument", Protocol::Any);
+            if what == "RegExp" && regexp_runs_exec(n) {
+                regexp_exec(m, t, call);
+            }
             ret_prim(m, call, prim::ALL);
             let pb = site_tmpl(m, call, "primbox");
             ret_tok(m, call, pb);
