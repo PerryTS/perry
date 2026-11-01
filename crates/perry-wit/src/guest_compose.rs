@@ -85,7 +85,11 @@ pub fn compose_experimental_guest(producer: &[u8], facade: &[u8], plan: &[u8]) -
             graph.set_instantiation_argument(facade, &binding.local, value)?;
         }
     }
-    let forwarding = graph.alias_instance_export(facade, &plan.forward_interface)?;
+    let forwarding = if plan.forwards.iter().any(|f| !f.interface.is_empty()) {
+        Some(graph.alias_instance_export(facade, &plan.forward_interface)?)
+    } else {
+        None
+    };
     let mut temporary = HashMap::<NodeId, String>::new();
     fn expose(
         graph: &mut CompositionGraph,
@@ -126,7 +130,10 @@ pub fn compose_experimental_guest(producer: &[u8], facade: &[u8], plan: &[u8]) -
                 );
                 let node = if let Some(forward) = forward {
                     forwarded_count += 1;
-                    graph.alias_instance_export(forwarding, &forward.export)?
+                    graph.alias_instance_export(
+                        forwarding.expect("interface forward"),
+                        &forward.export,
+                    )?
                 } else {
                     graph.alias_instance_export(original, &field)?
                 };
