@@ -51,17 +51,28 @@ capabilities and generated typed future/stream transport. Normal debug-mode
 tests cover joint resource/endpoint custody, nominal payload types, duplicate
 transfers, actual relocation, queued disposal and finalization. Guest endpoint
 I/O and writer factories still need implementation; public generation remains
-guarded. Actual P3 library transport acceptance is in progress.
+guarded. The actual P3 transport profile is qualified separately below.
+
+The [endpoint transport receipt](validation/wasi-p3-endpoint-transport-20261101.json)
+now qualifies that experimental library profile on Linux: 15 acceptance phases,
+plain/instrumented execution, a separate maintained-C canonical WAIT/resume
+control, and 5,346 copied Wasm guest objects with evacuation verification.
+Generated frame calls keep the JS agent in persistent TLS and restore SDK task
+TLS before returning to C; scheduler userdata no longer overwrites the SDK's
+stack context. Thirty-two WIT/C tests and five WASI capability tests pass.
+Moving diagnostics use an explicit bounded guest stderr capture; native host
+GC controls remain off. Guest reads, writes, writer factories and the private
+producer actor remain open, as does blocking native I/O from sync exports.
 
 | Requirement | Required evidence | Current state |
 | --- | --- | --- |
 | Canonical async imports and exports | Public generated components compose in both directions; overlapping calls, immediate/delayed completion, errors, post-return work and Store reuse | Experimental scalar/compound profile qualified; public CLI guarded |
 | Resource ownership across async calls | Imported/exported nominal resources, compound aliases, pre-start cancellation, returned-result races, borrow expiry at return/cancel, exactly-once drops and moving GC | Actual experimental entry point qualifies basic and compound C/Perry/C profiles on Linux, including 24 duplicate-owner rejections, 188 exactly-once drops, unclaimed results and moving GC; public async CLI remains guarded |
-| Guest `future<T>` and `stream<T>` | Readable/writable ownership, arbitrary supported WIT payloads, void, bounded writes, backpressure, final partial chunks, closure, cancellation and cleanup across suspension | Native hosts have readers/producers; experimental guest reader custody/typed transport implemented, with 116 component runtime tests and 30 WIT/C tests passing; actual transport acceptance in progress, guest I/O/writers pending, public adapters guarded |
+| Guest `future<T>` and `stream<T>` | Readable/writable ownership, arbitrary supported WIT payloads, void, bounded writes, backpressure, final partial chunks, closure, cancellation and cleanup across suspension | Experimental reader custody/transport qualified on Linux: 116 component runtime tests, 32 WIT/C tests, 15 actual acceptance phases and positive Wasm guest relocation; guest I/O/writers/private actor pending, public adapters guarded |
 | WASI 0.3.0 command output | A public command/runtime profile with `wasi:cli/run@0.3.0`, explicit system-interface versions and execution in a host providing the declared 0.3.0 imports; no implicit reliance on P2 compatibility | Integration branch implements `--target wasip3`; nine Perry commands and 51 Linux acceptance phases pass, plus ten separate Wasm-guest GC phases; current runtime changes, native production variants, release/platform qualification and landing remain; `--target wasi` retains P2 |
 | Complete supported 0.3.0 WASI interfaces | Commands, clocks, randomness, filesystem, TCP/UDP/DNS and HTTP execute through Turnloop with capability checks, I/O cancellation and shutdown | Linux provider/command/HTTP receipts exist; complete current-profile matrix still required |
 | Cross-language interoperability | Public Perry output composed with independent Rust and maintained-C components, including resources and future/stream payloads | Scalar/compound and cancellation examples exist; missing value profiles unqualified |
-| Runtime integration | Promise/nextTick task isolation, rejection identity, ALS, suspended-value tracing, teardown and positive moving-GC witnesses | Public ALS constructors/methods now link from runtime alone; Linux imports/exports and moving-GC execution pass, plus four native A/B checks; shared-provider regression and wider platform/package coverage remain |
+| Runtime integration | Promise/nextTick task isolation, rejection identity, ALS, suspended-value tracing, teardown and positive moving-GC witnesses | Public ALS constructors/methods link from runtime alone; recorded Linux imports/exports and moving-GC profiles pass. Actual P3 libraries now preserve agent TLS across SDK tasks, including canonical WAIT/resume. Shared-provider regression and wider platform/package coverage remain |
 | HTTP layouts | Current supported layouts and limitations explicitly tested; concurrent root handlers, nested/imported fallback, streaming bodies and cancellation | Linux supported layouts qualified; broader composition coverage open |
 | Platform and packaging | Current source-matched ordinary/instrumented artifacts and installed public tools run on Linux x86_64, macOS ARM64 and Windows x64 | Current Turnloop execution qualified on Linux; Windows compile only |
 | Durable regression coverage | Required CI executes the advertised profiles and fails if the actual guest, cancellation or GC witness is absent | Existing gates cover implemented profiles; extend for completed profiles |

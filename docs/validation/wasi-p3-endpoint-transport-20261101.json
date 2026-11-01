@@ -1,0 +1,190 @@
+{
+  "date": "2026-11-01",
+  "source": "2428d7b687bce57ead757011fae65b58725c7dca",
+  "runtimeAndCompilerSource": "8bc32a9d5988c9dae9e07c4a6e4518fe45aa5ba0",
+  "nativeDriverAndGeneratorSource": "2428d7b687bce57ead757011fae65b58725c7dca",
+  "scope": "Linux x86_64 actual Perry WASI 0.3 library reader transport and persistent agent TLS; experimental generation",
+  "fullWasi030Qualified": false,
+  "sourceReuse": {
+    "frozenCompilerAndRuntimeInputsUnchanged": [
+      "crates/perry-runtime",
+      "crates/perry-runtime-static",
+      "crates/perry-stdlib",
+      "crates/perry-stdlib-static",
+      "crates/perry-abi",
+      "crates/perry-codegen",
+      "crates/perry/src",
+      "Cargo.toml",
+      "Cargo.lock",
+      ".cargo/config.toml",
+      "rust-toolchain.toml",
+      "scripts/wasi_build_runtime.py"
+    ],
+    "nativeDriverProbeRebuiltFromCurrentSource": true,
+    "currentNativeReleaseCohortQualified": false
+  },
+  "agentTls": {
+    "guestAbiVersion": 2,
+    "sdkTaskContextZeroPreserved": true,
+    "nativeCUserdataSurvivesCanonicalWaitResume": true,
+    "finiteRustCallsRestoreSdkTaskTls": true,
+    "experimentalThreadingEnabled": false,
+    "sdk": "wasi-sdk 34.0",
+    "sdkLibcRevision": "2e6fb9d8ee0cdf9e431fbcabe8af3115de000a13",
+    "frameAndRegistrationCallsBridged": 52
+  },
+  "units": {
+    "runtimeSource": "44d6ed6b9ebeded7969020074d188c19646e9c58",
+    "runtimeAbiInputsUnchangedThrough": "2428d7b687bce57ead757011fae65b58725c7dca",
+    "normalDevComponentRuntimePassed": 116,
+    "runtimeTestsSerial": true,
+    "fullRuntimeSuiteQualified": false,
+    "witPassed": 32,
+    "witIgnoredFixtureProducers": 2,
+    "hostWasiCapabilityPassed": 5
+  },
+  "acceptance": {
+    "script": "scripts/component_endpoint_transport_acceptance.py",
+    "phasesPassed": 15,
+    "phases": [
+      {
+        "phase": "build-probes",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "public-guard",
+        "exitCode": 1,
+        "passed": true
+      },
+      {
+        "phase": "generate",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "plain-compile",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "plain-link",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "reject-undeclared-types",
+        "exitCode": 1,
+        "passed": true
+      },
+      {
+        "phase": "plain-contract",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "plain-execute",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "c-task-context-link",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "c-task-context-execute",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "instrumented-compile",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "instrumented-link",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "instrumented-contract",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "instrumented-execute",
+        "exitCode": 0,
+        "passed": true
+      },
+      {
+        "phase": "moving",
+        "exitCode": 0,
+        "passed": true
+      }
+    ],
+    "plainAndInstrumentedExecution": true,
+    "ordinaryProfilesInheritNativeStderr": true,
+    "forcedCanonicalWaitResumeControlIsSeparateFromPerryAsyncBodies": true,
+    "externalWasiInterfaces": 18,
+    "externalWasiVersion": "0.3.0",
+    "explicitStructuralTypeImports": [
+      "payload",
+      "pending",
+      "values",
+      "pair"
+    ],
+    "undeclaredTypeImportsRejected": true,
+    "publicAsyncGuardPreserved": true,
+    "values": [
+      "record payload with Unicode, u64, char and bytes",
+      "compound future/stream pair",
+      "char future",
+      "void future",
+      "unit stream",
+      "byte stream",
+      "nested future"
+    ],
+    "hostPayloadReadWriteAndPartialRemainders": true,
+    "explicitAndGcDrop": true,
+    "storeReuse": true,
+    "nativeGcControlsOffThroughout": true,
+    "guestOnlyEnvironmentGrants": true,
+    "guestCopiedObjectsInMinorLogs": 5346,
+    "guestEvacuationVerified": true,
+    "movingGuestStderrCaptureBytes": 16777216,
+    "physicalWasmPageProtectionClaimed": false,
+    "explicitFuelGrant": 3000000000
+  },
+  "runtimeArchives": {
+    "plain": {
+      "bytes": 46089878,
+      "sha256": "bee9b59fa348d4bc812634fd93fa1fe633d55ef412de1ba1051dda8da8b6b9b2"
+    },
+    "instrumented": {
+      "bytes": 46895798,
+      "sha256": "edba403f74cdada608a086d62fdd7a5c6859a976624332b77ef8c27e22364e12"
+    }
+  },
+  "noTokio": {
+    "offlineInventoryPassed": true,
+    "manifests": 128,
+    "lockfiles": 28,
+    "newDependencies": false
+  },
+  "evidence": {
+    "archive": "wasi-030-v092-evidence.tar.gz",
+    "bytes": 75953760,
+    "sha256": "fb9c379e8d731f28963c4f6025df22e668327f6bc7ce02ea88f4ae915c75df53",
+    "indexedFiles": 182,
+    "archiveAndEveryIndexedMemberVerifiedLocally": true,
+    "exactRegularFileSetVerified": true
+  },
+  "notQualifiedByThisReceipt": [
+    "Guest endpoint read/write methods, guest-created writers, private producer actor or public async generation",
+    "Arbitrary resource-bearing endpoint payloads in actual guest I/O",
+    "Blocking native stdio from synchronous canonical exports; moving diagnostics use an explicit bounded capture pipe",
+    "Complete current provider/HTTP/shared-provider ALS matrix",
+    "Fresh current native release cohorts, all nine command regressions on these later runtime sources, macOS/Windows installed packages, required CI, full lint or merge"
+  ]
+}
