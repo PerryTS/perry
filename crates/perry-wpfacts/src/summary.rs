@@ -433,6 +433,11 @@ pub fn map_cons(
             src: n(src),
             site,
         },
+        StoreIndexed { o, src, site } => StoreIndexed {
+            o: n(o),
+            src: n(src),
+            site,
+        },
         AccessorKeyed { holder, f, setter } => AccessorKeyed {
             holder: n(holder),
             f: n(f),
@@ -549,6 +554,7 @@ fn gen_kind(c: &Cons) -> bool {
             | ForInBody { .. }
             | DefineKeyed { .. }
             | StoreKeyed { .. }
+            | StoreIndexed { .. }
             | AccessorKeyed { .. }
             | Arith { .. }
             | ArrayLenArg { .. }
