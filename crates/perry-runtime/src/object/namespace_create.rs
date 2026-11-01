@@ -44,8 +44,8 @@ pub extern "C" fn js_finalize_namespace(value: f64) -> f64 {
     unsafe {
         (*obj).class_id = MODULE_NAMESPACE_CLASS_ID;
         // A module namespace exotic object has a [[Prototype]] of `null`
-        // (ECMA-262 10.4.6), and `OBJ_FLAG_NULL_PROTO` is the proof
-        // `Object.getPrototypeOf` already reads to answer `null`. Without it a
+        // (ECMA-262 10.4.6): its shape names the null identity, which
+        // `Object.getPrototypeOf` reads to answer `null`. Without it a
         // namespace reached the self-prototype fallback in
         // `object_ops/prototype.rs`, which answers with a further namespace
         // object, so a prototype-chain walk over an `import * as ns` binding
@@ -53,9 +53,12 @@ pub extern "C" fn js_finalize_namespace(value: f64) -> f64 {
         // `NATIVE_MODULE_CLASS_ID` arm already guards against for
         // `require("path")` namespaces; a static ESM namespace reaches this
         // function instead, and had no such guard.
-        let gc = crate::gc::header_from_trusted_user_ptr(obj.cast()).cast_mut();
-        (*gc)._reserved |= crate::gc::OBJ_FLAG_NULL_PROTO;
-        crate::object::shapes::restamp_object_proto_id(obj);
+        crate::object::shapes::transition_object_shape_prototype(
+            obj,
+            crate::object::shapes::PROTO_ID_NULL,
+            crate::value::TAG_NULL,
+        );
+        crate::object::shapes::store_kind::restamp_object_store_kind(obj);
     }
     crate::object::js_object_prevent_extensions(value)
 }

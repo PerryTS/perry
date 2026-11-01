@@ -589,9 +589,17 @@ fn object_set_static_prototype_impl_with(
     }
 }
 
+/// Does `obj_ptr` have a non-null [[Prototype]] other than its default?
+/// [`object_static_prototype`] less a null link: the question a root such as
+/// `%Object.prototype%` (whose own link is null) asks of "was it re-linked".
+pub(crate) fn object_static_prototype_is_linked(obj_ptr: usize) -> bool {
+    object_static_prototype(obj_ptr).is_some_and(|bits| bits != crate::value::TAG_NULL)
+}
+
 /// Look up the recorded prototype bits for an object, if any. Returns `None`
 /// when no explicit prototype has been recorded (the object still has its
-/// default prototype); `Some(TAG_NULL)` when it was explicitly set to `null`.
+/// default prototype); `Some(TAG_NULL)` when its [[Prototype]] is null, born
+/// so (`Object.create(null)`) or linked so: its shape's one identity.
 pub fn object_static_prototype(obj_ptr: usize) -> Option<u64> {
     if crate::hot_diag::receiver_repr_on() {
         crate::hot_diag::receiver_repr_note_decoded_pointer(obj_ptr);
@@ -658,14 +666,14 @@ pub fn object_static_prototype(obj_ptr: usize) -> Option<u64> {
 ///
 /// A chain ends explicitly when a hop carries a recorded `TAG_NULL`
 /// (`Object.setPrototypeOf(x, null)`, `__proto__ = null`) or is a cell born
-/// with no prototype at all (`Object.create(null)`, `OBJ_FLAG_NULL_PROTO`). It
+/// with no prototype at all (`Object.create(null)`: its shape's null identity). It
 /// does NOT end explicitly when a hop simply has no record: that is an
 /// ordinary object standing on the class default, which is exactly the case
 /// the fallback exists for.
 ///
 /// Cost is paid only on a MISS, and only walks hops that carry a record: an
-/// ordinary receiver answers `false` from one absent meta record plus one
-/// header bit.
+/// ordinary receiver answers `false` from one absent meta record plus its
+/// shape word.
 #[cfg(test)]
 pub(crate) fn prototype_chain_ends_in_explicit_null(obj_ptr: usize) -> bool {
     chain_ends_in_explicit_null_before::<false>(obj_ptr)
@@ -767,20 +775,15 @@ unsafe fn class_link_prototype(obj_ptr: usize) -> usize {
     super::class_registry::class_holder_prototype(class_id) as usize
 }
 
-/// Was this cell allocated with no prototype (`Object.create(null)`,
-/// `querystring.parse`)? That is `OBJ_FLAG_NULL_PROTO`, the header bit #1175
-/// added, and it is the born-null half of the question
-/// [`chain_ends_in_explicit_null_before`] asks.
+/// Does this cell's shape name a null prototype with nothing recorded over
+/// it (`Object.create(null)`, `querystring.parse`)? The born-null half of the
+/// question [`chain_ends_in_explicit_null_before`] asks (#1175).
 #[inline]
 unsafe fn cell_is_born_null_proto(obj_ptr: usize) -> bool {
     if obj_ptr == 0 || !crate::object::is_valid_obj_ptr(obj_ptr as *const u8) {
         return false;
     }
-    let Some(header) = crate::value::addr_class::try_read_gc_header(obj_ptr) else {
-        return false;
-    };
-    crate::gc_type_is_object!(header.obj_type)
-        && header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0
+    super::shapes::cell_prototype_is_null(obj_ptr)
 }
 
 /// Whether ordinary property lookup must consult the receiver's own chain
@@ -907,7 +910,7 @@ pub(crate) unsafe fn default_object_prototype_for_owner(obj_ptr: usize) -> Optio
         return None;
     }
     let gc = super::gc_header_for(obj);
-    if (*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
+    if (*gc).obj_type == crate::gc::GC_TYPE_OBJECT && super::shapes::object_prototype_is_null(obj) {
         return None;
     }
     if crate::gc_type_is_not_object!((*gc).obj_type)

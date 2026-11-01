@@ -1918,12 +1918,10 @@ pub(crate) unsafe fn array_record_close_is_absent() -> bool {
             return true;
         }
         if parent == 0 {
-            let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
+            if crate::value::addr_class::try_read_gc_header(obj as usize).is_none() {
                 return false;
-            };
-            if header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0
-                || obj as usize == object_proto
-            {
+            }
+            if obj as usize == object_proto {
                 return true;
             }
             // Class-zero ordinary owners inherit Object.prototype when their
