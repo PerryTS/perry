@@ -80,10 +80,30 @@ fn exported_resource_records_are_shared_through_the_published_interface() {
     let ItemKind::Type(Type::Value(second)) = types[mirror].exports["payload"] else {
         panic!("shared payload")
     };
-    assert_eq!(
-        types.resolve_value_type(first),
-        types.resolve_value_type(second)
-    );
+    // The parser can allocate distinct record entries after export aliasing.
+    // Their structure and the underlying nominal resource must stay equal.
+    let owner = |ty| {
+        let ValueType::Defined(id) = types.resolve_value_type(ty) else {
+            panic!("record type")
+        };
+        let wac_graph::types::DefinedType::Record(record) = &types[id] else {
+            panic!("record payload")
+        };
+        assert_eq!(record.fields.len(), 2);
+        assert_eq!(
+            types.resolve_value_type(record.fields["text"]),
+            ValueType::Primitive(wac_graph::types::PrimitiveType::String)
+        );
+        let ValueType::Own(resource) = types.resolve_value_type(record.fields["owner"]) else {
+            panic!("owned nominal resource")
+        };
+        types.resolve_resource(resource)
+    };
+    let ItemKind::Type(Type::Resource(resource)) = types[api].exports["item"] else {
+        panic!("public resource")
+    };
+    assert_eq!(owner(first), types.resolve_resource(resource));
+    assert_eq!(owner(second), types.resolve_resource(resource));
 }
 
 #[test]
