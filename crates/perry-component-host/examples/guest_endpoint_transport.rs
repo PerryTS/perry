@@ -152,6 +152,9 @@ fn main() -> Result<()> {
         ] {
             wasi.env.insert(name.into(), "1".into());
         }
+        wasi.env
+            .insert("PERRY_GC_SCHEDULE_SEED".into(), "303".into());
+        wasi.env.insert("PERRY_GC_SCHEDULE_RATE".into(), "1".into());
     }
     if args[2..].iter().any(|arg| arg == "--trace") {
         for name in ["PERRY_TRACE_THROW", "PERRY_TRACE_ASYNC"] {

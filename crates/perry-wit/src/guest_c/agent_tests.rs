@@ -59,7 +59,7 @@ fn agent_tls_bridge_covers_the_frame_abi_and_restores_nested_sdk_contexts() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(
-        output.stdout,
-        b"PASS: agent TLS, nested calls, errors, void and wide results\n"
+        String::from_utf8(output.stdout).unwrap().trim_end(),
+        "PASS: agent TLS, nested calls, errors, void and wide results"
     );
 }
