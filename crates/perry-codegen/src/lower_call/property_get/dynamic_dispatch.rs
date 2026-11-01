@@ -568,8 +568,9 @@ pub(crate) fn try_lower_instance_method_call(
                         // The facts prove the receiver is this arm's class
                         // (`proven`) and that class's layout never changes
                         // (`fixed_layout`): the arm needs no recheck.
+                        let owner = impl_owner[i].as_deref().unwrap_or_default();
                         let layout_proven =
-                            proven.is_some() && tower_layout_proven(ctx, implementors[i].0);
+                            proven.is_some() && tower_layout_proven(ctx, owner, implementors[i].0);
                         emit_tower_pshape_call(
                             ctx,
                             i,
@@ -577,6 +578,8 @@ pub(crate) fn try_lower_instance_method_call(
                             &recv_handle,
                             &case_arg_slices,
                             layout_proven,
+                            owner,
+                            implementors[i].0,
                         )
                     }
                     None => {
