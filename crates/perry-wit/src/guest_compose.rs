@@ -248,34 +248,6 @@ pub fn compose_experimental_guest(producer: &[u8], facade: &[u8], plan: &[u8]) -
         validate: false,
         ..EncodeOptions::default()
     })?;
-    #[cfg(test)]
-    if original_imports.contains_key("left") {
-        let directory = tempfile::tempdir()?.keep();
-        std::fs::write(directory.join("graph.wasm"), &encoded)?;
-        let mut dump = String::new();
-        for payload in Parser::new(0).parse_all(&encoded) {
-            match payload? {
-                Payload::ComponentTypeSection(section) => for ty in section {
-                    dump.push_str(&format!("TYPE {:?}\n", ty?));
-                },
-                Payload::ComponentImportSection(section) => for item in section {
-                    dump.push_str(&format!("IMPORT {:?}\n", item?));
-                },
-                Payload::ComponentAliasSection(section) => for item in section {
-                    dump.push_str(&format!("ALIAS {:?}\n", item?));
-                },
-                Payload::ComponentInstanceSection(section) => for item in section {
-                    dump.push_str(&format!("INSTANCE {:?}\n", item?));
-                },
-                Payload::ComponentSection { .. } => dump.push_str("COMPONENT\n"),
-                Payload::Version { .. } => dump.push_str("VERSION\n"),
-                Payload::End(_) => dump.push_str("END\n"),
-                _ => {},
-            }
-        }
-        std::fs::write(directory.join("graph.txt"), dump)?;
-        eprintln!("Labeled-interface diagnostic: {}\n{:#?}", directory.display(), graph.types());
-    }
     publish(&encoded, &exports)
 }
 

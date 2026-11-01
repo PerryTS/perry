@@ -102,6 +102,8 @@ run('p1-contract',['python3',ROOT/'scripts/wasi_imports_check.py',p1])
 p1host=out/'p1-host.mjs'
 p1host.write_text('import { WASI } from "node:wasi";\nimport { readFileSync } from "node:fs";\nconst wasi = new WASI({ version: "preview1", args: [], env: {}, returnOnExit: true });\nconst module = await WebAssembly.compile(readFileSync(process.argv[2]));\nconst instance = await WebAssembly.instantiate(module, wasi.getImportObject());\nprocess.exitCode = wasi.start(instance);\n')
 for name,(incoming,expected) in cases.items():run('p1-'+name,['node',p1host,p1],incoming,expected)
+identities={str(p):dict(bytes=p.stat().st_size,sha256=hashlib.sha256(p.read_bytes()).hexdigest()) for p in [source,native,component,host,p1,p1host,perry,*(path.resolve()/'libperry_runtime.a' for path in [args.native_runtime,args.p1_runtime,args.p3_runtime])]}
+(out/'artifact-identities.json').write_text(json.dumps(identities,indent=2)+'\n')
 if args.live_clients:
     clients = {
         'client.mjs': 'a60a32a1bad72ce416a032ca05b2bb5e27e0b25b4b8a688aa180eab3219ebc82',
@@ -158,7 +160,5 @@ if args.live_clients:
                     failedPhase=name, performanceQualified=False), indent=2) + '\n')
                 print(client_output, (out / (name + '.server.stderr')).read_text(), flush=True)
                 raise SystemExit(1)
-identities={str(p):dict(bytes=p.stat().st_size,sha256=hashlib.sha256(p.read_bytes()).hexdigest()) for p in [source,native,component,host,p1,p1host,perry,*(path.resolve()/'libperry_runtime.a' for path in [args.native_runtime,args.p1_runtime,args.p3_runtime])]}
-(out/'artifact-identities.json').write_text(json.dumps(identities,indent=2)+'\n')
 (out/'result.json').write_text(json.dumps(dict(exitCode=0,upstreamCommit=UPSTREAM_COMMIT,sourceUnmodified=True,profile='supplied compiler and runtime archives, functional acceptance only',performanceQualified=False,preview1Qualified=True,liveClientsQualified=args.live_clients,remaining=([] if args.live_clients else ['live socket/client roundtrip'])+['production release size/startup/throughput/memory comparisons']),indent=2)+'\n')
 print('WEBSOCKET NATIVE, PREVIEW 1 AND P3 FUNCTIONAL ACCEPTANCE PASS',flush=True)
