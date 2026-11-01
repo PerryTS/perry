@@ -17,6 +17,7 @@ fn cjs(path: &str, source: &str) -> String {
         false,
         None,
         None,
+        None,
         &mut Vec::new(),
         None,
     )

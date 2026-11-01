@@ -10,13 +10,26 @@ use crate::ir::*;
 
 use super::super::{lower_expr, LoweringContext};
 
-fn text_encoder_encode_into(args: Vec<Expr>) -> Expr {
-    let mut args = args.into_iter();
-    let source = args.next().unwrap_or(Expr::Undefined);
-    let dest = args.next().unwrap_or(Expr::Undefined);
-    Expr::TextEncoderEncodeInto {
-        source: Box::new(source),
-        dest: Box::new(dest),
+/// Keep the receiver and property lookup: encode/encodeInto are ordinary
+/// writable methods. A receiverless intrinsic cannot represent replacement
+/// and also discards receiver-construction effects on inline calls.
+pub(super) fn encoder_call(
+    receiver: Expr,
+    method: &str,
+    args: Vec<Expr>,
+    call: &ast::CallExpr,
+) -> Expr {
+    Expr::Call {
+        callee: Box::new(Expr::PropertyGet {
+            object: Box::new(receiver),
+            property: method.into(),
+            byte_offset: call.span.lo.0,
+            byte_end: call.span.hi.0,
+        }),
+        args,
+        type_args: vec![],
+        byte_offset: call.span.lo.0,
+        byte_end: call.span.hi.0,
     }
 }
 
@@ -50,16 +63,11 @@ pub(super) fn try_textencoder_decoder(
                 // Check if the receiver is new TextEncoder() or new TextDecoder()
                 if let ast::Expr::New(new_expr) = member.obj.as_ref() {
                     if let Some(class_name) = new_callee_name(ctx, new_expr) {
-                        if class_name == "TextEncoder" && method_name == "encode" {
-                            let str_arg = if !args.is_empty() {
-                                args.into_iter().next().unwrap()
-                            } else {
-                                Expr::String(String::new())
-                            };
-                            return Ok(Ok(Expr::TextEncoderEncode(Box::new(str_arg))));
-                        }
-                        if class_name == "TextEncoder" && method_name == "encodeInto" {
-                            return Ok(Ok(text_encoder_encode_into(args)));
+                        if class_name == "TextEncoder"
+                            && matches!(method_name, "encode" | "encodeInto")
+                        {
+                            let receiver = lower_expr(ctx, &member.obj)?;
+                            return Ok(Ok(encoder_call(receiver, method_name, args, call)));
                         }
                         if class_name == "TextDecoder" && method_name == "decode" {
                             let decoder = super::super::expr_new::lower_text_decoder_new(
@@ -85,16 +93,9 @@ pub(super) fn try_textencoder_decoder(
                         .lookup_local_type(&obj_name)
                         .map(|ty| matches!(ty, Type::Named(name) if name == "TextEncoder"))
                         .unwrap_or(false);
-                    if is_text_encoder && method_name == "encode" {
-                        let str_arg = if !args.is_empty() {
-                            args.into_iter().next().unwrap()
-                        } else {
-                            Expr::String(String::new())
-                        };
-                        return Ok(Ok(Expr::TextEncoderEncode(Box::new(str_arg))));
-                    }
-                    if is_text_encoder && method_name == "encodeInto" {
-                        return Ok(Ok(text_encoder_encode_into(args)));
+                    if is_text_encoder && matches!(method_name, "encode" | "encodeInto") {
+                        let receiver = lower_expr(ctx, &member.obj)?;
+                        return Ok(Ok(encoder_call(receiver, method_name, args, call)));
                     }
                     let is_text_decoder = ctx
                         .lookup_local_type(&obj_name)

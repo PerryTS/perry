@@ -130,6 +130,7 @@ pub(super) struct PrepInputs<'a> {
     pub(super) native_addon_paths: &'a BTreeMap<PathBuf, String>,
     pub(super) bunfs_root: Option<&'a Path>,
     pub(super) debug_symbols: bool,
+    pub(super) cjs_demanded_exports: &'a BTreeMap<PathBuf, BTreeSet<String>>,
 }
 
 impl<'a> PrepInputs<'a> {
@@ -140,6 +141,7 @@ impl<'a> PrepInputs<'a> {
             native_addon_paths: &ctx.native_addon_paths,
             bunfs_root: ctx.bunfs_root.as_deref(),
             debug_symbols: ctx.debug_symbols,
+            cjs_demanded_exports: &ctx.cjs_demanded_exports,
         }
     }
 }
@@ -152,6 +154,7 @@ struct PrepConfig {
     compile_packages: HashSet<String>,
     native_addon_paths: BTreeMap<PathBuf, String>,
     debug_symbols: bool,
+    cjs_demanded_exports: BTreeMap<PathBuf, BTreeSet<String>>,
 }
 
 impl PrepConfig {
@@ -164,7 +167,17 @@ impl PrepConfig {
             compile_packages: ctx.compile_packages.clone(),
             native_addon_paths: ctx.native_addon_paths.clone(),
             debug_symbols: ctx.debug_symbols,
+            cjs_demanded_exports: ctx.cjs_demanded_exports.clone(),
         })
+    }
+
+    /// Same settings except, possibly, the demanded CommonJS exports, which
+    /// change only the modules they name.
+    fn same_except_demand(&self, other: &Self) -> bool {
+        self.target == other.target
+            && self.compile_packages == other.compile_packages
+            && self.native_addon_paths == other.native_addon_paths
+            && self.debug_symbols == other.debug_symbols
     }
 
     fn inputs(&self) -> PrepInputs<'_> {
@@ -174,6 +187,7 @@ impl PrepConfig {
             native_addon_paths: &self.native_addon_paths,
             bunfs_root: None,
             debug_symbols: self.debug_symbols,
+            cjs_demanded_exports: &self.cjs_demanded_exports,
         }
     }
 }
@@ -294,6 +308,7 @@ pub(super) fn prepare_from_raw(
             class.is_entry,
             Some(inputs.compile_packages),
             Some(inputs.native_addon_paths),
+            inputs.cjs_demanded_exports.get(canonical),
             &mut messages,
             Some(&mut computed_require_warnings),
         );
@@ -688,9 +703,17 @@ impl WalkSources<'_> {
             }
             WalkSources::Reuse(sources) => {
                 let config = PrepConfig::of(ctx, target);
-                if config.is_none() || sources.config != config {
-                    sources.modules.clear();
+                match (&config, &sources.config) {
+                    (Some(new), Some(old)) if new.same_except_demand(old) => {
+                        // Re-prepare only the modules whose demanded exports
+                        // changed; every other kept source still applies.
+                        sources.modules.retain(|path, _| {
+                            new.cjs_demanded_exports.get(path) == old.cjs_demanded_exports.get(path)
+                        });
+                    }
+                    _ => sources.modules.clear(),
                 }
+                sources.config = config;
             }
         }
     }

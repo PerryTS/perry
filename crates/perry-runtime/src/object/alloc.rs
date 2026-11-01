@@ -163,6 +163,19 @@ pub(crate) unsafe fn object_alloc_null_proto_with_key_attrs(
     object_alloc_null_proto_with_key_attrs_and_inline(entries, attrs, entries.len() as u32)
 }
 
+/// [`object_alloc_null_proto_with_key_attrs`] with `ROOM` more inline slots
+/// than keys, for an object that will take more keys (a function's bag): its
+/// later key-adds land inline instead of in the spill buffer.
+///
+/// # Safety
+/// Same suppression and distinct-key requirements as the full-inline birth.
+pub(crate) unsafe fn object_alloc_null_proto_with_key_attrs_room<const ROOM: u32>(
+    entries: &[(&str, f64)],
+    attrs: &[u8],
+) -> *mut ObjectHeader {
+    object_alloc_null_proto_with_key_attrs_sized::<ROOM>(entries, attrs, entries.len() as u32)
+}
+
 /// The same canonical birth with a bounded inline prefix. Remaining fixed
 /// positions use the existing traced spill store; no key-add or per-key
 /// attribute transitions are needed to establish them.
@@ -170,6 +183,17 @@ pub(crate) unsafe fn object_alloc_null_proto_with_key_attrs(
 /// # Safety
 /// Same suppression and distinct-key requirements as the full-inline birth.
 pub(crate) unsafe fn object_alloc_null_proto_with_key_attrs_and_inline(
+    entries: &[(&str, f64)],
+    attrs: &[u8],
+    inline: u32,
+) -> *mut ObjectHeader {
+    object_alloc_null_proto_with_key_attrs_sized::<0>(entries, attrs, inline)
+}
+
+/// The canonical birth with `inline` live inline keys in storage of
+/// `inline + ROOM` inline slots.
+#[inline(always)]
+unsafe fn object_alloc_null_proto_with_key_attrs_sized<const ROOM: u32>(
     entries: &[(&str, f64)],
     attrs: &[u8],
     inline: u32,
@@ -184,7 +208,7 @@ pub(crate) unsafe fn object_alloc_null_proto_with_key_attrs_and_inline(
     }
     // Under suppression the unpublished bag cannot move or be traced before
     // its final keys and live bound are stamped. Publish no empty predecessor.
-    let obj = super::alloc_basic::object_alloc_unpublished(0, inline);
+    let obj = super::alloc_basic::object_alloc_unpublished(0, inline + ROOM);
     let with_attrs = attrs.iter().any(|&entry| entry != 0);
     let gc = (obj as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
     if with_attrs {
