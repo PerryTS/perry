@@ -2,7 +2,7 @@
 
 Perry compiles TypeScript directly to native code via LLVM, but JavaScript is a managed language: closures escape, objects outlive scopes, cycles exist. This page explains how Perry reconciles "native binary" with "garbage-collected language" — the value representation, the heap layout, how the GC finds roots, and how LLVM-generated code cooperates with the collector.
 
-If you've ever wondered "does Perry use reference counting?" — no. There is no `Rc` at runtime. Perry has a real tracing GC, described below.
+JavaScript heap objects use tracing GC. Rust runtime components may separately use reference-counted ownership; that is not the JavaScript heap collector.
 
 For the dated source of truth on shipped collection paths, target-specific
 root lowerings, memory pressure, block pooling, supported knobs, and CI, see
@@ -10,7 +10,9 @@ root lowerings, memory pressure, block pooling, supported knobs, and CI, see
 
 ## Value representation: NaN-boxing
 
-Every JavaScript value in Perry is a single 64-bit word. The encoding piggy-backs on IEEE 754: any `f64` whose exponent is all-ones and whose mantissa is non-zero is a NaN, and there are ~2⁵² distinct NaN bit patterns. Perry uses the high 16 bits as a type tag and the low 48 (or 32) bits as the payload.
+The generic JavaScript value ABI is a 64-bit NaN-boxed word. Proven native values and specialized storage can use other representations; boxing is required when crossing a generic value boundary.
+
+The encoding piggy-backs on IEEE 754: any `f64` whose exponent is all-ones and whose mantissa is non-zero is a NaN, and there are ~2⁵² distinct NaN bit patterns. Perry uses the high 16 bits as a type tag and the low 48 (or 32) bits as the payload.
 
 | Tag (high 16 bits) | Type | Payload |
 |---|---|---|
@@ -21,11 +23,13 @@ Every JavaScript value in Perry is a single 64-bit word. The encoding piggy-back
 | `0x7FF9` | Short string (0–5 bytes) | length in bits 40–47, the bytes in bits 0–39 — no allocation |
 | `0x7FFA` | BigInt | low 48 bits = heap pointer |
 | `0x7FFB` | JS handle | low 48 bits = handle id (V8-backed objects) |
+| `0xFFF9` | Native handle | low 48 bits = registry id, not a heap pointer |
 | `0x7FFD` | Object / Array / Closure | low 48 bits = heap pointer |
 | `0x7FFE` | Int32 | low 32 bits = signed int |
 | `0x7FFF` | String | low 48 bits = heap pointer |
 | anything else | `f64` | the full 64 bits are the number |
 
+<!-- gc-fact: HANDLE_TAG = 0xFFF9_0000_0000_0000 in crates/perry-abi/src/lib.rs -->
 <!-- gc-fact: POINTER_TAG = 0x7FFD_0000_0000_0000 in crates/perry-runtime/src/value/tags.rs -->
 <!-- gc-fact: STRING_TAG = 0x7FFF_0000_0000_0000 in crates/perry-runtime/src/value/tags.rs -->
 <!-- gc-fact: INT32_TAG = 0x7FFE_0000_0000_0000 in crates/perry-runtime/src/value/tags.rs -->
@@ -46,12 +50,9 @@ Three consequences worth noting:
 
 ## Heap layout: per-thread arena, nursery + old-gen
 
-Perry is single-threaded by default, and each thread owns its own heap. Sharing across threads happens via deep copy (`SerializedValue`), not shared memory, so the GC never has to synchronize across threads.
+Ordinary values cross agents through `SerializedValue`. SharedArrayBuffer backing is explicitly shared, and supported transfer operations move ownership. Each collector traces its own heap; shared backing and transfer coordination have separate lifetime rules.
 
-Within a thread, the heap is two arenas:
-
-- **`ARENA`** — the nursery. New allocations land here. Carved into 1 MB blocks (since v0.5.196).
-- **`OLD_ARENA`** — the old generation. Holds objects that have survived enough minor GCs to be tenured.
+The nursery uses Eden and survivor spaces; `OLD_ARENA` holds old objects. Regular blocks occupy one aligned region (2 MiB on Linux, 1 MiB elsewhere). Dedicated young large-object storage and separately tracked malloc allocations also participate in collection.
 
 Every allocation, in either arena, is prefixed by an 8-byte `GcHeader`
 (`crates/perry-runtime/src/gc/types.rs`):
@@ -61,18 +62,14 @@ Every allocation, in either arena, is prefixed by an 8-byte `GcHeader`
 pub struct GcHeader {
     pub obj_type: u8,    // GC_TYPE_ARRAY, GC_TYPE_STRING, …
     pub gc_flags: u8,    // MARKED | ARENA | PINNED | TENURED | HAS_SURVIVED | …
-    pub _reserved: u16,
+    pub _reserved: u16, // kind-specific facts, including object callability
     pub size: u32,       // total alloc size, used for arena block walking
 }
 ```
 
 Callers receive a pointer **after** the header (`ptr + 8`), so from TypeScript code's perspective the header is invisible. The collector finds the header by subtracting 8.
 
-Allocation goes through `gc_malloc(size, obj_type)` in the `gc/` module tree.
-LLVM-generated code emits calls to this for every object literal, array
-literal, closure capture, string concat, BigInt operation, etc. Going through
-the GC allocation funnel is how the collector accounts for memory and decides
-when to collect.
+Allocation uses runtime helpers and compiler-emitted inline bump allocation. Inline births initialize a complete layout and obey the same accounting and GC birth-color contract. `gc_malloc` is one allocation entry point, not a call emitted for every object.
 
 ## How the GC finds roots
 
@@ -82,11 +79,7 @@ Three mechanisms cover different storage locations:
 
 ### 1. Target-aware precise roots (codegen-emitted)
 
-One pointer-local analysis feeds two correct lowerings. On supported 64-bit
-AArch64/arm64 and x86-64 targets, native RS4GC statepoints plus Perry's compact
-stack map are the default. `arm64_32` watchOS, ARM64 Windows, and unsupported
-architectures use Perry's heap-backed shadow frames. The fallback is a root
-lowering, not an unrooted mode; see [the current GC page](garbage-collector.md#roots-by-target).
+Native AArch64 and x86-64 use LLVM RS4GC statepoints and compact stack maps. WASI and ARM64 Windows use shadow frames. watchOS ILP32 currently rejects compiler emission. Managed values must remain in writable roots across collection; generated native homes store boxed values and are reloaded after relocation. See [roots by target](garbage-collector.md#roots-by-target).
 
 At a safepoint the selected map describes each live managed local regardless of
 whether LLVM kept it in a register, spilled it, or relocated it.
@@ -114,15 +107,7 @@ Most JS allocations die young — object literals in a loop body, short-lived cl
 Aging is recorded two different ways, because the two minor paths need different
 things from it.
 
-**The non-copying minor** uses two flag bits in `gc_flags`
-(`crates/perry-runtime/src/gc/types.rs`): `GC_FLAG_HAS_SURVIVED` on the first
-minor an object survives, `GC_FLAG_TENURED` on the second, at which point the
-object is logically promoted. The two-bit scheme avoids a counter field in the
-header, and a tenured object initially stays physically where it is — that
-promotion is a flag flip, not a copy. Whether such objects are then evacuated
-into `OLD_ARENA` (with every reference rewritten) is a policy decision taken per
-cycle from nursery/RSS pressure and measured movable candidates, and it requires
-generated write barriers to be active.
+The non-copying minor records survival in `gc_flags`: `GC_FLAG_HAS_SURVIVED`, then `GC_FLAG_TENURED`. Logical promotion does not itself move the object. Evacuation requires active barriers and rewritable roots; budgeted low-pause cycles remain non-moving.
 
 **The copying minor** — the default nursery path — stores an exact short age in
 the header instead, and its promotion threshold is *adaptive*: a
@@ -168,7 +153,7 @@ drain behaviour.
 | Env var | Effect |
 |---|---|
 | `PERRY_GEN_GC=0` / `off` / `false` | Disable generational mode; fall back to full mark-sweep (intended for bisection only). |
-| `PERRY_GC_FORCE_EVACUATE=1` | With generated write barriers active and policy evacuation allowed, stress-copy every marked non-pinned nursery object instead of only tenured survivors. |
+| `PERRY_GC_FORCE_EVACUATE=1` | Stress evacuation of eligible live nursery objects; requires active barriers and movable roots. Explicit `gc()` runs an evacuating minor before its full sweep under this control. |
 | `PERRY_GC_VERIFY_EVACUATION=1` | After an evacuation that actually forwards objects, panic if any mutable live slot still points at a forwarded nursery object after rewrite. |
 | `PERRY_WRITE_BARRIERS=0` / `off` / `false` | Disable codegen-emitted write barriers at compile time and runtime exact helper barriers at runtime for benchmark/debug bisection. Unset, `=1`, `=on`, and `=true` keep barriers enabled. |
 | `PERRY_GC_DIAG=1` | Print per-cycle diagnostics, including one evacuation-policy line for cycles where evacuation was considered and for `barriers_inactive` skips. |
@@ -249,8 +234,7 @@ Perry go through LLVM and still run a moving managed heap.
 
 Going to native code does not preclude having a GC. It means the collector's
 relationship with compiled code is mediated by an ABI and the selected root
-map; the linked runtime remains a real tracing collector. There is nothing
-reference-counted at runtime.
+map; the linked runtime remains a real tracing collector.
 
 ## Profiling Perry's memory on macOS
 
@@ -309,7 +293,7 @@ row of this table once pointed into a `gc.rs` that no longer exists.
 
 | Topic | File | Symbol to look for |
 |---|---|---|
-| NaN-boxing tags | `crates/perry-runtime/src/value/tags.rs` | `POINTER_TAG`, `STRING_TAG` |
+| NaN-boxing tags | `crates/perry-runtime/src/value/tags.rs`, `crates/perry-abi/src/lib.rs` | `POINTER_TAG`, `STRING_TAG`, `HANDLE_TAG` |
 | `GcHeader`, type/flag constants | `crates/perry-runtime/src/gc/types.rs` | `GcHeader` |
 | `gc_malloc` | `crates/perry-runtime/src/gc/malloc.rs` | `gc_malloc` |
 | Shadow frames (fallback root lowering) | `crates/perry-runtime/src/gc/roots/shadow_stack.rs` | `js_shadow_frame_push` |

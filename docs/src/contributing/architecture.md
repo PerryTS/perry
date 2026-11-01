@@ -12,6 +12,7 @@ TypeScript (.ts)
     ↓ Lower (perry-hir)
     ↓ HIR (High-level IR)
     ↓ Transform (inline, closure conversion, async lowering)
+    ↓ Program facts and layout planning
     ↓ Codegen (LLVM)
     ↓ Object file (.o)
     ↓ Link (system cc)
@@ -27,6 +28,8 @@ Native Executable
 | `perry-parser` | SWC wrapper for TypeScript parsing |
 | `perry-hir` | HIR types and data structures, plus AST→HIR lowering |
 | `perry-transform` | IR passes: function inlining, closure conversion, async lowering |
+| `perry-wpfacts` | Value-flow facts and cross-module contracts |
+| `perry-abi` | Shared compiler/runtime value and layout contract |
 | `perry-codegen` | LLVM-based native code generation |
 | `perry-codegen-wasm` | WebAssembly code generation for `--target web` / `--target wasm` (HIR → WASM bytecode + JS bridge) |
 | `perry-codegen-js` | Legacy JavaScript code generator (still present for the JS minifier; the JS-emit `--target web` path was consolidated into `perry-codegen-wasm`) |
@@ -43,7 +46,7 @@ Native Executable
 
 ### NaN-Boxing
 
-All JavaScript values are represented as 64-bit NaN-boxed values. The upper 16 bits encode the type tag:
+The generic JavaScript value ABI is a 64-bit NaN-boxed word. Proven native values and specialized storage can use other representations; boxing is required when crossing a generic value boundary.
 
 | Tag | Type |
 |-----|------|
@@ -51,51 +54,24 @@ All JavaScript values are represented as 64-bit NaN-boxed values. The upper 16 b
 | `0x7FFD` | Pointer/Object (lower 48 bits = pointer) |
 | `0x7FFE` | Int32 (lower 32 bits = integer) |
 | `0x7FFA` | BigInt (lower 48 bits = pointer) |
+| `0x7FF9` | Inline short string |
+| `0xFFF9` | Native handle |
 | Special constants | undefined, null, true, false |
 | Any other | Float64 (the full 64 bits) |
 
 ### Garbage Collection
 
-Generational mark-sweep GC, per-thread arena split into nursery + old-gen. Roots come from a precise shadow stack (emitted by codegen), a conservative native-stack scan, and 9 registered runtime scanners. Two-bit aging tenures objects after surviving 2 minor cycles; a write barrier maintains a remembered set for old → young pointers.
+The per-thread tracing collector combines copying nursery collection, non-moving fallbacks and full mark-sweep. Native roots use LLVM statepoints; supported fallback targets use shadow frames. Runtime root scanners cover globals and side tables. Conservative stack scanning is diagnostic-only. Adaptive aging, large young storage and whole-block promotion have separate policies.
 
 See [Internals → Memory Model](../internals/memory-model.md) for the full picture (NaN-boxing, heap layout, root discovery, generational behaviour, env-var escape hatches).
 
 ### Handle-Based UI
 
-UI widgets are represented as small integer handles NaN-boxed with `POINTER_TAG`. Each handle maps to a native platform widget (NSButton, UILabel, GtkButton, etc.). Two dispatch tables route method calls and property accesses to the correct FFI function.
+Native UI registry IDs use `HANDLE_TAG` (`0xFFF9`), distinct from managed heap pointers. Each handle maps to a native platform widget (NSButton, UILabel, GtkButton, etc.). Two dispatch tables route method calls and property accesses to the correct FFI function.
 
 ## Source Code Organization
 
-The codegen crate is organized into focused modules:
-
-```
-perry-codegen/src/
-  codegen.rs       # Main entry, module compilation
-  types.rs         # Type definitions, context structs
-  util.rs          # Helper functions
-  stubs.rs         # Stub generation for unresolved deps
-  runtime_decls.rs # Runtime function declarations
-  classes.rs       # Class compilation
-  functions.rs     # Function compilation
-  closures.rs      # Closure compilation
-  module_init.rs   # Module initialization
-  stmt.rs          # Statement compilation
-  expr.rs          # Expression compilation
-```
-
-The HIR lowering was split into 8 modules:
-
-```
-perry-hir/src/
-  lower.rs           # Main lowering entry
-  analysis.rs        # Code analysis passes
-  enums.rs           # Enum lowering
-  jsx.rs             # JSX lowering
-  lower_types.rs     # Type lowering
-  lower_patterns.rs  # Pattern lowering
-  destructuring.rs   # Destructuring lowering
-  lower_decl.rs      # Declaration lowering
-```
+Start with `crates/perry-hir/src/lower/` for AST lowering, `crates/perry-codegen/src/codegen/` for module orchestration, and its sibling `expr/`, `stmt/`, `lower_call/` and `native_root_coverage/` trees for emission. [Program facts](../internals/program-facts.md) connect analysis to layout and specialization. Turnloop supplies the event loop; Tokio is not part of the runtime.
 
 ## Adding a native UI widget
 
