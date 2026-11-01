@@ -615,3 +615,6 @@ mod unit_cycle_order;
 mod own_key_shadow;
 
 mod ctor_receiver_calls;
+
+#[path = "unit_mode/closed_ctor_literal.rs"]
+mod closed_ctor_literal;
