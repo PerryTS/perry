@@ -152,7 +152,7 @@ pub(super) unsafe fn try_emit_with_live(
         return false;
     };
     if !template.own_keys_exclude_to_json
-        || crate::object::prototype_chain::object_static_prototype(obj as usize).is_some()
+        || crate::object::prototype_chain::object_static_prototype_is_linked(obj as usize)
     {
         return false;
     }

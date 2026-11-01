@@ -186,6 +186,9 @@ pub(crate) fn declared_property_type_from_annotation(
 /// whose result has another kind. New expression variants are unproven by
 /// default until their full lowering contract is explicitly reviewed here.
 pub(crate) fn proven_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirType> {
+    if is_literal_number_selection(init) {
+        return Some(HirType::Number);
+    }
     if let Some(kind) = super::iterator_record_primitive_type(init) {
         return Some(kind);
     }
@@ -407,6 +410,9 @@ pub(crate) fn is_imported_native_constructor_class(
 ///   nested arrays gets the right type for `__item_63 = arr[i]` patterns)
 /// - **PropertyGet on a known class field** → the field's declared type
 pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirType> {
+    if is_literal_number_selection(init) {
+        return Some(HirType::Number);
+    }
     match init {
         // #11759 (c′): `new C()` / `C.<static>` guarded on the first
         // evaluation refines as its static form; a later evaluation builds an

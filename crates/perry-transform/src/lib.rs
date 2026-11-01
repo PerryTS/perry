@@ -18,6 +18,7 @@ mod field_push_local_bind;
 pub mod finally_inline;
 pub mod generator;
 pub mod i18n;
+mod immutable_numeric_arrays;
 pub mod inline;
 mod local_copies;
 mod local_occurrences;

@@ -810,7 +810,9 @@ fn emit_desc(
     let word = crate::layout_ordinals::descriptor_word(
         desc_name,
         format!("{keys:?}|{family}|{slot_count}|{class:?}"),
-        0,
+        // A family the descriptor links to null (`require.cache`) carries
+        // the null identity, which only a null-kind word names.
+        if proto == 1 { 2 } else { 0 },
         true,
         // Both nominal and admitted classless families carry their DPA word.
         true,
