@@ -1,0 +1,63 @@
+{
+  "runtimeSource": "1ef0f4fa691bc78abb458124db6f7716f8b8cad0",
+  "compilerAndNativeCarrier": "d7b50d345cc3845b39c6f9f311620600bb5badd5",
+  "scope": "Linux x86_64 Perry-generated WASI 0.3 commands; ordinary and forced-moving native hosts",
+  "fullWasi030Qualified": false,
+  "profile": {
+    "target": "wasip3",
+    "compilerFeature": "target-wasi",
+    "runtimeTarget": "wasm32-wasip3",
+    "wasiSdk": "34.0",
+    "irOptimizer": "linked LLVM 22.1.8",
+    "objectEmitter": "SDK Clang 23.1.0-wasi-sdk, libcall thread-context ABI",
+    "componentThreadingOrStackfulFeatureEnabledByThisChange": false,
+    "commandFuelGrant": 1000000000,
+    "defaultHostFuelLimitChanged": false
+  },
+  "acceptance": {
+    "script": "scripts/component_p3_command_acceptance.py",
+    "phasesPassed": 51,
+    "programsPassedInBothNativeHostModes": [
+      "classes", "closures", "collections", "exit_code", "high_arity_dispatch",
+      "iterators", "values", "async-clock", "exceptions"
+    ],
+    "exactStdoutAndExitCodesCompared": true,
+    "nonzeroExitCode": 3,
+    "allNineBinaryContractsChecked": "Top-level external imports must be WASI 0.3.0 interface instances; require randomness and wasi:cli/run@0.3.0",
+    "additionalCommandControls": [
+      "ok/error returns", "explicit exit and startup exit", "malformed startup signature",
+      "wrong interface version", "late trap after task return", "real async clock",
+      "closed default stdio", "host survival after exits and traps"
+    ],
+    "exactStdioPayloadBytesPerMode": 3145865,
+    "timerRepair": "SDK canonical monotonic-clock wait replaces the default P3 libc's unsupported futex/condvar park"
+  },
+  "nativeGc": {
+    "carrierBuiltWithPerryRuntimeInstruments": true,
+    "variantNamesStagedAsByteIdenticalCopies": true,
+    "namedSidecarsRegenerated": true,
+    "commandControlsCopiedObjects": 7,
+    "stdioControlCopiedObjects": 0,
+    "evacuationVerificationAndProtectedRetiredPagesObservedInBothControls": true,
+    "distinctNativeOrdinaryInstrumentFreeBuildQualified": false,
+    "forcedMovingWasmGuestQualified": false
+  },
+  "runtimeArchive": {
+    "bytes": 46067324,
+    "sha256": "96f1f3cfd6f36607d75d70327eac421a08cae1ec2d12658a876b865f7d3b811c"
+  },
+  "evidence": {
+    "archive": "wasi-030-v060-evidence.tar.gz",
+    "bytes": 53625815,
+    "sha256": "a1653edfd03cc2deb907858b07b6b2c4d1675dc806adda656d6292e79928b71e",
+    "indexedFiles": 417,
+    "archiveAndEveryIndexedMemberVerifiedLocally": true,
+    "nativeCarrierHashesRecorded": true
+  },
+  "notQualifiedByThisReceipt": [
+    "Perry guest future/stream adapters, public async generator and reusable P3 plugin output",
+    "forced-moving Wasm guest execution and distinct native production variants",
+    "complete provider/HTTP matrix and shared-provider ALS regression",
+    "macOS/Windows P3 output, installed distributions and required CI"
+  ]
+}
