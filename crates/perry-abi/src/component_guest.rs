@@ -41,3 +41,25 @@ pub struct ComponentGuestEndpointOps {
     pub size: usize,
     pub operation: GuestEndpointOperation,
 }
+
+/// Additive producer ABI 1. Creation is finite and leaves the conversion
+/// frame with Rust, returning its pair slot (zero on frame error). Writing
+/// adopts its fresh operation frame only on return zero. Notifications are
+/// native metadata edits only: no JS, canonical operations or suspension.
+/// notify actions: 0 cancel this operation, 1 release writer, 2 abort producer,
+/// 3 readable ownership transferred out of this instance.
+pub const GUEST_PRODUCER_ABI_VERSION: u32 = 1;
+#[repr(C)]
+pub struct ComponentGuestProducerOps {
+    pub abi_version: u32,
+    pub size: usize,
+    pub create: unsafe extern "C" fn(frame: *mut c_void, ty: u32) -> u32,
+    pub write: unsafe extern "C" fn(
+        frame: *mut c_void,
+        ty: u32,
+        writer: u32,
+        operation: u32,
+        input: u32,
+    ) -> i32,
+    pub notify: unsafe extern "C" fn(ty: u32, handle: u32, operation: u32, action: u32),
+}

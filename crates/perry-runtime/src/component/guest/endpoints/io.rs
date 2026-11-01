@@ -12,11 +12,14 @@ const OBSERVER: u32 = 0;
 const FIELDS: u32 = 1;
 const SNAPSHOT: u32 = 2;
 const PREPARED: u32 = 3;
+const INPUT: u32 = 4;
 
 pub(in crate::component::guest) struct Operation {
     row: u32,
     id: u32,
     stream: bool,
+    writing: bool,
+    committed: bool,
     finished: bool,
 }
 
@@ -54,6 +57,15 @@ pub(super) extern "C" fn read(
         capacity,
     )
 }
+pub(super) extern "C" fn read_future(
+    closure: *const crate::closure::ClosureHeader,
+    _: crate::closure::JsThis,
+) -> f64 {
+    begin(
+        crate::closure::js_closure_get_capture_f64(closure, 0),
+        undefined(),
+    )
+}
 
 fn settled_eof() -> f64 {
     let scope = RuntimeHandleScope::new();
@@ -71,39 +83,57 @@ fn settled_eof() -> f64 {
 }
 
 fn begin(wrapper: f64, capacity: f64) -> f64 {
+    begin_operation(wrapper, capacity, false)
+}
+pub(super) fn write(wrapper: f64, input: f64) -> f64 {
+    begin_operation(wrapper, input, true)
+}
+fn begin_operation(wrapper: f64, argument: f64, writing: bool) -> f64 {
     let scope = RuntimeHandleScope::new();
     let wrapper = scope.root_nanbox_f64(wrapper);
-    let fields = scope.root_nanbox_f64(data(wrapper.get_nanbox_f64()));
+    let argument = scope.root_nanbox_f64(argument);
+    let fields = scope.root_nanbox_f64(if writing {
+        writer::data(wrapper.get_nanbox_f64())
+    } else {
+        data(wrapper.get_nanbox_f64())
+    });
     let owner = scope.root_nanbox_f64(get(fields.get_nanbox_f64(), OWNER));
     if owner.get_nanbox_f64().to_bits() != super::super::maybe_registry().to_bits()
         || !unsafe { (*context::get(owner.get_nanbox_f64())).alive }
     {
         fail("Guest async value belongs to another or disposed instance");
     }
-    if get(fields.get_nanbox_f64(), STATE) == EOF {
+    if !writing && get(fields.get_nanbox_f64(), STATE) == EOF {
         return settled_eof();
     }
-    live(wrapper.get_nanbox_f64());
+    if writing {
+        writer::live(wrapper.get_nanbox_f64());
+    } else {
+        live(wrapper.get_nanbox_f64());
+    }
     if get(fields.get_nanbox_f64(), PENDING) != 0.0 {
-        fail("Guest async value already has a pending read");
+        fail("Guest async value already has a pending operation");
     }
     let ty = get(fields.get_nanbox_f64(), TYPE) as u32;
     let schema = schema(owner.get_nanbox_f64(), ty).unwrap_or_else(|message| fail(message));
     let stream = schema["kind"] == "stream";
     drop(schema);
-    let capacity = if JSValue::from_bits(capacity.to_bits()).is_undefined() {
+    let capacity = if writing {
+        0.0
+    } else if JSValue::from_bits(argument.get_nanbox_f64().to_bits()).is_undefined() {
         if stream {
             4096.0
         } else {
             1.0
         }
     } else {
-        capacity
+        argument.get_nanbox_f64()
     };
-    if !JSValue::from_bits(capacity.to_bits()).is_number()
-        || capacity.fract() != 0.0
-        || !(1.0..=65536.0).contains(&capacity)
-        || (!stream && capacity != 1.0)
+    if !writing
+        && (!JSValue::from_bits(capacity.to_bits()).is_number()
+            || capacity.fract() != 0.0
+            || !(1.0..=65536.0).contains(&capacity)
+            || (!stream && capacity != 1.0))
     {
         fail("Invalid guest async read capacity");
     }
@@ -111,7 +141,9 @@ fn begin(wrapper: f64, capacity: f64) -> f64 {
         fail("Guest endpoint I/O requires a live canonical task");
     }
     let ops = OPS.load(Ordering::Acquire);
-    if ops.is_null() {
+    if writing {
+        producer::ops();
+    } else if ops.is_null() {
         fail("Guest adapter does not support endpoint I/O");
     }
     let ctx = context::get(owner.get_nanbox_f64());
@@ -144,7 +176,7 @@ fn begin(wrapper: f64, capacity: f64) -> f64 {
             crate::weakref::js_weakref_new(promise.get_nanbox_f64()) as i64,
         ));
         let row = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
-            crate::array::js_array_alloc_with_length(4) as i64,
+            crate::array::js_array_alloc_with_length(5) as i64,
         ));
         for (index, value) in [
             weak.get_nanbox_f64(),
@@ -153,6 +185,11 @@ fn begin(wrapper: f64, capacity: f64) -> f64 {
                 saved.get_raw_mut_ptr::<als::AsyncSnapshotHolder>() as i64
             ),
             undefined(),
+            if writing {
+                argument.get_nanbox_f64()
+            } else {
+                undefined()
+            },
         ]
         .into_iter()
         .enumerate()
@@ -165,7 +202,14 @@ fn begin(wrapper: f64, capacity: f64) -> f64 {
             OBSERVER,
             wrapper.get_nanbox_f64(),
         );
-        live(wrapper.get_nanbox_f64());
+        if writing {
+            writer::live(wrapper.get_nanbox_f64());
+        } else {
+            live(wrapper.get_nanbox_f64());
+        }
+        if !job_domain::current().is_some_and(|token| token.is_current_live()) {
+            fail("Guest endpoint task changed during Promise initialization");
+        }
         if get(fields.get_nanbox_f64(), PENDING) != id as f64 {
             fail("Guest async value changed during Promise initialization");
         }
@@ -174,11 +218,17 @@ fn begin(wrapper: f64, capacity: f64) -> f64 {
             row,
             id,
             stream,
+            writing,
+            committed: false,
             finished: false,
         });
         let handle = get(fields.get_nanbox_f64(), HANDLE) as u32;
-        let status =
-            unsafe { ((*ops).operation)((&raw mut *frame).cast(), ty, handle, 0, capacity as u32) };
+        let status = if writing {
+            let input = frame.add(argument.get_nanbox_f64());
+            unsafe { (producer::ops().write)((&raw mut *frame).cast(), ty, handle, id, input) }
+        } else {
+            unsafe { ((*ops).operation)((&raw mut *frame).cast(), ty, handle, 0, capacity as u32) }
+        };
         adopted = status == 0;
         if let Some(error) = frame.error() {
             crate::exception::js_throw(error);
@@ -243,7 +293,8 @@ fn active(frame: &Frame) -> bool {
     let owner = get(fields, OWNER);
     if !unsafe { (*context::get(owner)).alive }
         || get(fields, PENDING) != operation.id as f64
-        || get(fields, STATE) != OPEN
+        || !(get(fields, STATE) == OPEN
+            || (operation.writing && operation.stream && get(fields, STATE) == CLOSED))
     {
         return false;
     }
@@ -320,7 +371,7 @@ fn complete(frame: &mut Frame, value: u32, flags: u32) {
     if operation.finished {
         fail("Guest endpoint operation already completed");
     }
-    let (stream, id) = (operation.stream, operation.id);
+    let (stream, writing, id) = (operation.stream, operation.writing, operation.id);
     let scope = RuntimeHandleScope::new();
     let row = scope.root_nanbox_f64(row(frame));
     let fields = scope.root_nanbox_f64(get(row.get_nanbox_f64(), FIELDS));
@@ -351,8 +402,12 @@ fn complete(frame: &mut Frame, value: u32, flags: u32) {
         set(fields.get_nanbox_f64(), PENDING, 0.0);
     }
     if flags & 1 != 0 && get(fields.get_nanbox_f64(), STATE) == OPEN {
-        release(fields.get_nanbox_f64());
-        if stream {
+        if writing {
+            writer::release(fields.get_nanbox_f64());
+        } else {
+            release(fields.get_nanbox_f64());
+        }
+        if stream && !writing {
             set(fields.get_nanbox_f64(), STATE, EOF);
         }
     }
@@ -372,9 +427,14 @@ fn complete(frame: &mut Frame, value: u32, flags: u32) {
     drop(snapshot);
     als::push_context_guard(als::ContextGuardAction::RestoreSnapshot(previous));
     if flags & 2 != 0 {
+        let text = if writing {
+            b"Guest endpoint write cancelled".as_slice()
+        } else {
+            b"Guest endpoint read cancelled".as_slice()
+        };
         let message = scope.root_string_ptr(crate::string::js_string_from_bytes(
-            b"Guest endpoint read cancelled".as_ptr(),
-            29,
+            text.as_ptr(),
+            text.len() as u32,
         ));
         let error =
             crate::error::js_error_new_with_name_message(b"AbortError", message.get_raw_mut_ptr());
@@ -384,6 +444,41 @@ fn complete(frame: &mut Frame, value: u32, flags: u32) {
     }
     if let Some(action) = als::pop_context_guard() {
         als::apply_context_guard(action);
+    }
+}
+
+/// Commit a complete typed write batch, then sever all temporary conversion
+/// edges. C now owns the native payload, so its frame must not accidentally
+/// retain an unobserved Promise through arbitrary input expandos/getters.
+/// # Safety
+/// Called once before canonical I/O on a freshly lowered write frame. All
+/// input/conversion slots become invalid; only the private operation row stays.
+#[no_mangle]
+pub unsafe extern "C" fn perry_component_frame_endpoint_write_commit(pointer: *mut c_void) -> i32 {
+    let frame = frame(pointer);
+    frame.guard(|frame| {
+        let operation = frame
+            .endpoint_io
+            .as_ref()
+            .unwrap_or_else(|| fail("Expected a guest write operation"));
+        if !operation.writing
+            || operation.finished
+            || operation.committed
+            || !frame.borrows.is_empty()
+            || !frame.committed_borrows.is_empty()
+        {
+            fail("Invalid guest write custody commit");
+        }
+        let slot = operation.row;
+        super::super::resources::commit(frame);
+        frame.endpoint_io.as_mut().unwrap().committed = true;
+        set(frame.get(slot), INPUT, undefined());
+        frame.clear_conversion_slots_except(slot);
+    });
+    if frame.error().is_some() {
+        -1
+    } else {
+        0
     }
 }
 

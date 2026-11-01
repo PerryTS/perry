@@ -216,6 +216,16 @@ impl Frame {
         self.failed.then(|| self.get(0))
     }
 
+    pub(super) fn clear_conversion_slots_except(&mut self, keep: u32) {
+        let values = self.values();
+        for slot in 1..self.length {
+            if slot != keep {
+                crate::array::js_array_set_f64(array(values), slot, undefined());
+            }
+        }
+        self.length = keep + 1;
+    }
+
     pub fn guard<T: Default>(&mut self, body: impl FnOnce(&mut Self) -> T) -> T {
         if self.failed {
             return T::default();
@@ -742,7 +752,9 @@ const fn adapter_entry(code: *const ()) -> AdapterEntry {
 }
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
-static KEEP_ADAPTER_ENTRIES: [AdapterEntry; 56] = [
+static KEEP_ADAPTER_ENTRIES: [AdapterEntry; 58] = [
+    adapter_entry(super::endpoints::producer::perry_component_frame_endpoint_pair as *const ()),
+    adapter_entry(super::endpoints::io::perry_component_frame_endpoint_write_commit as *const ()),
     adapter_entry(super::endpoints::io::perry_component_frame_endpoint_status as *const ()),
     adapter_entry(super::endpoints::io::perry_component_frame_endpoint_prepare as *const ()),
     adapter_entry(super::endpoints::io::perry_component_frame_endpoint_finish as *const ()),

@@ -1,0 +1,1 @@
+Add an experimental producer callback ABI and private guest writer capabilities, with canonical factory type validation, weak unobserved write Promises and typed write custody that releases temporary input edges. Public async generation remains guarded while canonical writer scheduling and producer qualification are completed.

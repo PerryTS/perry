@@ -190,6 +190,7 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     );
     module.declare_function("js_component_resource_value", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_component_register", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_component_guest_create_async_value", DOUBLE, &[DOUBLE]);
     module.declare_function("js_component_import", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
 
     // ========== Console ==========

@@ -9,6 +9,8 @@ use crate::object::owned_state_bag::{
 };
 use std::ffi::c_void;
 pub(super) mod io;
+pub(super) mod producer;
+mod writer;
 
 const OWNER: u32 = 0;
 const TYPE: u32 = 1;
@@ -19,6 +21,8 @@ const TRANSFERRED: f64 = 2.0;
 const CLOSED: f64 = 3.0;
 const EOF: f64 = 4.0;
 const PENDING: u32 = 4;
+const ROLE: u32 = 5;
+const WRITER: f64 = 1.0;
 
 fn get(fields: f64, index: u32) -> f64 {
     crate::array::js_array_get_f64(array_pointer(fields).unwrap(), index)
@@ -36,6 +40,9 @@ fn data(wrapper: f64) -> f64 {
 }
 fn live(wrapper: f64) -> f64 {
     let fields = data(wrapper);
+    if get(fields, ROLE) == WRITER {
+        fail("Expected a guest readable endpoint");
+    }
     let owner = get(fields, OWNER);
     if owner.to_bits() != super::maybe_registry().to_bits() {
         fail("Async value belongs to another guest instance");
@@ -108,15 +115,27 @@ fn register(wrapper: f64, fields: f64) {
 fn wrap(ty: u32, handle: u32) -> f64 {
     let scope = RuntimeHandleScope::new();
     let owner = scope.root_nanbox_f64(super::registry());
+    if !unsafe { (*context::get(owner.get_nanbox_f64())).alive } {
+        fail("Guest instance has been disposed");
+    }
     // Validate before adopting a handle. An unknown generated type retires the
     // component rather than publishing a capability with the wrong drop ABI.
-    drop(schema(owner.get_nanbox_f64(), ty).unwrap_or_else(|message| fail(message)));
+    let schema = schema(owner.get_nanbox_f64(), ty).unwrap_or_else(|message| fail(message));
+    let stream = schema["kind"] == "stream";
+    drop(schema);
     let fields = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
-        crate::array::js_array_alloc_with_length(5) as i64,
+        crate::array::js_array_alloc_with_length(6) as i64,
     ));
-    for (index, value) in [owner.get_nanbox_f64(), ty as f64, handle as f64, OPEN, 0.0]
-        .into_iter()
-        .enumerate()
+    for (index, value) in [
+        owner.get_nanbox_f64(),
+        ty as f64,
+        handle as f64,
+        OPEN,
+        0.0,
+        0.0,
+    ]
+    .into_iter()
+    .enumerate()
     {
         set(fields.get_nanbox_f64(), index as u32, value);
     }
@@ -133,7 +152,11 @@ fn wrap(ty: u32, handle: u32) -> f64 {
     // A future endpoint is a capability, not a Promise/thenable.
     set_field(wrapper.get_nanbox_f64(), b"then", undefined());
     let read = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-        crate::fn_info!(io::read, 1),
+        if stream {
+            crate::fn_info!(io::read, 1)
+        } else {
+            crate::fn_info!(io::read_future, 0)
+        },
         1,
     ));
     crate::closure::js_closure_set_capture_f64(read.get_raw_mut_ptr(), 0, wrapper.get_nanbox_f64());
@@ -173,6 +196,10 @@ fn wrap(ty: u32, handle: u32) -> f64 {
 // No JS calls, collection or canonical operations occur here. The state is
 // shared by explicit disposal, transfer and the eventual finalization job.
 fn release(fields: f64) {
+    if get(fields, ROLE) == WRITER {
+        writer::release(fields);
+        return;
+    }
     if get(fields, STATE) != OPEN {
         return;
     }
@@ -244,7 +271,9 @@ pub(super) fn validate_transfers(frame: &Frame) {
 pub(super) fn commit_transfers(frame: &mut Frame) {
     // resources::commit has validated the ENTIRE resource/endpoint batch.
     for slot in std::mem::take(&mut frame.endpoint_transfers) {
-        set(data(frame.get(slot)), STATE, TRANSFERRED);
+        let fields = data(frame.get(slot));
+        producer::notify(get(fields, TYPE) as u32, get(fields, HANDLE) as u32, 0, 3);
+        set(fields, STATE, TRANSFERRED);
     }
 }
 

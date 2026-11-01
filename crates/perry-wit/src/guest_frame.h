@@ -25,6 +25,21 @@ typedef struct {
     int32_t (*operation)(void *, uint32_t, uint32_t, uint32_t, uint32_t);
 } perry_guest_endpoint_ops;
 int32_t js_component_set_guest_endpoint_ops(const perry_guest_endpoint_ops *);
+/* Producer ABI 1: create returns a pair slot without adopting the frame;
+   write adopts only on return zero. notify edits native metadata only.
+   actions: 0 cancel operation, 1 release writer, 2 abort, 3 reader transfer. */
+typedef struct {
+    uint32_t abi_version;
+    size_t size;
+    uint32_t (*create)(void *, uint32_t);
+    int32_t (*write)(void *, uint32_t, uint32_t, uint32_t, uint32_t);
+    void (*notify)(uint32_t, uint32_t, uint32_t, uint32_t);
+} perry_guest_producer_ops;
+int32_t js_component_set_guest_producer_ops(const perry_guest_producer_ops *);
+uint32_t perry_component_frame_endpoint_pair(void *, uint32_t, uint32_t, uint32_t);
+/* Commit the fully lowered write batch and invalidate temporary conversion
+   slots. C retains its native payload; the private operation row survives. */
+int32_t perry_component_frame_endpoint_write_commit(void *);
 void *perry_component_frame_new(void);
 /* Binds the module's layout image before allocating the returned owned frame.
    Initializer errors are retained in that frame; a null initializer returns NULL. */

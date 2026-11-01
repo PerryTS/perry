@@ -127,6 +127,9 @@ export function closeComponentHttpServer(server: ComponentHttpServer): void;
 export function runComponentCommand(bytes: Uint8Array, options?: ComponentOptions): number;
 /** Registers the exports of a Perry-authored library component. */
 export function registerComponentExports(contract: string, exports: unknown): void;
+/** Guest-only synchronous pair creation. Use the factory emitted for a WIT
+ * future/stream type; writers stay in their creating component instance. */
+export function createComponentAsyncValue<T = unknown, Chunk = Array<T>>(type: string): ComponentProducer<T, Chunk>;
 export function callComponentImport(interfaceName: string, functionName: string, args: unknown[]): unknown;
 
 /** Explicit per-instance grants. An empty object enables clocks and randomness;
