@@ -333,6 +333,7 @@ pub(super) fn anon_tmpl(m: &mut Model, what: &'static str) -> Tok {
         parent_value: None,
         parent_links: Vec::new(),
         null_proto: false,
+        species: None,
     });
     m.tok(TokKind::Obj(tm, NO_CTX))
 }

@@ -63,8 +63,15 @@ pub fn closure_set_static_prototype(closure_ptr: usize, proto_bits: u64) {
         }
         return;
     }
-    unsafe { super::props::state_set_prototype(closure_ptr, proto_bits) };
+    // A described function names the link on its shape; a dictionary one
+    // (or a link with no stable identity) keeps it in its own record.
+    if unsafe { super::shape::closure_link_on_shape(closure_ptr, proto_bits) } {
+        return;
+    }
+    // Into FunctionDictionary first: it moves a link the described shape
+    // named into the record, which this link then replaces.
     super::shape::note_function_own_state_changed(closure_ptr);
+    unsafe { super::props::state_set_prototype(closure_ptr, proto_bits) };
 }
 
 /// Look up the static prototype object bits recorded for a closure, if any.
@@ -72,12 +79,25 @@ pub fn closure_static_prototype(closure_ptr: usize) -> Option<u64> {
     if closure_ptr == 0 || !is_closure_ptr(closure_ptr) {
         return None;
     }
+    closure_static_prototype_proven(closure_ptr)
+}
+
+/// [`closure_static_prototype`] of a proven, live closure cell.
+pub(crate) fn closure_static_prototype_proven(closure_ptr: usize) -> Option<u64> {
     if unsafe { super::shape::is_class_info((*(closure_ptr as *const ClosureHeader)).info) } {
         return Some(unsafe {
             crate::object::class_value::constructor_parent_bits(closure_ptr as *mut ClosureHeader)
         });
     }
-    unsafe { super::props::state_prototype(closure_ptr) }
+    // A described shape is the record of the link; FunctionDictionary keeps
+    // it in the function's own record ("ask the object").
+    let closure = closure_ptr as *const ClosureHeader;
+    unsafe {
+        if (*closure).shape_id != super::shape::function_dictionary_shape() {
+            return super::shape::described_link_bits(closure);
+        }
+        super::props::state_prototype(closure_ptr)
+    }
 }
 
 /// Is `ptr` a live function object (`GC_TYPE_CLOSURE` cell)? Safe for an
@@ -366,6 +386,11 @@ fn closure_proto_chain_get(
         if depth > 0 {
             proto_bits = closure_static_prototype(cur)?;
         }
+        // A null link ends the chain: the read's answer is `undefined`, not
+        // `%Function.prototype%`'s.
+        if proto_bits == crate::value::TAG_NULL {
+            return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
+        }
         let proto_f64 = f64::from_bits(proto_bits);
         let proto_ptr = crate::value::js_nanbox_get_pointer(proto_f64) as usize;
         if proto_ptr == 0 || proto_ptr == cur {
@@ -467,6 +492,25 @@ fn closure_proto_chain_get(
     None
 }
 
+/// Build the realm global that holds %Function.prototype% (its first
+/// inherited read), keeping the reading function and receiver alive across
+/// the allocation. Returns both, re-read.
+#[cold]
+#[inline(never)]
+fn cold_materialize_function_prototype(self_ptr: usize, receiver: f64) -> (usize, f64) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver_root = scope.root_nanbox_f64(receiver);
+    let self_root = (self_ptr != 0)
+        .then(|| scope.root_nanbox_f64(crate::value::js_nanbox_pointer(self_ptr as i64)));
+    let _ = super::shape::function_prototype_ptr_materialized();
+    (
+        self_root.map_or(0, |r| {
+            (r.get_nanbox_u64() & crate::value::POINTER_MASK) as usize
+        }),
+        receiver_root.get_nanbox_f64(),
+    )
+}
+
 /// `[[Get]]` of `prop` on the real `%Function.prototype%` object, for a
 /// function-object receiver whose own/static lookup already missed — a
 /// user method or expando (`Function.prototype.myHelper = fn`) or a
@@ -485,6 +529,18 @@ pub(crate) fn function_prototype_inherited_get(
     if crate::object::reified_function_method_name(prop).is_some() {
         return None;
     }
+    // A read needs %Function.prototype% itself: build the realm global that
+    // holds it when this is the program's first inherited read (the set
+    // side's descriptor probe must not, so the shared target answers 0).
+    let (self_ptr, receiver) = if crate::array::function_prototype_addr() == 0
+        && !matches!(
+            prop,
+            "prototype" | "name" | "length" | "caller" | "arguments"
+        ) {
+        cold_materialize_function_prototype(self_ptr, receiver)
+    } else {
+        (self_ptr, receiver)
+    };
     let proto_ptr = function_prototype_fallback_target(self_ptr, prop)?;
     // A defineProperty accessor on Function.prototype
     // (`{ get: () => 12 }`) is invoked with the reading

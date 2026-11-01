@@ -887,7 +887,9 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
                     && c.fns.is_empty()
                     && c.builtins.is_empty()
                     && c.arrays.is_empty()
+                    && c.made_arrays.is_empty()
                     && c.boxes.is_empty()
+                    && c.arrayboxes.is_empty()
             };
             let top = top || others.iter().any(|w| pure(&w.c));
             let mut v: Vec<u64> = others

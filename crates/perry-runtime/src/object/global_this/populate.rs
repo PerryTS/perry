@@ -70,6 +70,9 @@ pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeade
     })
 }
 crate::realm_decl! { Infinity, value = Infinity; NaN, value = NaN; crypto, attrs = 6, get = "crypto.<get>", births = [ArrayBuffer, Crypto, CryptoKey, Promise, SubtleCrypto]; global, attrs = 7, alias = "%Global%"; globalThis, alias = "%Global%"; localStorage, attrs = 6, get = "localStorage.<get>", set = "localStorage.<set>"; sessionStorage, attrs = 6, get = "sessionStorage.<get>", set = "sessionStorage.<set>"; undefined, value = undefined; }
+// Compact the once-per-realm installer, not the methods it installs. Blanket
+// Oz also shrinks/outlines hot array and iterator helpers (#13662).
+#[optimize(size)]
 fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
     if singleton_at_entry.is_null() {
         return;

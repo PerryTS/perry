@@ -339,6 +339,17 @@ fn int_range_expr_inner(
         | Expr::PodLayoutAlignOf { .. }
         | Expr::PodLayoutOffsetOf { .. } => pod_layout_constant_i64(ctx, expr).map(IntRange::exact),
         Expr::LocalGet(id) => int_range_for_local(ctx, *id, seen),
+        // The literal choices exposed by a private constant-array read retain
+        // their integer range through selection. Only literal leaves qualify:
+        // an arbitrary condition can write a local before selecting its value.
+        Expr::Conditional { .. } => literal_selection_range(ctx, expr),
+        // A proven integer is never nullish, so the right operand is not
+        // evaluated and cannot affect the result's range.
+        Expr::Logical {
+            op: perry_hir::LogicalOp::Coalesce,
+            left,
+            ..
+        } => int_range_expr_inner(ctx, left, seen),
         // An update expression is both a read and a write, but its returned
         // value still has an exact range relative to the value on entry:
         // postfix returns the old range, prefix returns the stepped range.
@@ -439,6 +450,46 @@ fn int_range_expr_inner(
 
 pub(crate) fn int_range_expr(ctx: &FnCtx<'_>, expr: &Expr) -> Option<IntRange> {
     int_range_expr_inner(ctx, expr, &mut std::collections::HashSet::new())
+}
+
+fn literal_selection_range(ctx: &FnCtx<'_>, expr: &Expr) -> Option<IntRange> {
+    match expr {
+        Expr::Integer(n) if i32::try_from(*n).is_ok() => Some(IntRange::exact(*n)),
+        Expr::Number(n)
+            if n.is_finite()
+                && n.fract() == 0.0
+                && (*n != 0.0 || !n.is_sign_negative())
+                && *n >= i32::MIN as f64
+                && *n <= i32::MAX as f64 =>
+        {
+            Some(IntRange::exact(*n as i64))
+        }
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            // Range consumers can lower an enclosing arithmetic tree natively.
+            // Its other operands' facts must survive this condition, so do not
+            // admit a call, write, getter, or a comparison that can ToPrimitive.
+            let primitive = |e: &Expr| {
+                matches!(e, Expr::Integer(_) | Expr::Number(_))
+                    || matches!(e, Expr::LocalGet(_) if crate::type_analysis::expr_produces_canonical_raw_f64(ctx, e))
+            };
+            let pure = matches!(condition.as_ref(), Expr::Bool(_))
+                || matches!(condition.as_ref(), Expr::Compare { left, right, .. } if primitive(left) && primitive(right));
+            if !pure {
+                return None;
+            }
+            let a = literal_selection_range(ctx, then_expr)?;
+            let b = literal_selection_range(ctx, else_expr)?;
+            Some(IntRange {
+                min: a.min.min(b.min),
+                max: a.max.max(b.max),
+            })
+        }
+        _ => None,
+    }
 }
 
 fn exact_i64_expr(ctx: &FnCtx<'_>, expr: &Expr) -> Option<i64> {

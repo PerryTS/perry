@@ -1510,7 +1510,6 @@ mod validation;
 
 pub(crate) use validation::{validate_gc_type_info, validate_gc_type_metadata};
 
-
 // Flag constants
 pub const GC_FLAG_MARKED: u8 = 0x01;
 pub const GC_FLAG_ARENA: u8 = 0x02;
@@ -1639,7 +1638,6 @@ pub use perry_abi::{OBJ_FLAG_FROZEN, OBJ_FLAG_NO_EXTEND, OBJ_FLAG_SEALED};
 /// objects (`OBJ_FLAG_RESERVED_BIT_MAP_SEE_DOC`); arrays and byte owners give
 /// it other meanings, so every reader checks `obj_type` first. Set-only.
 pub(crate) use perry_abi::OBJ_FLAG_NEVER_MOVE;
-pub use perry_abi::OBJ_FLAG_NULL_PROTO;
 /// I1 companion (`gc::never_move::note_memo_named`): a site memo stores
 /// this object's address. If a class relink displaces it from a class
 /// identity, the retirement pins it, so the memo keeps reading this object.
@@ -1789,7 +1787,6 @@ pub(crate) const GC_OBJECT_CALLABLE_IS_DISJOINT: bool = GC_OBJECT_CALLABLE
         | OBJ_FLAG_FROZEN
         | OBJ_FLAG_SEALED
         | OBJ_FLAG_NO_EXTEND
-        | OBJ_FLAG_NULL_PROTO
         | OBJ_FLAG_NEVER_MOVE
         | OBJ_FLAG_TYPED_ARRAY_PROTO
         | OBJ_FLAG_PLAIN_ORDINARY

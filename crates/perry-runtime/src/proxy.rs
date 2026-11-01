@@ -935,7 +935,6 @@ mod tests {
             crate::gc::OBJ_FLAG_FROZEN,
             crate::gc::OBJ_FLAG_SEALED,
             crate::gc::OBJ_FLAG_NO_EXTEND,
-            crate::gc::OBJ_FLAG_NULL_PROTO,
             crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO,
             crate::gc::OBJ_FLAG_HAS_DESCRIPTORS,
             0x0018, // GC_COPY_SURVIVAL_AGE_MASK

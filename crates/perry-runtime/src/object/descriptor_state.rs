@@ -848,15 +848,11 @@ pub(crate) unsafe fn plain_data_write_may_intercept(addr: usize, class_id: u32, 
         // Plain object. Its prototype is exactly `Object.prototype` unless a
         // `setPrototypeOf` target was recorded for it — #10287: a recorded
         // prototype is vetted per key instead of rejecting the receiver.
-        if super::prototype_chain::object_static_prototype(addr).is_some() {
-            plain_custom_prototype_may_intercept(addr, key)
-        } else if crate::value::addr_class::try_read_gc_header(addr)
-            .is_some_and(|header| header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0)
-        {
-            // Born with a null `[[Prototype]]` and never relinked: no chain.
-            false
-        } else {
-            object_proto_may_intercept_key(key)
+        match super::prototype_chain::object_static_prototype(addr) {
+            // A null `[[Prototype]]`: no chain.
+            Some(crate::value::TAG_NULL) => false,
+            Some(_) => plain_custom_prototype_may_intercept(addr, key),
+            None => object_proto_may_intercept_key(key),
         }
     } else {
         // Class instance: an inherited accessor / non-writable data property

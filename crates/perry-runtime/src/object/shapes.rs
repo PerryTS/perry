@@ -4203,6 +4203,23 @@ pub(crate) unsafe fn birth_publish_object_shape(
     synchronize_object_shape_descriptor_from(obj, None, live_inline_slot_count)
 }
 
+/// [`birth_publish_object_shape`] of a keyless newborn whose allocator names
+/// its [[Prototype]] identity (a born-null record: `PROTO_ID_NULL`).
+pub(crate) unsafe fn birth_publish_object_shape_as(
+    obj: *mut crate::object::ObjectHeader,
+    live_inline_slot_count: u32,
+    proto_id: u64,
+) -> LayoutWord {
+    publish_object_shape_from_rep_born(
+        obj,
+        None,
+        crate::object::ObjectKeys::NONE,
+        live_inline_slot_count,
+        super::field_rep::REP_ANY,
+        Some(proto_id),
+    )
+}
+
 /// Publish a new live inline-slot bound for an ALREADY PUBLISHED object.
 ///
 /// This is the #8113 replacement for `(*obj).field_count = n`. The successor
@@ -4330,6 +4347,29 @@ pub(crate) unsafe fn publish_object_shape_from_rep(
     live_inline_slot_count: u32,
     rep: u64,
 ) -> LayoutWord {
+    publish_object_shape_from_rep_born(
+        obj,
+        predecessor,
+        keys_view,
+        live_inline_slot_count,
+        rep,
+        None,
+    )
+}
+
+/// [`publish_object_shape_from_rep`] for an unstamped newborn whose allocator
+/// knows its [[Prototype]] identity (`Some`): a born-null record names
+/// `PROTO_ID_NULL` in its first shape, the one place that fact is kept. A
+/// receiver with a lineage carries the lineage's identity either way.
+#[cfg_attr(feature = "shape-mint-diag", track_caller)]
+pub(crate) unsafe fn publish_object_shape_from_rep_born(
+    obj: *mut crate::object::ObjectHeader,
+    predecessor: Option<ShapeDescriptor>,
+    keys_view: crate::object::ObjectKeys,
+    live_inline_slot_count: u32,
+    rep: u64,
+    birth_proto: Option<u64>,
+) -> LayoutWord {
     if obj.is_null() || !shape_word_is_writable(obj) {
         return LayoutWord(0);
     }
@@ -4426,7 +4466,7 @@ pub(crate) unsafe fn publish_object_shape_from_rep(
     // receiver with no lineage (an unstamped newborn) reads its own.
     let proto_id = match lineage {
         Some(descriptor) => descriptor.proto_id,
-        None => object_proto_id(obj),
+        None => birth_proto.unwrap_or_else(|| object_proto_id(obj)),
     };
     let id = publish_shape_result(shape_descriptor_ensure_with_rep(
         keys_view,
@@ -5113,6 +5153,13 @@ pub(crate) unsafe fn stable_declared_linked_proto_id(class_id: u32, bits: u64) -
     stable_linked_proto_id_for_class(class, bits)
 }
 
+/// The [[Prototype]] identity a function's shape names for a link to `bits`
+/// (null, or a prototype that already has its stable serial): the class-less
+/// rule an ordinary receiver's link takes.
+pub(crate) fn stable_function_link_identity(bits: u64) -> Option<u64> {
+    stable_linked_proto_id_for_class(0, bits)
+}
+
 fn stable_linked_proto_id_for_class(class: u32, bits: u64) -> Option<u64> {
     if bits == crate::value::TAG_NULL {
         return Some(PROTO_ID_NULL);
@@ -5275,10 +5322,9 @@ pub(crate) const SYNTHETIC_CLASS_ID_BASE: u32 =
 /// `obj` is a live `ObjectHeader`.
 ///
 /// A null [[Prototype]] is the identity `PROTO_ID_NULL` and reads back as
-/// `TAG_NULL` — except on a cell BORN null (`Object.create(null)`,
-/// `OBJ_FLAG_NULL_PROTO`), which answers 0 as it always has: every reader
-/// tests that header bit for the born-null case, and a recorded null would
-/// send it down the re-prototyped-receiver paths instead.
+/// `TAG_NULL`, however the cell came to have it (born null, as
+/// `Object.create(null)`, or linked to null later): the shape is the one
+/// authority ([`object_prototype_is_null`]).
 #[inline(always)]
 pub(crate) unsafe fn object_prototype_word(obj: *const crate::object::ObjectHeader) -> u64 {
     // A1_UNPROVEN: record-first: shape word (kind-A/B question for S0f).
@@ -5287,27 +5333,37 @@ pub(crate) unsafe fn object_prototype_word(obj: *const crate::object::ObjectHead
         return (*meta).prototype;
     }
     // A default, class or per-object identity answers 0 from the id alone,
-    // and a null link from the header. The link is the layout's (an overflow
+    // and a null identity `TAG_NULL`. The link is the layout's (an overflow
     // never holds [[Prototype]]), so the layout id answers under the bit.
     let word = super::layout_desc::layout_id_of_word((*obj).parent_class_id);
     match shape_word_kind(word) {
         SHAPE_ID_KIND_PLAIN => 0,
-        SHAPE_ID_KIND_NULL if is_layout_word(word) => null_linked_prototype_word(obj),
+        SHAPE_ID_KIND_NULL if is_layout_word(word) => crate::value::TAG_NULL,
         _ => linked_object_prototype_word(obj),
     }
 }
 
-/// [`object_prototype_word`] of a meta-less receiver whose ShapeId names the
-/// null identity: `TAG_NULL`, or 0 on a cell born null.
+/// Is `obj`'s [[Prototype]] null? Its recorded prototype, else its shape's
+/// identity: the one authority, whatever made the link null. Allocation-free.
 ///
 /// # Safety
 /// `obj` is a live `ObjectHeader`.
-#[inline(never)]
-unsafe fn null_linked_prototype_word(obj: *const crate::object::ObjectHeader) -> u64 {
-    match crate::value::addr_class::try_read_gc_header(obj as usize) {
-        Some(header) if header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 => 0,
-        _ => crate::value::TAG_NULL,
-    }
+#[inline(always)]
+pub(crate) unsafe fn object_prototype_is_null(obj: *const crate::object::ObjectHeader) -> bool {
+    object_prototype_word(obj) == crate::value::TAG_NULL
+}
+
+/// [`object_prototype_is_null`] for an arbitrary heap address: false for
+/// anything that is not a live, unforwarded ordinary object cell.
+///
+/// # Safety
+/// `addr` is any word; it is proven a GC cell before it is read.
+pub(crate) unsafe fn cell_prototype_is_null(addr: usize) -> bool {
+    crate::value::addr_class::try_read_gc_header(addr).is_some_and(|header| {
+        header.obj_type == crate::gc::GC_TYPE_OBJECT
+            && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+            && object_prototype_is_null(addr as *const crate::object::ObjectHeader)
+    })
 }
 
 /// [`object_prototype_word`] of a meta-less receiver whose ShapeId may name
@@ -5332,10 +5388,7 @@ unsafe fn linked_object_prototype_word(obj: *const crate::object::ObjectHeader) 
     if proto_id != PROTO_ID_NULL {
         return record.prototype_word();
     }
-    match crate::value::addr_class::try_read_gc_header(obj as usize) {
-        Some(header) if header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 => 0,
-        _ => crate::value::TAG_NULL,
-    }
+    crate::value::TAG_NULL
 }
 
 /// The prototype identity `obj` has when its recorded [[Prototype]] is
@@ -5366,15 +5419,9 @@ pub(crate) unsafe fn object_proto_id_for(
     {
         return PROTO_ID_PER_OBJECT;
     }
-    // A recorded prototype outranks the born-null header bit, which is
-    // sticky: `Object.setPrototypeOf(Object.create(null), p)` keeps the bit
-    // and its shape must still name `p`.
-    if recorded == 0 {
-        if let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) {
-            if header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
-                return PROTO_ID_NULL;
-            }
-        }
+    // A null link (born null or linked to null later) is the null identity.
+    if recorded == crate::value::TAG_NULL {
+        return PROTO_ID_NULL;
     }
     let class_id = (*obj).class_id;
     let class = shapes_class_role::receiver_vtable_class(obj);

@@ -685,9 +685,11 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
             unsafe {
                 let obj = raw_addr as *const ObjectHeader;
                 let gc = gc_header_for(obj);
-                // #1175: objects allocated with a null prototype
-                // (Object.create(null), querystring.parse) report null here.
-                if (*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
+                // #1175: objects with a null prototype (Object.create(null),
+                // querystring.parse, linked to null): their shape says so.
+                if (*gc).obj_type == crate::gc::GC_TYPE_OBJECT
+                    && crate::object::shapes::object_prototype_is_null(obj)
+                {
                     return f64::from_bits(TAG_NULL);
                 }
                 // A RegExp's internal prototype does not depend on its
@@ -949,7 +951,9 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
         unsafe {
             let obj = bits as *const ObjectHeader;
             let gc = gc_header_for(obj);
-            if (*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
+            if (*gc).obj_type == crate::gc::GC_TYPE_OBJECT
+                && crate::object::shapes::object_prototype_is_null(obj)
+            {
                 return f64::from_bits(TAG_NULL);
             }
 

@@ -91,8 +91,8 @@ pub use unbox::{js_closure_unbox_callee_checked, js_closure_unbox_callee_checked
 
 pub(crate) use dynamic_props::{
     clone_closure_rebind_this, closure_get_dynamic_prop_keyed, closure_reads_this_from_capture,
-    closure_set_via_function_prototype_descriptor, function_prototype_fallback_target,
-    function_prototype_inherited_get,
+    closure_set_via_function_prototype_descriptor, closure_static_prototype_proven,
+    function_prototype_fallback_target, function_prototype_inherited_get,
 };
 pub(crate) use dynamic_props::{
     closure_define_data_with_attrs, closure_define_data_with_attrs_bytes,

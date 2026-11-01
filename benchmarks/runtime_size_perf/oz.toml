@@ -1,0 +1,12 @@
+# Diagnostic negative control: blanket Oz is NOT the proposed size policy.
+[profile.issue-size]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+strip = false
+
+[profile.issue-size.package.perry-runtime]
+opt-level = "z"
+
+[profile.issue-size.package.perry-stdlib]
+opt-level = "z"
