@@ -2024,6 +2024,7 @@ impl Model {
                 accessor,
             } => format!("definekeyed {n} {o} {reason} {}", *accessor as u8),
             Cons::StoreKeyed { o, src, site } => format!("storekeyed {n} {o} {src} {site}"),
+            Cons::StoreIndexed { o, src, site } => format!("storeindexed {n} {o} {src} {site}"),
             Cons::AccessorKeyed { holder, f, setter } => {
                 format!("accessorkeyed {n} {holder} {f} {}", *setter as u8)
             }

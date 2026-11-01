@@ -102,26 +102,30 @@ impl<'a> Gen<'a> {
                 } else if m0 == "module" && method == "createRequire" && object.is_none() {
                     let t = self.m.tok(TokKind::Builtin(BuiltinNs::Require));
                     self.tok_node(t)
-                } else if let (true, Some(o)) = (
-                    module == "array"
-                        && matches!(method.as_str(), "push_single" | "push" | "push_field_single"),
-                    o,
-                ) {
-                    // `arr.push(x)` lowered to the runtime's append: no
-                    // unknown code runs. `push_single` and `push` append to
-                    // the receiver's elements (codegen folds them only on a
-                    // receiver typed an array); `push_field_single` checks
-                    // the receiver and runs its own `push` otherwise, which
-                    // is the method call itself.
-                    if method == "push_field_single" {
-                        let push = self.m.atom("push");
-                        self.mcall(o, Key::Named(push), a, vec![])
-                    } else {
-                        for v in a {
-                            self.elem_store(fx, o, v, "push");
+                } else if let (true, Some(o)) = (module == "array" && method == "push_field_single", o) {
+                    // `push_field_single` checks the receiver and runs its own
+                    // `push` otherwise, which is the method call itself.
+                    let push = self.m.atom("push");
+                    self.mcall(o, Key::Named(push), a, vec![])
+                } else if module == "array" && matches!(method.as_str(), "push_single" | "push") {
+                    // The array push the HIR folds for a receiver it proved an
+                    // array (`this.items.push(x)`): the arguments are its new
+                    // elements, as `Expr::ArrayPush` stores them; the result
+                    // is the new length. The grown array's write-back into its
+                    // holder stores the same array.
+                    match o {
+                        Some(o) => {
+                            for v in a {
+                                self.elem_store(fx, o, v, "push");
+                            }
                         }
-                        self.prim_node(prim::NUM)
+                        None => {
+                            for v in a {
+                                self.to_sink(v, "argument of native module array.push");
+                            }
+                        }
                     }
+                    self.prim_node(prim::NUM)
                 } else {
                     if module == "vm" || module == "node:vm" {
                         crate::builtins::set_dyn_eval(&mut self.m, "E14 node:vm");
@@ -1306,6 +1310,44 @@ impl<'a> Gen<'a> {
                 let out = self.elem_load(a);
                 self.m.add_prim(out, prim::UNDEF);
                 out
+            }
+            // `indexOf` / `lastIndexOf` / `includes` the HIR folds for an array
+            // receiver (ECMA-262 23.1.3.16/.19/.13): they read the receiver's
+            // `length` and elements and compare each with the value
+            // (IsStrictlyEqual / SameValueZero: no conversion, no call). Only
+            // `fromIndex` is converted (ToIntegerOrInfinity). The result is
+            // a Number, or a Boolean for `includes`.
+            Expr::ArrayIndexOf {
+                array,
+                value,
+                from_index,
+            }
+            | Expr::ArrayLastIndexOf {
+                array,
+                value,
+                from_index,
+            }
+            | Expr::ArrayIncludes {
+                array,
+                value,
+                from_index,
+            } => {
+                let a = self.expr(fx, array);
+                let _ = self.expr(fx, value);
+                if let Some(x) = from_index {
+                    let _ = self.prim_op(
+                        fx,
+                        &[x],
+                        prim::NUM,
+                        "search index",
+                        Protocol::ToPrimitive,
+                    );
+                }
+                let _ = self.elem_load(a);
+                match e {
+                    Expr::ArrayIncludes { .. } => self.prim_node(prim::BOOL),
+                    _ => self.prim_node(prim::NUM),
+                }
             }
             Expr::ArraySlice {
                 array, start, end, ..

@@ -644,6 +644,8 @@ impl<'a> Gen<'a> {
                         self.m.edge(v, n);
                     }
                 }
+                // A key the defining unit never holds is the chain's.
+                FieldView::Plain(f) if crate::units::unheld(c, f) => {}
                 FieldView::Plain(f) => {
                     let kd = &f.kind;
                     let undef = if f.definite { 0 } else { prim::UNDEF };
@@ -954,6 +956,11 @@ impl<'a> Gen<'a> {
             // made below.
             if let Some((_, fcs)) = c.field_fns.iter().find(|(k, _)| k == &fld.key) {
                 fn_fields.push((n, fcs));
+                continue;
+            }
+            // A key the defining unit never holds (a read names it): no own
+            // value, its read is the chain's (`units::unheld`).
+            if crate::units::unheld(c, fld) {
                 continue;
             }
             // A data field that holds only primitives (DECISIONS 74): their

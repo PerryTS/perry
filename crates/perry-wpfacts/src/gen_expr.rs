@@ -247,7 +247,18 @@ impl<'a> Gen<'a> {
         let site = self.store_site(fx.module, fx.f, desc.into(), None, false);
         self.m.stores[site as usize].key_value = Some(key_value);
         self.mark_rooted(e, site);
-        self.m.cons(recv, Cons::Store { key, src, site });
+        match key {
+            Key::Named(_) => self.m.cons(recv, Cons::Store { key, src, site }),
+            // The key's values decide: an index or any key (`StoreIndexed`).
+            Key::Any => self.m.cons(
+                key_value,
+                Cons::StoreIndexed {
+                    o: recv,
+                    src,
+                    site,
+                },
+            ),
+        }
     }
 
     /// A `this.k = v` store in a function `new` may call, before `this`
@@ -855,19 +866,18 @@ impl<'a> Gen<'a> {
                     }
                 } else {
                     let key = self.key_of(key);
-                    self.store_phased(fx, e, target, t, key, v, "putvalue".into(), owner, Some(k));
                     // A receiver other than the target gets the own data store.
-                    self.store_phased(
-                        fx,
-                        e,
-                        target,
-                        rv,
-                        key,
-                        v,
-                        "putvalue-receiver".into(),
-                        owner,
-                        Some(k),
-                    );
+                    for (o, what) in [(t, "putvalue"), (rv, "putvalue-receiver")] {
+                        let site = self.store_site(fx.module, fx.f, what.into(), owner, false);
+                        self.mark_fn_phase(fx, e, target, site);
+                        self.mark_rooted(e, site);
+                        self.m.stores[site as usize].key_value = Some(k);
+                        match key {
+                            Key::Named(_) => self.m.cons(o, Cons::Store { key, src: v, site }),
+                            // The key's values decide: an index or any key.
+                            Key::Any => self.m.cons(k, Cons::StoreIndexed { o, src: v, site }),
+                        }
+                    }
                 }
                 v
             }
