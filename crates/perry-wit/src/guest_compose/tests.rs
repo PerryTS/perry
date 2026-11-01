@@ -2,6 +2,91 @@ use super::*;
 use wac_graph::types::{Type, Types, ValueType};
 
 #[test]
+fn exported_resource_records_are_shared_through_the_published_interface() {
+    let producer = wat::parse_str(
+        r#"(component
+        (import "start" (func $kick async))
+        (component $implementation
+            (type $rep (resource (rep i32)))
+            (export $item "item" (type $rep))
+            (type $own (own $item))
+            (type $record (record (field "owner" $own) (field "text" string)))
+            (export $payload "payload" (type $record))
+            (core module $m
+                (memory (export "memory") 1)
+                (func (export "echo") (param i32 i32 i32) (result i32) i32.const 0)
+                (func (export "realloc") (param i32 i32 i32 i32) (result i32) i32.const 0))
+            (core instance $m (instantiate $m))
+            (alias core export $m "memory" (core memory $memory))
+            (alias core export $m "echo" (core func $echo))
+            (alias core export $m "realloc" (core func $realloc))
+            (func (export "echo") (param "value" $payload) (result $payload)
+                (canon lift (core func $echo) (memory $memory) (realloc $realloc))))
+        (instance $api (instantiate $implementation))
+        (export $published "api" (instance $api))
+        (alias export $published "payload" (type $payload))
+        (alias export $published "echo" (func $echo))
+        (instance $mirror (export "payload" (type $payload)) (export "pass" (func $echo)))
+        (export "mirror" (instance $mirror))
+        (export "actor" (func $kick))
+        (export "signal" (func $kick)))"#,
+    )
+    .unwrap();
+    let facade = wat::parse_str(
+        r#"(component
+        (type $api (instance
+            (export "item" (type $item (sub resource)))
+            (type $own (own $item))
+            (type $record (record (field "owner" $own) (field "text" string)))
+            (export "payload" (type $payload (eq $record)))
+            (export "echo" (func (param "value" $payload) (result $payload)))))
+        (import "source-api" (instance $api (type $api)))
+        (alias export $api "payload" (type $payload))
+        (type $mirror (instance
+            (alias outer 1 $payload (type $outer))
+            (export "payload" (type $payload (eq $outer)))
+            (export "pass" (func (param "value" $payload) (result $payload)))))
+        (import "source-mirror" (instance $mirror (type $mirror)))
+        (import "kick" (func async))
+        (alias export $api "echo" (func $echo))
+        (alias export $mirror "pass" (func $pass))
+        (instance $forward (export "echo" (func $echo)) (export "pass" (func $pass)))
+        (export "forwarder" (instance $forward)))"#,
+    )
+    .unwrap();
+    Validator::new_with_features(WasmFeatures::all())
+        .validate_all(&producer)
+        .unwrap();
+    let plan = serde_json::to_vec(&serde_json::json!({
+        "schema_version":1, "actor":"actor", "signal":"signal", "forward_interface":"forwarder",
+        "imports":[{"local":"source-api","original":"api"},{"local":"source-mirror","original":"mirror"},{"local":"kick","original":"actor"}],
+        "forwards":[{"interface":"api","function":"echo","export":"echo"},
+                    {"interface":"mirror","function":"pass","export":"pass"}]
+    })).unwrap();
+    let bytes = compose_experimental_guest(&producer, &facade, &plan).unwrap();
+    let mut types = Types::default();
+    let package = Package::from_bytes("test:shared-output", None, bytes, &mut types).unwrap();
+    let exports = &types[package.ty()].exports;
+    assert_eq!(exports.len(), 2);
+    let ItemKind::Instance(api) = exports["api"] else {
+        panic!("api")
+    };
+    let ItemKind::Instance(mirror) = exports["mirror"] else {
+        panic!("mirror")
+    };
+    let ItemKind::Type(Type::Value(first)) = types[api].exports["payload"] else {
+        panic!("api payload")
+    };
+    let ItemKind::Type(Type::Value(second)) = types[mirror].exports["payload"] else {
+        panic!("shared payload")
+    };
+    assert_eq!(
+        types.resolve_value_type(first),
+        types.resolve_value_type(second)
+    );
+}
+
+#[test]
 fn imported_resource_records_and_future_types_keep_shared_interface_bindings() {
     let foreign = r#"(type $foreign (instance
         (export "item" (type $item (sub resource)))
