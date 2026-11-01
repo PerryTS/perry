@@ -300,6 +300,12 @@ pub enum TmplKind {
     ObjCreate { module: u32, site: SiteId },
     /// An array literal / array-producing site (flow only).
     Arr { module: u32, site: SiteId },
+    /// A function's `arguments` object (ECMA-262 10.4.4, flow only). It is
+    /// no Array: its prototype is `%Object.prototype%`, and `length` and
+    /// `callee` are ordinary own data properties (writable, configurable:
+    /// a store or `defineProperty` gives them any value). Its indices are
+    /// elements, as an array's are, and it iterates them.
+    Args { module: u32, site: SiteId },
     /// A builtin object created at a site (Map, Set, Promise, Date, Error,
     /// RegExp, typed array, ArrayBuffer, iterator …). Flow only.
     BObj {

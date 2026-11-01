@@ -942,7 +942,7 @@ fn seed_family(m: &Model, t: Tok) -> Option<Family> {
             _ if m.virt_protos.contains_key(&t) => None,
             TmplKind::Arr { .. } => Some(Family::Array),
             TmplKind::BObj { what, .. } => Some(members::bobj_family(what)),
-            TmplKind::Lit { .. } => Some(Family::Object),
+            TmplKind::Lit { .. } | TmplKind::Args { .. } => Some(Family::Object),
         },
         TokKind::Proto(tm) => {
             let tm = &m.tmpls[*tm as usize];
