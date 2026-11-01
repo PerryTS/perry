@@ -53,12 +53,20 @@ pub(crate) fn resolve_prebuilt_ext_libs(
                 libs.push(path);
             }
             None => {
+                let npm_hint = super::super::library_search::npm_ext_package_install_hint()
+                    .map(|cmd| {
+                        format!(
+                            " This perry runs from an npm package, which ships the wrapper \
+                             archives separately: `{cmd}`."
+                        )
+                    })
+                    .unwrap_or_default();
                 eprintln!(
                     "error: `{module}` links the prebuilt wrapper archive `{filename}`, which \
                      was not found. Install Perry's bundled libraries next to the perry binary, \
                      set PERRY_LIB_DIR, or build the workspace (`cargo build --release` builds \
                      `{}` with the runtime; `scripts/build_instr_runtime.sh` builds the \
-                     instrumented `_instr` archives a compile with an instrument knob links).",
+                     instrumented `_instr` archives a compile with an instrument knob links).{npm_hint}",
                     binding.krate
                 );
                 std::process::exit(1);

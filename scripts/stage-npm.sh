@@ -231,6 +231,63 @@ stage_android_cross_libs() {
   echo "  android: staged $staged cross-lib(s) under bin/$triple/release/"
 }
 
+# Native-extension archives (`libperry_ext_*.a`): `perry compile` links one per
+# well-known module a program imports (http, ws, net, zlib, sharp, ...). They
+# total ~165 MB compressed per platform, and the host packages are already near
+# the 180 MB packed budget, so they ship in a package of their own,
+# `@perryts/perry-ext-<platform>`, staged at npm/perry-ext-<platform>. perry
+# finds it next to the host package (library_search.rs, npm_ext_package).
+# Platforms whose release archive has no ext archives (musl, Windows) get none.
+# Args: $1 = platform suffix, $2 = source dir of the release archive.
+stage_ext_package() {
+  local pkg_suffix="$1" src="$2" f
+  local ext_dir="$NPM_DIR/perry-ext-$pkg_suffix"
+  local found=0
+  for f in "$src"/libperry_ext_*.a; do
+    [ -f "$f" ] && found=1
+  done
+  if [ "$found" -eq 0 ]; then
+    rm -rf "$ext_dir"
+    echo "  (ext: no libperry_ext_*.a in the release archive; no ext package)"
+    return 0
+  fi
+  [ "${KEEP_EXISTING:-0}" = "1" ] || rm -rf "$ext_dir"
+  mkdir -p "$ext_dir/lib"
+  for f in "$src"/libperry_ext_*.a; do
+    [ -f "$f" ] || continue
+    cp "$f" "$ext_dir/lib/"
+  done
+  if [ "${PERRY_NPM_NO_COMPRESS:-0}" != "1" ]; then
+    if ! command -v zstd >/dev/null 2>&1; then
+      echo "  error: zstd not found but archive compression is required" >&2
+      exit 1
+    fi
+    for f in "$ext_dir"/lib/*.a; do
+      zstd -19 -T0 -q -f --rm "$f"
+    done
+  fi
+  sed -e "s/__VERSION__/$VERSION/g" -e "s/__SUFFIX__/$pkg_suffix/g" \
+    "$NPM_DIR/perry-ext/package.json.tmpl" > "$ext_dir/package.json"
+  if [ -f "$LICENSE_SRC" ]; then
+    cp "$LICENSE_SRC" "$ext_dir/LICENSE"
+  fi
+  cat > "$ext_dir/README.md" <<EOF
+# @perryts/perry-ext-$pkg_suffix
+
+Prebuilt native-extension static libraries (\`libperry_ext_*.a\`) for
+\`@perryts/perry-$pkg_suffix\`: the host functions behind node:http, ws, net, zlib,
+sharp, pdf, the database drivers and the other well-known modules.
+
+Install it next to \`@perryts/perry\` when a program imports one of those
+modules; perry finds it automatically and checks that the versions match.
+
+\`\`\`bash
+npm install -g @perryts/perry-ext-$pkg_suffix
+\`\`\`
+EOF
+  echo "  ext: staged $(ls "$ext_dir/lib" | wc -l | tr -d ' ') archive(s) in npm/perry-ext-$pkg_suffix"
+}
+
 # -----------------------------------------------------------------------------
 # Stage wrapper package
 # -----------------------------------------------------------------------------
@@ -294,6 +351,7 @@ for entry in "${PLATFORMS[@]}"; do
       [ -f "$src_dir/$lib" ] && cp "$src_dir/$lib" "$pkg_dir/lib/"
     done
     stage_sidecars "$src_dir" "$pkg_dir/lib" "${UNIX_CORE_LIBS[@]}"
+    stage_ext_package "$pkg_suffix" "$src_dir"
   fi
 
   # Compress the static archives so the published npm tarball stays under
@@ -336,4 +394,4 @@ npm install -g @perryts/perry
 EOF
 done
 
-echo "[stage-npm] done. Version $VERSION staged across $(ls -d "$NPM_DIR"/perry-*/ 2>/dev/null | wc -l | tr -d ' ') platform packages."
+echo "[stage-npm] done. Version $VERSION staged across $(ls -d "$NPM_DIR"/perry-*/ 2>/dev/null | grep -vc '/perry-ext') platform packages, $(ls -d "$NPM_DIR"/perry-ext-*/ 2>/dev/null | wc -l | tr -d ' ') ext packages."

@@ -1078,6 +1078,67 @@ fn push_executable_relative_host_candidates(
     if let Some(prefix) = bin_dir.parent() {
         candidates.push(prefix.join("lib").join(name));
     }
+    push_npm_ext_package_candidates(candidates, bin_dir, name);
+}
+
+/// Native-extension wrapper archives (`libperry_ext_*.a`, `perry_ext_*.lib`).
+fn is_ext_archive_name(name: &str) -> bool {
+    name.starts_with("libperry_ext_") || name.starts_with("perry_ext_")
+}
+
+/// The npm package that carries the extension archives for the npm host
+/// package this binary runs from. `.../node_modules/@perryts/perry-<suffix>/
+/// bin/perry` pairs with `@perryts/perry-ext-<suffix>`: the host package is
+/// already at its packed-size limit, so the archives ship in a package of their
+/// own. Returns the host package directory and the ext package name; `None`
+/// for any other layout (zip, tarball, Homebrew, a source tree).
+fn npm_ext_package(bin_dir: &Path) -> Option<(PathBuf, String)> {
+    let host_pkg = bin_dir.parent()?;
+    let scope = host_pkg.parent()?;
+    if scope.file_name()?.to_str()? != "@perryts" {
+        return None;
+    }
+    let suffix = host_pkg.file_name()?.to_str()?.strip_prefix("perry-")?;
+    Some((host_pkg.to_path_buf(), format!("perry-ext-{suffix}")))
+}
+
+/// Install hint for a missing extension archive, when running from an npm host
+/// package. `None` for every other install layout.
+pub(super) fn npm_ext_package_install_hint() -> Option<String> {
+    let exe = std::env::current_exe().ok()?;
+    let (_, ext_pkg) = npm_ext_package(exe.parent()?)?;
+    Some(format!(
+        "npm install -g @perryts/{ext_pkg}@{}",
+        env!("CARGO_PKG_VERSION")
+    ))
+}
+
+/// Candidates `<node_modules>/@perryts/perry-ext-<suffix>/lib/<name>` for every
+/// `node_modules` above the host package (Node's own lookup rule: nested,
+/// hoisted, or the global prefix). A root counts only when its `package.json`
+/// version equals this binary's version: the archives are linked against this
+/// exact runtime and are never used "close enough".
+fn push_npm_ext_package_candidates(candidates: &mut Vec<PathBuf>, bin_dir: &Path, name: &str) {
+    if !is_ext_archive_name(name) {
+        return;
+    }
+    let Some((host_pkg, ext_pkg)) = npm_ext_package(bin_dir) else {
+        return;
+    };
+    for ancestor in host_pkg.ancestors().skip(1) {
+        if ancestor.file_name().and_then(|n| n.to_str()) != Some("node_modules") {
+            continue;
+        }
+        let root = ancestor.join("@perryts").join(&ext_pkg);
+        let version_matches = std::fs::read_to_string(root.join("package.json"))
+            .ok()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+            .and_then(|v| v.get("version").and_then(|v| v.as_str()).map(str::to_owned))
+            .is_some_and(|v| v == env!("CARGO_PKG_VERSION"));
+        if version_matches {
+            candidates.push(root.join("lib").join(name));
+        }
+    }
 }
 
 pub(super) fn collect_library_candidates(name: &str, target: Option<&str>) -> Vec<PathBuf> {
@@ -1601,3 +1662,6 @@ mod linux_host_candidate_tests;
 
 #[cfg(all(test, target_os = "windows"))]
 mod windows_toolchain_tests;
+
+#[cfg(test)]
+mod npm_ext_package_tests;
