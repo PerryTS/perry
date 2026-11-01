@@ -244,6 +244,7 @@ pub(crate) unsafe fn gc_object_meta_slot(user_ptr: usize) -> Option<*mut u64> {
 /// # Safety
 /// `obj` is the user pointer of a live ordinary object.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) unsafe fn a1_internal_error(obj: *const ObjectHeader, reason: MetaReason) -> ! {

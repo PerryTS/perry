@@ -155,6 +155,7 @@ fn synced_current_eden_block_bytes() -> usize {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn walk_and_store(generation: u64, current_bytes: usize) -> usize {
     let bytes = copying_from_space_in_use_bytes_walked();

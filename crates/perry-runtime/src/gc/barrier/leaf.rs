@@ -6,6 +6,7 @@
 /// [`decode_heap_addr`] that a subnormal double reaches. Cold and out of line:
 /// it is the only part of the decode that is more than a few compares.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(in crate::gc) fn decode_raw_pointer_candidate(addr: usize) -> usize {
     if matches!(
@@ -24,6 +25,7 @@ pub(in crate::gc) fn decode_raw_pointer_candidate(addr: usize) -> usize {
 /// remains rejected even for an exact malloc hit; tagged words use the wider
 /// arena-first nursery-or-malloc predicate instead.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(in crate::gc) fn raw_child_needs_tracking(addr: usize) -> bool {
     matches!(

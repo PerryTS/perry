@@ -1112,6 +1112,7 @@ fn check_listener_limit(target: f64, event: f64, list: f64) {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn warn_listener_limit(target: f64, event: f64, list: f64, len: f64, max: f64) {
     let scope = crate::gc::RuntimeHandleScope::new();

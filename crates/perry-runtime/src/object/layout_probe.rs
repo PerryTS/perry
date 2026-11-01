@@ -214,6 +214,7 @@ unsafe fn key_word_hash(bits: u64) -> Option<u64> {
 /// Derive record `r`'s probe word from its key list (its colour masks are
 /// facts of the record from its mint, [`mint_colour_masks`]).
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn derive(r: *mut ShapeRecord) -> u64 {
     let mut word = derive_word(&*r);
@@ -490,6 +491,7 @@ unsafe fn text_proves_absence(rec: &ShapeRecord) -> bool {
 /// A TEXT entry's word (a short or plain string no program atom named when
 /// the index was derived) against a site key: equal texts are one key.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn text_entry_matches(word: u64, key_bits: u64) -> bool {
     if key_bits & TAG_MASK != STRING_TAG {
@@ -611,6 +613,7 @@ unsafe fn own_entry(r: *mut ShapeRecord, key_bits: u64, hash: u64) -> Result<(u3
 /// The data value at key position `pos` of `obj` (record `r`), or `TAG_HOLE`
 /// for an accessor, a hole, or storage the probe does not read.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn value_at(obj: *const ObjectHeader, r: *const ShapeRecord, pos: u32) -> f64 {
     let keys = (*r).keys as usize as *const crate::array::ArrayHeader;
@@ -927,6 +930,7 @@ unsafe fn plain_data_at(r: *const ShapeRecord, pos: u32) -> bool {
 /// Is position `pos` of record `r` an accessor or a private name (not
 /// [`plain_data_at`])? Out of line: the chain walk asks it only for a hole.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn attributed_at(r: *const ShapeRecord, pos: u32) -> bool {
     !plain_data_at(r, pos)
@@ -936,6 +940,7 @@ unsafe fn attributed_at(r: *const ShapeRecord, pos: u32) -> bool {
 /// hole slot (the key is absent), else an accessor or storage the probe does
 /// not read, which declines.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn own_hole<const ABSENT: bool>(
     dir: *const u8,
@@ -954,6 +959,7 @@ unsafe fn own_hole<const ABSENT: bool>(
 /// The receiver's own key at position `pos`: its value, or, for a hole slot
 /// of a plain data key, the absent key's answer.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn own_value<const ABSENT: bool>(
     dir: *const u8,
@@ -974,6 +980,7 @@ unsafe fn own_value<const ABSENT: bool>(
 /// from the slots, so the overflow (a re-add) and then the prototype chain
 /// answer, exactly as for a key the layout does not list.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn own_absent<const ABSENT: bool>(
     dir: *const u8,
@@ -1010,6 +1017,7 @@ unsafe fn own_absent<const ABSENT: bool>(
 ///
 /// Everything else declines.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn array_named_get<const ABSENT: bool>(
     dir: *const u8,
@@ -1244,6 +1252,7 @@ unsafe fn intrinsic_prototype(dir: *const u8, serial: u64) -> Option<*const Obje
 
 /// The record's probe word is not derived yet, or declines.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn probe_get_underived<const ABSENT: bool>(
     dir: *const u8,
@@ -1579,6 +1588,7 @@ pub unsafe extern "C" fn perry_probe_own_method(
 
 /// [`perry_probe_own_method`]'s by-bytes scan of the key's text.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn own_method_by_bytes(recv: f64, key_bits: u64) -> f64 {
     let key = (key_bits & POINTER_MASK) as *const crate::StringHeader;
@@ -1723,6 +1733,7 @@ pub(crate) unsafe fn probe_has(obj_bits: u64, key_bits: u64, own_only: bool) -> 
 /// Is `obj` (class id nonzero) a class declaration's or a class
 /// evaluation's prototype object?
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn class_prototype_object(obj: *const ObjectHeader) -> bool {
     crate::object::class_value::class_decl_prototype_link((*obj).class_id) as usize == obj as usize

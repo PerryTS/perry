@@ -369,6 +369,7 @@ fn concat_parts_simple<const M: usize, const UNROLL: bool>(
 /// operand, take the collecting allocation, and re-read each from its handle.
 /// Literals, digits and the stack conversions do not move.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 #[allow(clippy::too_many_arguments)]
 fn concat_parts_rooted_copy<const M: usize>(
@@ -416,6 +417,7 @@ fn concat_parts_rooted_copy<const M: usize>(
 /// Every other value kind. The converted text of a value operand is a rooted
 /// heap string; a literal or a number is borrowed from rodata or the stack.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn concat_parts_general<const M: usize>(
     parts: *const ConcatPartSlot,

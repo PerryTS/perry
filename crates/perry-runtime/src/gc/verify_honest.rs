@@ -90,6 +90,7 @@ pub(super) fn classify_pointer_word(bits: u64) -> Result<HonestTarget, &'static 
 /// remembered set). Unmarked young garbage is skipped. Aborts on a violation.
 /// Out of line: a diagnostic must not grow the collector's step functions.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(super) fn verify_honest_pointers(phase: &str) -> HonestPointerStats {
     let mut stats = HonestPointerStats::default();
@@ -137,6 +138,7 @@ pub(super) fn verify_honest_pointers(phase: &str) -> HonestPointerStats {
 /// rejects a header-less root under verification; this adds the id-band rule.
 /// Out of line: it sits on the marker's rare id-band arm.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(super) fn verify_honest_root_word(bits: u64) {
     if bits & TAG_MASK != POINTER_TAG {

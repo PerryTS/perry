@@ -1453,6 +1453,7 @@ pub(crate) fn raw_receiver_is_heap_object(arr: *const ArrayHeader) -> bool {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(crate) fn array_object_receiver(arr: *const ArrayHeader) -> Option<f64> {
     let raw = (arr as u64) & 0x0000_FFFF_FFFF_FFFF;
@@ -1486,6 +1487,7 @@ pub(crate) fn is_array_subclass_value(value: f64) -> bool {
 ///
 /// Returns `None` only for a method name neither engine implements.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(crate) fn array_object_method(recv: f64, method: &str, args: &[f64]) -> Option<f64> {
     if method == "push" && args.len() == 1 {
@@ -1521,6 +1523,7 @@ pub(crate) fn array_object_method(recv: f64, method: &str, args: &[f64]) -> Opti
 
 /// `Get(recv, ToString(index))` for an array-like object receiver.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(crate) fn array_object_index_get(recv: f64, index: u32) -> f64 {
     if let Some(value) = array_subclass_fast_index_get(recv, index) {
@@ -1539,6 +1542,7 @@ pub(crate) fn array_object_index_get(recv: f64, index: u32) -> f64 {
 /// `sub[0] = 10; sub.length` read back `0`, on the ANNOTATED and unannotated
 /// paths alike. Emulate the exotic step here so both agree with node.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(crate) fn array_object_index_set(recv: f64, index: u32, value: f64) {
     if array_subclass_fast_index_set(recv, index, value) {
@@ -1633,6 +1637,7 @@ pub(crate) fn maintain_array_exotic_length(recv: f64, index: u32) {
 /// truncating deletes the indices at or above the new length, exactly as the
 /// Array-exotic `[[DefineOwnProperty]]` would.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(crate) fn array_object_set_length(recv: f64, new_length: f64) {
     if let Some((obj, elements)) = crate::array::subclass_elements::backed_value(recv) {

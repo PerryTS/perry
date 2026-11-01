@@ -295,6 +295,7 @@ fn private_instance_access_is_proven(
 
 /// Cold half of [`private_instance_access_is_proven`]: read the shape once.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn private_shape_proof_learn(
     object: *const ObjectHeader,

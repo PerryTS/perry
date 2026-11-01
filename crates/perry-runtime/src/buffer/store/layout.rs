@@ -228,6 +228,7 @@ pub(crate) fn buffer_family_type_owned(addr: usize) -> Option<u8> {
 /// Allocator-proven ownership of `addr`'s header: a tracked arena/malloc GC
 /// allocation, or a process-global SharedArrayBuffer block.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(crate) fn header_is_owned(addr: usize) -> bool {
     unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }.is_some()

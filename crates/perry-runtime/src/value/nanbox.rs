@@ -121,6 +121,7 @@ pub extern "C" fn js_nanbox_pointer(ptr: i64) -> f64 {
 ///   dereferences it), and any other id-band payload as `HANDLE_TAG`, never
 ///   as a `POINTER_TAG`: this is the constructor for words of unknown kind.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn box_unusual_pointer_word(bits: u64) -> f64 {
     if bits & 0xFFF0_0000_0000_0000 >= 0x7FF0_0000_0000_0000 {

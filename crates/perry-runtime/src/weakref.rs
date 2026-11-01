@@ -410,6 +410,7 @@ pub(crate) unsafe fn is_weak_target_trace_slot(
 /// `obj` is the readable object payload of the checked GC header, and
 /// `class_id` is its checked weak-holder class. This helper does not collect.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn is_weak_branded_target_trace_slot(
     obj: *mut ObjectHeader,

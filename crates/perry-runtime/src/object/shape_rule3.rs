@@ -430,6 +430,7 @@ pub(crate) fn clamp_plus_four_word(kind: &'static str, word: u32) -> u32 {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn throw_plus_four_range_error(message: &'static [u8]) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);

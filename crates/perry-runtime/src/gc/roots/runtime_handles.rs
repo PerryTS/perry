@@ -356,6 +356,7 @@ fn runtime_handle_slot_write_barrier(slot: RuntimeHandleSlot) {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn runtime_handle_slot_write_barrier_active(slot: RuntimeHandleSlot) {
     match slot {
@@ -404,12 +405,14 @@ pub struct RuntimeHandle<'scope> {
 /// line in the release build — they showed up as 4.3 % and 3.0 % of a
 /// promise-heavy program's leaf samples purely as call frames.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn handle_used_after_scope() -> ! {
     panic!("runtime handle used after its scope was dropped");
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn handle_kind_mismatch(expected: &str) -> ! {
     panic!("runtime handle kind mismatch: expected {expected}");

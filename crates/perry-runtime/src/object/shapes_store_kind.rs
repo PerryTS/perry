@@ -195,6 +195,7 @@ pub(crate) unsafe fn audit_store_facts_for_test(obj: *const ObjectHeader) {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn audit_check(obj: *const ObjectHeader) {
     if obj.is_null() || !crate::object::object_is_shaped(obj) {
@@ -207,6 +208,7 @@ unsafe fn audit_check(obj: *const ObjectHeader) {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn report_disagreement(obj: *const ObjectHeader) -> ! {
     let id = object_shape_stamp(obj);
@@ -414,6 +416,7 @@ pub(crate) unsafe fn retire_proof_before_stamp(obj: *mut ObjectHeader, new_id: L
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn retire_proof_before_stamp_slow(obj: *mut ObjectHeader, new_id: LayoutWord) {
     if crate::gc_type_is_not_object!((*gc_header(obj)).obj_type) {

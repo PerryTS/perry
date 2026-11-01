@@ -72,6 +72,7 @@ pub(super) fn clear_oversized_key_cache() {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn clear_oversized_key_cache_slow() {
     if super::PARSE_KEY_CACHE_OVERSIZED.with(std::cell::Cell::get) {
@@ -80,6 +81,7 @@ fn clear_oversized_key_cache_slow() {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(super) fn clear_key_cache() {
     super::PARSE_KEY_CACHE_OVERSIZED.with(|oversized| {

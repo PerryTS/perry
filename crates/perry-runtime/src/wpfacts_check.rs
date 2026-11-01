@@ -109,6 +109,7 @@ extern "C" fn report_at_exit() {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn violate(site: u64, what: &str, detail: String) -> ! {
     eprintln!("perry: wpfacts contract violated at elided site {site:#018x}: {what} ({detail})");

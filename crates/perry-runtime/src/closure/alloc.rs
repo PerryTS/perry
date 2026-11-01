@@ -805,6 +805,7 @@ pub extern "C" fn js_closure_alloc_fixed(
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn closure_alloc_init_collecting(
     info: *const crate::closure::JsFunctionInfo,

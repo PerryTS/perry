@@ -79,6 +79,7 @@ pub(super) fn emitter_capture_default_with_birth(birth: Option<(f64, f64)>) -> b
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn read_default_slow(ctor: f64, proto: Option<f64>) -> bool {
     let scope = crate::gc::RuntimeHandleScope::new();

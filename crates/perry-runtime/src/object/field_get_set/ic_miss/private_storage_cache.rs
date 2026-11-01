@@ -591,6 +591,7 @@ impl IntrinsicPrivateReadSite {
     }
 
     #[cold]
+    #[optimize(size)]
     #[inline(never)]
     fn read_miss(&self, receiver: f64) -> Option<f64> {
         let (object, _) = unsafe { private_plain_receiver_shape(receiver) }?;

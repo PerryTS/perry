@@ -384,6 +384,7 @@ pub(crate) fn read_state_data(stream: f64, data: StateData) -> Option<f64> {
 /// The ordinary `Get(state, name)` for a state off its birth shape: an own
 /// accessor or an inherited value runs as in node.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn state_data_get(state: *mut ObjectHeader, data: StateData) -> f64 {
     // SAFETY: `state` was checked by `object_receiver`, nothing ran since.

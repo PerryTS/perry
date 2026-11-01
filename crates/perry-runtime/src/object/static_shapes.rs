@@ -598,6 +598,7 @@ pub(crate) fn note_static_request(path: &str, requested: u32, got: u32) {
 
 /// The census line, off the startup path: formatting is paid only with the knob on.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn print_static_request(path: &str, requested: u32, got: u32) {
     let verdict = if requested == got { "hit" } else { "miss" };

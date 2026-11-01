@@ -213,6 +213,7 @@ pub unsafe extern "C" fn js_register_function_metadata(
 /// # Safety
 /// `bounds` names the records section of a loaded image.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn copy_image(bounds: &FunctionRecordBounds) -> &'static [&'static OwnerState] {
     let mut states: Vec<&'static OwnerState> = Vec::new();

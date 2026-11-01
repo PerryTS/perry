@@ -710,6 +710,7 @@ pub(super) fn verify_array_pointer_slots_enumerated_report(phase: &str) {
 /// the old→young gate checks: the shape record's keys word the layout also
 /// yields is a shared runtime root with its own scanner.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn verify_image_cell_child_marks(
     stats: &mut MarkInvariantVerifyStats,

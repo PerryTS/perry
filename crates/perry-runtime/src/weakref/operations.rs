@@ -19,6 +19,7 @@ impl Receiver {
     }
 
     #[cold]
+    #[optimize(size)]
     #[inline(never)]
     fn reject(self, receiver: f64, method: &str, args: &[f64]) -> f64 {
         match self {

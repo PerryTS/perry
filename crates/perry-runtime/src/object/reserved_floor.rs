@@ -98,6 +98,7 @@ pub(crate) unsafe fn runtime_receiver_declines_key_add(obj: *mut ObjectHeader) -
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn runtime_band_receiver_declines(obj: *mut ObjectHeader) -> bool {
     (*obj).class_id == super::NATIVE_MODULE_CLASS_ID || reserved_floor_unseeded(obj)

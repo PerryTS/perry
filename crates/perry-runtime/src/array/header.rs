@@ -530,6 +530,7 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
 /// of raw words, forwarding chains, lazy arrays and the sparse/buffer
 /// exceptions. One out-of-line copy shared by every caller.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn clean_arr_ptr_resolve(arr: *const ArrayHeader) -> *const ArrayHeader {
     let bits = arr as u64;

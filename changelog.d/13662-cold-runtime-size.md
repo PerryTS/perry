@@ -1,0 +1,1 @@
+Reduce runtime code size by applying size optimization to existing out-of-line cold helpers while retaining speed optimization on hot paths. Add the public scan reproducer and size/instruction/cycle/timing measurements for #13662; no side tables or caches.

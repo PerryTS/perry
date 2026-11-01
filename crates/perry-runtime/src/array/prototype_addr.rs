@@ -297,6 +297,7 @@ fn resolve_prototype_addr(slot: usize) -> usize {
 /// write — is a slot load, a compare and a branch, with the whole `globalThis`
 /// walk off the fast path.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn bootstrap_prototype_addr(slot: usize) -> usize {
     if slot == OBJECT_PROTO_CACHE {

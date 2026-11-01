@@ -158,6 +158,7 @@ fn countdown(bytes: usize, interval: usize) -> bool {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn note_slow(total: usize, obj_type: u8, interval: usize) {
     if countdown(total, interval) {
@@ -178,6 +179,7 @@ pub(crate) fn note_inline_sync(block_offset: usize, inline_offset: usize) {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn note_inline_slow(bytes: usize, interval: usize) {
     if countdown(bytes, interval) {
