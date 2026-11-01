@@ -139,6 +139,7 @@ pub(crate) mod field_get_set;
 pub(crate) mod overflow;
 pub(crate) use field_get_set::scan_accessor_receiver_override_root_mut;
 mod field_set_by_name;
+pub(crate) mod function_own_put;
 mod gc_slots;
 pub(crate) use gc_slots::{
     gc_field_slot_range, gc_shape_keys_edge_slot, gc_shape_prototype_edge_slot,

@@ -1826,6 +1826,7 @@ pub unsafe extern "C" fn perry_probe_set(
 mod write;
 use write::hole_fill_admitted;
 pub(crate) use write::layouts_admit_add;
+pub(crate) use write::{function_link_admits_add, function_put_plan, FunctionPut};
 use write::probe_add;
 
 #[path = "layout_probe/computed.rs"]
