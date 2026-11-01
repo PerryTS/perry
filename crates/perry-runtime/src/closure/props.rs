@@ -55,7 +55,9 @@ pub(crate) unsafe fn closure_has_generator_body(closure: *const ClosureHeader) -
 /// birth bound would otherwise go to the spill buffer. A bag born holding a
 /// known key set (builtin metadata, `closure_define_first_props`) is born
 /// exact: room there only re-publishes its shape at a later add.
-pub(crate) const BAG_ROOM: u32 = 6;
+/// Two slots: measured on Supabase startup (0: 6.015 G, 2: 5.998 G, 4 and 6:
+/// 6.27 G, the larger bags cost one more minor collection).
+pub(crate) const BAG_ROOM: u32 = 2;
 
 const STATE_PROTO: &str = "p";
 const DELETED_PREFIX: &str = "d:";
