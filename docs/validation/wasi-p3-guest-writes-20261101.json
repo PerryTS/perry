@@ -194,5 +194,20 @@
     "Complete current provider, HTTP and shared-provider ALS matrix",
     "Current nine-command regressions, instrumented native release artifacts, macOS/Windows packages, required CI, full lint or merge",
     "Later ABI inventory/scanner follow-up commits"
-  ]
+  ],
+  "additionalPlainArchiveControl": {
+    "source": "fb38e46cf49e3bc85e05c41f6bdb0390f604f6b8",
+    "subjectExitCode": 1,
+    "expectedFailureReason": "built without the GC instruments",
+    "executedSeparatelyAgainstFrozenV109Artifacts": true,
+    "maintainedAcceptanceNowRequiresControl": true,
+    "evidence": {
+      "archive": "wasi-030-v110-evidence.tar.gz",
+      "bytes": 2041,
+      "sha256": "a1da7cf959c735879beca9723820b7bb6ac8167e3b93a0415398cb2c27434599",
+      "indexedFiles": 3,
+      "archiveAndEveryIndexedMemberVerifiedLocally": true,
+      "exactRegularFileSetVerified": true
+    }
+  }
 }

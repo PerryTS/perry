@@ -104,7 +104,10 @@ producers finish; host reads then advance the producers without another guest
 export call. Partial write suffixes, cancellation/retry, explicit stream close,
 nine completed producers and zero producer failures are asserted. The moving
 guest copies 12,032 objects with evacuation verification; native host controls
-remain off. Actual resource-bearing endpoint I/O, the wider lifecycle matrix
+remain off. A separate control against these frozen artifacts confirms the
+plain archive rejects instrumentation grants for the expected reason; the
+maintained acceptance script now requires that additional control.
+Actual resource-bearing endpoint I/O, the wider lifecycle matrix
 and private producer scheduling behind synchronous public factories remain.
 
 | Requirement | Required evidence | Current state |
