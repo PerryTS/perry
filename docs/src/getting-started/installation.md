@@ -75,7 +75,7 @@ npx -y @perryts/perry compile src/main.ts -o myapp
 | Linux arm64 (musl / Alpine) | `@perryts/perry-linux-arm64-musl` |
 | Windows x64 | `@perryts/perry-win32-x64` |
 
-Cross-target libraries (`--target android`, `ios`, `wasi`, ...) are separate packages, one per target, at the same version as perry: `npm install -g @perryts/perry-target-<triple>@<perry version>`, for example `@perryts/perry-target-aarch64-linux-android`. `perry compile --target` prints the exact command when one is missing; `perry target add <target>` installs the same package without npm.
+Cross-target libraries (`--target android`, `ios`, `wasi`, ...) are separate packages, one per target, at the same version as perry: `npm install -g @perryts/perry-target-<triple>@<perry version>`, for example `@perryts/perry-target-aarch64-linux-android`. `perry compile --target` prints the exact command when one is missing; `perry target add <target>` installs the same package without npm. Native-extension archives (node:http, ws, zlib, ...) ship in `@perryts/perry-ext-<triple>`, which perry downloads by itself the first time a compile needs one (`PERRY_NO_AUTO_FETCH=1` turns that off; `perry target add --ext` installs it ahead of time).
 
 #### Linux glibc requirement
 

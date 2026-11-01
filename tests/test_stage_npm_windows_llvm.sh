@@ -19,10 +19,11 @@ mkdir -p \
   "$WIN_ARTIFACT"
 
 cp "$REPO_ROOT/scripts/stage-npm.sh" "$FIXTURE_REPO/scripts/stage-npm.sh"
-# stage-npm.sh reads the target triples from constants.mts (SKIP_MISSING=1
-# skips their absent bundles here).
+# stage-npm.sh reads the target and ext triples from constants.mts, which
+# reads npm/packaged-triples.json (SKIP_MISSING=1 skips their absent inputs).
 cp "$REPO_ROOT/scripts/publish/constants.mts" "$REPO_ROOT/scripts/publish/stage-target.mts" \
   "$FIXTURE_REPO/scripts/publish/"
+cp "$REPO_ROOT/npm/packaged-triples.json" "$FIXTURE_REPO/npm/packaged-triples.json"
 cp "$REPO_ROOT/npm/perry/package.json.tmpl" "$FIXTURE_REPO/npm/perry/package.json.tmpl"
 cp "$REPO_ROOT/npm/perry/bin/perry.js" "$FIXTURE_REPO/npm/perry/bin/perry.js"
 cp "$REPO_ROOT/npm/perry-win32-x64/package.json.tmpl" \
