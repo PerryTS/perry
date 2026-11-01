@@ -313,3 +313,96 @@ fn sibling_facade_rebuilds_public_interfaces_without_replacing_their_resource_id
     };
     assert!(types[later].is_async);
 }
+
+#[test]
+fn repeated_interface_labels_keep_exact_resource_dependencies() {
+    let foreign = r#"(type $foreign (instance
+        (export "item" (type $item (sub resource)))
+        (type $own (own $item))
+        (type $record (record (field "owner" $own) (field "label" string)))
+        (export "payload" (type $payload (eq $record)))))"#;
+    let api = r#"(type $api (instance
+        (alias outer 1 $payload (type $outer))
+        (export "payload" (type $value (eq $outer)))
+        (type $future (future $value))
+        (export "pending" (type $pending (eq $future)))
+        (export "make" (func (param "value" $value) (result $pending)))))"#;
+    let producer = wat::parse_str(format!(
+        r#"(component {foreign}
+        (import "left" (implements "test:shared/foreign") (instance $foreign (type $foreign)))
+        (import "right" (implements "test:shared/foreign") (instance (type $foreign)))
+        (alias export $foreign "payload" (type $payload))
+        {api}
+        (import "api-input" (instance $api (type $api)))
+        (import "start" (func $kick async))
+        (export "test:shared/api" (instance $api))
+        (export "actor" (func $kick))
+        (export "signal" (func $kick)))"#
+    ))
+    .unwrap();
+    let facade = |wrong: bool| {
+        wat::parse_str(format!(
+            r#"(component {foreign}
+        (import "left" (implements "test:shared/foreign") (instance $foreign (type $foreign)))
+        (import "right" (implements "test:shared/foreign") (instance $other (type $foreign)))
+        (alias export ${which} "payload" (type $payload))
+        {api}
+        (import "source" (instance $source (type $api)))
+        (import "kick" (func async))
+        (alias export $source "make" (func $make))
+        (instance $forward (export "forward" (func $make)))
+        (export "forwarder" (instance $forward)))"#,
+            which = if wrong { "other" } else { "foreign" }
+        ))
+        .unwrap()
+    };
+    let plan = serde_json::to_vec(&serde_json::json!({
+        "schema_version":1, "actor":"actor", "signal":"signal", "forward_interface":"forwarder",
+        "imports":[{"local":"source","original":"test:shared/api"},{"local":"kick","original":"actor"}],
+        "forwards":[{"interface":"test:shared/api","function":"make","export":"forward"}]
+    })).unwrap();
+    Validator::new_with_features(WasmFeatures::all())
+        .validate_all(&producer)
+        .unwrap();
+    let bytes = compose_experimental_guest(&producer, &facade(false), &plan).unwrap();
+    let mut types = Types::default();
+    let package = Package::from_bytes("test:shared-result", None, bytes, &mut types).unwrap();
+    assert_eq!(types[package.ty()].exports.len(), 1);
+    let imports = &types[package.ty()].imports;
+    assert_eq!(
+        imports.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+        BTreeSet::from(["left", "right", "api-input", "start"])
+    );
+    let resource = |label: &str| {
+        let ItemKind::Instance(id) = imports[label] else {
+            panic!("resource interface")
+        };
+        let ItemKind::Type(Type::Resource(id)) = types[id].exports["item"] else {
+            panic!("resource type")
+        };
+        types.resolve_resource(id)
+    };
+    assert_ne!(resource("left"), resource("right"));
+    let ItemKind::Instance(api) = types[package.ty()].exports["test:shared/api"] else {
+        panic!("public API")
+    };
+    let ItemKind::Type(Type::Value(payload)) = types[api].exports["payload"] else {
+        panic!("record type")
+    };
+    let ValueType::Defined(record) = types.resolve_value_type(payload) else {
+        panic!("record type")
+    };
+    let wac_graph::types::DefinedType::Record(record) = &types[record] else {
+        panic!("record payload")
+    };
+    let ValueType::Own(owner) = types.resolve_value_type(record.fields["owner"]) else {
+        panic!("record owner")
+    };
+    assert_eq!(types.resolve_resource(owner), resource("left"));
+
+    let error = compose_experimental_guest(&producer, &facade(true), &plan).unwrap_err();
+    assert!(
+        format!("{error:#}").to_lowercase().contains("resource"),
+        "{error:#}"
+    );
+}
