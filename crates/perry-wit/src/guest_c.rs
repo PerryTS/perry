@@ -200,11 +200,8 @@ impl Generator<'_> {
         self.source.push_str(
             "static void *perry_initialize(void);\nstatic void perry_endpoint_flush(void);\n",
         );
-        if let Some(anchor) = &self.anchor {
-            self.source.push_str(&asynchronous::scheduler(
-                &self.resolve.worlds[self.id].name.to_snake_case(),
-                anchor,
-            ));
+        if self.anchor.is_some() {
+            self.source.push_str("/* PERRY_ASYNC_SCHEDULER */\n");
         }
         let world = &self.resolve.worlds[self.id];
         // Match WorldGenerator's visitation order, including the separate
@@ -239,6 +236,26 @@ impl Generator<'_> {
                 }
             }
             self.define(live, None, import);
+            if !import {
+                if let Some(anchor) = &self.anchor {
+                    let WorldItem::Function(function) =
+                        &world.exports[&WorldKey::Name(anchor.clone())]
+                    else {
+                        unreachable!()
+                    };
+                    let Some(wit_parser::Type::Id(signal)) = function.result else {
+                        unreachable!()
+                    };
+                    // Resolve the signal through the same C-name visitation as
+                    // every other value; it may belong to an imported interface.
+                    let signal = self.names[&signal].strip_suffix("_t").unwrap();
+                    self.source = self.source.replacen(
+                        "/* PERRY_ASYNC_SCHEDULER */\n",
+                        &asynchronous::scheduler(&world.name.to_snake_case(), anchor, signal),
+                        1,
+                    );
+                }
+            }
             for item in items.values() {
                 if let WorldItem::Function(function) = item {
                     if !import && self.anchor.as_deref() == Some(&function.name) {

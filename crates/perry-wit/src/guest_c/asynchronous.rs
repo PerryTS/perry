@@ -8,24 +8,16 @@ pub(super) fn add_wake_anchor(resolve: &mut Resolve, id: WorldId) -> Result<Stri
     let mut n = 0;
     let name = loop {
         let candidate = format!("perry-scheduler-signal-{n}");
-        let stream = format!("{candidate}-stream");
         if !resolve.worlds[id]
             .exports
             .contains_key(&WorldKey::Name(candidate.clone()))
             && !resolve.worlds[id]
                 .imports
                 .contains_key(&WorldKey::Name(candidate.clone()))
-            && !resolve.types.iter().any(|(_, ty)| {
-                ty.name
-                    .as_deref()
-                    .is_some_and(|name| name == candidate || name == stream)
-            })
-            && !resolve.worlds[id]
-                .imports
-                .contains_key(&WorldKey::Name(stream.clone()))
-            && !resolve.worlds[id]
-                .exports
-                .contains_key(&WorldKey::Name(stream))
+            && !resolve
+                .types
+                .iter()
+                .any(|(_, ty)| ty.name.as_deref() == Some(&candidate))
         {
             break candidate;
         }
@@ -33,16 +25,25 @@ pub(super) fn add_wake_anchor(resolve: &mut Resolve, id: WorldId) -> Result<Stri
     };
     // Append after converting the public world: existing nominal/resource IDs,
     // function indices and the serialized contract stay unchanged.
-    let signal = resolve.types.alloc(wit_parser::TypeDef {
-        // A private name keeps its helper symbols distinct from public unit
-        // streams, including unit streams owned by imported interfaces.
-        name: Some(format!("{name}-stream")),
-        kind: TypeDefKind::Stream(None),
-        owner: wit_parser::TypeOwner::None,
-        docs: Default::default(),
-        stability: wit_parser::Stability::Unknown,
-        span: Default::default(),
-        external_id: None,
+    // Reuse a reachable anonymous unit stream. Allocating a second equivalent
+    // anonymous type makes the maintained backend emit duplicate C helpers.
+    // Naming a private type instead would introduce a public WIT type export.
+    let mut live = LiveTypes::default();
+    live.add_world(resolve, id);
+    let existing = live.iter().find(|ty| {
+        resolve.types[*ty].name.is_none()
+            && matches!(resolve.types[*ty].kind, TypeDefKind::Stream(None))
+    });
+    let signal = existing.unwrap_or_else(|| {
+        resolve.types.alloc(wit_parser::TypeDef {
+            name: None,
+            kind: TypeDefKind::Stream(None),
+            owner: wit_parser::TypeOwner::None,
+            docs: Default::default(),
+            stability: wit_parser::Stability::Unknown,
+            span: Default::default(),
+            external_id: None,
+        })
     });
     let function = Function {
         name: name.clone(),
@@ -60,10 +61,10 @@ pub(super) fn add_wake_anchor(resolve: &mut Resolve, id: WorldId) -> Result<Stri
     Ok(name)
 }
 
-pub(super) fn scheduler(world: &str, anchor: &str) -> String {
+pub(super) fn scheduler(world: &str, anchor: &str, signal: &str) -> String {
     include_str!("scheduler.h")
         .replace("$W", world)
-        .replace("$S", &format!("{world}_{}_stream", anchor.to_snake_case()))
+        .replace("$S", signal)
         .replace("$U", &world.to_uppercase())
         .replace("$ANCHOR", &anchor.to_snake_case())
 }

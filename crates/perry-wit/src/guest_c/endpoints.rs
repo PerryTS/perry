@@ -115,7 +115,7 @@ mod tests {
     fn scheduler_signal_type_and_function_names_avoid_public_names() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("world.wit");
-        std::fs::write(&path, "package test:signal-names; world plugin { type perry-scheduler-signal-0-stream = u32; export perry-scheduler-signal-1: func(); export work: async func(value: stream) -> stream; }").unwrap();
+        std::fs::write(&path, "package test:signal-names; world plugin { type perry-scheduler-signal-0 = u32; export perry-scheduler-signal-1: func(); export work: async func(value: stream) -> stream; }").unwrap();
         let files = experimental_async_guest(&path, None).unwrap();
         let (_, metadata) = wit_component::metadata::decode(&files["plugin_component_type.o"])
             .expect("type and function namespaces must remain valid");
