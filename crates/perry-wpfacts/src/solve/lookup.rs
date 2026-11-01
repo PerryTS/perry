@@ -265,6 +265,13 @@ impl Model {
                 self.add_prim(dst, prim::UNDEF);
                 return;
             }
+            // DECISIONS 235: an element key is a number, never
+            // `constructor`: ⊤ read under it is ⊤, not the Function
+            // constructor.
+            if t == TOP {
+                self.add_tok(dst, TOP);
+                return;
+            }
             return self.load_from(origin, t, Key::Any, dst);
         }
         if t == TOP {
