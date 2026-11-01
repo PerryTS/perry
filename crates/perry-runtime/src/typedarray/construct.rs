@@ -259,7 +259,7 @@ unsafe fn typed_array_plain_object_values(val: f64) -> Vec<f64> {
         let bound_rooted = scope.root_nanbox_u64(bound);
         let iter = crate::closure::js_native_call_value(
             bound_rooted.get_nanbox_f64(),
-            crate::closure::plain_call_receiver(),
+            crate::closure::JsThis::from_f64(rooted.get_nanbox_f64()),
             ptr::null(),
             0,
         );
