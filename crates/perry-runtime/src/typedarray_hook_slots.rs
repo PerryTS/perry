@@ -75,9 +75,8 @@ pub(crate) extern "C" fn js_typed_array_copy_within(
         |run| run(ta, target_value, start_value, end_value),
     )
 }
-static JS_TYPED_ARRAY_EVERY: Hook<
-    fn(*const TypedArrayHeader, *const ClosureHeader, f64) -> f64,
-> = Hook::empty();
+static JS_TYPED_ARRAY_EVERY: Hook<fn(*const TypedArrayHeader, *const ClosureHeader, f64) -> f64> =
+    Hook::empty();
 pub(crate) fn js_typed_array_every(
     ta: *const TypedArrayHeader,
     callback: *const ClosureHeader,
@@ -116,9 +115,8 @@ pub(crate) fn js_typed_array_filter(
         .get()
         .map_or_else(|| std::ptr::null_mut(), |run| run(ta, callback, this_arg))
 }
-static JS_TYPED_ARRAY_FIND: Hook<
-    fn(*const TypedArrayHeader, *const ClosureHeader, f64) -> f64,
-> = Hook::empty();
+static JS_TYPED_ARRAY_FIND: Hook<fn(*const TypedArrayHeader, *const ClosureHeader, f64) -> f64> =
+    Hook::empty();
 pub(crate) fn js_typed_array_find(
     ta: *const TypedArrayHeader,
     callback: *const ClosureHeader,
@@ -348,9 +346,8 @@ pub(crate) extern "C" fn js_typed_array_slice(
         .get()
         .map_or_else(|| std::ptr::null_mut(), |run| run(ta, start, end))
 }
-static JS_TYPED_ARRAY_SOME: Hook<
-    fn(*const TypedArrayHeader, *const ClosureHeader, f64) -> f64,
-> = Hook::empty();
+static JS_TYPED_ARRAY_SOME: Hook<fn(*const TypedArrayHeader, *const ClosureHeader, f64) -> f64> =
+    Hook::empty();
 pub(crate) fn js_typed_array_some(
     ta: *const TypedArrayHeader,
     callback: *const ClosureHeader,

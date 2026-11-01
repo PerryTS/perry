@@ -28,9 +28,9 @@ mod resolved_read_tests;
 pub(crate) use crate::byte_cell_support::shared_access;
 mod slice_ops;
 #[cfg(test)]
-mod thread_exit_tests;
-#[cfg(test)]
 mod this_arg_tests;
+#[cfg(test)]
+mod thread_exit_tests;
 mod transform;
 
 // `#[no_mangle] pub extern "C"` FFI entry points are compiled regardless (the
@@ -45,26 +45,26 @@ pub use access::{
 };
 pub(crate) use construct::typed_array_from_source_raw_values;
 pub use construct::{js_typed_array_new, js_typed_array_new_empty, js_typed_array_new_from_array};
-pub(crate) use iterate::{
-    typed_array_every_this, typed_array_filter_this, typed_array_find_index_this,
-    typed_array_find_this, typed_array_for_each_this, typed_array_map_this, typed_array_some_this,
-};
 pub use iterate::{
     js_typed_array_every, js_typed_array_filter, js_typed_array_find, js_typed_array_find_index,
     js_typed_array_for_each, js_typed_array_map, js_typed_array_reduce,
     js_typed_array_reduce_right, js_typed_array_some,
 };
+pub(crate) use iterate::{
+    typed_array_every_this, typed_array_filter_this, typed_array_find_index_this,
+    typed_array_find_this, typed_array_for_each_this, typed_array_map_this, typed_array_some_this,
+};
 pub use slice_ops::{
     js_typed_array_fill, js_typed_array_join, js_typed_array_join_value, js_typed_array_reverse,
     js_typed_array_slice, js_typed_array_subarray,
 };
-pub(crate) use transform::{typed_array_find_last_index_this, typed_array_find_last_this};
 pub use transform::{
     js_typed_array_find_last, js_typed_array_find_last_index, js_typed_array_sort_default,
     js_typed_array_sort_with_comparator, js_typed_array_to_reversed,
     js_typed_array_to_sorted_default, js_typed_array_to_sorted_with_comparator,
     js_typed_array_with, typed_array_to_array,
 };
+pub(crate) use transform::{typed_array_find_last_index_this, typed_array_find_last_this};
 
 // Element kind tags. Match the order used by HIR/codegen.
 pub const KIND_INT8: u8 = 0;

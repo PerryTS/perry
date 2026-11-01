@@ -831,7 +831,11 @@ pub(crate) unsafe fn dispatch_uint8_buffer_method(
             receiver
         }
         "map" => {
-            let cb = RootedCallback3::with_this(&scope, validate_callback(args), arg_or_undefined(args, 1));
+            let cb = RootedCallback3::with_this(
+                &scope,
+                validate_callback(args),
+                arg_or_undefined(args, 1),
+            );
             // `uint8_alloc_like` allocates, so the receiver read is
             // sequenced AFTER it.
             // Keep the fresh output live while the callback can run a full
@@ -848,7 +852,11 @@ pub(crate) unsafe fn dispatch_uint8_buffer_method(
             out.live().1
         }
         "filter" => {
-            let cb = RootedCallback3::with_this(&scope, validate_callback(args), arg_or_undefined(args, 1));
+            let cb = RootedCallback3::with_this(
+                &scope,
+                validate_callback(args),
+                arg_or_undefined(args, 1),
+            );
             let (addr, receiver) = recv.live();
             let mut kept = Vec::new();
             for i in 0..len {
@@ -865,7 +873,11 @@ pub(crate) unsafe fn dispatch_uint8_buffer_method(
             pointer_value(out as usize)
         }
         "every" => {
-            let cb = RootedCallback3::with_this(&scope, validate_callback(args), arg_or_undefined(args, 1));
+            let cb = RootedCallback3::with_this(
+                &scope,
+                validate_callback(args),
+                arg_or_undefined(args, 1),
+            );
             let (addr, receiver) = recv.live();
             for i in 0..len {
                 let value = uint8_get(addr, i) as f64;
@@ -877,7 +889,11 @@ pub(crate) unsafe fn dispatch_uint8_buffer_method(
             bool_value(true)
         }
         "some" => {
-            let cb = RootedCallback3::with_this(&scope, validate_callback(args), arg_or_undefined(args, 1));
+            let cb = RootedCallback3::with_this(
+                &scope,
+                validate_callback(args),
+                arg_or_undefined(args, 1),
+            );
             let (addr, receiver) = recv.live();
             for i in 0..len {
                 let value = uint8_get(addr, i) as f64;
@@ -894,7 +910,11 @@ pub(crate) unsafe fn dispatch_uint8_buffer_method(
         // node: `2`). Its sibling `findLastIndex` was already served below,
         // which is why the hole survived: the two are always cited together.
         "find" | "findLast" => {
-            let cb = RootedCallback3::with_this(&scope, validate_callback(args), arg_or_undefined(args, 1));
+            let cb = RootedCallback3::with_this(
+                &scope,
+                validate_callback(args),
+                arg_or_undefined(args, 1),
+            );
             let (addr, receiver) = recv.live();
             let indexes: Box<dyn Iterator<Item = usize>> = if method == "find" {
                 Box::new(0..len)
@@ -911,7 +931,11 @@ pub(crate) unsafe fn dispatch_uint8_buffer_method(
             undefined()
         }
         "findIndex" | "findLastIndex" => {
-            let cb = RootedCallback3::with_this(&scope, validate_callback(args), arg_or_undefined(args, 1));
+            let cb = RootedCallback3::with_this(
+                &scope,
+                validate_callback(args),
+                arg_or_undefined(args, 1),
+            );
             let (addr, receiver) = recv.live();
             let indexes: Box<dyn Iterator<Item = usize>> = if method == "findIndex" {
                 Box::new(0..len)
@@ -928,7 +952,11 @@ pub(crate) unsafe fn dispatch_uint8_buffer_method(
             -1.0
         }
         "forEach" => {
-            let cb = RootedCallback3::with_this(&scope, validate_callback(args), arg_or_undefined(args, 1));
+            let cb = RootedCallback3::with_this(
+                &scope,
+                validate_callback(args),
+                arg_or_undefined(args, 1),
+            );
             let (addr, receiver) = recv.live();
             for i in 0..len {
                 let value = uint8_get(addr, i) as f64;
