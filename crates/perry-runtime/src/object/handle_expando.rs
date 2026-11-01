@@ -147,6 +147,26 @@ pub(crate) fn handle_expando_delete(handle: i64, name: &str) -> bool {
     crate::object::js_object_delete_field(bag, key) != 0
 }
 
+/// Ordinary [[Get]] order for a native handle: an own property in the
+/// handle's bag shadows every prototype member the typed handle dispatchers
+/// answer (`res.writeHead = hook` must read back `hook`, not the intrinsic).
+/// `None` when the bag has no such own property.
+///
+/// # Safety
+/// `name_ptr` must point at `name_len` readable bytes (or be null).
+pub unsafe fn handle_own_property_get(
+    handle: i64,
+    name_ptr: *const u8,
+    name_len: usize,
+) -> Option<f64> {
+    if name_ptr.is_null() || name_len == 0 || !super::class_handles::native_property_bag_published()
+    {
+        return None;
+    }
+    let name = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)).ok()?;
+    handle_expando_get(handle, name)
+}
+
 /// True when the handle has at least one user-assigned expando property.
 #[allow(dead_code)]
 pub fn handle_expando_has_any(handle: i64) -> bool {

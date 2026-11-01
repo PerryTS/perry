@@ -50,6 +50,7 @@ use bare_receiver::{
 use disposal::{
     js_using_check_disposable, try_disposable_stack_method_dispatch, try_symbol_dispose_dispatch,
 };
+pub(crate) use handle_methods::try_dispatch_handle_method_value;
 #[cfg(any(test, target_os = "wasi"))]
 pub(crate) use namespace_override::namespace_override_depth;
 #[cfg(test)]
