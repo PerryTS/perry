@@ -123,6 +123,12 @@ pub const ATOM_KIND_PROGRAM_SYMBOL: u8 = 2;
 /// its registry key, `hash` the compiler's hash of it (a key index position
 /// only: the runtime resolves the symbol through the registry).
 pub const ATOM_KIND_REGISTERED_SYMBOL: u8 = 3;
+/// The index hash of the runtime's `n`-th own symbol atom (a kind-2 atom
+/// of node's library, `perry_runtime_symbol_atom_<n>`). The runtime's
+/// declaration and the compiler's emitted descriptors both read it here.
+pub const fn runtime_symbol_atom_hash(n: u32) -> u64 {
+    0x9e37_79b9_7f4a_7c15u64.wrapping_mul(n as u64 + 0x100)
+}
 /// `StaticAtom.kind`: a module-local symbol (a top-level `const k =
 /// Symbol(desc)` of the program) as a key of a carried prototype layout;
 /// `string` is null, `hash` the compiler's hash of the binding (a key index
