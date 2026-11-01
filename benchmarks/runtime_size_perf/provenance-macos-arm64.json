@@ -1,0 +1,149 @@
+{
+  "base_commit": "ee0d9183d4496489dd4532247a64c66b57969230",
+  "rustc": "rustc 1.101.0-nightly (db8f076d2 2026-10-03)\nbinary: rustc\ncommit-hash: db8f076d2619ce2585b0380dda06e8da25a40da4\ncommit-date: 2026-10-03\nhost: aarch64-apple-darwin\nrelease: 1.101.0-nightly\nLLVM version: 23.1.1\n",
+  "node": "v26.12.1",
+  "platform": "ProductName:\t\tmacOS\nProductVersion:\t\t26.5\nBuildVersion:\t\t25F71\n",
+  "features": "perry-runtime/keepalive-anchors,perry-stdlib/async-bridge",
+  "app_environment": {
+    "PERRY_LL_OPT_LEVEL": "2",
+    "PERRY_SPECIALIZED_ABI": "1",
+    "PERRY_KEEP_SYMBOLS": "1",
+    "PERRY_NO_CACHE": "1"
+  },
+  "cpu": "Apple M1 Max",
+  "date": "2026-11-01",
+  "compiler_llvm": "22.1.8",
+  "runtime_patch_sha256": "f6343b8d546a1adbdb8327b2d03a850b98e1313bd474f9547607cf311e7bb0e5",
+  "scheduler": "taskpolicy -t 0 -l 0 (hint, not hard CPU affinity)",
+  "rustflags": [
+    "-C",
+    "force-unwind-tables=yes",
+    "-Z",
+    "use-sync-unwind=yes"
+  ],
+  "full_application_features": "perry-runtime/keepalive-anchors,perry-runtime/regex-engine,perry-stdlib/async-bridge",
+  "full_application_function_source": "header",
+  "archives": {
+    "speed": {
+      "libperry_runtime.a": {
+        "sha256": "3530d24fba77aebf2f6e841ec3d72189cbc4f5863d330f3a73329574697ea631",
+        "bytes": 32353328
+      },
+      "libperry_stdlib.a": {
+        "sha256": "ee53a5ce6ca79d320a98a08721085682c6c82be02ad740859c59c9a03c085567",
+        "bytes": 33156904
+      }
+    },
+    "cold": {
+      "libperry_runtime.a": {
+        "sha256": "2f35c1416a54e825f77a07966b46d9561003755073882f53c470cdcc0dfb35ea",
+        "bytes": 32353880
+      },
+      "libperry_stdlib.a": {
+        "sha256": "7d7a3cd21ee70829b99e54aadd2d199c69a1d8aae03737503b1712c0fee99b8c",
+        "bytes": 33157288
+      }
+    },
+    "oz": {
+      "libperry_runtime.a": {
+        "sha256": "e88f4353006d422995fa24d44c3552d7a13bc4c2b9d8cf145c49787eba47118e",
+        "bytes": 27296704
+      },
+      "libperry_stdlib.a": {
+        "sha256": "32407069240f49dc152ee49a0b8b0a28c843c06ad46367a54403062119461003",
+        "bytes": 27934008
+      }
+    },
+    "full-speed": {
+      "libperry_runtime.a": {
+        "sha256": "33ebf0672f729dcc7f63fba0589ae66ac5e856394de5f541d5cd877b84d12344",
+        "bytes": 33292144
+      },
+      "libperry_stdlib.a": {
+        "sha256": "6620a1a6b7f1b295d815b6556eea4f597ae3c7bf7401d2d4f4a369b10cd99ac4",
+        "bytes": 34095568
+      }
+    },
+    "full-cold": {
+      "libperry_runtime.a": {
+        "sha256": "7092461fd91aadc16f92de56a9558310eaacf25e2ff43ec2062f443fc0a24d5d",
+        "bytes": 33291992
+      },
+      "libperry_stdlib.a": {
+        "sha256": "aa156656b72c1e5dae1ab9830985ba95d86876a190e8a99155e780551ddf4912",
+        "bytes": 34095304
+      }
+    }
+  },
+  "hot_helpers": {
+    "speed": {
+      "_js_array_get_f64": {
+        "instructions": 469,
+        "outlined_calls": 0
+      },
+      "_js_array_length": {
+        "instructions": 518,
+        "outlined_calls": 0
+      },
+      "_js_array_record_stack_enter": {
+        "instructions": 176,
+        "outlined_calls": 0
+      }
+    },
+    "cold": {
+      "_js_array_get_f64": {
+        "instructions": 469,
+        "outlined_calls": 0
+      },
+      "_js_array_length": {
+        "instructions": 518,
+        "outlined_calls": 0
+      },
+      "_js_array_record_stack_enter": {
+        "instructions": 176,
+        "outlined_calls": 0
+      }
+    },
+    "oz": {
+      "_js_array_get_f64": {
+        "instructions": 227,
+        "outlined_calls": 48
+      },
+      "_js_array_length": {
+        "instructions": 269,
+        "outlined_calls": 59
+      },
+      "_js_array_record_stack_enter": {
+        "instructions": 97,
+        "outlined_calls": 29
+      }
+    }
+  },
+  "symbol_extents": {
+    "speed": {
+      "_js_array_length": 2072,
+      "_js_array_get_f64": 1888,
+      "perry_runtime::object::global_this::populate::populate_global_this_builtins_inner": 24940,
+      "perry_runtime::object::global_this::install_static::install_builtin_constructor_statics": 6844,
+      "perry_runtime::object::global_this::proto_methods::populate_builtin_prototype_methods": 11552,
+      "_js_array_record_stack_enter": 704
+    },
+    "cold": {
+      "_js_array_length": 2072,
+      "_js_array_get_f64": 1888,
+      "perry_runtime::object::global_this::populate::populate_global_this_builtins_inner": 15660,
+      "perry_runtime::object::global_this::install_static::install_builtin_constructor_statics": 4564,
+      "perry_runtime::object::global_this::proto_methods::populate_builtin_prototype_methods": 8960,
+      "perry_runtime::object::global_this::proto_methods::populate_builtin_prototype_methods::{closure#0}": 24,
+      "_js_array_record_stack_enter": 704
+    },
+    "oz": {
+      "_js_array_length": 1076,
+      "_js_array_get_f64": 908,
+      "perry_runtime::object::global_this::install_static::install_builtin_constructor_statics": 3356,
+      "perry_runtime::object::global_this::proto_methods::populate_builtin_prototype_methods": 7620,
+      "perry_runtime::object::global_this::populate::populate_global_this_builtins_inner": 10496,
+      "_js_array_record_stack_enter": 444
+    }
+  }
+}
