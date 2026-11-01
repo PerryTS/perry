@@ -245,6 +245,7 @@ pub(crate) fn subclass_backing_of(value: f64) -> Option<CollectionBacking> {
 /// This probe is a GC leaf: `subclass_backing_of` reads only the receiver's
 /// own internal backing field, without allocating a key or invoking JavaScript.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(crate) fn redirect_collection_receiver(addr: usize, want: CollectionKind) -> usize {
     let boxed = f64::from_bits(JSValue::pointer(addr as *const u8).bits());

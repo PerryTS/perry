@@ -65,6 +65,7 @@ impl ShapeRecord {
     /// existing extension has room for it; a plain record acquires the same
     /// extension, preserving its scalar rollback edge.
     #[cold]
+    #[optimize(size)]
     #[inline(never)]
     pub(in crate::object) fn note_created_birth_shape(&mut self, birth: LayoutWord) {
         self.note_handle_carrier(birth);

@@ -77,6 +77,7 @@ pub(crate) unsafe fn forward_with_explicit_this<R>(
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn forward_rooted<R>(
     target: f64,

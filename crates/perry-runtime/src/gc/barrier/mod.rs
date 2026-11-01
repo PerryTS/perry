@@ -1632,6 +1632,7 @@ fn precise_root_write_barrier(root: super::PreciseRoot) {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn precise_root_write_barrier_active(root: super::PreciseRoot) {
     let ptr = hot_incremental_mark_valid_ptrs().get();

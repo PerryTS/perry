@@ -628,6 +628,7 @@ pub(super) fn record_layout_child_slot_read(kind: HeapChildSlotReadKind) {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn record_layout_child_slot_read_armed(kind: HeapChildSlotReadKind) {
     if !layout_scan_trace_active() {

@@ -60,6 +60,7 @@ impl<T: ZeroEmpty, const N: usize> ZeroPages<T, N> {
     }
 
     #[cold]
+    #[optimize(size)]
     #[inline(never)]
     fn map(&self) -> *mut [T; N] {
         const { assert!(std::mem::align_of::<T>() <= 4096) };

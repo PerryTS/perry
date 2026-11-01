@@ -248,6 +248,7 @@ thread_local! {
 /// address of the state struct itself (a thread-local, fixed for the thread's
 /// lifetime) is cached per activation.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn grow_for(s: &mut ShadowStackState, need: usize) {
     // Arm the thread-exit free the first time this thread allocates.
@@ -317,6 +318,7 @@ unsafe fn clear_slots(p: *mut ShadowEntry, n: usize) {
 /// # Safety
 /// `p` must point at `n` writable, correctly-aligned `ShadowEntry`s.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn clear_large_frame_slots(p: *mut ShadowEntry, n: usize) {
     std::ptr::write_bytes(p, 0, n);
@@ -389,6 +391,7 @@ fn root_shading_barrier(value_bits: u64) {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn shade_root_slot_value(value_bits: u64) {
     crate::gc::runtime_write_barrier_root_nanbox(value_bits);

@@ -339,6 +339,7 @@ pub(crate) fn get_property_attrs_bytes(obj: usize, key: &[u8]) -> Option<Propert
 /// Default dense/length attributes come from the array's resolved header.
 /// Customized attributes have already been answered by its holder shape.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn array_integrity_attrs(arr: *const ArrayHeader, key: &str) -> Option<PropertyAttrs> {
     let flags = (*crate::gc::header_from_trusted_user_ptr(arr.cast()))._reserved;

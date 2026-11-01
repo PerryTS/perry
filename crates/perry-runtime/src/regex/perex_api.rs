@@ -945,6 +945,7 @@ fn exec_start(
 /// [`exec_start`] for a `lastIndex` that is not a Number, whose ToLength may
 /// run `valueOf` and so collect: the RegExp and the string are rooted across it.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn coerced_start(
     re: *mut RegExpHeader,

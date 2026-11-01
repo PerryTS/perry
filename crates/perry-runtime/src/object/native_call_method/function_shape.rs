@@ -100,6 +100,7 @@ pub(crate) unsafe fn try_function_shape_method_call(
 /// same name is left to the tower: calling it here would re-enter this path
 /// (#11700).
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn patched_slot_call(
     object: f64,
@@ -169,6 +170,7 @@ pub(crate) unsafe fn run_function_intrinsic(
 /// constructor goes to the class arm; anything else back to the tower. Out of
 /// line so the inlined arm stays small.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn function_shape_decline(
     object: f64,

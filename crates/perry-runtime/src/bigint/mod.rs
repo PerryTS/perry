@@ -51,6 +51,7 @@ fn throw_bigint_syntax_error(message: &str) -> ! {
 const MAX_BIGINT_BITS: u64 = 1 << 30;
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn throw_bigint_overflow() -> ! {
     throw_bigint_range_error("Maximum BigInt size exceeded");

@@ -34,6 +34,7 @@ pub(crate) fn register_static_layouts_in(program: &crate::codegen_abi::PerryProg
 /// The startup walk of an image with a lazy span. The span is one contiguous
 /// run of the section, so the walk goes around it and no row pays a test.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn register_around_lazy_span(program: &crate::codegen_abi::PerryProgramTableV1) {
     let (start, end) = layout_bounds();
@@ -123,6 +124,7 @@ pub(crate) unsafe fn layout_word_for_birth(desc: *const PerryLayoutDesc) -> Opti
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn install_runtime_layout(desc: *const PerryLayoutDesc) -> Option<()> {
     let requested = layout_id_of_index(descriptor_index(desc)?)?;

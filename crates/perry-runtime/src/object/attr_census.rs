@@ -65,6 +65,7 @@ pub(crate) fn armed() -> bool {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn resolve_arming() -> bool {
     let on = sink().is_some();

@@ -397,6 +397,7 @@ pub(crate) fn object_alloc_plain_born(
 
 /// [`object_alloc_plain_born`] through the collecting allocator.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn object_alloc_plain_born_slow(
     field_count: u32,

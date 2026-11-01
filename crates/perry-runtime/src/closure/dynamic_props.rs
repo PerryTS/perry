@@ -372,6 +372,7 @@ pub(crate) fn closure_get_dynamic_prop_keyed(
 /// Out of line and cold: only a function given a recorded prototype reaches
 /// it, so the keyed read's common path does not carry the walk.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn closure_proto_chain_get(
     ptr: usize,
@@ -496,6 +497,7 @@ fn closure_proto_chain_get(
 /// inherited read), keeping the reading function and receiver alive across
 /// the allocation. Returns both, re-read.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn cold_materialize_function_prototype(self_ptr: usize, receiver: f64) -> (usize, f64) {
     let scope = crate::gc::RuntimeHandleScope::new();

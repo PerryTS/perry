@@ -28,6 +28,7 @@ pub(crate) unsafe fn own_descriptors_skip_key(addr: usize, key: f64) -> bool {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn own_descriptors_skip_key_slow(addr: usize, key: f64) -> bool {
     let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];

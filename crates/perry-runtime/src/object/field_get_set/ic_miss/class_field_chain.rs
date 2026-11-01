@@ -110,6 +110,7 @@ pub(super) unsafe fn predecessor(receiver: f64) -> LayoutWord {
 /// prevent stable-ID mutable lists from changing its meaning later. IDs are
 /// never reused; a pruned target simply misses on the next construction.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(super) unsafe fn learn(predecessor: LayoutWord, receiver: f64, key: f64) {
     let Some((obj, _)) = receiver_record(receiver) else {

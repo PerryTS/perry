@@ -50,6 +50,7 @@ pub fn gc_header_size_word(total: usize) -> u32 {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn gc_header_size_overflow(total: usize) -> ! {
     panic!(

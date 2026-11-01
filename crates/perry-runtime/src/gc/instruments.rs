@@ -604,6 +604,7 @@ pub(crate) fn refuse_instrument_knobs_without_instruments() {
 
 #[cfg(not(perry_gc_instruments))]
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn instruments_unavailable(knob: &str) -> ! {
     use std::io::Write;

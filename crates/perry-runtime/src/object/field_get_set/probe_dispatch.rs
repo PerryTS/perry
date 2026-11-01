@@ -3,6 +3,7 @@
 use super::*;
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(super) unsafe fn symbol_property_if_registered(
     obj: *const ObjectHeader,
@@ -26,6 +27,7 @@ pub(super) unsafe fn symbol_property_if_registered(
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(super) unsafe fn set_property_if_registered(
     obj: *const ObjectHeader,

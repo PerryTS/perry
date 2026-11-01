@@ -560,6 +560,7 @@ impl ShapeSlab {
 
     /// A slab that publishes nothing (tests): the slab answers.
     #[cold]
+    #[optimize(size)]
     #[inline(never)]
     pub(super) fn unpublished_record_for_word(word: u32) -> Option<*mut ShapeRecord> {
         crate::state::state()
@@ -606,6 +607,7 @@ impl ShapeSlab {
     /// exotic) or no issued row: out of line, so the inlined ordinary read
     /// stays one compare.
     #[cold]
+    #[optimize(size)]
     #[inline(never)]
     pub(super) fn receiver_row_record_banded(word: u32, bound: usize) -> Option<*mut ShapeRecord> {
         use crate::codegen_abi::{
