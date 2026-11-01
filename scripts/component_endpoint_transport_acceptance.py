@@ -100,6 +100,10 @@ def main():
         run(kind + "-execute", [binaries / ("guest_endpoint_transport" + suffix), guest / "world.wit", component])
         assert marker in (out / (kind + "-execute.log")).read_text()
         if kind == "plain":
+            run("plain-rejects-instrument-grant",
+                [binaries / ("guest_endpoint_transport" + suffix), guest / "world.wit", component, "--moving"],
+                expected=1)
+            assert "built without the GC instruments" in (out / "plain-rejects-instrument-grant.log").read_text()
             control = out / "task-context-control"
             shutil.copytree(generated, control)
             adapter = control / "perry_adapter.c"
