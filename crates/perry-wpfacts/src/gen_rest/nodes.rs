@@ -33,6 +33,25 @@ impl<'a> Gen<'a> {
         self.tok_node(t)
     }
 
+    /// An array a builtin makes from `src`'s arrays with ArraySpeciesCreate
+    /// (`Template::species`).
+    pub(crate) fn new_species_arr(
+        &mut self,
+        mi: u32,
+        what: &str,
+        elems: &[NodeId],
+        src: NodeId,
+    ) -> NodeId {
+        let tm = self.new_arr_template(mi, what);
+        self.m.tmpls[tm as usize].species = Some(src);
+        let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
+        let fa = self.m.field_any(t);
+        for &e in elems {
+            self.m.edge(e, fa);
+        }
+        self.tok_node(t)
+    }
+
     /// A builtin iterator object (`arr.values()`, `entries()`, `keys()`)
     /// yielding `vals` through `next().value` (`builtins::iterator_method`).
     pub(crate) fn new_iter_from(&mut self, mi: u32, vals: &[NodeId]) -> NodeId {

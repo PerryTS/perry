@@ -239,11 +239,7 @@ impl<'a> Gen<'a> {
             | Expr::OsUserInfoBuffer
             | Expr::OsLoadavg
             | Expr::RegExpExecGroups
-            | Expr::ObjectKeys(..)
             | Expr::ForInKeys(..)
-            | Expr::ObjectGetOwnPropertyNames(..)
-            | Expr::ObjectGetOwnPropertySymbols(..)
-            | Expr::ReflectOwnKeys(..)
             | Expr::StringSplit(..)
             | Expr::StringMatch { .. }
             | Expr::StringMatchAll { .. }
@@ -261,14 +257,29 @@ impl<'a> Gen<'a> {
                 // Own keys and enumeration run no lookup; the others read
                 // elements or dispatch through `@@split` / `@@match`.
                 let proto = match e {
-                    Expr::ObjectKeys(..)
-                    | Expr::ForInKeys(..)
-                    | Expr::ObjectGetOwnPropertyNames(..)
-                    | Expr::ObjectGetOwnPropertySymbols(..)
-                    | Expr::ReflectOwnKeys(..) => Protocol::OwnKeys,
+                    Expr::ForInKeys(..) => Protocol::OwnKeys,
                     _ => Protocol::Any,
                 };
                 self.primbox_kids(fx, e, "primitive container builtin", proto)
+            }
+            // The calls they lower (`builtins` Object.keys, Reflect.ownKeys):
+            // a fresh Array of the operand's own keys, no primitive.
+            Expr::ObjectKeys(..)
+            | Expr::ObjectGetOwnPropertyNames(..)
+            | Expr::ObjectGetOwnPropertySymbols(..)
+            | Expr::ReflectOwnKeys(..) => {
+                let ks = kids(e);
+                let _ = self.prim_op(
+                    fx,
+                    &ks,
+                    prim::UNDEF,
+                    "primitive container builtin",
+                    Protocol::OwnKeys,
+                );
+                let (t, n) = self.bobj(mi, "arraybox");
+                let fa = self.m.field_any(t);
+                self.m.add_prim(fa, prim::STR | prim::SYMBOL);
+                n
             }
             Expr::NamespacePatched(_) => self.prim_node(prim::BOOL),
             Expr::GlobalThisExpr => {
@@ -762,6 +773,7 @@ impl<'a> Gen<'a> {
                     parent_value: None,
                     parent_links: Vec::new(),
                     null_proto: false,
+                    species: None,
                 });
                 let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
                 let pn = self.m.proto_node(t);
@@ -1337,7 +1349,7 @@ impl<'a> Gen<'a> {
                     let _ = self.prim_op(fx, &[x], prim::NUM, "slice index", Protocol::ToPrimitive);
                 }
                 let el = self.elem_load(a);
-                self.new_arr_from(mi, "slice", &[el])
+                self.new_species_arr(mi, "slice", &[el], a)
             }
             Expr::ArraySplice {
                 array_id,
@@ -1362,24 +1374,24 @@ impl<'a> Gen<'a> {
                     self.elem_store(fx, a, v, "splice");
                 }
                 let el = self.elem_load(a);
-                self.new_arr_from(mi, "splice", &[el])
+                self.new_species_arr(mi, "splice", &[el], a)
             }
             Expr::ArrayForEach { array, callback } => {
                 let _ = self.array_cb(fx, array, callback);
                 self.prim_node(prim::UNDEF)
             }
             Expr::ArrayMap { array, callback } => {
-                let (_, _, ret) = self.array_cb(fx, array, callback);
-                self.new_arr_from(mi, "map", &[ret])
+                let (a, _, ret) = self.array_cb(fx, array, callback);
+                self.new_species_arr(mi, "map", &[ret], a)
             }
             Expr::ArrayFlatMap { array, callback } => {
-                let (_, _, ret) = self.array_cb(fx, array, callback);
+                let (a, _, ret) = self.array_cb(fx, array, callback);
                 let inner = self.elem_load(ret);
-                self.new_arr_from(mi, "flatMap", &[ret, inner])
+                self.new_species_arr(mi, "flatMap", &[ret, inner], a)
             }
             Expr::ArrayFilter { array, callback } => {
-                let (_, el, _) = self.array_cb(fx, array, callback);
-                self.new_arr_from(mi, "filter", &[el])
+                let (a, el, _) = self.array_cb(fx, array, callback);
+                self.new_species_arr(mi, "filter", &[el], a)
             }
             Expr::ArrayFind { array, callback } | Expr::ArrayFindLast { array, callback } => {
                 let (_, el, _) = self.array_cb(fx, array, callback);
@@ -1451,7 +1463,7 @@ impl<'a> Gen<'a> {
                 let a = self.expr(fx, array);
                 let el = self.elem_load(a);
                 let inner = self.elem_load(el);
-                self.new_arr_from(mi, "flat", &[el, inner])
+                self.new_species_arr(mi, "flat", &[el, inner], a)
             }
             Expr::ArrayToReversed { array } => {
                 let a = self.expr(fx, array);
