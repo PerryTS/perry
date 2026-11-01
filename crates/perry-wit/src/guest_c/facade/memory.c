@@ -3,6 +3,7 @@
 #include "perry_producer_forward.c"
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 static unsigned consumed, freed_buffers, kicks, dropped_subtasks;
 static uint8_t *text(const char *value) {
     uint8_t *result = malloc(4); assert(result); memcpy(result, value, 4); return result;
