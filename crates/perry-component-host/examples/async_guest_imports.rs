@@ -159,6 +159,7 @@ fn main() -> Result<()> {
     };
     if matches!(mode, "--moving" | "--inline-moving") {
         for name in [
+            "PERRY_GC_INSTRUMENTS",
             "PERRY_GC_FORCE_EVACUATE",
             "PERRY_GC_VERIFY_EVACUATION",
             "PERRY_GC_DIAG",
@@ -212,12 +213,18 @@ fn main() -> Result<()> {
     let (mut driver, client) = host.into_driver()?;
     let mut status = client.call("", "status", &[])?;
     assert_eq!(result(&mut driver, &mut status), json!(10000));
-    let mut guarded = client.call("", "guarded", &[])?;
-    assert_eq!(result(&mut driver, &mut guarded), json!(77));
     assert_eq!(
         empty_calls.load(Ordering::SeqCst),
         0,
-        "initialization/sync guards must precede host I/O"
+        "initialization guard must precede host I/O"
+    );
+    let mut guarded = client.call("", "guarded", &[])?;
+    assert_eq!(result(&mut driver, &mut guarded), json!(0));
+    idle(&mut driver);
+    assert_eq!(
+        empty_calls.load(Ordering::SeqCst),
+        1,
+        "a synchronous export's staged import must complete after return"
     );
     for round in 0..64 {
         let input_a = payload(1);
@@ -317,8 +324,8 @@ fn main() -> Result<()> {
     assert_eq!(result(&mut driver, &mut status), json!(10009));
     idle(&mut driver);
     assert_eq!(many_calls.load(Ordering::SeqCst), 131);
-    assert_eq!(empty_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(empty_calls.load(Ordering::SeqCst), 3);
     assert_eq!(cancelled.load(Ordering::SeqCst), 0);
-    println!("PASS: generated Perry async imports, 64 reverse pairs, typed indirect buffers, collecting getters, parallel children, scalar/void, initialization/sync guards, post-return child chain, idle");
+    println!("PASS: generated Perry async imports, 64 reverse pairs, typed indirect buffers, collecting getters, parallel children, scalar/void, initialization guard, sync-started import, post-return child chain, idle");
     Ok(())
 }

@@ -113,6 +113,7 @@ fn main() -> Result<()> {
     };
     if args.get(2).is_some_and(|s| s == "--moving") {
         for key in [
+            "PERRY_GC_INSTRUMENTS",
             "PERRY_GC_FORCE_EVACUATE",
             "PERRY_GC_VERIFY_EVACUATION",
             "PERRY_GC_DIAG",

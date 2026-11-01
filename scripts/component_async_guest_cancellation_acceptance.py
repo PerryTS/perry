@@ -13,15 +13,19 @@ import sys
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ["wasi-sdk", "perry", "runtime", "target-dir", "output"]:
+    for name in ["wasi-sdk", "perry", "runtime", "plain-runtime", "native-runtime-dir",
+                 "target-dir", "p3-contract", "output"]:
         parser.add_argument("--" + name, type=Path, required=True)
-    parser.add_argument("--profile", choices=["dev", "prod"], default="dev")
+    parser.add_argument("--profile", choices=["dev", "perry-dev", "prod"], default="perry-dev")
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
     out = args.output.resolve()
-    out.mkdir(parents=True, exist_ok=True)
+    out.mkdir(parents=True, exist_ok=False)
     (out / "OWNER").write_text("Cooperative canonical cancellation acceptance evidence; preserve.\n")
-    env = {**os.environ, "CARGO_TARGET_DIR": str(args.target_dir.resolve())}
+    env = {**os.environ, "CARGO_TARGET_DIR": str(args.target_dir.resolve()),
+           "PERRY_WORKSPACE_ROOT": str(root),
+           "PERRY_RUNTIME_DIR": str(args.native_runtime_dir.resolve()),
+           "WASI_SDK_PATH": str(args.wasi_sdk.resolve())}
     rows = []
 
     def run(name, command):
@@ -37,7 +41,8 @@ def main():
     # Qualify the same new scheduler on its ordinary import paths first.
     guest = out / "guest"
     command = [sys.executable, root / "scripts/component_async_guest_exports_acceptance.py", "--imports", "--profile", args.profile]
-    for name in ["wasi-sdk", "perry", "runtime", "target-dir"]:
+    for name in ["wasi-sdk", "perry", "runtime", "plain-runtime", "native-runtime-dir",
+                 "target-dir", "p3-contract"]:
         command.extend(["--" + name, getattr(args, name.replace("-", "_")).resolve()])
     run("ordinary-import-regression", [*command, "--output", guest])
     run("build-caller-probes", ["cargo", "-Z", "checksum-freshness", "build", "--locked", "--profile", args.profile,
@@ -59,12 +64,15 @@ def main():
     generated = caller / "generated"
     run("generate-caller", [generator, caller / "world.wit", "supervisor", generated])
     component = caller / "caller.component.wasm"
-    run("link-caller", [args.wasi_sdk.resolve() / "bin" / ("clang" + suffix), "--target=wasm32-wasip2",
+    run("link-caller", [args.wasi_sdk.resolve() / "bin" / ("clang" + suffix), "--target=wasm32-wasip3",
                         "-mexec-model=reactor", "-O1", "-g", "-Wall", "-Werror", "-I", generated,
                         generated / "supervisor.c", caller / "supervisor.c", generated / "supervisor_component_type.o",
                         "-Wl,--export=cabi_realloc", "-Wl,--fatal-warnings", "-o", component])
     composed = out / "composed.component.wasm"
     run("compose", [host, "--compose", guest / "guest.component.wasm", component, composed])
+    run("p3-contract", [args.p3_contract.resolve(), "--reactor", composed, "exercise",
+        "--interface-import=test:async-guest-imports/service@1.0.0", "--type-import=payload",
+        "--function-import=scalar", "--function-import=empty", "--function-import=proceed"])
     marker = "PASS: cooperative canonical cancellation, 8 rounds, 16 native children, live sibling and reusable Store"
     for name, flags in [("execute", []), ("moving", ["--moving"])]:
         run(name, [host, caller / "world.wit", composed, *flags])

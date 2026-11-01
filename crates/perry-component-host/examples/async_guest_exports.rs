@@ -45,6 +45,7 @@ fn main() -> Result<()> {
     };
     if moving {
         for name in [
+            "PERRY_GC_INSTRUMENTS",
             "PERRY_GC_FORCE_EVACUATE",
             "PERRY_GC_VERIFY_EVACUATION",
             "PERRY_GC_DIAG",

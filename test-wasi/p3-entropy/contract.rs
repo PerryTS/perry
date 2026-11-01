@@ -16,6 +16,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut types = Vec::new();
     let mut instances = Vec::new();
     let mut interfaces = Vec::new();
+    let mut functions = Vec::new();
     required.retain(|arg| {
         if let Some(name) = arg.strip_prefix("--type-import=") {
             types.push(name.to_string());
@@ -26,6 +27,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else if let Some(name) = arg.strip_prefix("--interface-import=") {
             interfaces.push(name.to_string());
             false
+        } else if let Some(name) = arg.strip_prefix("--function-import=") {
+            functions.push(name.to_string());
+            false
         } else {
             true
         }
@@ -33,6 +37,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if types
         .iter()
         .chain(&interfaces)
+        .chain(&functions)
         .any(|name| name.is_empty() || name.starts_with("wasi:"))
     {
         return Err("invalid declared application import".into());
@@ -58,6 +63,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 for import in section {
                     let import = import?;
                     let name = import.name.name;
+                    if reactor && matches!(import.ty, ComponentTypeRef::Func(_)) {
+                        if let Some(index) = functions.iter().position(|function| function == name)
+                        {
+                            functions.remove(index);
+                            println!("declared application function {name}");
+                            continue;
+                        }
+                    }
                     if reactor && matches!(import.ty, ComponentTypeRef::Instance(_)) {
                         if let Some(index) =
                             interfaces.iter().position(|interface| interface == name)
@@ -116,8 +129,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         || !types.is_empty()
         || !instances.is_empty()
         || !interfaces.is_empty()
+        || !functions.is_empty()
     {
-        return Err(format!("incomplete P3 contract: depth={depth}, imports={imports}, run={command}, random={random}, missing_exports={required:?}, missing_types={types:?}, missing_instances={instances:?}, missing_interfaces={interfaces:?}").into());
+        return Err(format!("incomplete P3 contract: depth={depth}, imports={imports}, run={command}, random={random}, missing_exports={required:?}, missing_types={types:?}, missing_instances={instances:?}, missing_interfaces={interfaces:?}, missing_functions={functions:?}").into());
     }
     if reactor {
         println!("PASS: external WASI 0.3-only reactor contract and required function exports");
