@@ -114,6 +114,7 @@ unsafe fn admitted_append(receiver: f64, index: f64) -> Option<*mut ArrayHeader>
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(super) unsafe fn grow(arr: *mut ArrayHeader, length: u32, value: f64) -> *mut ArrayHeader {
     let scope = crate::gc::RuntimeHandleScope::new();

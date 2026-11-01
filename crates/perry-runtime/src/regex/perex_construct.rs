@@ -162,6 +162,7 @@ pub(super) fn new_data<'s>(
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn new_data_miss<'s>(
     scope: &'s RuntimeHandleScope,

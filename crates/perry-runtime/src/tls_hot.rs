@@ -285,6 +285,7 @@ static HOT: crate::tls_os_pool::LocalKey<UnsafeCell<HotTls>> =
 /// caller would, so a lazily-initialised one is initialised here instead of at
 /// its first hot-path use. That is a move in when, not in what.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn fill(slots: *mut HotTls) {
     // Query the native stack before provider initialization maps arena memory.
@@ -487,6 +488,7 @@ pub(crate) fn thread_identity() -> usize {
     target_pointer_width = "64"
 ))]
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn hot_uncached() -> &'static HotTls {
     let slots = hot_via_tls();
@@ -636,6 +638,7 @@ impl SlotId {
     /// and `HOT_SLOT_CAPACITY` is sized for declarations, not for declarations
     /// times threads.
     #[cold]
+    #[optimize(size)]
     #[inline(never)]
     fn claim(&self) -> u32 {
         use std::sync::atomic::Ordering;
@@ -920,6 +923,7 @@ impl<T: 'static> HotKey<T> {
     }
 
     #[cold]
+    #[optimize(size)]
     #[inline(never)]
     fn get_slow(&'static self) -> &'static T {
         let cell = self
@@ -956,6 +960,7 @@ impl<T: 'static> HotKey<T> {
     /// Claim the shared declaration slot, reuse any published storage, or
     /// resolve through the real `thread_local!` and publish it for this thread.
     #[cold]
+    #[optimize(size)]
     #[inline(never)]
     fn resolve_and_cache(&'static self) -> Result<*mut u8, AccessError> {
         // Claim before resolving storage: another provider can already have

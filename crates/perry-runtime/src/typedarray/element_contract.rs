@@ -33,6 +33,7 @@ pub extern "C" fn js_typed_element_contract(value: f64, kind: i32, index: i64) -
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn contract_violated(bits: u64, kind: i32, index: i64) -> ! {
     crate::entry_contracts::contract_violated(

@@ -67,6 +67,7 @@ pub(crate) fn probe_old_parent_child(child_addr: usize) {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn note_store(parent_addr: usize, child_addr: usize) {
     // A young parent is read by the census; an image parent is a root.
@@ -76,6 +77,7 @@ fn note_store(parent_addr: usize, child_addr: usize) {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn note_store_bits(parent_addr: usize, bits: u64) {
     let child = barrier::decode_heap_addr(bits);

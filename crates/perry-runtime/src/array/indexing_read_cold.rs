@@ -72,6 +72,7 @@ pub unsafe extern "C" fn perry_array_read_cold_shared(
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe extern "C" fn read_cold_entry(receiver: f64, key: f64, control: u64) -> f64 {
     let (site, control, source) = if control > 15 && control & 3 == 2 {
@@ -121,6 +122,7 @@ unsafe extern "C" fn read_cold_entry(receiver: f64, key: f64, control: u64) -> f
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn read_cold_dispatch(
     receiver: f64,

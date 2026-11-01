@@ -788,6 +788,7 @@ enum Resumed {
 /// The rest of a lent search that did not decide within its first quantum:
 /// poll between quanta, or report the frames or undo entries it needs.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 #[allow(clippy::too_many_arguments)]
 fn resume_lent<'mem, R, RP, RS, H>(
@@ -839,6 +840,7 @@ where
 /// A search initializes the registers it reads, so the fill value is never
 /// observed. `false` when the memory is not available.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn grow_lent_registers(cell: &mut ScratchCell, registers: usize) -> bool {
     if cell
@@ -855,6 +857,7 @@ fn grow_lent_registers(cell: &mut ScratchCell, registers: usize) -> bool {
 /// Grow the lent frames and undo entries to what a search asked for, so the
 /// next search of the same program fits.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn grow_lent_frames(cell: &mut ScratchCell, required: ScratchRequirements) {
     if crate::hot_diag::regex_on() {
@@ -1228,6 +1231,7 @@ where
 
 /// [`search`] over buffers this search owns.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 #[allow(clippy::too_many_arguments)]
 fn search_owned<'mem, R, RP, RS, H>(

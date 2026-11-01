@@ -160,6 +160,7 @@ impl PageObjects {
     }
 
     #[cold]
+    #[optimize(size)]
     #[inline(never)]
     fn reserve_for_push(&mut self) {
         let inline = self.offsets.is_empty() && self.entering_header != 0;

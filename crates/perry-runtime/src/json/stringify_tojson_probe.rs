@@ -184,6 +184,7 @@ pub(super) fn key_bytes_may_carry_to_json(bytes: &[u8]) -> bool {
 /// Ordinary keys do not need the long marker constants in their hot loop.
 /// No verdict is retained: changed keys are read again on the next probe.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn marker_bytes_may_carry_to_json(bytes: &[u8]) -> bool {
     if bytes == b"toJSON"
@@ -403,6 +404,7 @@ pub(super) unsafe fn object_proto_may_have_to_json() -> bool {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn object_proto_may_have_to_json_recompute() -> bool {
     let computed = compute_object_proto_tojson_state();
@@ -519,6 +521,7 @@ pub(super) unsafe fn object_is_plain_record(obj: *const crate::ObjectHeader) -> 
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn class_chain_to_json_memo_fill(
     class_id: u32,

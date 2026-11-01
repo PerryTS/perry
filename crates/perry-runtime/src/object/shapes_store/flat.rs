@@ -270,6 +270,7 @@ impl Region {
     }
     /// [`Self::published`] when the row's leaf is not boxed yet.
     #[cold]
+    #[optimize(size)]
     #[inline(never)]
     fn published_new_leaf(&mut self, key: usize, index: usize) -> bool {
         let mut moved = false;

@@ -576,6 +576,7 @@ pub unsafe extern "C" fn js_array_push_f64_spec_or_own(
 /// method actually selected, through `builtin_proto::redirect_call`. `None`
 /// when it is still the builtin, so the caller's plain push runs.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn push_patched_proto(
     arr: *mut crate::array::ArrayHeader,
@@ -599,6 +600,7 @@ unsafe fn push_patched_proto(
 /// declined: forwarded, carrying named properties or descriptors, sealed,
 /// frozen, or not an ordinary array at all.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn push_or_own_declined(
     arr: *mut crate::array::ArrayHeader,

@@ -28,6 +28,7 @@ const JSON_MEMBERS: &[Member] = &[
 ];
 crate::realm_decl! { JSON, provider = namespace(JSON_MEMBERS), births = [Array, Boolean, Number, Object, String]; }
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(crate) fn create_json_namespace() -> *mut ObjectHeader {
     builtin_namespace::create(JSON_MEMBERS)
@@ -103,6 +104,7 @@ const REFLECT_MEMBERS: &[Member] = &[
 ];
 crate::realm_decl! { Reflect, provider = namespace(REFLECT_MEMBERS); }
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(crate) fn create_reflect_namespace() -> *mut ObjectHeader {
     builtin_namespace::create(REFLECT_MEMBERS)

@@ -375,6 +375,7 @@ pub(crate) fn class_value_is_first_evaluation(class_id: u32) -> bool {
 /// Never collects: callers hold raw receiver pointers across the lookup, so
 /// the old-arena allocation runs under a [`crate::gc::GcSuppressScope`].
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn class_value_mint(class_id: u32) -> *mut ClosureHeader {
     // Any class id may own one: a native class whose prototype carries
@@ -1126,6 +1127,7 @@ pub(crate) unsafe fn constructor_property_get(
 /// `C[prop]` for a class function object at `ptr` (routed by
 /// `closure_get_dynamic_prop` on the class ShapeId): the class lookup.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(crate) fn class_static_read(ptr: usize, prop: &str, key: *const crate::StringHeader) -> f64 {
     // SAFETY: the caller proved a live class closure (its ShapeId).

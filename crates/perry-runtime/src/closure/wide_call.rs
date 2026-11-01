@@ -96,6 +96,7 @@ pub(crate) unsafe fn dispatch_wide_abi(
 
 #[cfg(target_os = "wasi")]
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn throw_too_wide_for_wasi(width: usize) -> ! {
     let message = format!(
@@ -108,6 +109,7 @@ fn throw_too_wide_for_wasi(width: usize) -> ! {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn throw_too_wide(width: usize) -> ! {
     let message = format!(

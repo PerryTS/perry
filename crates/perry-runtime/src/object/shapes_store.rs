@@ -850,6 +850,7 @@ pub(super) fn facts_key_proto(
 /// The extension record of a shape with ConstFn slots or private brands, out
 /// of line: almost every mint has neither.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn new_extras(infos: &[ConstFnSlotInfo], brands: &[u64]) -> u64 {
     let extras = Box::new(ShapeExtras {
@@ -957,6 +958,7 @@ pub(super) fn facts_key_proto_with_special(
 /// folds as its metadata identity (the owner's registration index and the
 /// entry ordinal, JST4), not as the address of its info record.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn fold_constfn_infos(mut h: u64, infos: &[ConstFnSlotInfo]) -> u64 {
     const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
@@ -975,6 +977,7 @@ fn fold_constfn_infos(mut h: u64, infos: &[ConstFnSlotInfo]) -> u64 {
 /// The brand half of [`facts_key_proto_with_special`], out of line: almost
 /// no shape carries a brand, and the hash runs on every intern.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn fold_brands(mut h: u64, brands: &[u64]) -> u64 {
     const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;

@@ -724,6 +724,7 @@ crate::perry_thread_local! {
 /// The inline slot of `prototype` the Function ShapeId `id` describes, or
 /// one of the two markers.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn prototype_slot_of_shape(closure: *const ClosureHeader, id: LayoutWord) -> u32 {
     if id == function_dictionary_shape() || is_class_info((*closure).info) {

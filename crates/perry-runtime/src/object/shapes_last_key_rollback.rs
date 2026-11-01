@@ -9,6 +9,7 @@ use crate::codegen_abi::LayoutWord;
 /// Learn the reverse of an admitted canonical key-add edge. Prefix equality
 /// is checked once at the write; all uses still validate the live records.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(crate) fn note_last_key_parent(from: LayoutWord, parent: LayoutWord) {
     unsafe {

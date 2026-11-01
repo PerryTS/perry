@@ -227,6 +227,7 @@ thread_local! {
 /// Validate the prototype shape's weak birth relationship now. Width and
 /// tracking state remain solely on the referenced live birth record.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn birth_record_for_prototype(
     id: LayoutWord,
@@ -248,6 +249,7 @@ fn birth_record_for_prototype(
 /// An absent or retired birth relationship resolves through the existing
 /// exact index/interner. No second index or allocation path is introduced.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn resolve_birth_record(proto_id: u64) -> Option<(LayoutWord, *mut ShapeRecord)> {
     let table = &crate::state::state().shapes;
@@ -335,6 +337,7 @@ pub(crate) fn created_birth_shape(
 /// # Safety
 /// `obj` is a live shaped `ObjectHeader`.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(crate) unsafe fn note_spill_width(obj: *const crate::object::ObjectHeader, width: u32) {
     if width <= crate::object::INLINE_SLOT_FLOOR as u32 {

@@ -75,6 +75,7 @@ pub(super) fn bounds() -> (usize, usize) {
 /// inside the section may name padding or string data, so bounds alone do not
 /// certify a header. Its marker, layout, length and complete payload must agree.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(super) unsafe fn header(addr: usize) -> Option<std::ptr::NonNull<GcHeader>> {
     use crate::string::StringHeader;

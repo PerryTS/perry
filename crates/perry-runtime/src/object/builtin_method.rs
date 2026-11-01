@@ -93,6 +93,7 @@ unsafe fn array_recv(v: f64) -> Option<f64> {
 
 /// The live head a forwarded array alias names, or `None`.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn forwarded_head(addr: usize) -> Option<usize> {
     let live = crate::array::clean_arr_ptr(addr as *const crate::array::ArrayHeader) as usize;

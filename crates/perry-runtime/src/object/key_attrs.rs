@@ -347,6 +347,7 @@ pub(crate) unsafe fn keys_attrs(keys: *const ArrayHeader) -> *mut ArrayHeader {
 // A keys list may still name its pre-growth head. Keep all of that resolution
 // work on the rare edge so ordinary shape reads need no forwarding frame.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn keys_attrs_forwarded(keys: *const ArrayHeader) -> *mut ArrayHeader {
     // Keys metadata is always a real array, never a Proxy or lazy JSON

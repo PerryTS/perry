@@ -1,0 +1,176 @@
+{
+  "o2": {
+    "total_samples": 5999,
+    "outlined_samples_at_least_five": 0,
+    "flat_symbols_at_least_five": [
+      {
+        "symbol": "perry_fn_scan_ts__scan$spec_b_i32_b",
+        "samples": 4967
+      },
+      {
+        "symbol": "<deduplicated_symbol>",
+        "samples": 468
+      },
+      {
+        "symbol": "js_array_record_stack_enter",
+        "samples": 335
+      },
+      {
+        "symbol": "_RNvNtCs49J2tmDdif6_13perry_runtime14typed_feedback33packed_f64_loop_admits_live_array",
+        "samples": 229
+      }
+    ]
+  },
+  "oz": {
+    "total_samples": 5966,
+    "outlined_samples_at_least_five": 546,
+    "flat_symbols_at_least_five": [
+      {
+        "symbol": "perry_fn_scan_ts__scan$spec_b_i32_b",
+        "samples": 4365
+      },
+      {
+        "symbol": "js_array_record_stack_enter",
+        "samples": 386
+      },
+      {
+        "symbol": "_RNvNtNtNtCsi9ZVZYQUTuj_13perry_runtime2gc5roots15runtime_handles24runtime_handle_stack_len",
+        "samples": 186
+      },
+      {
+        "symbol": "_RNvNtCsi9ZVZYQUTuj_13perry_runtime14typed_feedback33packed_f64_loop_admits_live_array",
+        "samples": 179
+      },
+      {
+        "symbol": "js_number_coerce",
+        "samples": 141
+      },
+      {
+        "symbol": "OUTLINED_FUNCTION_6649",
+        "samples": 106
+      },
+      {
+        "symbol": "OUTLINED_FUNCTION_5250",
+        "samples": 93
+      },
+      {
+        "symbol": "_RNvNtNtCsi9ZVZYQUTuj_13perry_runtime5array6header29array_has_raw_f64_layout_flag",
+        "samples": 51
+      },
+      {
+        "symbol": "OUTLINED_FUNCTION_6851",
+        "samples": 43
+      },
+      {
+        "symbol": "OUTLINED_FUNCTION_1842",
+        "samples": 40
+      },
+      {
+        "symbol": "js_nanbox_get_pointer",
+        "samples": 40
+      },
+      {
+        "symbol": "OUTLINED_FUNCTION_1640",
+        "samples": 38
+      },
+      {
+        "symbol": "OUTLINED_FUNCTION_13589",
+        "samples": 28
+      },
+      {
+        "symbol": "js_nanbox_pointer",
+        "samples": 26
+      },
+      {
+        "symbol": "_RNvXsd_NtCs7iaa78gPu5S_5alloc3vecINtB5_3VecNtNtNtNtCsi9ZVZYQUTuj_13perry_runtime5arena9page_meta10page_class14PageClassEntryEINtNtNtCsbuT5dCMLKzJ_4core3ops5index5IndexjE5indexBN_",
+        "samples": 23
+      },
+      {
+        "symbol": "OUTLINED_FUNCTION_432",
+        "samples": 20
+      },
+      {
+        "symbol": "OUTLINED_FUNCTION_9521",
+        "samples": 20
+      },
+      {
+        "symbol": "OUTLINED_FUNCTION_14920",
+        "samples": 17
+      },
+      {
+        "symbol": "OUTLINED_FUNCTION_18144",
+        "samples": 16
+      },
+      {
+        "symbol": "OUTLINED_FUNCTION_18690",
+        "samples": 16
+      },
+      {
+        "symbol": "OUTLINED_FUNCTION_10318",
+        "samples": 15
+      },
+      {
+        "symbol": "OUTLINED_FUNCTION_22317",
+        "samples": 15
+      },
+      {
+        "symbol": "OUTLINED_FUNCTION_11247",
+        "samples": 14
+      },
+      {
+        "symbol": "OUTLINED_FUNCTION_2568",
+        "samples": 14
+      },
+      {
+        "symbol": "_RNvNtNtCsi9ZVZYQUTuj_13perry_runtime5array6header39js_array_is_numeric_f64_layout_resolved",
+        "samples": 14
+      },
+      {
+        "symbol": "OUTLINED_FUNCTION_5589",
+        "samples": 13
+      },
+      {
+        "symbol": "OUTLINED_FUNCTION_764",
+        "samples": 13
+      },
+      {
+        "symbol": "OUTLINED_FUNCTION_17689",
+        "samples": 12
+      },
+      {
+        "symbol": "OUTLINED_FUNCTION_11722",
+        "samples": 8
+      },
+      {
+        "symbol": "OUTLINED_FUNCTION_9852",
+        "samples": 5
+      },
+      {
+        "symbol": "js_eh_handle_height",
+        "samples": 5
+      }
+    ]
+  },
+  "cold": {
+    "total_samples": 6055,
+    "outlined_samples_at_least_five": 0,
+    "flat_symbols_at_least_five": [
+      {
+        "symbol": "perry_fn_scan_ts__scan$spec_b_i32_b",
+        "samples": 4973
+      },
+      {
+        "symbol": "<deduplicated_symbol>",
+        "samples": 501
+      },
+      {
+        "symbol": "js_array_record_stack_enter",
+        "samples": 353
+      },
+      {
+        "symbol": "_RNvNtCs49J2tmDdif6_13perry_runtime14typed_feedback33packed_f64_loop_admits_live_array",
+        "samples": 228
+      }
+    ]
+  }
+}

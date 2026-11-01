@@ -272,6 +272,7 @@ impl<T: ShapeColumnEntry> PagedColumn<T> {
     }
 
     #[cold]
+    #[optimize(size)]
     #[inline(never)]
     fn new_page(&mut self) {
         // SAFETY: an array of `MaybeUninit` needs no initialization.
@@ -701,6 +702,7 @@ impl CanonicalTable {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn canonical_node_ids_exhausted() -> ! {
     eprintln!(

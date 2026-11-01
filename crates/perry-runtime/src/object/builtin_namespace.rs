@@ -220,6 +220,7 @@ pub(crate) unsafe fn note_write(
 /// Set namespace `i`'s bit (or point its slot at the patched stand-in when its
 /// holder's word cannot carry it).
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn withdraw(i: usize, site: &'static str) {
     let p = holder(i) as *mut ObjectHeader;
@@ -244,6 +245,7 @@ unsafe fn withdraw(i: usize, site: &'static str) {
 /// withdrawal with its funnel. A program that patches nothing prints only the
 /// seals.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn trace(name: &str, what: &str, word: u32) {
     // SAFETY: a NUL-terminated literal; `getenv` only reads the environment.

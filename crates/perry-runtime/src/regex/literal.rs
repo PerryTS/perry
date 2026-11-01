@@ -32,6 +32,7 @@ pub extern "C" fn js_regexp_literal(site: i64) -> *mut RegExpHeader {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn literal_cold(site: *mut LiteralSite, word: *mut u64) -> *mut RegExpHeader {
     let scope = RuntimeHandleScope::new();
@@ -69,6 +70,7 @@ pub(crate) fn from_parts(
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn literal_miss(pattern: *const StringHeader, flags: *const StringHeader, word: *mut u64) {
     let scope = RuntimeHandleScope::new();

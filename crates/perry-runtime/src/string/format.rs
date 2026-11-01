@@ -249,6 +249,7 @@ fn short_ascii_string_bits(buf: &[u8; 32], len: usize) -> u64 {
 /// per conversion on the float fixture, because a miss then paid an extra
 /// call and re-ran the admission test.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn small_int_cache_fill(idx: usize) -> *mut StringHeader {
     debug_assert!(idx < SMALL_INT_CACHE_SIZE);

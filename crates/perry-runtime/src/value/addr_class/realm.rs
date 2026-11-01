@@ -118,6 +118,7 @@ unsafe fn cell_header_is_well_formed(header_addr: usize, end: usize) -> bool {
 /// aligned word inside a cell whose bytes happen to form a well-formed header
 /// is not excluded. Exact cell starts are what [`for_each_cell`] walks.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(crate) unsafe fn header(addr: usize) -> Option<std::ptr::NonNull<GcHeader>> {
     let (start, end) = bounds();
