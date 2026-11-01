@@ -1043,12 +1043,26 @@ impl<'a> Gen<'a> {
             if p.is_rest {
                 // The rest local holds a fresh array whose elements are the
                 // extra arguments (and, for `arguments`, every argument).
-                let arr = self.new_arr_template(mi, "rest");
+                let arr = match &p.arguments_object {
+                    Some(_) => self.new_args_template(mi),
+                    None => self.new_arr_template(mi, "rest"),
+                };
                 let at = self.m.tok(TokKind::Obj(arr, NO_CTX));
                 self.m.add_tok(n, at);
                 let fa = self.m.field_any(at);
-                if p.arguments_object.is_some() {
+                if let Some(ao) = &p.arguments_object {
                     self.m.edge(args_all, fa);
+                    // Its own `length` is the argument count until code
+                    // stores another value; sloppy `callee` is the function
+                    // (strict `callee` is an accessor that throws).
+                    let la = self.m.atom("length");
+                    let lf = self.m.field(at, la);
+                    self.m.add_prim(lf, prim::NUM);
+                    if !ao.strict {
+                        let ca = self.m.atom("callee");
+                        let cf = self.m.field(at, ca);
+                        self.m.add_tok(cf, tok);
+                    }
                     // Sloppy mapped `arguments` aliases the params: writes
                     // through it reach them (E24). The synthetic parameter
                     // may come before the named ones, so the edges are added
@@ -1632,10 +1646,26 @@ impl<'a> Gen<'a> {
 
     pub(crate) fn new_arr_template(&mut self, mi: u32, what: &str) -> TmplId {
         let site = self.next_site(mi);
+        self.new_indexed_template(mi, TmplKind::Arr { module: mi, site }, what, site)
+    }
+
+    /// A function's `arguments` object: not an Array (`TmplKind::Args`).
+    pub(crate) fn new_args_template(&mut self, mi: u32) -> TmplId {
+        let site = self.next_site(mi);
+        self.new_indexed_template(mi, TmplKind::Args { module: mi, site }, "arguments", site)
+    }
+
+    fn new_indexed_template(
+        &mut self,
+        mi: u32,
+        kind: TmplKind,
+        what: &str,
+        site: SiteId,
+    ) -> TmplId {
         let tm = self.m.tmpls.len() as TmplId;
         self.note_birth_fn(tm);
         self.m.tmpls.push(Template {
-            kind: TmplKind::Arr { module: mi, site },
+            kind,
             display: format!("{}:[{what}#{site}]", self.mods[mi as usize].path_short()),
             birth_keys: vec![],
             definite: vec![],
