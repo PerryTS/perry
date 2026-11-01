@@ -59,7 +59,7 @@ fn target_dir(node_modules: &Path) -> PathBuf {
 }
 
 fn accepted(exe: Option<&Path>, home: Option<&Path>) -> Vec<(PathBuf, RootSource)> {
-    discover(TRIPLE, exe, home, ME)
+    discover(PackageKind::Target, TRIPLE, exe, home, ME)
         .into_iter()
         .filter(TargetRoot::is_accepted)
         .map(|r| (r.path, r.source))
@@ -69,11 +69,11 @@ fn accepted(exe: Option<&Path>, home: Option<&Path>) -> Vec<(PathBuf, RootSource
 #[test]
 fn the_package_name_is_derived_from_the_triple() {
     assert_eq!(
-        package_name("wasm32-wasip1"),
+        package_name(PackageKind::Target, "wasm32-wasip1"),
         "@perryts/perry-target-wasm32-wasip1"
     );
     assert_eq!(
-        package_name(TRIPLE),
+        package_name(PackageKind::Target, TRIPLE),
         "@perryts/perry-target-aarch64-linux-android"
     );
 }
@@ -169,9 +169,14 @@ fn perry_home_comes_after_npm_and_is_keyed_by_version() {
     let modules = root.join("prefix/lib/node_modules");
     let exe = touch(&modules.join("@perryts/perry-linux-x64/bin/perry"));
     let npm = good(&target_dir(&modules));
-    let mine = good(&perry_home_root(&home, ME.version, TRIPLE));
+    let mine = good(&perry_home_root(
+        &home,
+        PackageKind::Target,
+        ME.version,
+        TRIPLE,
+    ));
     package(
-        &perry_home_root(&home, "0.5.1600", TRIPLE),
+        &perry_home_root(&home, PackageKind::Target, "0.5.1600", TRIPLE),
         TRIPLE,
         "0.5.1600",
         ME.revision.unwrap(),
@@ -198,9 +203,14 @@ fn a_mismatched_root_is_skipped_and_a_later_valid_one_used() {
         "0.5.1690",
         ME.revision.unwrap(),
     );
-    let valid = good(&perry_home_root(&home, ME.version, TRIPLE));
+    let valid = good(&perry_home_root(
+        &home,
+        PackageKind::Target,
+        ME.version,
+        TRIPLE,
+    ));
 
-    let roots = discover(TRIPLE, Some(&exe), Some(&home), ME);
+    let roots = discover(PackageKind::Target, TRIPLE, Some(&exe), Some(&home), ME);
     assert_eq!(roots.len(), 2);
     let rejected = roots[0].status.as_ref().unwrap_err();
     assert_eq!(roots[0].path, old);
@@ -354,4 +364,92 @@ fn verify_files_hashes_raw_and_compressed_archives() {
     let mut escaping = manifest.clone();
     escaping.files[0].path = "lib/../../etc/passwd".into();
     assert!(verify_files(&pkg, &escaping).is_err());
+}
+
+#[test]
+fn ext_packages_share_the_layout_under_their_own_names() {
+    assert_eq!(
+        package_name(PackageKind::Ext, "x86_64-unknown-linux-gnu"),
+        "@perryts/perry-ext-x86_64-unknown-linux-gnu"
+    );
+    let (_t, root) = tree();
+    let modules = root.join("prefix/lib/node_modules");
+    let exe =
+        touch(&modules.join("@perryts/perry/node_modules/@perryts/perry-linux-x64/bin/perry"));
+    let home = root.join("home");
+    // A target package of the same triple is not an ext package, and back.
+    good(&target_dir(&modules));
+    assert!(discover(PackageKind::Ext, TRIPLE, Some(&exe), Some(&home), ME).is_empty());
+    let npm = good(&modules.join("@perryts").join(format!("perry-ext-{TRIPLE}")));
+    let mine = good(&perry_home_root(
+        &home,
+        PackageKind::Ext,
+        ME.version,
+        TRIPLE,
+    ));
+    assert!(mine.starts_with(home.join(".perry/ext")));
+    let roots: Vec<_> = discover(PackageKind::Ext, TRIPLE, Some(&exe), Some(&home), ME)
+        .into_iter()
+        .map(|r| (r.path, r.source, r.status.is_ok()))
+        .collect();
+    assert_eq!(
+        roots,
+        [
+            (npm, RootSource::Npm, true),
+            (mine, RootSource::PerryHome, true)
+        ]
+    );
+}
+
+#[test]
+fn the_packaged_triples_come_from_the_one_list() {
+    let list: serde_json::Value = serde_json::from_str(PACKAGED_TRIPLES_JSON).unwrap();
+    for (kind, key) in [(PackageKind::Target, "targets"), (PackageKind::Ext, "ext")] {
+        let triples = list[key].as_array().unwrap();
+        assert!(!triples.is_empty(), "{key}");
+        for triple in triples {
+            assert!(
+                is_packaged(kind, triple.as_str().unwrap()),
+                "{key}: {triple}"
+            );
+        }
+    }
+    assert!(is_packaged(PackageKind::Target, "aarch64-linux-android"));
+    assert!(is_packaged(PackageKind::Ext, "x86_64-unknown-linux-gnu"));
+    // No package: windows-msvc cross targets, musl and Windows extensions.
+    assert!(!is_packaged(PackageKind::Target, "x86_64-pc-windows-msvc"));
+    assert!(!is_packaged(PackageKind::Ext, "x86_64-unknown-linux-musl"));
+    assert!(!is_packaged(PackageKind::Ext, "x86_64-pc-windows-msvc"));
+    assert!(!is_packaged(PackageKind::Ext, "aarch64-linux-android"));
+}
+
+#[test]
+fn the_ext_install_hint_names_npm_and_perry_and_a_rejected_root() {
+    let (_t, root) = tree();
+    let modules = root.join("prefix/lib/node_modules");
+    let exe = touch(&modules.join("@perryts/perry-linux-x64/bin/perry"));
+    let triple = "x86_64-unknown-linux-gnu";
+    package(
+        &modules.join("@perryts").join(format!("perry-ext-{triple}")),
+        triple,
+        "0.5.1600",
+        ME.revision.unwrap(),
+    );
+    let hint = install_hint(
+        PackageKind::Ext,
+        triple,
+        "perry target add --ext",
+        Some(&exe),
+        None,
+        ME,
+    );
+    assert!(
+        hint.contains("npm install -g @perryts/perry-ext-x86_64-unknown-linux-gnu@0.5.1700\n"),
+        "{hint}"
+    );
+    assert!(hint.contains("  perry target add --ext\n"), "{hint}");
+    assert!(
+        hint.contains("found @perryts/perry-ext-x86_64-unknown-linux-gnu 0.5.1600"),
+        "{hint}"
+    );
 }

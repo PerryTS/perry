@@ -1,14 +1,18 @@
 /**
  * @file Materialize one `@perryts/perry-target-<triple>` package from an
- *   extracted `perry-cross-<triple>.tar.gz` bundle. Called by
- *   scripts/stage-npm.sh (which extracts the bundle and zstd-compresses the
- *   archives afterwards); the pure part is exported for publish.test.mts.
+ *   extracted `perry-cross-<triple>.tar.gz` bundle, or (`--ext`) one
+ *   `@perryts/perry-ext-<triple>` package from a host's extracted release
+ *   archive. Called by scripts/stage-npm.sh (which extracts the input and
+ *   zstd-compresses the archives afterwards); the pure part is exported for
+ *   the tests.
  *
- *   Every bundle file is checked against the bundle's own manifest.json
- *   before it is copied, and the package's target.json is that manifest
- *   restated for the package layout (`lib/<name>`, hashes of the
- *   uncompressed archives). perry accepts an installed target package only
- *   when target.json names its own version, source revision and triple.
+ *   Target: every bundle file is checked against the bundle's own
+ *   manifest.json before it is copied, and the package's target.json is that
+ *   manifest restated for the package layout (`lib/<name>`, hashes of the
+ *   uncompressed archives). Ext: every `libperry_ext_*` archive of the
+ *   release archive is copied and hashed into the same target.json schema.
+ *   perry accepts an installed package of either kind only when target.json
+ *   names its own version, source revision and triple.
  */
 
 import { createHash } from 'node:crypto'
@@ -24,7 +28,7 @@ import {
 } from 'node:fs'
 import path from 'node:path'
 
-import { rootPath, targetPackageName } from './constants.mts'
+import { extPackageName, rootPath, targetPackageName } from './constants.mts'
 
 /** One archive as both the bundle manifest and target.json describe it. */
 export interface TargetFile {
@@ -135,57 +139,145 @@ export function stageTarget(options: StageTargetOptions): TargetJson {
     throw new Error(`${where}: bundle has no runtime archive`)
   }
 
-  rmSync(packageDir, { recursive: true, force: true })
-  mkdirSync(path.join(packageDir, 'lib'), { recursive: true })
-  for (const file of checked) {
-    copyFileSync(path.join(bundleDir, file.path), path.join(packageDir, 'lib', file.path))
+  return writePackage({
+    kind: 'target',
+    sourceDir: bundleDir,
+    packageDir,
+    triple,
+    version,
+    revision,
+    files: checked,
+    repoRoot,
+  })
+}
+
+export interface StageExtOptions {
+  /** The extracted release archive of the host (perry + lib*.a). */
+  sourceDir: string
+  /** npm/perry-ext-<triple>; replaced whole. */
+  packageDir: string
+  triple: string
+  version: string
+  /** The release's full source revision (PERRY_SOURCE_REVISION); required. */
+  revision?: string
+  repoRoot?: string
+}
+
+/** The native-extension archives of a release archive. */
+const EXT_ARCHIVE = /^(lib)?perry_ext_[a-z0-9_]+\.(a|lib)$/
+
+/** Write the ext package of a host from its release archive's ext archives. */
+export function stageExt(options: StageExtOptions): TargetJson {
+  const { sourceDir, packageDir, triple, version } = options
+  const where = extPackageName(triple)
+  const revision = options.revision ?? ''
+  if (!REVISION.test(revision)) {
+    throw new Error(`${where}: no full source revision (set PERRY_SOURCE_REVISION)`)
+  }
+  const names = readdirSync(sourceDir).filter(name => EXT_ARCHIVE.test(name)).sort()
+  if (names.length === 0) {
+    throw new Error(`${where}: ${sourceDir} has no libperry_ext_* archives`)
+  }
+  const files = names.map(name => {
+    const file = path.join(sourceDir, name)
+    return { path: name, sha256: sha256(file), size: statSync(file).size }
+  })
+  return writePackage({
+    kind: 'ext',
+    sourceDir,
+    packageDir,
+    triple,
+    version,
+    revision,
+    files,
+    repoRoot: options.repoRoot ?? rootPath,
+  })
+}
+
+interface WritePackage {
+  kind: 'target' | 'ext'
+  sourceDir: string
+  packageDir: string
+  triple: string
+  version: string
+  revision: string
+  /** Checked files of `sourceDir`, by plain name. */
+  files: TargetFile[]
+  repoRoot: string
+}
+
+/** The package both kinds share: lib/, target.json, package.json, README, LICENSE. */
+function writePackage(p: WritePackage): TargetJson {
+  const name = p.kind === 'target' ? targetPackageName(p.triple) : extPackageName(p.triple)
+  rmSync(p.packageDir, { recursive: true, force: true })
+  mkdirSync(path.join(p.packageDir, 'lib'), { recursive: true })
+  for (const file of p.files) {
+    copyFileSync(path.join(p.sourceDir, file.path), path.join(p.packageDir, 'lib', file.path))
   }
 
   const targetJson: TargetJson = {
     schema_version: 1,
-    perry_version: version,
-    source_revision: revision,
-    target_triple: triple,
-    files: checked.map(file => ({ ...file, path: `lib/${file.path}` })),
+    perry_version: p.version,
+    source_revision: p.revision,
+    target_triple: p.triple,
+    files: p.files.map(file => ({ ...file, path: `lib/${file.path}` })),
   }
-  writeFileSync(path.join(packageDir, 'target.json'), `${JSON.stringify(targetJson, null, 2)}\n`)
+  writeFileSync(path.join(p.packageDir, 'target.json'), `${JSON.stringify(targetJson, null, 2)}\n`)
 
   const template = readFileSync(
-    path.join(repoRoot, 'npm', 'perry-target', 'package.json.tmpl'),
+    path.join(p.repoRoot, 'npm', `perry-${p.kind}`, 'package.json.tmpl'),
     'utf8',
   )
-  const rendered = template.replaceAll('__TRIPLE__', triple).replaceAll('__VERSION__', version)
+  const rendered = template.replaceAll('__TRIPLE__', p.triple).replaceAll('__VERSION__', p.version)
   const packageJson = JSON.parse(rendered) as { name?: string }
-  if (packageJson.name !== targetPackageName(triple)) {
-    throw new Error(`${where}: rendered package name ${String(packageJson.name)}`)
+  if (packageJson.name !== name) {
+    throw new Error(`${name}: rendered package name ${String(packageJson.name)}`)
   }
-  writeFileSync(path.join(packageDir, 'package.json'), rendered)
+  writeFileSync(path.join(p.packageDir, 'package.json'), rendered)
 
-  const license = path.join(repoRoot, 'LICENSE')
-  if (existsSync(license)) copyFileSync(license, path.join(packageDir, 'LICENSE'))
-  writeFileSync(
-    path.join(packageDir, 'README.md'),
-    `# ${targetPackageName(triple)}
+  const license = path.join(p.repoRoot, 'LICENSE')
+  if (existsSync(license)) copyFileSync(license, path.join(p.packageDir, 'LICENSE'))
+  const readme =
+    p.kind === 'target'
+      ? `# ${name}
 
 Prebuilt Perry libraries (runtime, stdlib, UI) for cross-compiling to
-\`${triple}\` with \`perry compile --target\`.
+\`${p.triple}\` with \`perry compile --target\`.
 
 Install the version that matches your perry exactly, next to it:
 
 \`\`\`bash
-npm install -g ${targetPackageName(triple)}@${version}   # global perry
-npm install --save-dev ${targetPackageName(triple)}@${version}   # project perry
+npm install -g ${name}@${p.version}   # global perry
+npm install --save-dev ${name}@${p.version}   # project perry
 \`\`\`
 
 Without npm, \`perry target add <target>\` installs the same package from the
 GitHub release into \`~/.perry/targets\`.
-`,
-  )
+`
+      : `# ${name}
+
+Prebuilt native-extension archives (\`libperry_ext_*.a\`) for perry on
+\`${p.triple}\`: the host functions behind node:http, ws, net, zlib, sharp,
+pdf, the database drivers and the other well-known modules.
+
+You normally do not install this package yourself: the first compile that
+needs one of these archives downloads this exact package from perry's GitHub
+release, verifies its signature and installs it into \`~/.perry/ext\`
+(\`PERRY_NO_AUTO_FETCH=1\` turns that off). To install it ahead of time, next
+to perry, use the version that matches your perry exactly:
+
+\`\`\`bash
+npm install -g ${name}@${p.version}   # global perry
+npm install --save-dev ${name}@${p.version}   # project perry
+perry target add --ext   # without npm
+\`\`\`
+`
+  writeFileSync(path.join(p.packageDir, 'README.md'), readme)
   return targetJson
 }
 
 // --- CLI entry --------------------------------------------------------------
-// node scripts/publish/stage-target.mts <bundle-dir> <package-dir> <triple> <version>
+// node scripts/publish/stage-target.mts [--ext] <source-dir> <package-dir> <triple> <version>
 // (the revision comes from PERRY_SOURCE_REVISION when set)
 import { fileURLToPath } from 'node:url'
 
@@ -193,19 +285,19 @@ const isMainModule =
   process.argv[1] === fileURLToPath(new URL(import.meta.url))
 
 if (isMainModule) {
-  const [bundleDir, packageDir, triple, version] = process.argv.slice(2)
-  if (!bundleDir || !packageDir || !triple || !version || process.argv.length !== 6) {
-    console.error('usage: stage-target.mts <bundle-dir> <package-dir> <triple> <version>')
+  const args = process.argv.slice(2)
+  const ext = args[0] === '--ext'
+  if (ext) args.shift()
+  const [sourceDir, packageDir, triple, version] = args
+  if (!sourceDir || !packageDir || !triple || !version || args.length !== 4) {
+    console.error('usage: stage-target.mts [--ext] <source-dir> <package-dir> <triple> <version>')
     process.exit(2)
   }
+  const revision = process.env.PERRY_SOURCE_REVISION || undefined
   try {
-    const staged = stageTarget({
-      bundleDir,
-      packageDir,
-      triple,
-      version,
-      revision: process.env.PERRY_SOURCE_REVISION || undefined,
-    })
+    const staged = ext
+      ? stageExt({ sourceDir, packageDir, triple, version, revision })
+      : stageTarget({ bundleDir: sourceDir, packageDir, triple, version, revision })
     console.log(`  ${staged.files.length} file(s), source ${staged.source_revision}`)
   } catch (error) {
     console.error(`  error: ${(error as Error).message}`)
