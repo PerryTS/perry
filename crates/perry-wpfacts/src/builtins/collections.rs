@@ -548,9 +548,17 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         }
         // Any other computed-key method: one that returns the receiver, or
         // one that makes an array through its `constructor` (`splice`, `map`
-        // ...).
+        // ...). A runtime protocol's call (`Model::protocol_calls`) is made
+        // per touched value and its result goes back to the runtime only:
+        // an array made there holds the receiver's elements, which the
+        // touch of the receiver already reaches, so the receiver stands
+        // for it (an array per such call would be touched in turn, without
+        // end).
         None => {
             ret_tok(m, call, t);
+            if m.protocol_calls.contains(&call) {
+                return;
+            }
             let out = site_tmpl(m, call, "Array");
             let ofa = m.field_any(out);
             m.edge(elems, ofa);

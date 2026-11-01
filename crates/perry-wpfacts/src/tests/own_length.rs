@@ -168,3 +168,25 @@ fn containers_that_may_be_no_array_and_other_objects_are_not_own_length() {
     }
 }
 
+
+#[test]
+fn a_protocol_touch_of_an_array_ends() {
+    // The runtime's protocol calls (here: a lowered join reads the
+    // elements and converts each to a String) are synthetic calls, one per
+    // touched value. Their results go back to the runtime only; minting an
+    // array per such call never ended (a stack overflow on chess).
+    for units in [false, true] {
+        let v = lengths(
+            r#"
+            function main() {
+                const a = [1, 2];
+                const b = [a, [3]];
+                console.log(b.join(","), a.join("-"), a.length);
+            }
+            main();
+        "#,
+            units,
+        );
+        assert_eq!(v.len(), 1, "units={units}: {v:?}");
+    }
+}
