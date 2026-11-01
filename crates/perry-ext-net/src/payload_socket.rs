@@ -816,6 +816,10 @@ fn register_callback(owner: f64, callback: f64, kind: CallbackKind) -> u64 {
     user
 }
 
+pub(crate) fn write_callback(owner: f64, callback: f64) -> u64 {
+    register_callback(owner, callback, CallbackKind::Write)
+}
+
 /// Writes retire in submission order. Consuming the JS queue's prefix also
 /// bounds its retained capacity for long-lived sockets; there is no token map.
 pub(crate) fn take_callback(owner: f64, user: u64) -> f64 {

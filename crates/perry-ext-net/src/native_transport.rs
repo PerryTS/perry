@@ -520,6 +520,12 @@ pub fn get(owner: f64, key: &str) -> f64 {
 pub fn write(owner: f64, bytes: &[u8], user: u64) -> Result<usize, tl::NetError> {
     crate::payload_tls::write(owner, bytes, user)
 }
+/// Registers `callback` for the next write submitted with the returned token.
+/// It runs once the socket reports that write complete, or with an error when
+/// the socket closes first.
+pub fn write_callback(owner: f64, callback: f64) -> u64 {
+    socket::write_callback(owner, callback)
+}
 /// End the write side on the protocol layer's behalf. This is `socket.end()` as
 /// far as the Socket is concerned (Node ends an HTTP connection with
 /// `destroySoon()`), so it marks `write_ended`: an application's own `end()`
