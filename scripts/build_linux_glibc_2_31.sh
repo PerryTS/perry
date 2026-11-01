@@ -9,7 +9,6 @@ set -euo pipefail
 
 target="${1:?usage: build_linux_glibc_2_31.sh <rust-target>}"
 target_dir="${CARGO_TARGET_DIR:-target}"
-abort_target_dir="${PERRY_ABORT_TARGET_DIR:-target-abort}"
 
 case "$target" in
   x86_64-unknown-linux-gnu)
@@ -72,12 +71,6 @@ fi
 "${cargo_build[@]}" --profile prod --target "$target" -p perry-runtime -p perry-runtime-static
 "${cargo_build[@]}" --profile prod --target "$target" -p perry-stdlib -p perry-stdlib-static
 
-# Ship the panic=abort runtime variant from the same old sysroot.
-CARGO_TARGET_DIR="$abort_target_dir" CARGO_PROFILE_PROD_PANIC=abort \
-  "${cargo_build[@]}" --profile prod --target "$target" -p perry-runtime -p perry-runtime-static
-cp "$abort_target_dir/$target/prod/libperry_runtime.a" \
-   "$target_dir/$target/prod/libperry_runtime_abort.a"
-
 # Match the ordinary release leg's best-effort extension-library build. #5716:
 # enumerate the explicit governance inventory rather than every matching
 # directory. Build perry, both wrappers and every extension in ONE invocation
@@ -87,7 +80,7 @@ cp "$abort_target_dir/$target/prod/libperry_runtime.a" \
 # the combined build fails, the core must still build alone, and each
 # extension is then retried on its own.
 governed_ext_packages=$(./scripts/release_ext_packages.sh)
-core_packages=(-p perry -p perry-runtime-static -p perry-stdlib-static -p perry-wasm-host "${wasi_features[@]}")
+core_packages=(-p perry -p perry-runtime-static -p perry-stdlib-static "${wasi_features[@]}")
 ext_packages=()
 while IFS= read -r package; do
   ext_packages+=(-p "$package")
@@ -103,6 +96,13 @@ if ! "${cargo_build[@]}" --keep-going --profile prod --target "$target" \
     echo "::endgroup::"
   done <<< "$governed_ext_packages"
 fi
+
+# The WebAssembly host archive: perry links it for a WebAssembly program and
+# never builds it while compiling. lto=false, as in release-packages.yml: an
+# ["rlib", "staticlib"] crate is never LTO'd, and under lto="thin" cargo would
+# embed LLVM bitcode in every object it ships.
+CARGO_PROFILE_PROD_LTO=false \
+  "${cargo_build[@]}" --profile prod --target "$target" -p perry-wasm-host
 
 # GC effects sidecars (<archive>.gc-effects) over the final runtime bytes: the
 # ext loop above re-links the runtime, so this is the last write. The table

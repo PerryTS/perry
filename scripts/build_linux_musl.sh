@@ -16,7 +16,6 @@ set -euo pipefail
 
 target="${1:?usage: build_linux_musl.sh <rust-target>}"
 target_dir="${CARGO_TARGET_DIR:-target}"
-abort_target_dir="${PERRY_ABORT_TARGET_DIR:-target-abort}"
 
 case "$target" in
   x86_64-unknown-linux-musl)
@@ -113,16 +112,16 @@ cargo_build=(mbx build)
 "${cargo_build[@]}" --profile prod --target "$target" -p perry
 "${cargo_build[@]}" --profile prod --target "$target" -p perry-runtime -p perry-runtime-static
 "${cargo_build[@]}" --profile prod --target "$target" -p perry-stdlib -p perry-stdlib-static
-# The WebAssembly host archive, co-built with the archives it links beside:
-# perry links it for a WebAssembly program and never builds it while compiling.
+# The compiler and both shipped wrapper archives in one graph (#7358).
 "${cargo_build[@]}" --profile prod --target "$target" \
-  -p perry -p perry-runtime-static -p perry-stdlib-static -p perry-wasm-host
+  -p perry -p perry-runtime-static -p perry-stdlib-static
 
-# Ship the panic=abort runtime variant from the same sysroot.
-env CARGO_TARGET_DIR="$abort_target_dir" CARGO_PROFILE_PROD_PANIC=abort \
-  "${cargo_build[@]}" --profile prod --target "$target" -p perry-runtime -p perry-runtime-static
-cp "$abort_target_dir/$target/prod/libperry_runtime.a" \
-   "$target_dir/$target/prod/libperry_runtime_abort.a"
+# The WebAssembly host archive: perry links it for a WebAssembly program and
+# never builds it while compiling. lto=false, as in release-packages.yml: an
+# ["rlib", "staticlib"] crate is never LTO'd, and under lto="thin" cargo would
+# embed LLVM bitcode in every object it ships.
+CARGO_PROFILE_PROD_LTO=false \
+  "${cargo_build[@]}" --profile prod --target "$target" -p perry-wasm-host
 
 # GC effects sidecars (<archive>.gc-effects) over the final runtime bytes.
 # The analyzer runs on the glibc host, so it links the host's LLVM 22, not the
