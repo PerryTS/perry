@@ -698,7 +698,7 @@ pub(crate) fn field_views<'c>(c: &'c ClassContract, k: &str) -> Vec<FieldView<'c
     c.facts
         .fields
         .iter()
-        .find(|f| f.key == k)
+        .find(|f| f.is(k, false))
         .map(FieldView::Plain)
         .into_iter()
         .collect()

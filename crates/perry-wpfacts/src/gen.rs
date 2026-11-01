@@ -1504,6 +1504,89 @@ impl<'a> Gen<'a> {
         }
     }
 
+    /// The storage key of private field `name` (`#x`) declared by class `c`
+    /// of module `mi`: the class its private elements belong to, the one it
+    /// was specialized from (codegen `element_class_id_in`), names it.
+    pub(crate) fn private_field_key(&self, mi: u32, c: &Class, name: &str) -> String {
+        let module = self.modules[mi as usize].1;
+        let mut cur = c;
+        for _ in 0..module.classes.len() {
+            match cur
+                .specialized_from
+                .as_deref()
+                .and_then(|o| module.classes.iter().find(|k| k.name == o))
+            {
+                Some(o) => cur = o,
+                None => break,
+            }
+        }
+        perry_hir::private_names::private_value_key(cur.id, name)
+    }
+
+    /// The key of static field `field_name` of class `class_name`: a `#x`
+    /// is the class's private static (codegen `static_field_meta`).
+    pub(crate) fn static_field_atom(
+        &mut self,
+        mi: u32,
+        class_name: &str,
+        field_name: &str,
+    ) -> Atom {
+        if field_name.starts_with('#') {
+            let module = self.modules[mi as usize].1;
+            if let Some(c) = module.classes.iter().find(|c| c.name == class_name) {
+                let key = self.private_field_key(mi, c, field_name);
+                return self.m.private_atom(&key);
+            }
+        }
+        self.m.atom(field_name)
+    }
+
+    /// The private fields construction claims on an instance of class
+    /// template `tm`, in claim order, when each lands at the next inline
+    /// slot after the birth keys (`perry_hir::private_names::
+    /// claimed_private_chain`, the layout codegen's completed private shape
+    /// has): the `i`th is at slot `birth keys + i`. `None` when the order is
+    /// not known, or the template's birth keys are not exactly the chain's
+    /// declared keys (codegen's birth layout).
+    pub(crate) fn claimed_private_atoms(&mut self, tm: TmplId) -> Option<Vec<Atom>> {
+        let TmplKind::Class {
+            module: mi,
+            name,
+            literal_shape: false,
+            ..
+        } = self.m.tmpls[tm as usize].kind.clone()
+        else {
+            return None;
+        };
+        let module: &'a Module = self.modules[mi as usize].1;
+        let class = module.classes.iter().find(|c| c.name == name)?;
+        let lookup = |n: &str| module.classes.iter().find(|c| c.name == n);
+        let chain = perry_hir::private_names::claimed_private_chain(class, &lookup)?;
+        let mut declared: Vec<Atom> = Vec::new();
+        for c in &chain {
+            for f in c.fields.iter().filter(|f| !f.is_private) {
+                let a = self.m.atom(&f.name);
+                push_unique(&mut declared, a);
+            }
+        }
+        let mut birth = self.m.tmpls[tm as usize].birth_keys.clone();
+        birth.sort_unstable();
+        declared.sort_unstable();
+        if birth != declared {
+            return None;
+        }
+        let mut out = Vec::new();
+        for c in &chain {
+            for f in c.fields.iter().filter(|f| f.is_private) {
+                let key = self.private_field_key(mi, c, &f.name);
+                out.push(self.m.private_atom(&key));
+            }
+        }
+        // Codegen reserves inline slack for at most 64 of them
+        // (`private_field_slot_count_in`).
+        (out.len() <= 64).then_some(out)
+    }
+
     /// A class name visible in module `mi`: its own classes, then imported
     /// bindings that hold exactly one class value.
     pub(crate) fn resolve_class_name(&mut self, mi: u32, name: &str) -> Option<TmplId> {

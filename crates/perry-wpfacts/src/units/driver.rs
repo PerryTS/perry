@@ -1792,7 +1792,7 @@ pub(super) fn typed_param_verdicts(pf: &mut ProgramFacts) {
                         && keys.iter().all(|k| {
                             t.fields
                                 .iter()
-                                .any(|f| &f.key == k && f.definite && f.data_field)
+                                .any(|f| f.is(k, false) && f.definite && f.data_field)
                         })
                 })
                 .collect()

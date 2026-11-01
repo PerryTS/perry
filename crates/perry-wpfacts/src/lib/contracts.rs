@@ -26,7 +26,7 @@ pub(super) fn class_statics(
                 .get(&cobj)
                 .into_iter()
                 .flatten()
-                .filter(|&&k| Some(k as usize) != pa)
+                .filter(|&&k| Some(k as usize) != pa && !g.m.is_private_atom(k))
                 .filter_map(|&k| {
                     let n = *g.m.fields.get(&(cobj, k))?;
                     let ts = g.m.nodes[n as usize].pts.to_sorted();
@@ -81,6 +81,10 @@ pub(super) fn literal_field_fns(
     keys.dedup();
     let mut out = Vec::new();
     'key: for a in keys {
+        // A class private field is no key of the layout to a reader.
+        if g.m.is_private_atom(a) {
+            continue;
+        }
         let mut fs: Vec<(model::FnIdx, model::Tok)> = Vec::new();
         for &t in &mine {
             let Some(&n) = g.m.fields.get(&(t, a)) else {
