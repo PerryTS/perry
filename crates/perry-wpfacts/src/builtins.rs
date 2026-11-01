@@ -1180,7 +1180,13 @@ fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
         TokKind::Func(..) | TokKind::Bound(_) => true,
         TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
             TmplKind::Arr { .. } => true,
-            TmplKind::BObj { what, .. } => members::bobj_family(what) != Family::Opaque,
+            TmplKind::BObj { what, .. } => {
+                members::bobj_family(what) != Family::Opaque
+                    || (*what == "RegExp"
+                        && name.as_deref().is_some_and(|n| {
+                            collections::regexp_runs_exec(n) || collections::regexp_species(n)
+                        }))
+            }
             _ => false,
         },
         _ => false,

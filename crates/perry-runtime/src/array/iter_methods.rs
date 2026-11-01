@@ -238,6 +238,7 @@ pub extern "C" fn js_array_forEach(arr: *const ArrayHeader, callback: *const Clo
         crate::typedarray_hook_slots::js_typed_array_for_each(
             arr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             callback,
+            f64::from_bits(crate::value::TAG_UNDEFINED),
         );
         return;
     }
@@ -330,6 +331,7 @@ pub extern "C" fn js_array_map(
         return crate::typedarray_hook_slots::js_typed_array_map(
             arr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             callback,
+            f64::from_bits(crate::value::TAG_UNDEFINED),
         ) as *mut ArrayHeader;
     }
     unsafe {
@@ -550,6 +552,7 @@ pub extern "C" fn js_array_filter(
         return crate::typedarray_hook_slots::js_typed_array_filter(
             arr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             callback,
+            f64::from_bits(crate::value::TAG_UNDEFINED),
         ) as *mut ArrayHeader;
     }
     unsafe {
@@ -652,6 +655,7 @@ pub extern "C" fn js_array_find(arr: *const ArrayHeader, callback: *const Closur
         return crate::typedarray_hook_slots::js_typed_array_find(
             arr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             callback,
+            f64::from_bits(crate::value::TAG_UNDEFINED),
         );
     }
     unsafe {
@@ -731,6 +735,7 @@ pub extern "C" fn js_array_findIndex(
         return crate::typedarray_hook_slots::js_typed_array_find_index(
             arr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             callback,
+            f64::from_bits(crate::value::TAG_UNDEFINED),
         ) as i32;
     }
     unsafe {
@@ -791,6 +796,7 @@ pub extern "C" fn js_array_find_last(
         return crate::typedarray_hook_slots::js_typed_array_find_last(
             arr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             callback,
+            f64::from_bits(crate::value::TAG_UNDEFINED),
         );
     }
     unsafe {
@@ -850,6 +856,7 @@ pub extern "C" fn js_array_find_last_index(
         let r = crate::typedarray_hook_slots::js_typed_array_find_last_index(
             arr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             callback,
+            f64::from_bits(crate::value::TAG_UNDEFINED),
         );
         return r as i32;
     }
@@ -967,6 +974,7 @@ pub extern "C" fn js_array_some(arr: *const ArrayHeader, callback: *const Closur
         return crate::typedarray_hook_slots::js_typed_array_some(
             arr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             callback,
+            f64::from_bits(crate::value::TAG_UNDEFINED),
         );
     }
     unsafe {
@@ -1138,6 +1146,7 @@ pub extern "C" fn js_array_every(arr: *const ArrayHeader, callback: *const Closu
         return crate::typedarray_hook_slots::js_typed_array_every(
             arr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             callback,
+            f64::from_bits(crate::value::TAG_UNDEFINED),
         );
     }
     unsafe {
