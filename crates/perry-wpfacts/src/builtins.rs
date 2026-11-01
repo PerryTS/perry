@@ -11,6 +11,7 @@ mod collections;
 mod members;
 mod native_protocol;
 pub(crate) mod string_methods;
+pub(crate) mod typed_array_methods;
 use collections::{array_method, bobj_method, function_method, iterate};
 pub(crate) use collections::to_prim;
 pub(crate) use collections::{WK_ITERATOR, WK_PREFIX};
@@ -734,6 +735,11 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             m.add_prim(dst, prim::UNDEF)
         }
         TokKind::Builtin(ns) => match name.as_deref() {
+            Some("@@__perry_wk_species") if matches!(ns, BuiltinNs::TypedArray | BuiltinNs::ArrayBuffer) => {
+                m.add_tok(dst, t);
+                let Key::Named(a) = key else { unreachable!() };
+                if !intrinsic_miss(m, a, NativeMiss::Load(dst)) { opaque_member(m, dst); }
+            }
             Some("prototype") => {
                 let op = m.tok(TokKind::ObjectProto);
                 m.add_tok(dst, op);
@@ -840,6 +846,12 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             TmplKind::BObj { what, .. } => {
                 let fam = members::bobj_family(what);
                 match (key, name.as_deref()) {
+                    (_, Some("constructor")) if what == "TypedArray" => {
+                        let ctor = m.tok(TokKind::Builtin(BuiltinNs::TypedArray));
+                        m.add_tok(dst, ctor);
+                        let Key::Named(a) = key else { unreachable!() };
+                        if !intrinsic_miss(m, a, NativeMiss::Load(dst)) { opaque_member(m, dst); }
+                    }
                     (_, Some("buffer")) if what == "TypedArray" => {
                         // B1: the backing buffer is observed (it can be
                         // transferred, detached or wrapped by another view).
@@ -1221,7 +1233,7 @@ fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
             TmplKind::Arr { .. } => true,
             TmplKind::BObj { what, .. } => {
                 members::bobj_family(what) != Family::Opaque
-                    || *what == "Date"
+                    || matches!(*what, "Date" | "TypedArray")
                     || (*what == "RegExp"
                         && name.as_deref().is_some_and(|n| {
                             string_methods::regexp_described(n) || collections::regexp_species(n)
@@ -2078,7 +2090,20 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             ret_tok(m, call, o);
         }
         BuiltinNs::TypedArray | BuiltinNs::ArrayBuffer => {
-            implicit_args(m, call, "typed array source", Protocol::Any);
+            // 23.2.5: object sources are iterated or read as array-like;
+            // elements ToNumber/ToBigInt. ArrayBuffer length is ToIndex,
+            // with only options.maxByteLength read. No identity is kept.
+            let c = m.calls[call as usize].clone();
+            if let Some(&src) = c.args.first() {
+                if ns == BuiltinNs::ArrayBuffer {
+                    string_methods::to_prim(m, src, "ArrayBuffer byteLength ToIndex");
+                    if let Some(&opts) = c.args.get(1) { string_methods::read_prim(m, opts, "maxByteLength", "ArrayBuffer maxByteLength ToIndex"); }
+                } else {
+                    let vals = typed_array_methods::source(m, call, src);
+                    string_methods::to_prim(m, vals, "typed-array constructor element ToNumber/ToBigInt");
+                    for &a in c.args.iter().skip(1).take(2) { string_methods::to_prim(m, a, "typed-array byteOffset/length ToIndex"); }
+                }
+            }
             let o = site_tmpl(m, call, "TypedArray");
             let fa = m.field_any(o);
             m.add_prim(fa, prim::NUM | prim::BIGINT);

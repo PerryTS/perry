@@ -365,7 +365,7 @@ fn iter_elems(m: &mut Model, it: Tok) -> NodeId {
 
 /// A fresh builtin iterator (array/Map/Set/string iterator, one template
 /// per source call site) yielding the values in `values`.
-fn iter_over(m: &mut Model, call: CallId, values: NodeId) -> Tok {
+pub(super) fn iter_over(m: &mut Model, call: CallId, values: NodeId) -> Tok {
     let it = site_tmpl(m, call, "Iterator");
     let e = iter_elems(m, it);
     m.edge(values, e);
@@ -374,7 +374,7 @@ fn iter_over(m: &mut Model, call: CallId, values: NodeId) -> Tok {
 
 /// The `[key, value]` pairs of an `entries()` iterator: one array template
 /// per call site holding `values` (plus the index for arrays).
-fn entry_pairs(m: &mut Model, call: CallId, values: NodeId, index: bool) -> NodeId {
+pub(super) fn entry_pairs(m: &mut Model, call: CallId, values: NodeId, index: bool) -> NodeId {
     let pair = site_tmpl(m, call, "Array");
     let fa = m.field_any(pair);
     m.edge(values, fa);
@@ -865,43 +865,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
                 ret_tok(m, call, t);
             }
         }
-        (
-            "TypedArray",
-            Some(n @ ("subarray" | "slice" | "fill" | "reverse" | "sort" | "map" | "filter")),
-        ) => {
-            let recv = m.node_l("typed-array");
-            m.add_tok(recv, t);
-            let num = m.node_l("num");
-            m.add_prim(num, prim::NUM);
-            if matches!(n, "sort" | "map" | "filter") {
-                // A comparator or callback gets (element, index, array) and
-                // thisArg; `map` and `sort` ToNumber its result.
-                if let Some(&cb) = c.args.first() {
-                    let (this, cargs) = if n == "sort" {
-                        (ThisArg::Undef, vec![num, num])
-                    } else {
-                        (
-                            c.args.get(1).map_or(ThisArg::Undef, |&x| ThisArg::Node(x)),
-                            vec![num, num, recv],
-                        )
-                    };
-                    let r = cb_call(m, call, cb, this, cargs);
-                    if n != "filter" {
-                        to_prim(m, r, "typed array callback result ToNumber");
-                    }
-                }
-            } else {
-                // The value and index arguments are ToNumber'd /
-                // ToIntegerOrInfinity'd.
-                for &a in &c.args {
-                    to_prim(m, a, "typed array method argument ToNumber");
-                }
-            }
-            if matches!(n, "subarray" | "slice" | "map" | "filter") {
-                species_constructor(m, recv);
-            }
-            ret_tok(m, call, t);
-        }
+        ("TypedArray", Some(n)) if typed_array_methods::method(m, t, n, call) => {}
         ("TypedArray", Some("transfer" | "transferToFixedLength" | "resize" | "grow")) => {
             let r = m.reason("B2 buffer transfer/resize");
             m.mark_hard(t, Hard::B2BufferResize, r);

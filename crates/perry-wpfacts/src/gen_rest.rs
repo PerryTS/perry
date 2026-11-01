@@ -962,9 +962,6 @@ impl<'a> Gen<'a> {
             | Expr::BufferFrom { .. }
             | Expr::BufferAlloc { .. }
             | Expr::BufferAllocUnsafe(..)
-            | Expr::Uint8ArrayNew(..)
-            | Expr::Uint8ArrayFrom(..)
-            | Expr::TypedArrayNew { .. }
             | Expr::FsReadFileBinary(..) => {
                 // Typed arrays / buffers hold numbers; an array argument is
                 // read, a buffer/view argument is shared (B1, flow only).
@@ -1000,6 +997,22 @@ impl<'a> Gen<'a> {
                 }
                 let fa = self.m.field_any(t);
                 self.m.add_prim(fa, prim::NUM);
+                n
+            }
+            Expr::Uint8ArrayNew(..) | Expr::Uint8ArrayFrom(..) | Expr::TypedArrayNew { .. } => {
+                // Constructor algorithm: source iterable/array-like reads,
+                // followed by numeric element conversion, not escape.
+                let args: Vec<_> = kids(e).iter().map(|k| self.expr(fx, k)).collect();
+                let (call, _) = self.new_call(ThisArg::Undef, args.clone(), vec![]);
+                let (t, n) = self.bobj(mi, "TypedArray");
+                let owner = self.begin_indexed_owner(mi, t, e);
+                if let Some(&v) = args.first() {
+                    let vals = crate::builtins::typed_array_methods::source(&mut self.m, call, v);
+                    crate::builtins::string_methods::to_prim(&mut self.m, vals, "typed-array constructor element ToNumber/ToBigInt");
+                    self.m.cons(v, Cons::ShareBuffer { ta: t });
+                    if owner { if let TokKind::Obj(tm, _) = self.m.toks[t as usize] { self.m.ta_birth_input.insert(tm, v); } }
+                }
+                let fa = self.m.field_any(t); self.m.add_prim(fa, prim::NUM | prim::BIGINT);
                 n
             }
             Expr::BufferFromArrayBuffer { .. }
