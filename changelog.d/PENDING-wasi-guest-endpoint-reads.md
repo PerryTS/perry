@@ -1,0 +1,1 @@
+Experimental guest endpoints gain read-operation custody with weak unobserved Promises, retention after observation, typed completion preparation, originating-task context checks and cancellation cleanup. Guest ABI 2 stays intact through an additive endpoint callback table; public async generation remains guarded while generated I/O and producer coverage are completed.

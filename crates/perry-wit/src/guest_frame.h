@@ -17,6 +17,14 @@ typedef struct {
     uint32_t (*resource)(void *, uint32_t, uint32_t, uint32_t);
 } perry_guest_ops;
 int32_t js_component_set_guest_ops(const perry_guest_ops *);
+/* Additive endpoint ABI 1: operation 0 starts a read (argument = capacity).
+   Returning 0 adopts the heap frame; -1 leaves it owned by the runtime. */
+typedef struct {
+    uint32_t abi_version;
+    size_t size;
+    int32_t (*operation)(void *, uint32_t, uint32_t, uint32_t, uint32_t);
+} perry_guest_endpoint_ops;
+int32_t js_component_set_guest_endpoint_ops(const perry_guest_endpoint_ops *);
 void *perry_component_frame_new(void);
 /* Binds the module's layout image before allocating the returned owned frame.
    Initializer errors are retained in that frame; a null initializer returns NULL. */
@@ -101,6 +109,13 @@ uint32_t perry_component_frame_endpoint_lower(void *, uint32_t, uint32_t);
 /* 1 drop ready, 0 empty, -1 error. Return before the typed canonical drop.
    Outputs must be distinct. Handle 0 is not an empty-queue sentinel. */
 int32_t perry_component_frame_endpoint_pop(void *, uint32_t *, uint32_t *);
+/* Status: 1 live observer, 0 cancel/retire, -1 error. Prepare pins a live
+   observer for one finite typed completion; zero means discard without lift.
+   Finish flags: 1 terminal reader, 2 aborted (value ignored). C acknowledges
+   native I/O before finish, and retains the frame through typed cleanup. */
+int32_t perry_component_frame_endpoint_status(void *);
+int32_t perry_component_frame_endpoint_prepare(void *);
+int32_t perry_component_frame_endpoint_finish(void *, uint32_t, uint32_t);
 /* Retire incoming borrows before task.return/cancel. The frame and its values
    remain alive for post-return work. Also releases borrows on a failed frame. */
 int32_t perry_component_frame_resource_scope_end(void *);

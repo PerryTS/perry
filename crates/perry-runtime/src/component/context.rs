@@ -19,6 +19,7 @@ pub(super) struct Context {
     // Canonical guest identities, drained by C after all Rust scopes return.
     // Heap teardown frees this metadata; it never calls canonical operations.
     pub pending_guest_endpoints: std::collections::VecDeque<(u32, u32)>,
+    pub next_guest_endpoint_operation: u32,
 }
 
 impl Drop for Context {
@@ -44,6 +45,7 @@ pub(super) fn publish(world: Value, imports: f64) -> f64 {
         pending_resource_drops: Vec::new(),
         pending_collections: Vec::new(),
         pending_guest_endpoints: std::collections::VecDeque::new(),
+        next_guest_endpoint_operation: 1,
     }));
     let cell = unsafe {
         crate::native_handle::native_handle_new_rust_payload(

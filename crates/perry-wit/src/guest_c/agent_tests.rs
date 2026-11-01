@@ -9,8 +9,9 @@ fn agent_tls_bridge_covers_the_frame_abi_and_restores_nested_sdk_contexts() {
         .filter_map(|line| {
             let (signature, _) = line.split_once('(')?;
             let name = signature.split_whitespace().last()?.trim_start_matches('*');
-            (name.starts_with("perry_component_frame_") || name == "js_component_set_guest_ops")
-                .then_some(name)
+            (name.starts_with("perry_component_frame_")
+                || name.starts_with("js_component_set_guest_"))
+            .then_some(name)
         })
         .collect();
     let bridged: BTreeSet<_> = agent
@@ -18,7 +19,8 @@ fn agent_tls_bridge_covers_the_frame_abi_and_restores_nested_sdk_contexts() {
         .filter_map(|line| line.strip_prefix("#define "))
         .filter_map(|line| line.split_whitespace().next())
         .filter(|name| {
-            name.starts_with("perry_component_frame_") || *name == "js_component_set_guest_ops"
+            name.starts_with("perry_component_frame_")
+                || name.starts_with("js_component_set_guest_")
         })
         .collect();
     assert_eq!(

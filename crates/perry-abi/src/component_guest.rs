@@ -22,3 +22,22 @@ pub struct ComponentGuestOps {
     pub import: GuestImport,
     pub resource: GuestResource,
 }
+
+/// Additive endpoint-operation table; the published Guest ABI 2 is unchanged.
+/// Operation 0 starts a read with `argument` as the positive element capacity.
+/// Return 0 only after adopting the fresh heap frame; -1 leaves it with Rust.
+/// The frame contains rooted private operation state, never a raw JS address.
+pub type GuestEndpointOperation = unsafe extern "C" fn(
+    frame: *mut c_void,
+    ty: u32,
+    handle: u32,
+    operation: u32,
+    argument: u32,
+) -> i32;
+pub const GUEST_ENDPOINT_ABI_VERSION: u32 = 1;
+#[repr(C)]
+pub struct ComponentGuestEndpointOps {
+    pub abi_version: u32,
+    pub size: usize,
+    pub operation: GuestEndpointOperation,
+}

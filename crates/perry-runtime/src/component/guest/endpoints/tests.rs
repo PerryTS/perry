@@ -2,12 +2,12 @@ use super::super::frame::*;
 use super::super::resources;
 use super::*;
 
-struct Registry<'a> {
+pub(super) struct Registry<'a> {
     global: crate::gc::RuntimeHandle<'a>,
     previous: crate::gc::RuntimeHandle<'a>,
 }
 impl<'a> Registry<'a> {
-    fn new(scope: &'a RuntimeHandleScope) -> Self {
+    pub(super) fn new(scope: &'a RuntimeHandleScope) -> Self {
         let global = scope.root_nanbox_f64(crate::object::js_get_global_this());
         let previous = scope.root_nanbox_f64(super::super::maybe_registry());
         let owner = scope.root_nanbox_f64(context::publish(serde_json::json!({

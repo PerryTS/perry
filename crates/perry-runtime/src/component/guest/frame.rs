@@ -71,6 +71,7 @@ pub(super) struct Frame {
     lifetime: Option<u32>,
     task: Option<task::TaskContext>,
     suspended: Option<suspended::SuspendedImport>,
+    pub(super) endpoint_io: Option<super::endpoints::io::Operation>,
 }
 
 impl Frame {
@@ -112,6 +113,7 @@ impl Frame {
             lifetime: None,
             task: None,
             suspended: None,
+            endpoint_io: None,
         }
     }
 
@@ -243,6 +245,7 @@ impl Drop for Frame {
         // The GC-cell finalizer flips this flag before heap unmapping. A late
         // native C-task drop must free only Rust state after that point.
         if self.alive.load(Ordering::Acquire) {
+            super::endpoints::io::retire(self);
             super::resources::release_borrows(self);
             self.end_resource_scope();
             let owner = unsafe { payload::link_event_owner(self.owner) }
@@ -739,7 +742,10 @@ const fn adapter_entry(code: *const ()) -> AdapterEntry {
 }
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
-static KEEP_ADAPTER_ENTRIES: [AdapterEntry; 53] = [
+static KEEP_ADAPTER_ENTRIES: [AdapterEntry; 56] = [
+    adapter_entry(super::endpoints::io::perry_component_frame_endpoint_status as *const ()),
+    adapter_entry(super::endpoints::io::perry_component_frame_endpoint_prepare as *const ()),
+    adapter_entry(super::endpoints::io::perry_component_frame_endpoint_finish as *const ()),
     adapter_entry(super::endpoints::perry_component_frame_endpoint_lift as *const ()),
     adapter_entry(super::endpoints::perry_component_frame_endpoint_lower as *const ()),
     adapter_entry(super::endpoints::perry_component_frame_endpoint_pop as *const ()),

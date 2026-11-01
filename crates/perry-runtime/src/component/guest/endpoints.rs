@@ -8,6 +8,7 @@ use crate::object::owned_state_bag::{
     COMPONENT_GUEST_ENDPOINT, COMPONENT_GUEST_ENDPOINT_FINALIZATION,
 };
 use std::ffi::c_void;
+pub(super) mod io;
 
 const OWNER: u32 = 0;
 const TYPE: u32 = 1;
@@ -16,6 +17,8 @@ const STATE: u32 = 3;
 const OPEN: f64 = 1.0;
 const TRANSFERRED: f64 = 2.0;
 const CLOSED: f64 = 3.0;
+const EOF: f64 = 4.0;
+const PENDING: u32 = 4;
 
 fn get(fields: f64, index: u32) -> f64 {
     crate::array::js_array_get_f64(array_pointer(fields).unwrap(), index)
@@ -109,9 +112,9 @@ fn wrap(ty: u32, handle: u32) -> f64 {
     // component rather than publishing a capability with the wrong drop ABI.
     drop(schema(owner.get_nanbox_f64(), ty).unwrap_or_else(|message| fail(message)));
     let fields = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
-        crate::array::js_array_alloc_with_length(4) as i64,
+        crate::array::js_array_alloc_with_length(5) as i64,
     ));
-    for (index, value) in [owner.get_nanbox_f64(), ty as f64, handle as f64, OPEN]
+    for (index, value) in [owner.get_nanbox_f64(), ty as f64, handle as f64, OPEN, 0.0]
         .into_iter()
         .enumerate()
     {
@@ -129,6 +132,21 @@ fn wrap(ty: u32, handle: u32) -> f64 {
     }
     // A future endpoint is a capability, not a Promise/thenable.
     set_field(wrapper.get_nanbox_f64(), b"then", undefined());
+    let read = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+        crate::fn_info!(io::read, 1),
+        1,
+    ));
+    crate::closure::js_closure_set_capture_f64(read.get_raw_mut_ptr(), 0, wrapper.get_nanbox_f64());
+    crate::object::set_builtin_closure_non_constructable(
+        read.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
+    );
+    set_field(
+        wrapper.get_nanbox_f64(),
+        b"read",
+        crate::value::js_nanbox_pointer(
+            read.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64
+        ),
+    );
     let dispose = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
         crate::fn_info!(dispose, 0),
         1,
@@ -186,7 +204,7 @@ extern "C" fn dispose(
 ) -> f64 {
     let wrapper = crate::closure::js_closure_get_capture_f64(closure, 0);
     let fields = data(wrapper);
-    if get(fields, STATE) == CLOSED {
+    if get(fields, STATE) == CLOSED || get(fields, STATE) == EOF {
         return undefined();
     }
     let fields = live(wrapper);
@@ -197,6 +215,9 @@ extern "C" fn dispose(
 
 fn lower(frame: &mut Frame, slot: u32, ty: u32) -> u32 {
     let fields = live(frame.get(slot));
+    if get(fields, PENDING) != 0.0 {
+        fail("Cannot transfer a guest async value with a pending read");
+    }
     let owner = get(fields, OWNER);
     if !same_type(owner, get(fields, TYPE) as u32, ty).unwrap_or_else(|message| fail(message)) {
         fail("Guest async value type mismatch");
@@ -214,7 +235,10 @@ fn lower(frame: &mut Frame, slot: u32, ty: u32) -> u32 {
 }
 pub(super) fn validate_transfers(frame: &Frame) {
     for slot in &frame.endpoint_transfers {
-        live(frame.get(*slot));
+        let fields = live(frame.get(*slot));
+        if get(fields, PENDING) != 0.0 {
+            fail("Cannot transfer a guest async value with a pending read");
+        }
     }
 }
 pub(super) fn commit_transfers(frame: &mut Frame) {

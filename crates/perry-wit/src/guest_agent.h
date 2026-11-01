@@ -37,6 +37,10 @@ static inline void *perry_agent_enter(void) {
     }
 
 PERRY_AGENT_RETURN(int32_t, js_component_set_guest_ops, (const perry_guest_ops * a0), (a0))
+PERRY_AGENT_RETURN(int32_t, js_component_set_guest_endpoint_ops, (const perry_guest_endpoint_ops * a0), (a0))
+PERRY_AGENT_RETURN(int32_t, perry_component_frame_endpoint_status, (void *a0), (a0))
+PERRY_AGENT_RETURN(int32_t, perry_component_frame_endpoint_prepare, (void *a0), (a0))
+PERRY_AGENT_RETURN(int32_t, perry_component_frame_endpoint_finish, (void *a0, uint32_t a1, uint32_t a2), (a0, a1, a2))
 PERRY_AGENT_VOID(perry_component_frame_drop, (void * a0), (a0))
 PERRY_AGENT_RETURN(int32_t, perry_component_frame_failed, (void * a0), (a0))
 PERRY_AGENT_VOID(perry_component_frame_fail, (void * a0, const uint8_t * a1, size_t a2), (a0, a1, a2))
@@ -93,6 +97,10 @@ PERRY_AGENT_RETURN(void *, perry_component_frame_task_new, (void), ())
 #undef PERRY_AGENT_VOID
 
 #define js_component_set_guest_ops perry_agent_js_component_set_guest_ops
+#define js_component_set_guest_endpoint_ops perry_agent_js_component_set_guest_endpoint_ops
+#define perry_component_frame_endpoint_status perry_agent_perry_component_frame_endpoint_status
+#define perry_component_frame_endpoint_prepare perry_agent_perry_component_frame_endpoint_prepare
+#define perry_component_frame_endpoint_finish perry_agent_perry_component_frame_endpoint_finish
 #define perry_component_frame_drop perry_agent_perry_component_frame_drop
 #define perry_component_frame_failed perry_agent_perry_component_frame_failed
 #define perry_component_frame_fail perry_agent_perry_component_frame_fail
