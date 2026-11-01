@@ -63,10 +63,10 @@ impl CopiedMinorEligibility {
         let snapshot = remembered_dirty_snapshot::<DIAGNOSTICS>();
         let mut dirty_checker =
             CopyingNurseryPreflight::new(ptrs, CopiedMinorFallbackReason::PinnedYoungDirtySlot);
-        scan_remembered_dirty_slots_copying::<DIAGNOSTICS>(
+        scan_remembered_dirty_slots_copying::<DIAGNOSTICS, false>(
             &snapshot,
             None,
-            |slot, _header, _external, _stats| unsafe {
+            |slot, _header, _weak_holder, _external, _stats| unsafe {
                 dirty_checker.check_bits(slot.read());
             },
         );

@@ -148,9 +148,13 @@ mod oracle {
             visit_ffi_mutable_registered_roots_with_sources(&mut visitor, None);
         }
         let snapshot = remembered_dirty_snapshot::<false>();
-        scan_remembered_dirty_slots_copying::<false>(&snapshot, None, |slot, _, _, _| unsafe {
-            trace.bits(slot.read());
-        });
+        scan_remembered_dirty_slots_copying::<false, false>(
+            &snapshot,
+            None,
+            |slot, _, _, _, _| unsafe {
+                trace.bits(slot.read());
+            },
+        );
         unsafe {
             super::super::image_cells::visit_leaf_service_roots(|bits| trace.bits(bits));
             trace.drain();

@@ -1256,7 +1256,7 @@ pub(super) fn run_copied_minor_attempt<const DIAGNOSTICS: bool>(
     let mut remembered_slots = 0usize;
     if !untraced {
         let _phase = super::pin::CopyingWalkPhaseGuard::enter("remembered_set");
-        let remembered_stats = scan_remembered_dirty_slots_copying::<DIAGNOSTICS>(
+        let remembered_stats = scan_remembered_dirty_slots_copying::<DIAGNOSTICS, true>(
             &snapshot,
             Some(&mut dirty_scan_covered),
             |slot, header, weak_holder, external, stats| unsafe {

@@ -296,10 +296,10 @@ impl CopyingNurseryPreflight {
     /// a conditional pinned value in an old dirty table.
     pub(super) fn check_dirty_roots<const DIAGNOSTICS: bool>(&mut self) {
         let snapshot = remembered_dirty_snapshot::<DIAGNOSTICS>();
-        scan_remembered_dirty_slots_copying::<DIAGNOSTICS>(
+        scan_remembered_dirty_slots_copying::<DIAGNOSTICS, false>(
             &snapshot,
             None,
-            |slot, _, _, _| unsafe {
+            |slot, _, _, _, _| unsafe {
                 self.check_bits_with_reason(
                     slot.read(),
                     CopiedMinorFallbackReason::PinnedYoungDirtySlot,

@@ -5,7 +5,12 @@
 
 use super::*;
 
-pub(in crate::gc) fn scan_remembered_dirty_slots_copying<const DIAGNOSTICS: bool>(
+// Preflight and leaf tracing omit weak edges; only the copying visitor may
+// receive them, because it repairs their addresses without tracing targets.
+pub(in crate::gc) fn scan_remembered_dirty_slots_copying<
+    const DIAGNOSTICS: bool,
+    const VISIT_WEAK: bool,
+>(
     snapshot: &RememberedDirtySnapshot,
     mut covered: Option<&mut crate::fast_hash::PtrHashSet<usize>>,
     mut visit: impl FnMut(GcMutableSlot, *mut GcHeader, bool, bool, &mut RememberedSetTraceStats),
@@ -79,19 +84,17 @@ pub(in crate::gc) fn scan_remembered_dirty_slots_copying<const DIAGNOSTICS: bool
             stats.valid_roots += 1;
             stats.dirty_objects_scanned += 1;
             let mut changed = false;
-            let weak_holder = weak_holder_fact(header);
+            let weak_holder = VISIT_WEAK && weak_holder_fact(header);
             let mut visit_slot =
                 |slot: GcMutableSlot, external: bool, stats: &mut RememberedSetTraceStats| {
                     let before = slot.read();
                     visit(slot, header, weak_holder, external, stats);
                     changed |= slot.read() != before;
                 };
-            let complete = super::barrier::scan_dirty_object_slots_with_weak::<DIAGNOSTICS, true>(
-                header,
-                &snapshot.dirty_pages,
-                stats,
-                &mut visit_slot,
-            );
+            let complete = super::barrier::scan_dirty_object_slots_with_weak::<
+                DIAGNOSTICS,
+                VISIT_WEAK,
+            >(header, &snapshot.dirty_pages, stats, &mut visit_slot);
             if complete {
                 if let Some(covered) = covered.as_deref_mut() {
                     covered.insert(header as usize);
