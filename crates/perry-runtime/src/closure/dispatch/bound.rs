@@ -680,6 +680,16 @@ unsafe fn bound_target_declared_name(target_value: f64) -> String {
 /// re-derived afterward before the final cache write (mirrors
 /// `js_object_get_own_property_descriptor`'s closure arm, #6943).
 pub(crate) unsafe fn bound_function_lazy_name(ptr: usize) -> f64 {
+    let (name_value, ptr) = bound_function_name_value(ptr);
+    crate::closure::closure_define_dynamic_prop(ptr, "name", name_value);
+    name_value
+}
+
+/// The bound function `ptr`'s `name` value (`"bound " + target name`),
+/// built without recording it, and `ptr` after the allocation. For the
+/// function's bag birth, which records it as the bag's intrinsic slot: a
+/// define from inside the birth would be born a bag of its own first.
+pub(crate) unsafe fn bound_function_name_value(ptr: usize) -> (f64, usize) {
     use crate::value::JSValue;
 
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -707,9 +717,7 @@ pub(crate) unsafe fn bound_function_lazy_name(ptr: usize) -> f64 {
             crate::string::js_string_from_bytes(bound_name.as_ptr(), bound_name.len() as u32);
         f64::from_bits(JSValue::string_ptr(name_ptr).bits())
     });
-    let ptr = ptr_raw as usize;
-    crate::closure::closure_define_dynamic_prop(ptr, "name", name_value);
-    name_value
+    (name_value, ptr_raw as usize)
 }
 
 /// `Function.prototype.bind(thisArg, ...boundArgs)` — create a distinct bound
