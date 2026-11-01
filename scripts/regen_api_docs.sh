@@ -15,7 +15,8 @@ cd "$ROOT"
 echo "==> Building perry (release)…"
 cargo build --release -p perry
 
-PERRY="$ROOT/target/release/perry"
+TARGET_DIR="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')"
+PERRY="$TARGET_DIR/release/perry"
 if [[ -f "${PERRY}.exe" ]]; then
   PERRY="${PERRY}.exe"
 fi
