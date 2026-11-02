@@ -605,9 +605,17 @@ enum HasInstanceOutcome {
 /// Spec `InstanceofOperator` / `GetMethod(C, @@hasInstance)`: a `null`/`undefined`
 /// value means "no hook" (→ ordinary `instanceof`), but a present **non-callable**
 /// value is a `TypeError` rather than a silent fall-through. `cb` is the already
-/// resolved OWN `@@hasInstance` value; this never resolves the inherited
-/// `Function.prototype` default thunk, so there is no `instanceof` recursion.
-fn dispatch_own_has_instance(cb: f64, value: f64) -> HasInstanceOutcome {
+/// resolved `@@hasInstance` value of `target` (C), and a callable hook runs as
+/// `Call(cb, C, « value »)`: C is its receiver.
+///
+/// `Function.prototype[@@hasInstance]` (the intrinsic default, reached through
+/// a linked chain or copied onto C) answers `OrdinaryHasInstance(C, value)`,
+/// which is the ordinary dispatch the caller continues with, so it falls
+/// through. It is recognized by its code, the function's identity: comparing
+/// value bits against a fresh read of `Function.prototype`'s slot misses it
+/// whenever that read allocates and the collector moves `cb` first, and the
+/// thunk run with C would re-enter this same dispatch.
+fn dispatch_own_has_instance(cb: f64, target: f64, value: f64) -> HasInstanceOutcome {
     let jv = crate::JSValue::from_bits(cb.to_bits());
     if jv.is_undefined() || jv.is_null() {
         return HasInstanceOutcome::Fallthrough;
@@ -615,11 +623,14 @@ fn dispatch_own_has_instance(cb: f64, value: f64) -> HasInstanceOutcome {
     if !value_is_callable(cb) {
         throw_type_error(b"Symbol(Symbol.hasInstance) is not a function");
     }
+    if is_intrinsic_has_instance(cb) {
+        return HasInstanceOutcome::Fallthrough;
+    }
     let args = [value];
     let r = unsafe {
         crate::closure::js_native_call_value(
             cb,
-            crate::closure::plain_call_receiver(),
+            crate::closure::JsThis::from_f64(target),
             args.as_ptr(),
             1,
         )
@@ -629,6 +640,20 @@ fn dispatch_own_has_instance(cb: f64, value: f64) -> HasInstanceOutcome {
     } else {
         f64::from_bits(crate::value::TAG_FALSE)
     })
+}
+
+/// Is `cb` the intrinsic `Function.prototype[@@hasInstance]`? Its code is
+/// [`function_prototype_has_instance_thunk`]; only the runtime mints a
+/// function with that code.
+fn is_intrinsic_has_instance(cb: f64) -> bool {
+    let jv = crate::JSValue::from_bits(cb.to_bits());
+    if !jv.is_pointer() {
+        return false;
+    }
+    let addr = jv.as_pointer::<u8>() as usize;
+    crate::closure::is_closure_ptr(addr)
+        && unsafe { (*(addr as *const crate::closure::ClosureHeader)).code() }
+            == function_prototype_has_instance_thunk as *const u8
 }
 
 fn is_event_emitter_instance_value(value: f64) -> bool {
