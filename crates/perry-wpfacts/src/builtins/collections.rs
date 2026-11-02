@@ -822,8 +822,10 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
 
     let c = m.calls[call as usize].clone();
     let elems = m.field_any(t);
-    // The four collection kinds share one model of their contents.
-    let what = match members::bobj_family(what) {
+    // The four collection kinds share one model of their contents; a
+    // member no arm models is looked up on the kind's own chain.
+    let (kind, fam) = (what, members::bobj_family(what));
+    let what = match fam {
         Family::Collection => "Collection",
         _ => what,
     };
@@ -998,13 +1000,6 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             | "fromEntries",
             Some(n),
         ) => array_method(m, t, Some(n), call),
-        (_, Some(n)) => undescribed_method(
-            m,
-            members::bobj_family(what),
-            t,
-            n,
-            call,
-            &format!("argument of {what}.{n}"),
-        ),
+        (_, Some(n)) => undescribed_method(m, fam, t, n, call, &format!("argument of {kind}.{n}")),
     }
 }
