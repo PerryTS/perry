@@ -722,7 +722,13 @@ pub(crate) fn lower_module_decl(
                                     let module_name = match (class_name, module_name.as_deref()) {
                                         _ if matches!(
                                             sqlite_export,
-                                            Some("DatabaseSync" | "StatementSync" | "Session")
+                                            Some(
+                                                "Database"
+                                                    | "DatabaseSync"
+                                                    | "Statement"
+                                                    | "StatementSync"
+                                                    | "Session"
+                                            )
                                         ) =>
                                         {
                                             None

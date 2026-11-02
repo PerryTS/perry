@@ -94,7 +94,7 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     class("sqlite", "Database"),
     class("sqlite", "DatabaseSync"),
     class("sqlite", "Session"),
-    class("sqlite", "SQLTagStore"),
+    internal_class("sqlite", "SQLTagStore"),
     class("sqlite", "Statement"),
     class("sqlite", "StatementSync"),
     method("sqlite", "Database", false, None),
