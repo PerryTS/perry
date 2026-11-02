@@ -97,7 +97,7 @@ struct PackagedTriples {
 }
 
 /// Whether perry releases publish a `kind` package for `triple`. A triple
-/// with none (a windows-msvc cross, a musl host's extensions) keeps the
+/// with none (a windows-msvc cross target) keeps the
 /// generic missing-library errors instead of naming a package that does not
 /// exist, and is never fetched.
 pub(crate) fn is_packaged(kind: PackageKind, triple: &str) -> bool {
