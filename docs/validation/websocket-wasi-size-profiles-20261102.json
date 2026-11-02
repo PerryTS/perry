@@ -1,0 +1,120 @@
+{
+  "date": "2026-11-02",
+  "platform": "Linux x86_64",
+  "scope": "Same-source P1 runtime optimization profiles, unchanged ThinLTO and feature set",
+  "source": "5cd1705734c73181d74380cac317f358a67c868d",
+  "nativeCompilerSource": "6ea71cc1a3675506869ea1ea3fe1cdff30d3fa7d",
+  "upstreamCommit": "d7f94f5634f733415f1f52547fe45b3794d9d41a",
+  "sourceUnmodified": true,
+  "sourceSha256": "ea9269e655def8f0aa95c09c467a5cb048f71e55994d22d1c90285f513b5de49",
+  "results": [
+    {
+      "runtimeOptLevel": "z",
+      "control": {
+        "module": {
+          "bytes": 5873817,
+          "sha256": "8dd530f8038f5e18476d9f011fd323d1e96f906e65b931d8a8b771770fd76d8f"
+        },
+        "runtime": {
+          "bytes": 56933756,
+          "sha256": "5dbbab317d63b6e08baf7d557fbd28cc7d07123a3d7cb3a0509bd84eaad05a06"
+        },
+        "gzipBytes": 1909769
+      },
+      "variant": {
+        "module": {
+          "bytes": 3650936,
+          "sha256": "bd08fe0eecb865bd854b9a085c9d23521964a34dbdb1dddc5f45bb1081784c7d"
+        },
+        "runtime": {
+          "bytes": 61261054,
+          "sha256": "daf2ed3d6f072014584eed4273fea64c26be9824a4fe2fb88325eb4570786017"
+        },
+        "gzipBytes": 1285892
+      },
+      "controlMedian": {
+        "medianWallSeconds": 16.847429254004965,
+        "medianMaxResidentKiB": 121480
+      },
+      "variantMedian": {
+        "medianWallSeconds": 18.06176457402762,
+        "medianMaxResidentKiB": 113556
+      },
+      "moduleReductionPercent": 37.84389265106489,
+      "medianTimeIncreasePercent": 7.207837479026558
+    },
+    {
+      "runtimeOptLevel": "s",
+      "control": {
+        "module": {
+          "bytes": 5873817,
+          "sha256": "8dd530f8038f5e18476d9f011fd323d1e96f906e65b931d8a8b771770fd76d8f"
+        },
+        "runtime": {
+          "bytes": 56933756,
+          "sha256": "5dbbab317d63b6e08baf7d557fbd28cc7d07123a3d7cb3a0509bd84eaad05a06"
+        },
+        "gzipBytes": 1909769
+      },
+      "variant": {
+        "module": {
+          "bytes": 4748649,
+          "sha256": "56fed2289f4a057c2f0dc6cd0c4dc30818ce160dc26e9d216c7f09b4efb68efa"
+        },
+        "runtime": {
+          "bytes": 60588184,
+          "sha256": "4771a74d75afa4cdf132b22ff700df1a0d09810bbb68b23ef5358038ece1b81b"
+        },
+        "gzipBytes": 1619730
+      },
+      "controlMedian": {
+        "medianWallSeconds": 16.591538622014923,
+        "medianMaxResidentKiB": 121696
+      },
+      "variantMedian": {
+        "medianWallSeconds": 16.84277670699521,
+        "medianMaxResidentKiB": 114968
+      },
+      "moduleReductionPercent": 19.15565295956616,
+      "medianTimeIncreasePercent": 1.5142542877061738
+    }
+  ],
+  "selectedRuntimeOptLevel": "s",
+  "lto": "thin",
+  "sameSourceAndFeatures": true,
+  "requiredUnwindArgumentsVerified": true,
+  "rustflagsEnvironmentUnmodified": true,
+  "binary20MiBRegularOutputsVerified": true,
+  "regularOutputBytes": 20974867,
+  "regularOutputSha256": "651575bc38ea827a9d1e13916b84891de0bd033d8becddded3dc4706a2583840",
+  "method": {
+    "repetitions": 5,
+    "orderRotated": true,
+    "sharedHost": true,
+    "processCold": true,
+    "osCachesWarm": true,
+    "startupAndWrapperIncluded": true,
+    "wholeNodeHostRssIncluded": true,
+    "stdin": "inherited regular file",
+    "stdout": "discarded during timing; separately verified byte for byte"
+  },
+  "evidence": {
+    "archive": {
+      "archive": "websocket-size-v030-evidence.tar.gz",
+      "indexedFiles": 121,
+      "bytes": 298711992,
+      "sha256": "8846eec5778f32f77bbaba58555332c6f7679200b3b468f15066473a435988cd"
+    },
+    "exactRegularFileSetVerified": true,
+    "allIndexedSizesAndHashesVerified": true,
+    "archiveExtracted": false
+  },
+  "limitations": [
+    "Regular-file stdin process measurements include launch/startup and whole Node host RSS",
+    "Not sustained socket throughput or a full compiler comparison",
+    "P1 profile experiment does not qualify P2, P3, native archives, installed packages, or the subsequent builder change"
+  ],
+  "subsequentBuilderChangeQualified": false,
+  "fullWasi030Qualified": false,
+  "fullCompilerComparisonQualified": false
+}

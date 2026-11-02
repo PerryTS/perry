@@ -67,6 +67,27 @@ roughly 18–20% process-time difference. Native size differs by about 41 times
 and P1 size by about 37 times. The scriptc P1 artifact provides a concrete
 small-module reference alongside the upstream WasmGC example.
 
+A [same-source runtime profile experiment](validation/websocket-wasi-size-profiles-20261102.json)
+at `5cd1705734` isolates the WASI runtime optimization setting. Package features,
+ThinLTO and required unwind arguments remain identical. Each variant passes
+the three independent wire cases and a separate exact 20 MiB regular-file
+output control before five rotated process measurements.
+
+| Runtime optimization | P1 module bytes | Reduction | Median time change |
+| --- | ---: | ---: | ---: |
+| `3`, control | 5,873,817 | — | — |
+| `s`, selected | 4,748,649 | 19.16% | +1.5% |
+| `z` | 3,650,936 | 37.8% | +7.2% |
+
+The WASI archive builder selects `s` with the existing ThinLTO profile. These
+measurements qualify the P1 experiment; the subsequent builder change still
+requires its fresh P1/P2/P3 qualification. Native build profiles are unchanged.
+The separate `z` plus FatLTO counterexperiment increased final module size and
+process time, so it was rejected. All 121 indexed files in the profile evidence
+archive were verified locally, including both runtime archives, modules,
+compiler-argument logs, wire outputs and source. Sustained socket throughput
+remains unmeasured, and the remaining footprint gap is still substantial.
+
 The stripped P1 artifact contains 5,347,131 bytes of code (91.49%) and 478,665
 bytes in its data section. A separate diagnostic build with names identifies
 object/builtin support and GC as the largest symbol-prefix groups. That build
