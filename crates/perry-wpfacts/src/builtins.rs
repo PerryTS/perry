@@ -23,6 +23,7 @@ pub use native_protocol::{
     native_parent_summarized, native_proto, native_written, note_global_in_top, note_native_write,
     require_parts, settle_native_given,
 };
+pub use native_protocol::event_emitter_method;
 use native_protocol::{native_method, native_skips};
 
 /// Global names the `GlobalGet(0)` sentinel resolves to.
@@ -737,8 +738,11 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             }
         }
         // A method has no `prototype`.
-        TokKind::Builtin(BuiltinNs::ObjectProtoMethod | BuiltinNs::ObjectProtoOwn(_))
-            if name.as_deref() == Some("prototype") =>
+        TokKind::Builtin(
+            BuiltinNs::ObjectProtoMethod
+            | BuiltinNs::ObjectProtoOwn(_)
+            | BuiltinNs::EventEmitterMethod(_),
+        ) if name.as_deref() == Some("prototype") =>
         {
             m.add_prim(dst, prim::UNDEF)
         }
@@ -936,6 +940,29 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             }
         }
         TokKind::ModNs(_) | TokKind::Proto(_) => m.add_prim(dst, prim::UNDEF),
+        // A described method of `EventEmitter.prototype`: Node's protocol
+        // is the member's value (`BuiltinNs::EventEmitterMethod`); a key a
+        // store into ⊤ may have written reads the opaque member too.
+        TokKind::NativeProto(n)
+            if n == "EventEmitter"
+                && name
+                    .as_deref()
+                    .and_then(native_protocol::event_emitter_method)
+                    .is_some() =>
+        {
+            let Key::Named(a) = key else { unreachable!() };
+            let i = name
+                .as_deref()
+                .and_then(native_protocol::event_emitter_method)
+                .unwrap_or_default();
+            let f = m.tok(TokKind::Builtin(BuiltinNs::EventEmitterMethod(i)));
+            m.add_tok(dst, f);
+            if native_protocol::native_written(m, t, a) {
+                opaque_member(m, dst);
+            } else {
+                m.native_missing.push((t, a, NativeMiss::Load(dst)));
+            }
+        }
         // A key the native prototype does not define: the chain goes on.
         TokKind::NativeProto(_) if native_skips(m, t, key, NativeMiss::Load(dst)) => {}
         // A builtin function value (or a bound function): the members of
@@ -1265,7 +1292,7 @@ fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
     match m.toks[t as usize].clone() {
         // `Function.prototype.call/apply/bind` of a described builtin
         // method: its call, the receiver given.
-        TokKind::Builtin(BuiltinNs::ObjectProtoOwn(_))
+        TokKind::Builtin(BuiltinNs::ObjectProtoOwn(_) | BuiltinNs::EventEmitterMethod(_))
             if matches!(name.as_deref(), Some("call" | "apply" | "bind")) =>
         {
             function_method(m, t, name.as_deref(), call)
@@ -1987,6 +2014,7 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
         }
         BuiltinNs::ObjectProtoMethod => object_proto_method_call(m, call),
         BuiltinNs::ObjectProtoOwn(own) => object_proto_own_call(m, own, call),
+        BuiltinNs::EventEmitterMethod(i) => native_protocol::event_emitter_method_call(m, i, call),
         BuiltinNs::Error | BuiltinNs::AggregateError | BuiltinNs::RegExp => {
             new_builtin_ns(m, ns, call);
             if ns == BuiltinNs::RegExp {

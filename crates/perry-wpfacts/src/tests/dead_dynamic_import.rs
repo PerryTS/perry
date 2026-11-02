@@ -853,18 +853,19 @@ fn native_member_parent_is_the_native_parent(src: &str) {
     ));
 }
 
-/// Rule 10 (pg `Client`: `con.on('errorMessage', this._handleErrorMessage.bind(this))`):
-/// a bound function passed to code outside the program exposes neither its
+/// Rule 10 (pg `Client`: `this._handleErrorMessage.bind(this)` handed to
+/// code outside the program): a bound function passed there exposes neither its
 /// target nor its bound receiver (ES 10.4.1: internal slots); that code may
 /// only call it, which runs the target with the bound `this`, or construct
 /// it. Before, the escape sank the target, so `this` inside it was ⊤ and
-/// `delete this.own[k]` an any-key delete on ⊤.
+/// `delete this.own[k]` an any-key delete on ⊤. (A described EventEmitter
+/// method no longer hands its listener out: rule 11.)
 const BOUND_CLI: &str = r#"
 import { EventEmitter } from "events";
 export class Conn extends EventEmitter { named: any = {}; }
 export class Cli extends EventEmitter {
   connection: any; own: any = {};
-  constructor() { super(); this.connection = new Conn(); const con = this.connection; con.on("err", this.onErr.bind(this)); }
+  constructor() { super(); this.connection = new Conn(); const con = this.connection; (globalThis as any)[String(process.argv.length)]("err", this.onErr.bind(this)); }
   onErr(msg: any) { delete this.own[String(msg)]; }
 }
 "#;
@@ -884,4 +885,59 @@ fn an_escaped_bound_method_keeps_its_bound_receiver() {
         "this.onErr.bind((globalThis as any)[String(process.argv.length)])",
     );
     assert!(imports_formatter_with_mods("", &tail, false, &[("cli", unknown.as_str())]));
+}
+/// Rule 11: a described `EventEmitter.prototype` method called on a native
+/// subclass instance (`con.on(ev, f)`) is Node's protocol on that receiver
+/// (the listener is stored on it, `emit` calls the stored listeners with
+/// this = receiver): the receiver does not escape because the method is
+/// native. Before, the chain value held the opaque builtin function, whose
+/// call escaped `con`; its fields were ⊤ and pg's `delete
+/// this.connection.submittedNamedStatements[name]` an any-key delete on ⊤.
+#[test]
+fn an_event_emitter_method_keeps_its_receiver() {
+    let conn = BOUND_CLI
+        .replace(
+            "(globalThis as any)[String(process.argv.length)](\"err\",",
+            "con.on(\"err\",",
+        )
+        .replace(
+            "delete this.own[String(msg)]",
+            "delete this.connection.named[String(msg)]",
+        );
+    assert!(conn.contains("con.on(\"err\", this.onErr.bind(this))"));
+    let tail = format!("{MAKE_CALLED}\nimport {{ Cli }} from \"./cli\";\nconst c = new Cli();\nconsole.log(c.own);");
+    for interp in [false, true] {
+        assert!(
+            !imports_formatter_with_mods("", &tail, interp, &[("cli", conn.as_str())]),
+            "interp={interp}: an EventEmitter method call keeps the formatter import live"
+        );
+    }
+    // The fixture can fail: an own key unknown code may have written
+    // shadows `on`, whose call escapes the receiver again.
+    let shadowed = conn.replace(
+        "const con = this.connection;",
+        "const con = this.connection; (con as any)[String(process.argv.length)] = (globalThis as any)[String(process.argv.length)];",
+    );
+    assert!(imports_formatter_with_mods("", &tail, false, &[("cli", shadowed.as_str())]));
+}
+
+/// Rule 11, soundness: `emit` through the chain calls the listeners `on`
+/// stored, with the emit arguments: an any-key delete on the argument a
+/// listener receives is one on ⊤ when ⊤ is emitted.
+#[test]
+fn an_event_emitter_emit_runs_the_stored_listeners() {
+    let src = r#"
+import { EventEmitter } from "events";
+export class Conn extends EventEmitter { named: any = {}; }
+export function go() {
+  const con = new Conn();
+  con.on("x", (o: any) => { delete o[String(o)]; });
+  con.emit("x", (globalThis as any)[String(process.argv.length)]);
+}
+"#;
+    let tail = format!("{MAKE_CALLED}\nimport {{ go }} from \"./cli\";\ngo();");
+    assert!(imports_formatter_with_mods("", &tail, false, &[("cli", src)]));
+    // Without the emit, the listener never runs.
+    let quiet = src.replace("con.emit(", "void (");
+    assert!(!imports_formatter_with_mods("", &tail, false, &[("cli", quiet.as_str())]));
 }

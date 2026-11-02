@@ -101,6 +101,31 @@ pub fn native_proto_keys(name: &str) -> &'static [&'static str] {
     }
 }
 
+/// The index of `EventEmitter.prototype`'s method `name` in its key list
+/// (`BuiltinNs::EventEmitterMethod`): a key `native_method` models,
+/// not `constructor` nor a bookkeeping field.
+pub fn event_emitter_method(name: &str) -> Option<u8> {
+    native_proto_keys("EventEmitter")
+        .iter()
+        .position(|k| *k == name)
+        .filter(|_| name != "constructor" && !name.starts_with('_'))
+        .map(|i| i as u8)
+}
+
+/// A call of `BuiltinNs::EventEmitterMethod(i)`: the protocol on its
+/// receiver (`cur_this`); a receiver no token stands for, or ⊤, is unknown
+/// here.
+pub(super) fn event_emitter_method_call(m: &mut Model, i: u8, call: CallId) {
+    let name = native_proto_keys("EventEmitter")[i as usize];
+    match m.cur_this {
+        Some(o) if o != TOP => {
+            let np = native_proto(m, "EventEmitter");
+            native_method(m, np, "EventEmitter", o, name, call);
+        }
+        _ => unknown_method(m, call, &format!("argument of EventEmitter.prototype.{name}")),
+    }
+}
+
 /// May native prototype `np`'s key `a` be written ([`Model::native_writes`])?
 pub fn native_written(m: &Model, np: Tok, a: Atom) -> bool {
     // An element store's write (`NUM_KEY`) is one of every numeric key and

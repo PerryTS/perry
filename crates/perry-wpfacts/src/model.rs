@@ -154,6 +154,15 @@ pub enum BuiltinNs {
     /// The method is named by [`ProtoOwn`], not by an atom: builtin tokens
     /// are shared between the units' models, whose atom tables differ.
     ObjectProtoOwn(ProtoOwn),
+    /// A method of `EventEmitter.prototype` read as a value through a
+    /// chain (`con.on`): index `i` in `native_proto_keys("EventEmitter")`
+    /// (an index, not an atom: builtin tokens are shared between the units'
+    /// models). A call is Node's documented protocol on its receiver
+    /// (`native_method`: `on`/`once`/... store the listener on the
+    /// receiver, `emit` calls the stored listeners with this = receiver);
+    /// the receiver does not escape. `call`/`apply`/`bind` are
+    /// `Function.prototype`'s. Not a constructor.
+    EventEmitterMethod(u8),
     Other,
 }
 

@@ -564,10 +564,19 @@ impl Model {
             }
             Cons::ProtoMethods { origin, key, call } => {
                 for &q in toks {
-                    if matches!(
-                        self.toks[q as usize],
-                        TokKind::ObjectProto | TokKind::NativeProto(_)
-                    ) {
+                    // A described `EventEmitter.prototype` method runs as
+                    // the chain value's member (`EventEmitterMethod`).
+                    let ee_member = matches!(
+                        (&self.toks[q as usize], key),
+                        (TokKind::NativeProto(n), Key::Named(a)) if n == "EventEmitter"
+                            && builtins::event_emitter_method(&self.atoms[a as usize]).is_some()
+                    );
+                    if !ee_member
+                        && matches!(
+                            self.toks[q as usize],
+                            TokKind::ObjectProto | TokKind::NativeProto(_)
+                        )
+                    {
                         self.with_b(|m| builtins::proto_method(m, q, origin, key, call));
                     }
                 }
