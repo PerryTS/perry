@@ -22,6 +22,10 @@ case "$target" in
     expected_machine=x86_64
     rustflags="-C force-unwind-tables=yes -Zuse-sync-unwind=yes -C target-feature=+crt-static -L native=/opt/perry-musl/lib"
     export CC_x86_64_unknown_linux_musl=musl-gcc
+    # musl-tools has no C++ compiler; the image names one with Alpine's
+    # libstdc++ headers (perry-codegen's LLVM adapter).
+    export CXX_x86_64_unknown_linux_musl="${PERRY_MUSL_CXX:?musl image names no target C++ compiler}"
+    export CXXFLAGS_x86_64_unknown_linux_musl="--target=x86_64-unknown-linux-musl ${PERRY_MUSL_CXXFLAGS:?}"
     export AR_x86_64_unknown_linux_musl=ar
     # cc-rs' default, x86_64-linux-musl-ranlib, does not exist (CMake's static
     # archive step in libz-ng-sys).
@@ -31,6 +35,10 @@ case "$target" in
     expected_machine=aarch64
     rustflags="-C force-unwind-tables=yes -Zuse-sync-unwind=yes -C target-feature=+crt-static -L native=/opt/perry-musl/lib"
     export CC_aarch64_unknown_linux_musl=musl-gcc
+    # musl-tools has no C++ compiler; the image names one with Alpine's
+    # libstdc++ headers (perry-codegen's LLVM adapter).
+    export CXX_aarch64_unknown_linux_musl="${PERRY_MUSL_CXX:?musl image names no target C++ compiler}"
+    export CXXFLAGS_aarch64_unknown_linux_musl="--target=aarch64-unknown-linux-musl ${PERRY_MUSL_CXXFLAGS:?}"
     export AR_aarch64_unknown_linux_musl=ar
     # cc-rs' default, aarch64-linux-musl-ranlib, does not exist (CMake's static
     # archive step in libz-ng-sys).
