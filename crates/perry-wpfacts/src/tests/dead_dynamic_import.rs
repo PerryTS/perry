@@ -429,6 +429,17 @@ export function make(ast: any, options: any) {
 /// guarded (`NamespacePatched(ns) ? globalThis.ns.m(..) : intrinsic`) and the
 /// facts know interpreted code may run. Is the formatter's `import()` live?
 fn imports_formatter_with_make(extra: &str, main_tail: &str, interp: bool) -> bool {
+    imports_formatter_with_mods(extra, main_tail, interp, &[])
+}
+
+/// `imports_formatter_with_make` with more program modules (`name`, source),
+/// each at `<name>.ts`.
+fn imports_formatter_with_mods(
+    extra: &str,
+    main_tail: &str,
+    interp: bool,
+    mods: &[(&str, &str)],
+) -> bool {
     let mut reach = perry_hir::dynamic_code::DynamicCodeReach::default();
     if interp {
         reach.record_global("new Function(...) @ x.ts (byte 1) (names globals)".into());
@@ -444,16 +455,38 @@ fn imports_formatter_with_make(extra: &str, main_tail: &str, interp: bool) -> bo
     let h = perry_hir::lower_module(&m, "mk", "mk.ts").expect("lowers");
     perry_hir::patched_builtins::clear_patched_builtins();
     hirs.push(("mk.ts".to_string(), h));
+    for (name, src) in mods {
+        let path = format!("{name}.ts");
+        let m = perry_parser::parse_typescript(src, &path).expect("parses");
+        hirs.push((path.clone(), perry_hir::lower_module(&m, name, &path).expect("lowers")));
+    }
     for (_, h) in hirs.iter_mut() {
         for imp in &mut h.imports {
             if imp.source == "./mk" {
                 imp.resolved_path = Some("mk.ts".into());
+            } else if let Some(n) = imp.source.strip_prefix("./") {
+                if mods.iter().any(|(m, _)| *m == n) {
+                    imp.resolved_path = Some(format!("{n}.ts"));
+                }
             }
         }
     }
     let list: Vec<(String, &perry_hir::Module)> =
         hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
     let mut cfg = FactsConfig::default();
+    // `export { x } from "./m"` reads `m.ts`, as the driver resolves it.
+    for (path, h) in &hirs {
+        for e in &h.exports {
+            if let perry_hir::Export::ReExport { source, .. } = e {
+                if let Some(n) = source.strip_prefix("./") {
+                    cfg.export_sources
+                        .entry(path.clone())
+                        .or_default()
+                        .insert(source.clone(), format!("{n}.ts"));
+                }
+            }
+        }
+    }
     if interp {
         cfg.dynamic_code = Some("interp".into());
         cfg.dynamic_code_reach = reach;
@@ -561,3 +594,93 @@ fn a_keyed_delete_on_a_native_prototype_writes_its_key() {
     }
 }
 
+
+/// Rule 6: a computed key that is an import of a module's `const` string
+/// binding is that string, through re-exports (an import of a binding is
+/// the binding). effect's `FiberImpl.runLoop` saves and restores
+/// `globalThis[currentFiberTypeId]` (`currentFiberTypeId` a `const` string
+/// of Redactable.js); as an any-key store it writes every field of
+/// globalThis, `globalThis.Object` holds the unknown value read back, every
+/// guarded `globalThis.Object.X(..)` arm calls it, `make`'s `self` is that
+/// value and its `Object.defineProperties` is an any-key write on it.
+const FIBER_KEY: &str = r#"export const currentFiberTypeId = "~effect/Fiber/currentFiber";
+"#;
+const FIBER_REEXPORT: &str = r#"export { currentFiberTypeId as fiberKey } from "./rdk";
+"#;
+const RUN_LOOP: &str = r#"
+import { fiberKey } from "./rdx";
+export function runLoop(fiber: any) {
+  const prevFiber = (globalThis as any)[fiberKey];
+  (globalThis as any)[fiberKey] = fiber;
+  (globalThis as any)[fiberKey] = prevFiber;
+}
+"#;
+#[test]
+fn an_imported_const_key_is_its_string() {
+    let tail = format!(
+        "{MAKE_CALLED}\nimport {{ runLoop }} from \"./mk\";\nrunLoop(require(String(process.argv.length)));"
+    );
+    let mods = [("rdk", FIBER_KEY), ("rdx", FIBER_REEXPORT)];
+    for interp in [false, true] {
+        assert!(
+            !imports_formatter_with_mods(RUN_LOOP, &tail, interp, &mods),
+            "interp={interp}: globalThis[importedConstKey] = v keeps the formatter import live"
+        );
+    }
+    // A module-scope `const` read in a function is TDZ-checked first
+    // (`Sequence([check, x])`): its value is still the string.
+    let local = format!("const fk = \"~k\";\n{}", RUN_LOOP.replace("[fiberKey]", "[fk]"));
+    assert!(!imports_formatter_with_mods(&local, &tail, true, &mods));
+    // The fixture can fail: a key that is not a constant is an any-key store.
+    let loose = RUN_LOOP.replace("[fiberKey]", "[String(fiber)]");
+    assert!(imports_formatter_with_mods(&loose, &tail, true, &mods));
+}
+
+
+
+
+/// Rule 7: effect's core.js `Error` is `function () { return class Base
+/// extends YieldableError { .. } }()`: the class's `extends` is evaluated
+/// by the class expression, in a closure whose body is walked during the
+/// solve, after generation ends. That evaluation is the parent
+/// (`feed_parent`); the class was taken as one with an unresolved `extends`
+/// (parent ⊤) because no evaluation had fed it when generation ended, so
+/// `this` in `Base`'s constructor was ⊤ and its `Object.defineProperty`
+/// an any-key write on ⊤.
+const CORE: &str = r#"
+export const YieldableError = /*#__PURE__*/function () {
+  class YieldableError extends globalThis.Error {}
+  return YieldableError;
+}();
+export const Error = /*#__PURE__*/function () {
+  const plainArgsSymbol = Symbol.for("effect/Data/Error/plainArgs");
+  return class Base extends YieldableError {
+    constructor(args: any) {
+      super(args?.message, args?.cause ? { cause: args.cause } : undefined);
+      if (args) { Object.defineProperty(this, plainArgsSymbol, { value: args, enumerable: false }); }
+    }
+  };
+}();
+"#;
+#[test]
+fn a_class_expression_parent_evaluated_later_is_its_parent() {
+    for tail in [
+        "import { Error as E } from \"./core\";\nconsole.log(new E({ message: \"m\" }));",
+        "import { Error as E } from \"./core\";\nclass T extends E { _tag = \"t\"; }\nconsole.log(new T({ message: \"m\" }));",
+    ] {
+        for interp in [false, true] {
+            assert!(
+                !imports_formatter_with_mods("", &format!("{MAKE_CALLED}\n{tail}"), interp, &[("core", CORE)]),
+                "interp={interp}: {tail}"
+            );
+        }
+    }
+    // The fixture can fail: an unknown parent makes `this` unknown.
+    let unknown = CORE.replace("extends YieldableError", "extends (require(String(args)) as any)");
+    assert!(imports_formatter_with_mods(
+        "",
+        &format!("{MAKE_CALLED}\nimport {{ Error as E }} from \"./core\";\nconsole.log(new E({{ message: \"m\" }}));"),
+        false,
+        &[("core", &unknown)]
+    ));
+}

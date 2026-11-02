@@ -112,15 +112,98 @@ impl<'a> Gen<'a> {
         (n >= 0.0 && n <= i32::MAX as f64 && n.fract() == 0.0).then_some(n as u32)
     }
 
+    /// The module-scope binding import `name` of module `mi` names: the
+    /// exporting module's binding, through `export { x as y }` and
+    /// `export { y } from` chains (ECMAScript ResolveExport). None when the
+    /// import is not resolved to a module of this run (another unit's
+    /// export, a native module) or the export is not a module-scope binding.
+    fn imported_binding(&self, mi: u32, name: &str) -> Option<Binding> {
+        self.imported_binding_at(mi, name, 0)
+    }
+
+    fn imported_binding_at(&self, mi: u32, name: &str, depth: u32) -> Option<Binding> {
+        if depth > 32 {
+            return None;
+        }
+        let (mut t, mut exported) = self.imports_of(mi as usize).iter().find_map(|imp| {
+            if imp.type_only {
+                return None;
+            }
+            let imported = imp.specifiers.iter().find_map(|s| match s {
+                perry_hir::ImportSpecifier::Named { imported, local } if local == name => {
+                    Some(imported.clone())
+                }
+                _ => None,
+            })?;
+            let t = imp.resolved_path.as_ref().and_then(|p| self.path_index.get(p))?;
+            Some((*t, imported))
+        })?;
+        for _ in 0..32 {
+            let module = self.modules[t as usize].1;
+            let mut next = None;
+            for e in self.exports_of(t as usize) {
+                match e {
+                    perry_hir::Export::Named { local, exported: x } if *x == exported => {
+                        if let Some(g) = self.globals_of(t as usize).into_iter().find(|g| &g.name == local) {
+                            return Some((t, true, g.id));
+                        }
+                        // A module-scope `const` of the module's body.
+                        let top = self.init_of(t as usize).into_iter().find_map(|st| match st {
+                            Stmt::Let {
+                                id,
+                                name: n,
+                                mutable: false,
+                                ..
+                            } if n == local => Some(*id),
+                            _ => None,
+                        });
+                        if let Some(id) = top {
+                            return Some((t, false, id));
+                        }
+                        // `import { a } from ..; export { a }`.
+                        return self.imported_binding_at(t, local, depth + 1);
+                    }
+                    perry_hir::Export::ReExport {
+                        source,
+                        imported,
+                        exported: x,
+                    } if *x == exported => {
+                        next = Some((self.resolve_source(t, module, source)?, imported.clone()));
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            (t, exported) = next?;
+        }
+        None
+    }
+
     /// The constant string `e` evaluates to: a constant expression
     /// (`const_eval`), or a constant binding whose initializer is one.
     pub(crate) fn const_key(&mut self, mi: u32, e: &Expr) -> Option<String> {
         let mut seen: Vec<Binding> = Vec::new();
         let mut e = e.clone();
+        let mut mi = mi;
         loop {
             let b = match &e {
                 Expr::LocalGet(id) => (mi, false, *id),
                 Expr::GlobalGet(id) => (mi, true, *id),
+                // An import of a module-scope binding is that binding (a
+                // live binding: constant when the binding is `const`).
+                Expr::ExternFuncRef { name, .. } => match self.imported_binding(mi, name) {
+                    Some(b) => {
+                        mi = b.0;
+                        b
+                    }
+                    None => break,
+                },
+                // A sequence's value is its last expression (a binding's
+                // TDZ check comes first).
+                Expr::Sequence(v) if !v.is_empty() => {
+                    e = v[v.len() - 1].clone();
+                    continue;
+                }
                 // ToPropertyKey of a string is the string.
                 Expr::Call { callee, args, .. }
                     if args.len() == 1

@@ -1481,6 +1481,13 @@ impl<'a> Gen<'a> {
             };
             match bound {
                 Some(b) => self.m.edge(b, pv),
+                // An `extends` that is no binding is evaluated where the
+                // class is (`ClassExprFresh`'s `evaluated_parent`,
+                // `RegisterClassParentDynamic`), and that evaluation feeds
+                // the parent (`feed_parent`) when its code is walked: a
+                // closure's body may be walked later, during the solve. No
+                // instance exists before the class is evaluated.
+                None if name.is_none() => {}
                 // DECISIONS 95: per unit, another unit may evaluate the
                 // parent (`RegisterClassParentDynamic` in the CommonJS
                 // factory): what it evaluates is cell `parent:<module>:<class>`.
