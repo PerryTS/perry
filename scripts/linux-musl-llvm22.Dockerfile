@@ -66,6 +66,26 @@ RUN set -eu; \
     done; \
     echo "musl target libraries OK: $reported"
 
+# perry-codegen compiles a C++ adapter against the LLVM headers (DCE layer 0:
+# unique sections), and its object links against the harvested libstdc++.a.
+# Compile it against that archive's own headers: copy Alpine's include tree
+# into a target-only sysroot. `cxx/` names the libstdc++ directories without
+# the GCC version, so the build script needs neither the version nor Alpine's
+# triple. They must belong to the gcc that located libgcc.a above.
+RUN set -eu; \
+    sysroot=/opt/perry-musl-sysroot; \
+    version="$(gcc -dumpversion)"; \
+    triple="$(gcc -dumpmachine)"; \
+    if [ ! -s "/usr/include/c++/$version/$triple/bits/c++config.h" ]; then \
+      echo "missing Alpine libstdc++ headers for gcc $version ($triple)" >&2; \
+      exit 1; \
+    fi; \
+    mkdir -p "$sysroot/usr" "$sysroot/cxx"; \
+    cp -a /usr/include "$sysroot/usr/"; \
+    ln -s "../usr/include/c++/$version" "$sysroot/cxx/include"; \
+    ln -s "../usr/include/c++/$version/$triple" "$sysroot/cxx/target-include"; \
+    echo "musl target C++ headers OK: libstdc++ $version ($triple)"
+
 FROM ${GLIBC_IMAGE}
 
 # The archived slim image has no CA bundle. Debian Release signatures are still
@@ -113,6 +133,7 @@ ENV PERRY_HOST_LLVM_PREFIX=/usr/lib/llvm-22
 # processes continue to use their own loader and multiarch libraries.)
 COPY --from=musl-sysroot /usr/lib/llvm22 /usr/lib/llvm22
 COPY --from=musl-sysroot /opt/perry-musl /opt/perry-musl
+COPY --from=musl-sysroot /opt/perry-musl-sysroot /opt/perry-musl-sysroot
 COPY --from=musl-sysroot /lib/ld-musl-*.so.1 /lib/
 COPY --from=musl-sysroot /usr/lib/libstdc++.so.6* /opt/perry-musl-runtime/
 COPY --from=musl-sysroot /usr/lib/libgcc_s.so.1 /opt/perry-musl-runtime/
@@ -120,6 +141,14 @@ COPY --from=musl-sysroot /usr/lib/libgcc_s.so.1 /opt/perry-musl-runtime/
 ENV LLVM_SYS_221_PREFIX=/usr/lib/llvm22
 ENV LIBCLANG_PATH=/opt/perry-host-libclang
 ENV BINDGEN_EXTRA_CLANG_ARGS="-isystem /opt/perry-host-libclang/include"
+
+# The musl target's C++ compiler: glibc clang 22 with the target-only sysroot.
+# -nostdinc++ and the explicit -isystem order put Alpine's libstdc++ headers
+# ahead of musl's C headers (libstdc++'s <cstdlib> include_nexts <stdlib.h>),
+# and nothing from the glibc host's /usr/include can be found. The build script
+# adds --target per leg.
+ENV PERRY_MUSL_CXX=/usr/lib/llvm-22/bin/clang++
+ENV PERRY_MUSL_CXXFLAGS="--sysroot=/opt/perry-musl-sysroot -nostdinc++ -isystem /opt/perry-musl-sysroot/cxx/include -isystem /opt/perry-musl-sysroot/cxx/target-include -isystem /opt/perry-musl-sysroot/cxx/include/backward"
 
 # Bindgen must load a GLIBC libclang, never the musl libLLVM tree above. Give it
 # a stable path independent of Debian's versioned LLVM directory, then assert
@@ -151,5 +180,19 @@ RUN set -eu; \
     test -s /opt/perry-musl/lib/libstdc++.a; \
     test -x /usr/bin/musl-gcc; \
     "$PERRY_TRAP_CLANG" --version | grep -q 'clang version 22\.'; \
+    # Compile the codegen adapter's one LLVM include exactly as cc-rs will, and
+    # require every header it reads from the target sysroot or Alpine's LLVM.
+    printf '%s\n' '#include "llvm/Target/TargetMachine.h"' > /tmp/musl-cxx-probe.cpp; \
+    "$PERRY_MUSL_CXX" --target="$musl_arch-unknown-linux-musl" $PERRY_MUSL_CXXFLAGS \
+      -I "$LLVM_SYS_221_PREFIX/include" -std=c++17 -fsyntax-only -MD -MF /tmp/musl-cxx-probe.d \
+      /tmp/musl-cxx-probe.cpp; \
+    probe_headers="$(tr -s ' \\' '\n\n' < /tmp/musl-cxx-probe.d | grep '^/' | grep -v '^/tmp/')"; \
+    if printf '%s\n' "$probe_headers" | grep -Ev '^(/opt/perry-musl-sysroot/|/usr/lib/llvm22/include/|/usr/lib/llvm-22/lib/clang/22/include/)'; then \
+      echo "musl C++ probe read headers outside the target sysroot (above)" >&2; \
+      exit 1; \
+    fi; \
+    printf '%s\n' "$probe_headers" | grep -q '^/opt/perry-musl-sysroot/cxx/target-include/bits/c++config\.h$'; \
+    rm -f /tmp/musl-cxx-probe.cpp /tmp/musl-cxx-probe.d; \
     echo "glibc host libclang: $host_libclang"; \
-    echo "musl target LLVM: $LLVM_SYS_221_PREFIX"
+    echo "musl target LLVM: $LLVM_SYS_221_PREFIX"; \
+    echo "musl target C++: $PERRY_MUSL_CXX $PERRY_MUSL_CXXFLAGS"
