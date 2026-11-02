@@ -179,10 +179,14 @@ mod tests {
     }
     #[test]
     fn layouts_and_native_identity_are_pinned() {
-        assert_eq!(
-            core::mem::offset_of!(FunctionMetadataOwner, count),
-            core::mem::size_of::<usize>()
-        );
+        // perry-codegen (module.rs, emit_function_metadata_owner) emits the
+        // owner as the literal LLVM type { i32, i32, ptr, i32 } and the
+        // self-relative bounds offset at field 3; the runtime reads the
+        // fields by name. Pin that shape so a field move fails here.
+        assert_eq!(core::mem::offset_of!(FunctionMetadataOwner, count), 0);
+        assert_eq!(core::mem::offset_of!(FunctionMetadataOwner, flags), 4);
+        assert_eq!(core::mem::offset_of!(FunctionMetadataOwner, state), 8);
+        assert_eq!(core::mem::offset_of!(FunctionMetadataOwner, bounds), 16);
         assert_eq!(
             core::mem::offset_of!(FunctionMetadataIdentity, ordinal),
             core::mem::size_of::<usize>()
