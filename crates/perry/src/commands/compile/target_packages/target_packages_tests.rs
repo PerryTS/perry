@@ -416,10 +416,16 @@ fn the_packaged_triples_come_from_the_one_list() {
     }
     assert!(is_packaged(PackageKind::Target, "aarch64-linux-android"));
     assert!(is_packaged(PackageKind::Ext, "x86_64-unknown-linux-gnu"));
-    // No package: windows-msvc cross targets, musl and Windows extensions.
+    for host in [
+        "x86_64-unknown-linux-musl",
+        "aarch64-unknown-linux-musl",
+        "x86_64-pc-windows-msvc",
+        "aarch64-pc-windows-msvc",
+    ] {
+        assert!(is_packaged(PackageKind::Ext, host), "{host}");
+    }
+    // No package: windows-msvc cross targets, and a target is not a host.
     assert!(!is_packaged(PackageKind::Target, "x86_64-pc-windows-msvc"));
-    assert!(!is_packaged(PackageKind::Ext, "x86_64-unknown-linux-musl"));
-    assert!(!is_packaged(PackageKind::Ext, "x86_64-pc-windows-msvc"));
     assert!(!is_packaged(PackageKind::Ext, "aarch64-linux-android"));
 }
 

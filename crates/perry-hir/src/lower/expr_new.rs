@@ -126,6 +126,23 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 args: lower_optional_args(ctx, new_expr.args.as_deref())?,
             });
         }
+        // node:sqlite `Database` / `DatabaseSync` are one constructor, under
+        // whatever local alias the import gave it. A distinct class name keeps
+        // it apart from better-sqlite3's `Database`.
+        if let Some((module, Some("Database" | "DatabaseSync"))) =
+            ctx.lookup_native_module(callee_ident.sym.as_ref())
+        {
+            if module.strip_prefix("node:").unwrap_or(module) == "sqlite" {
+                return Ok(Expr::New {
+                    byte_end: 0,
+                    class_name: "NodeSqliteDatabaseSync".to_string(),
+                    args: lower_optional_args(ctx, new_expr.args.as_deref())?,
+                    type_args: Vec::new(),
+                    byte_offset: new_byte_offset,
+                    cap_args_appended: 0,
+                });
+            }
+        }
         // Keep Bun's `Database` distinct from better-sqlite3's same-named
         // constructor while still allocating the shared native SQLite handle.
         if matches!(
@@ -1357,7 +1374,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                                             } else if let Some(local_id) = ctx.lookup_local(&name) {
                                                 Expr::LocalGet(local_id)
                                             } else if ctx.lookup_class(&name).is_some() {
-                                                Expr::ClassRef(name.clone())
+                                                crate::lower::class_binding_read(ctx, &name)
                                             } else {
                                                 continue;
                                             };

@@ -1249,6 +1249,12 @@ pub struct StoreSite {
     /// The evaluated key of an indexed source store. Its solved scalar kind
     /// distinguishes element effects from arbitrary named-property writes.
     pub key_value: Option<NodeId>,
+    /// RPG1b: where the store runs in its function, when the walk made it
+    /// at a statement of a function body: `Some(true)` inside a loop
+    /// (body, condition or update), `Some(false)` not. `None`: a site no
+    /// body walk ordered (a birth definition, a replay, a parameter
+    /// default, a synthetic store); it is never an ordered writer.
+    pub in_loop: Option<bool>,
 }
 
 #[derive(Default, Clone, Debug)]
@@ -1287,6 +1293,14 @@ impl WorkProfile {
 pub struct LitSpread {
     pub named: Vec<Atom>,
     pub sites: Vec<(SiteId, Option<Vec<Atom>>)>,
+}
+
+/// DECISIONS 241: the join's values of one function's own properties
+/// (`Model::fn_joined`).
+#[derive(Default, Clone, Debug)]
+pub struct FnJoined {
+    pub keys: Vec<(Atom, NodeId)>,
+    pub any: Option<NodeId>,
 }
 
 #[derive(Default)]
@@ -1346,6 +1360,19 @@ pub struct Model {
     pub class_writers: FxHashMap<(TmplId, Atom), FieldWriters>,
     pub proto_writers: FxHashMap<(TmplId, Atom), FieldWriters>,
     pub any_writers: FxHashMap<TmplId, FieldWriters>,
+    /// RPG1b: the functions whose body runs at most once per evaluation of
+    /// module `.0`, and only while it evaluates (`gen/once.rs`); `.1`: once
+    /// with reload (the runtime's path registry may evaluate the module
+    /// again after its `require.cache` entry was deleted).
+    pub once_fns: FxHashMap<FnIdx, (u32, bool)>,
+    /// RPG1b: each module's static evaluation dependencies (imports that
+    /// are not dynamic, type-only, erased or a deferred require): their
+    /// evaluation completes before the module's starts, unless they reach
+    /// it back (`derive::evaluated_before`).
+    pub eval_deps: Vec<Vec<u32>>,
+    /// The modules each module reaches through `eval_deps`, as a bit set,
+    /// computed when an ordered-writer check first asks (`derive`).
+    pub eval_reach: FxHashMap<u32, Vec<u64>>,
     pub adds_keys: FxHashMap<TmplId, u32>,
     /// The part of `adds_keys` that came from a named store of a key the
     /// template did not list as a birth key when the store was seen
@@ -1550,6 +1577,8 @@ pub struct Model {
     /// The boundary's store standing in for other units' stores into what
     /// this unit gives them (`Gen::unit_boundary`): not this unit's write.
     pub other_units_store: Option<NodeId>,
+    /// This run is one unit of a per-unit solve (`Config::unit`).
+    pub unit_mode: bool,
     /// Prototype nodes of escaped values (`Model::escape_inner`): what
     /// escapes there is reached along a chain, not handed over as a value.
     pub chain_sinks: crate::pts::FxHashSet<NodeId>,
@@ -1972,6 +2001,22 @@ pub struct Model {
     /// left with the function (unknown code reads and writes them); the
     /// reason it left.
     pub props_escaped: FxHashMap<Tok, u32>,
+    /// DECISIONS 241: what this unit's code stored on a function token's
+    /// own property (`store_into`), apart from what its fields hold from
+    /// the join (`fn_joined`): the unit publishes these
+    /// (`ProgramFacts::fn_stores_out`). Not `prototype` (DECISIONS 210(1)).
+    pub fn_stored: FxHashMap<(Tok, Atom), NodeId>,
+    pub fn_stored_any: FxHashMap<Tok, NodeId>,
+    /// DECISIONS 241: per function (this unit's or a stand-in), the values
+    /// every unit stored on its own properties (`Published::fn_stores`),
+    /// each a node holding their stand-ins: each token of the function
+    /// reads them under its key (`field`), its computed key (`field_any`)
+    /// and every key (`all_fields`).
+    pub fn_joined: FxHashMap<FnIdx, FnJoined>,
+    /// DECISIONS 241: function tokens that reached unknown code (not a
+    /// publication to another unit, `UNDESCRIBED`): any key of theirs may
+    /// hold anything, published as an unknown computed-key store.
+    pub fn_props_top: crate::pts::FxHashSet<Tok>,
     /// DECISIONS 210/211: the functions unknown code constructs
     /// (`Model::construct_unknown`), once each.
     pub unknown_new: crate::pts::FxHashSet<FnIdx>,

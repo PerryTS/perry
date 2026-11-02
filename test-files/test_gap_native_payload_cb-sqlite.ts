@@ -140,7 +140,11 @@ let inAuth = false;
 db.setAuthorizer(() => {
   if (!inAuth) {
     inAuth = true;
-    db.exec("select 1");
+    try {
+      db.exec("select 1");
+    } catch (e: any) {
+      console.log("authorizer reentry threw", e.code, e.message);
+    }
     inAuth = false;
   }
   return constants.SQLITE_OK;

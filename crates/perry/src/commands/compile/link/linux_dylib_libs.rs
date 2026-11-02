@@ -1,6 +1,6 @@
 //! System libraries for a Linux shared-library (`--output-type dylib`) link.
 //!
-//! The executable link (`build_and_run.rs`) has always added
+//! The executable link (`build_and_run.rs`, which shares this list) has always added
 //! `-lm -lpthread -ldl` on Linux. The `cc -shared` plugin link in
 //! `run_pipeline.rs` never did: a plugin resolves every `perry_*`/`js_*`
 //! symbol from the host at `dlopen` time, so nothing *Perry* provides is
@@ -73,6 +73,24 @@ mod tests {
             assert!(pos(lib) < pos("-o"), "`{lib}` must precede `-o`: {args:?}");
         }
         assert_eq!(&args[args.len() - 2..], ["-o", "out.so"]);
+    }
+
+    #[test]
+    fn linux_system_libs_never_include_system_openssl() {
+        // perry-stdlib bundles its own OpenSSL (openssl-sys `vendored`);
+        // the executable link must not ask for libssl/libcrypto, or users
+        // need libssl-dev / openssl-dev on the build host.
+        for lib in LINUX_DYLIB_SYSTEM_LIBS {
+            assert!(
+                !lib.contains("ssl") && !lib.contains("crypto"),
+                "unexpected system TLS library {lib}"
+            );
+        }
+        let src = include_str!("build_and_run.rs");
+        assert!(
+            !src.contains("\"-lssl\"") && !src.contains("\"-lcrypto\""),
+            "build_and_run.rs must not link system OpenSSL"
+        );
     }
 
     #[test]

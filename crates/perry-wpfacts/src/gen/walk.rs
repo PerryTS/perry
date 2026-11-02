@@ -8,6 +8,13 @@ impl<'a> Gen<'a> {
 
     pub fn walk_all(&mut self) {
         let modules = self.modules.clone();
+        // RPG1b: the once closures and the evaluation order (`derive`'s
+        // ordered writers).
+        self.once_ids = modules
+            .iter()
+            .map(|(_, m)| once::once_closures(m))
+            .collect();
+        self.m.eval_deps = (0..modules.len()).map(|mi| self.eval_deps_of(mi)).collect();
         // Constructor phase analysis first (needs every class).
         for mi in 0..modules.len() {
             for c in self.classes_of(mi) {
@@ -56,6 +63,9 @@ impl<'a> Gen<'a> {
                     f
                 }
             };
+            if !modules[mi as usize].1.has_top_level_await {
+                self.m.once_fns.insert(init_fn, (mi, false));
+            }
             if self.dynamic_only.contains(&mi) && self.defer_walk(init_fn, PendingWalk::Module(mi))
             {
                 continue;
@@ -65,6 +75,23 @@ impl<'a> Gen<'a> {
                 return;
             }
         }
+    }
+
+    /// RPG1b: module `mi`'s static evaluation dependencies (`Model::eval_deps`).
+    fn eval_deps_of(&self, mi: usize) -> Vec<u32> {
+        let mut out: Vec<u32> = self
+            .imports_of(mi)
+            .iter()
+            .filter(|i| {
+                !i.is_dynamic && !i.type_only && !i.runtime_erased && !i.is_deferred_require
+            })
+            .filter_map(|i| i.resolved_path.as_ref())
+            .filter_map(|r| self.path_index.get(r).copied())
+            .filter(|&t| t as usize != mi)
+            .collect();
+        out.sort_unstable();
+        out.dedup();
+        out
     }
 
     /// The modules that load only through `import()`: no static import or
@@ -197,10 +224,13 @@ impl<'a> Gen<'a> {
                 self.m.edge(v, gn);
             }
         }
+        let saved = (self.order_ok, self.loop_depth);
+        (self.order_ok, self.loop_depth) = (true, 0);
         for s in self.init_of(mi as usize) {
             self.stmt(&fx, s);
             self.name_enum_object(mi, s);
         }
+        (self.order_ok, self.loop_depth) = saved;
         for f in self.functions_of(mi as usize) {
             if self.m.aborted {
                 return;
@@ -491,7 +521,23 @@ impl<'a> Gen<'a> {
         }
     }
 
+    /// A declared function's or method's body: never a once body, so its
+    /// stores are unordered (RPG1b).
     fn walk_fn_body(
+        &mut self,
+        mi: u32,
+        fxi: FnIdx,
+        f: &'a Function,
+        class: Option<TmplId>,
+        ctor_of: Option<TmplId>,
+    ) {
+        let saved = (self.order_ok, self.loop_depth);
+        (self.order_ok, self.loop_depth) = (false, 0);
+        self.walk_fn_body_inner(mi, fxi, f, class, ctor_of);
+        (self.order_ok, self.loop_depth) = saved;
+    }
+
+    fn walk_fn_body_inner(
         &mut self,
         mi: u32,
         fxi: FnIdx,
@@ -574,7 +620,15 @@ impl<'a> Gen<'a> {
         self.walk_class_rest(mi, c, outer);
     }
 
+    /// Field initializers run per construction: unordered (RPG1b).
     fn walk_fields_body(&mut self, mi: u32, c: &'a Class) {
+        let saved = (self.order_ok, self.loop_depth);
+        (self.order_ok, self.loop_depth) = (false, 0);
+        self.walk_fields_body_inner(mi, c);
+        (self.order_ok, self.loop_depth) = saved;
+    }
+
+    fn walk_fields_body_inner(&mut self, mi: u32, c: &'a Class) {
         let tm = self.mods[mi as usize].classes[&c.name];
         // Instance field initializers run in the field-init context.
         let fi = self.field_init_fn[&tm];
@@ -779,6 +833,7 @@ impl<'a> Gen<'a> {
             rooted: false,
             deep: false,
             key_value: None,
+            in_loop: self.order_ok.then_some(self.loop_depth > 0),
         });
         id
     }
@@ -897,8 +952,10 @@ impl<'a> Gen<'a> {
                 }
             }
             Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+                self.loop_depth += 1;
                 let _ = self.expr(fx, condition);
                 self.stmts(fx, body);
+                self.loop_depth -= 1;
             }
             Stmt::For {
                 init,
@@ -909,6 +966,7 @@ impl<'a> Gen<'a> {
                 if let Some(i) = init {
                     self.stmt(fx, i);
                 }
+                self.loop_depth += 1;
                 if let Some(c) = condition {
                     let _ = self.expr(fx, c);
                 }
@@ -919,6 +977,7 @@ impl<'a> Gen<'a> {
                     Some(f) => self.for_in_body(fx, &f),
                     None => self.stmts(fx, body),
                 }
+                self.loop_depth -= 1;
             }
             Stmt::Labeled { body, .. } => self.stmt(fx, body),
             Stmt::Break

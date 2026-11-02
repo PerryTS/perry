@@ -626,3 +626,6 @@ mod site_copies;
 
 #[path = "unit_mode/returned_field_map.rs"]
 mod returned_field_map;
+
+#[path = "unit_mode/foreign_fn_own_key.rs"]
+mod foreign_fn_own_key;

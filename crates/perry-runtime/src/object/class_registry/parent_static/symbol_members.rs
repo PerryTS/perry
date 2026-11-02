@@ -296,4 +296,107 @@ mod static_receiver_tests {
             crate::object::class_registry::test_clear_class_side_table_roots();
         }
     }
+
+    /// `(C as any)[S] = v` (`js_put_value_set_dynamic`, the [[Set]] walk): a
+    /// declared `static set [S]` is an own accessor of the class function
+    /// object, so an own or inherited setter runs with `this` = the class
+    /// written to and stores nothing; a getter-only one refuses the write
+    /// (no shadowing data member); a class without one takes a data member.
+    #[test]
+    fn class_symbol_write_runs_the_declared_static_setter() {
+        unsafe {
+            crate::object::class_registry::test_clear_class_side_table_roots();
+            let own = 0x3a6c_u32;
+            let deep = 0x3a6d_u32;
+            let g = 0x3a6e_u32;
+            let g2 = 0x3a6f_u32;
+            let plain = 0x3a70_u32;
+            for class_id in [own, deep, g, g2, plain] {
+                crate::object::js_register_class_id(class_id);
+            }
+            super::super::register_class(own, 0);
+            super::super::register_class(deep, own);
+            super::super::register_class(g, 0);
+            super::super::register_class(g2, g);
+            super::super::register_class(plain, 0);
+            let sym = crate::symbol::js_symbol_new_empty();
+            let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+            crate::object::class_registry::js_register_class_computed_accessor(
+                own as i64,
+                sym,
+                0,
+                static_recording_setter as *const () as usize as i64,
+                1,
+                0,
+                undef,
+            );
+            crate::object::class_registry::js_register_class_computed_accessor(
+                g as i64,
+                sym,
+                static_this_getter as *const () as usize as i64,
+                0,
+                1,
+                0,
+                undef,
+            );
+            let set = |class_id: u32, v: f64| {
+                let c = crate::object::class_value::class_value(class_id);
+                crate::object::property_ops::put_value::js_put_value_set_dynamic(c, sym, v, 0);
+                c
+            };
+            // An own symbol property of the class function object (an
+            // accessor's entry or a data member).
+            let own_symbol_data = |class_id: u32| {
+                let c = crate::object::class_value::class_value(class_id);
+                crate::symbol::symbol_property_root_bits(
+                    crate::symbol::obj_key_from_f64(c),
+                    crate::symbol::sym_key_from_f64(sym),
+                )
+            };
+            let has_own = |class_id: u32| own_symbol_data(class_id).is_some();
+            assert_eq!(
+                crate::object::js_object_get_prototype_of(crate::object::class_value::class_value(
+                    deep
+                ))
+                .to_bits(),
+                crate::object::class_value::class_value(own).to_bits(),
+                "the subclass function object inherits from its parent"
+            );
+            for (class_id, v) in [(own, 1.0_f64), (deep, 7.0)] {
+                SETTER_CALL.with(|c| c.set(None));
+                let c = set(class_id, v);
+                assert_eq!(
+                    SETTER_CALL.with(|c| c.get()),
+                    Some((c.to_bits(), v.to_bits())),
+                    "the static setter runs with this = the class written to (class {class_id:#x})"
+                );
+                let still_accessor = crate::symbol::symbol_accessor_descriptor_bits(
+                    crate::symbol::obj_key_from_f64(c),
+                    crate::symbol::sym_key_from_f64(sym),
+                )
+                .is_some();
+                assert!(
+                    still_accessor || own_symbol_data(class_id).is_none(),
+                    "no data member shadows the setter (class {class_id:#x})"
+                );
+            }
+            assert!(
+                has_own(own),
+                "the declared accessor is an own property of its class"
+            );
+            assert!(!has_own(deep), "an inherited accessor is not own");
+            set(g2, 9.0);
+            assert!(
+                !has_own(g2),
+                "a getter-only accessor refuses the write: nothing is stored"
+            );
+            set(plain, 3.0);
+            assert_eq!(
+                own_symbol_data(plain),
+                Some(3.0_f64.to_bits()),
+                "a class without a symbol accessor takes an own data member"
+            );
+            crate::object::class_registry::test_clear_class_side_table_roots();
+        }
+    }
 }

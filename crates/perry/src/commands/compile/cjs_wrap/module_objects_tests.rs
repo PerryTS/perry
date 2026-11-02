@@ -410,3 +410,97 @@ fn matching_brace(text: &str, open: usize) -> usize {
     }
     panic!("unbalanced braces after offset {open}");
 }
+
+/// The `require.cache` reads of `pf` in the wrapped modules, by the file
+/// name their key ends with, and whether each is proven.
+fn cache_reads(dir: &tempfile::TempDir, pf: &ProgramFacts) -> Vec<(String, bool)> {
+    let root = dir
+        .path()
+        .canonicalize()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let support = support_index(pf);
+    pf.sites
+        .iter()
+        .filter(|s| s.module != support && s.key.starts_with(&root))
+        .map(|s| {
+            let name = s.key.rsplit('/').next().unwrap_or_default().to_string();
+            (name, proven(&s.verdict))
+        })
+        .collect()
+}
+
+/// RPG1b: a cache key keeps its slot because its module's evaluation adds it
+/// before any later key's module evaluates. With the declared order against
+/// the evaluation order (`c.js` first, but `c.js` requires `b.js`, which
+/// evaluates first and adds the later key), `c.js` is added while `b.js` is
+/// present: its slot is the hole, and its reads are not proven.
+#[test]
+fn a_cache_key_added_after_a_later_key_is_not_a_slot() {
+    let (dir, _names, pf) = solve(&[("c.js", C), ("b.js", B), ("a.js", A)]);
+    let dump = pf.dump_text();
+    let reads = cache_reads(&dir, &pf);
+    assert!(reads.iter().any(|(k, _)| k == "c.js"), "{reads:?}\n{dump}");
+    for (k, p) in &reads {
+        match k.as_str() {
+            "c.js" => assert!(!p, "c.js is added after b.js: {reads:?}\n{dump}"),
+            _ => assert!(p, "{k} is added in order: {reads:?}\n{dump}"),
+        }
+    }
+}
+
+/// RPG1b: a deleted cache entry lets the runtime evaluate its module again
+/// (the path registry runs its factory): the factory's stores are no longer
+/// once, so the exports keys it adds keep no order (and the cache, HARD
+/// after the delete, no slot).
+#[test]
+fn a_cache_deletion_ends_the_factory_order() {
+    let a = "const b = require('./b.js');\nconst k = Object.keys(require.cache)[0];\ndelete require.cache[k];\nconsole.log(b.name);\n";
+    let b = "exports.name = 'b';\nexports.twice = function (n) { return n * 2; };\nconsole.log(exports.name);\n";
+    let (dir, _names, pf) = solve(&[("b.js", b), ("c.js", C), ("a.js", a)]);
+    let dump = pf.dump_text();
+    for (k, p) in cache_reads(&dir, &pf) {
+        assert!(!p, "cache read {k} proven after a deletion\n{dump}");
+    }
+    let reads: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| s.key == "name" && !s.is_call)
+        .filter(|s| {
+            s.receivers
+                .iter()
+                .all(|r| r.contains("b.js:__PerryDeclaredKeysObject_"))
+        })
+        .collect();
+    assert!(!reads.is_empty(), "{dump}");
+    for s in reads {
+        assert!(!proven(&s.verdict), "an exports read is proven\n{dump}");
+    }
+}
+
+/// RPG1b: a store in a loop runs again after the stores that follow it: an
+/// exports key first added in a loop keeps no order before a later key.
+#[test]
+fn an_export_added_in_a_loop_keeps_no_order() {
+    let b = "for (let i = 0; i < 2; i++) { if (i === 1) exports.name = 'b'; exports.twice = function (n) { return n * 2; }; }\nconsole.log(exports.name);\n";
+    let (_dir, _names, pf) = solve(&[("b.js", b), ("c.js", C), ("a.js", A)]);
+    let dump = pf.dump_text();
+    let reads: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| s.key == "name" && !s.is_call)
+        .filter(|s| {
+            s.receivers
+                .iter()
+                .all(|r| r.contains("b.js:__PerryDeclaredKeysObject_"))
+        })
+        .collect();
+    assert!(!reads.is_empty(), "{dump}");
+    for s in reads {
+        assert!(
+            !proven(&s.verdict),
+            "a loop-added export read is proven\n{dump}"
+        );
+    }
+}

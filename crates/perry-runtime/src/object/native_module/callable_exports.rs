@@ -162,7 +162,7 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
             crate::gc::gc_collect_minor();
         }
     });
-    let exposed_name = if export_module_name == "fs" {
+    let exposed_name = if export_module_name == "fs" || export_module_name == "sqlite" {
         native_callable_export_display_name(export_module_name, property_name)
     } else if export_module_name == "url" && property_name == "resolveObject" {
         realm_native_url_resolveObject_metadata!(name)
@@ -411,6 +411,14 @@ pub(super) fn native_callable_export_display_name<'a>(module: &str, prop: &'a st
         match prop {
             "_toUnixTimestamp" => realm_native_fs_toUnixTimestamp_metadata!(name),
             "Stats" => realm_native_fs_Stats_metadata!(name),
+            _ => prop,
+        }
+    } else if module == "sqlite" {
+        // node 26: the classes are `Database` / `Statement`; `DatabaseSync`
+        // and `StatementSync` are aliases of them.
+        match prop {
+            "DatabaseSync" => "Database",
+            "StatementSync" => "Statement",
             _ => prop,
         }
     } else {

@@ -411,7 +411,11 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                         .any(|m| m.name.starts_with("__perry_static_init_"));
                 let has_private_elements = class.has_private_elements();
                 // Captures alone need a class object per evaluation only when
-                // the instances carry them: a guarded class environment
+                // the instances carry them. A class environment never makes
+                // them carry: a run-once definition has exactly one
+                // environment, whose slots are its only evaluation's (so the
+                // template IS the class, the one a member naming a later
+                // class through `ClassRef` reaches), and a guarded one
                 // (#11759 (c′)) gives the first evaluation the environment's
                 // slots and each later one its own capture array.
                 let per_evaluation_state = has_private_elements
@@ -419,7 +423,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     || !computed_keys.is_empty()
                     || (!captured_exprs.is_empty()
                         && !has_static_state
-                        && !ctx.is_class_env_guarded(&class.name));
+                        && !ctx.is_class_env(&class.name));
                 // #11759 (c′): a declaration that may be evaluated more than
                 // once and has no other per-evaluation state keeps the shared
                 // class for its FIRST evaluation; later ones are fresh.

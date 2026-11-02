@@ -45,6 +45,10 @@ pub struct LlFunction {
     /// general small-function policy gives the early pass an explicit code-size
     /// budget instead of activating every historical hint at once.
     pub pre_statepoint_inline: bool,
+    /// This admission belongs to the receiver/closed-target/ConstFn cost
+    /// policy. Numeric/index ABI adapters have their own admission contracts;
+    /// the final guarded-growth gate may revoke only this policy's decisions.
+    pub guarded_preinline: bool,
     /// This lowered method body fits the guarded-specialization inline budget.
     /// It joins the early inliner only when the facts prove a call site closed
     /// over it (`codegen/closed_targets.rs`).
@@ -315,6 +319,7 @@ impl LlFunction {
             linkage: String::new(),
             force_inline: false,
             pre_statepoint_inline: false,
+            guarded_preinline: false,
             closed_target_preinline: false,
             no_inline: false,
             disable_tail_calls: false,
