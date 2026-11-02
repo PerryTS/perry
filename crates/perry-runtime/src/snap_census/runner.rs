@@ -2333,9 +2333,15 @@ fn write_report(st: &mut State) {
         // A pointer outside the reservation and the binary points into
         // malloc memory (mimalloc picks randomized arena hints, so its
         // addresses differ per run even with ASLR off): it hashes as its tag.
+        // A raw (untagged) word that points into mimalloc's arenas is such
+        // a pointer too: runtime objects keep native pointers (a closure's
+        // Rust-side state) in raw words.
         let foreign = |v: u64| -> bool {
             let a = (v & 0xFFFF_FFFF_FFFF) as usize;
             let hi = v >> 48;
+            if hi == 0 {
+                return in_malloc(a);
+            }
             (hi == 0x7FFD || hi == 0x7FFC || hi == 0x7FFF || hi == 0x7FFE)
                 && st.heap.slot(a).is_none()
                 && st.bin.slot(a).is_none()
@@ -2634,6 +2640,14 @@ fn env_word_access(st: &mut State, v: u32, word: usize, write: bool, pc: usize) 
         return;
     }
     if let Some(o) = st.env_obs.get_mut(v as usize) {
+        // The word holding `capacity` and the `refcount` alias hint is the
+        // string's ownership state, not its value: a store barrier demotes
+        // the string to shared there (`js_string_addref`). The value words
+        // (lengths, flags, bytes) are what an observation reads; the hint is
+        // reported with the cell so the startup fill sets it the same way.
+        if word == (o.ptr + std::mem::offset_of!(crate::StringHeader, refcount)) & !7 {
+            return;
+        }
         if o.kind == OBS_STORE {
             o.kind = OBS_STORE_READ;
             o.by = top;
@@ -2702,6 +2716,19 @@ fn tsv_text(s: &str) -> String {
 /// The digest name of the env object and its storage.
 const ENV_NAME: u64 = 0x454E_5600_0000_0000;
 
+/// Whether `a` lies in mimalloc's heap memory (raw native pointers).
+fn in_malloc(a: usize) -> bool {
+    #[cfg(feature = "alloc-mimalloc")]
+    {
+        a >= 0x1_0000 && unsafe { libmimalloc_sys::mi_is_in_heap_region(a as *const _) }
+    }
+    #[cfg(not(feature = "alloc-mimalloc"))]
+    {
+        let _ = a;
+        false
+    }
+}
+
 fn write_env_report(st: &State, f: &mut std::fs::File, rank: &[u64]) {
     use std::io::Write;
     let in_d = |i: u32| st.inits[i as usize].in_d;
@@ -2740,7 +2767,9 @@ fn write_env_report(st: &State, f: &mut std::fs::File, rank: &[u64]) {
             } else {
                 let o = &st.env_obs[t as usize];
                 found[t as usize] += 1;
-                let _ = writeln!(f, "#cell\tenv_var\t{name}\t{}\t{}", o.name, o.init);
+                // The alias hint at the boundary (0 shared, 1 unique).
+                let alias = unsafe { (*(o.ptr as *const crate::StringHeader)).refcount };
+                let _ = writeln!(f, "#cell\tenv_var\t{name}\t{}\t{}\talias={alias}", o.name, o.init);
             }
         }
     };
