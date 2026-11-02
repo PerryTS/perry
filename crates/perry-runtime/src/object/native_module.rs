@@ -1612,6 +1612,9 @@ mod buffer_pool_size_tests;
 mod namespace_accessor_tests;
 
 #[cfg(test)]
+mod builtin_parent_tests;
+
+#[cfg(test)]
 mod realm_native_storage_tests {
     include!(concat!(env!("OUT_DIR"), "/realm_native_storage_test.rs"));
 }

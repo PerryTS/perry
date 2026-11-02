@@ -33,6 +33,11 @@ impl RealmTop {
 pub struct RealmReach {
     pub names: BTreeSet<String>,
     pub top: BTreeSet<RealmTop>,
+    /// The names the program itself names, before the birth closure (and
+    /// before a top scan closes R to the whole catalog). Every such name
+    /// enters through [`own`](Self::own); [`close`](Self::close) adds to
+    /// `names` only.
+    pub own_names: BTreeSet<String>,
 }
 
 impl RealmReach {
@@ -40,8 +45,15 @@ impl RealmReach {
         !self.top.is_empty()
     }
 
+    /// The program names `name`: it is in R and among the program's own names.
+    pub fn own(&mut self, name: &str) {
+        self.names.insert(name.into());
+        self.own_names.insert(name.into());
+    }
+
     pub fn merge(&mut self, other: &Self) {
         self.names.extend(other.names.iter().cloned());
+        self.own_names.extend(other.own_names.iter().cloned());
         self.top.extend(other.top.iter().cloned());
     }
 
@@ -60,14 +72,14 @@ impl RealmReach {
     }
 
     /// Test-only (the realm-diff gate's `PERRY_REALM_REACH_NAMES` input):
-    /// R becomes exactly `names`, with every top reason dropped, so a program
-    /// that reflects over `globalThis` (the realm dumper) can be built with a
-    /// partial image. A top program's own names are not kept: a scan closes a
-    /// top R to the whole catalog, so they are no longer distinguishable.
-    /// [`close`](Self::close) then applies the birth relation as usual.
+    /// R becomes the program's own names united with `names`, with every top
+    /// reason dropped, so a program that reflects over `globalThis` (the realm
+    /// dumper) is built with a partial image that still holds every cell the
+    /// program itself names. [`close`](Self::close) then applies the birth
+    /// relation as usual.
     pub fn restrict_to(&mut self, names: impl IntoIterator<Item = String>) {
         self.top.clear();
-        self.names = names.into_iter().collect();
+        self.names = self.own_names.iter().cloned().chain(names).collect();
     }
 
     pub fn close(&mut self, entries: &[RealmEntry]) {
@@ -132,7 +144,7 @@ pub fn scan(module: &ast::Module, entries: &[RealmEntry]) -> RealmReach {
         "SuppressedError",
     ] {
         if entries.iter().any(|e| e.name == name) {
-            out.names.insert(name.into());
+            out.own(name);
         }
     }
     scan_resolved(module, entries, &mut out);
@@ -241,7 +253,7 @@ pub fn scan_lowered(module: &crate::Module, entries: &[RealmEntry], out: &mut Re
         if matches!(receiver, Expr::GlobalThisExpr) {
             static_receivers.insert(receiver as *const Expr as usize);
             if entries.iter().any(|e| e.name == key) {
-                out.names.insert(key.into());
+                out.own(key);
             }
         }
     };
@@ -481,7 +493,7 @@ impl Scan<'_> {
 
     fn add(&mut self, name: &str) {
         if self.entries.iter().any(|e| e.name == name) {
-            self.out.names.insert(name.into());
+            self.out.own(name);
         }
     }
 
@@ -504,7 +516,7 @@ impl Scan<'_> {
         let name = name.strip_prefix("node:").unwrap_or(name);
         for entry in self.entries {
             if entry.module == Some(name) {
-                self.out.names.insert(entry.name.into());
+                self.out.own(entry.name);
             }
         }
     }

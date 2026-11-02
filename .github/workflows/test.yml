@@ -5221,6 +5221,19 @@ jobs:
           PERRY_RUNTIME_DIR: ${{ github.workspace }}/target/release
         run: python3 scripts/realm_wgraph_gate.py --perry target/release/perry --output target/realm-wgraph --self-test
 
+      # WRT3p-A2 (DESIGN §3.2, "The R-restricted realm-diff gate"): the realm
+      # dumper's descriptor graph equals the checked-in base-arm references in
+      # realm-dumps/, byte for byte, in full mode and R-restricted for hello,
+      # lad-04-classes and lad-07-json. PERRY_REALM_REACH_NAMES is a test-only
+      # compiler-driver input the gate sets for the restricted dumper; the gate
+      # asserts it took effect (--self-test: a dumper built without it fails).
+      # References change only through `realm_diff_gate.py --regenerate` on main.
+      - name: Realm diff (full and R-restricted, test-only PERRY_REALM_REACH_NAMES)
+        if: runner.os == 'Linux'
+        env:
+          PERRY_RUNTIME_DIR: ${{ github.workspace }}/target/release
+        run: python3 scripts/realm_diff_gate.py --perry target/release/perry --output target/realm-diff --self-test
+
       - name: Upload link absence evidence
         if: always()
         uses: ./.github/actions/perry/actions/upload-artifact # v7

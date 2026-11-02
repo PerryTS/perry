@@ -218,11 +218,26 @@ fn prototype(constructor: f64) -> f64 {
 }
 
 pub(crate) fn link_parent(value: f64, parent: f64) -> f64 {
+    link(value, parent, prototype)
+}
+
+/// [`link_parent`] for a global builtin parent (`repl.Recoverable` extends
+/// `SyntaxError`): the parent's `prototype` keeps the descriptor its own
+/// declaration gives it (non-writable, as in Node), so the link only reads
+/// it and never applies the minted-prototype attributes of
+/// [`finish_prototype`].
+fn link_builtin_parent(value: f64, parent: f64) -> f64 {
+    link(value, parent, |f| {
+        crate::object::js_function_prototype_value_for_read(f)
+    })
+}
+
+fn link(value: f64, parent: f64, parent_prototype: fn(f64) -> f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let ctor = scope.root_nanbox_f64(value);
     let parent = scope.root_nanbox_f64(parent);
     let proto = scope.root_nanbox_f64(prototype(ctor.get_nanbox_f64()));
-    let parent_proto = scope.root_nanbox_f64(prototype(parent.get_nanbox_f64()));
+    let parent_proto = scope.root_nanbox_f64(parent_prototype(parent.get_nanbox_f64()));
     crate::object::js_object_set_prototype_of(ctor.get_nanbox_f64(), parent.get_nanbox_f64());
     // A prototype born on a layout naming its parent (`runtime_layouts::
     // node_prototypes`) already has it: no relink, which on a sealed
@@ -280,7 +295,7 @@ pub(crate) fn link_parent(value: f64, parent: f64) -> f64 {
     }
     if module == "repl" && name == "Recoverable" {
         let parent = crate::object::js_get_global_this_builtin_value(b"SyntaxError".as_ptr(), 11);
-        return link_parent(ctor.get_nanbox_f64(), parent);
+        return link_builtin_parent(ctor.get_nanbox_f64(), parent);
     }
     if let Some(parent_value) = native_parent(module, name) {
         let parent = scope.root_nanbox_f64(parent_value());
