@@ -776,26 +776,18 @@ pub(crate) unsafe fn define_array_property(
     Some(true)
 }
 
-fn builtin_constructor_prototype_value(name: &[u8]) -> Option<f64> {
-    let ctor = js_get_global_this_builtin_value(name.as_ptr(), name.len());
-    let ctor_value = crate::value::JSValue::from_bits(ctor.to_bits());
-    if !ctor_value.is_pointer() {
-        return None;
-    }
-    let ctor_ptr = ctor_value.as_pointer::<u8>() as usize;
-    let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
-    let proto_value = crate::value::JSValue::from_bits(proto.to_bits());
-    proto_value.is_pointer().then_some(proto)
-}
-
+/// An array's default [[Prototype]]: this realm's %Array.prototype%, and for
+/// %Array.prototype% itself (an Array exotic object) %Object.prototype%. Both
+/// are the realm's intrinsics, pinned when the realm was populated; the
+/// writable `globalThis.Array` / `globalThis.Object` bindings name whatever
+/// user code stored there and are never consulted.
 pub(crate) fn array_get_prototype_of_addr(raw_addr: usize) -> Option<f64> {
-    if let Some(array_proto) = builtin_constructor_prototype_value(b"Array") {
-        let proto_addr = crate::value::js_nanbox_get_pointer(array_proto) as usize;
-        if proto_addr != raw_addr {
-            return Some(array_proto);
-        }
+    let array_proto = crate::array::array_prototype_addr();
+    if array_proto != 0 && array_proto != raw_addr {
+        return Some(crate::value::js_nanbox_pointer(array_proto as i64));
     }
-    builtin_constructor_prototype_value(b"Object")
+    let object_proto = crate::array::object_prototype_addr();
+    (object_proto != 0).then(|| crate::value::js_nanbox_pointer(object_proto as i64))
 }
 
 #[cfg(test)]

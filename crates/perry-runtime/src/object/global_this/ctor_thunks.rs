@@ -221,8 +221,9 @@ pub(crate) fn is_function_prototype_object_value(value: f64) -> bool {
 /// `"Function"` is answered from the memoized intrinsic (#10497) — the same
 /// object the by-name walk below finds, unless user code has reassigned the
 /// writable `globalThis.Function`, in which case the memo is the spec's
-/// %Function.prototype% and the walk would not be. Every other name keeps
-/// the walk.
+/// %Function.prototype% and the walk would not be. `Map`, `Array`, `Object`
+/// and the typed-array kinds are answered from their realm intrinsics the same
+/// way. Every other name keeps the walk.
 pub(crate) fn builtin_prototype_value(name: &str) -> f64 {
     if name == "Buffer" {
         return crate::object::native_module::buffer_original_prototype_value();
@@ -237,6 +238,22 @@ pub(crate) fn builtin_prototype_value(name: &str) -> f64 {
         let addr = crate::array::function_prototype_addr();
         if addr != 0 {
             return crate::value::js_nanbox_pointer(addr as i64);
+        }
+    }
+    // The realm's own intrinsics: a user `globalThis.Array = X` replaces the
+    // binding, never %Array.prototype% (nor what an array inherits from).
+    let intrinsic = match name {
+        "Array" => crate::array::array_prototype_addr(),
+        "Object" => crate::array::object_prototype_addr(),
+        _ => 0,
+    };
+    if intrinsic != 0 {
+        return crate::value::js_nanbox_pointer(intrinsic as i64);
+    }
+    if let Some(kind) = crate::typedarray_hook_slots::kind_for_name(name) {
+        let proto = super::typed_array::typed_array_kind_intrinsic_prototype_value(kind);
+        if crate::value::JSValue::from_bits(proto.to_bits()).is_pointer() {
+            return proto;
         }
     }
     let ctor = js_get_global_this_builtin_value(name.as_ptr(), name.len());
