@@ -977,7 +977,7 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
     // materialize through array-clone fast paths, but runtime-produced
     // Buffers can reach generic iterator lookup first.
     let raw_ptr = crate::value::js_nanbox_get_pointer(obj_f64) as usize;
-    if raw_ptr >= 0x10000 && crate::buffer::is_registered_buffer(raw_ptr) {
+    if raw_ptr >= 0x10000 && crate::buffer::is_byte_indexed_buffer(raw_ptr) {
         let iter_wk = well_known_symbol("iterator");
         if !iter_wk.is_null() {
             let iter_f64 =
@@ -1044,7 +1044,7 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
             }
         }
     }
-    if raw_addr >= 0x1000 && crate::buffer::is_registered_buffer(raw_addr) {
+    if raw_addr >= 0x1000 && crate::buffer::is_byte_indexed_buffer(raw_addr) {
         let iter_wk = well_known_symbol("iterator");
         if !iter_wk.is_null() {
             let iter_f64 =
