@@ -341,14 +341,15 @@ pub(super) fn read_birth_data(obj: *const ObjectHeader, data: StateData) -> Opti
         StateData::WritableCorked => 2,
         StateData::WritableWriteLen => 4,
     };
-    let desc = if data.readable() {
-        crate::object::runtime_layouts::READABLE_STATE::desc()
+    // Identity is the layout's fixed word: a program that reaches no stream
+    // defines neither state descriptor, and naming one is a birth.
+    let word = if data.readable() {
+        crate::object::runtime_layouts::READABLE_STATE::WORD
     } else {
-        crate::object::runtime_layouts::WRITABLE_STATE::desc()
+        crate::object::runtime_layouts::WRITABLE_STATE::WORD
     };
-    let shape = unsafe { crate::object::runtime_layouts::layout_id(desc) };
     // SAFETY: the caller validated this live ordinary state receiver.
-    if shape == 0 || unsafe { (*obj).parent_class_id } != shape {
+    if unsafe { (*obj).parent_class_id } != word {
         return None;
     }
     // This declared family has all its public data slots inline.
