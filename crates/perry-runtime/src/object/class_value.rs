@@ -1126,6 +1126,7 @@ pub(crate) unsafe fn constructor_property_get(
 /// `C[prop]` for a class function object at `ptr` (routed by
 /// `closure_get_dynamic_prop` on the class ShapeId): the class lookup.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(crate) fn class_static_read(ptr: usize, prop: &str, key: *const crate::StringHeader) -> f64 {
     // SAFETY: the caller proved a live class closure (its ShapeId).

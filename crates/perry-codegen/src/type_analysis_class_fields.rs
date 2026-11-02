@@ -87,9 +87,11 @@ pub(crate) fn class_field_global_index(
     // shape — where the `config;` declaration sits among method-ref class
     // fields — surfaces this as `column.config = 0` for every column
     // builder when read from the importing module.
+    // The packed layout lists the chain's public keys only; a private field's
+    // entry is claimed at its declaration (#11791), so a public field defined
+    // after one is not at its packed index on any instance (#8969,
+    // `perry_hir::private_names::construction_entries`): it has no slot here.
     fn count_keyable(fields: &[perry_hir::ClassField]) -> u32 {
-        // Private fields are not slots of the class layout either: their
-        // entries are claimed at construction, after every packed key (#11791).
         fields
             .iter()
             .filter(|f| f.key_expr.is_none() && !f.is_private)
@@ -159,6 +161,12 @@ pub(crate) fn class_field_global_index(
                     continue;
                 }
                 if f.name == property {
+                    if perry_hir::private_names::private_entry_precedes(
+                        chain[..=i].iter().map(|(_, fields)| fields.as_slice()),
+                        f,
+                    ) {
+                        return None;
+                    }
                     return Some(prefix_counts[i] + own_idx);
                 }
                 own_idx += 1;
@@ -186,7 +194,9 @@ pub(crate) fn class_field_global_index(
             return None;
         }
         let class = ctx.classes.get(class_name)?;
-        // Compute the byte-offset contribution from this class's parent.
+        // Compute the byte-offset contribution from this class's parent, and
+        // its fields, leaf first (the construction order is their reverse).
+        let mut ancestor_fields: Vec<&[perry_hir::ClassField]> = Vec::new();
         let parent_count = if let Some(parent_name) = class.extends_name.as_deref() {
             let mut p_count = 0u32;
             let mut p = Some(parent_name.to_string());
@@ -200,6 +210,7 @@ pub(crate) fn class_field_global_index(
                 }
                 if let Some(parent) = ctx.classes.get(&name) {
                     p_count += count_keyable(&parent.fields);
+                    ancestor_fields.push(&parent.fields);
                     p = parent.extends_name.clone();
                 } else {
                     return None; // unresolvable parent — no inline path
@@ -219,6 +230,11 @@ pub(crate) fn class_field_global_index(
                 continue;
             }
             if f.name == property {
+                ancestor_fields.reverse();
+                ancestor_fields.push(&class.fields);
+                if perry_hir::private_names::private_entry_precedes(ancestor_fields, f) {
+                    return None;
+                }
                 return Some(offset + parent_count + own_idx);
             }
             own_idx += 1;

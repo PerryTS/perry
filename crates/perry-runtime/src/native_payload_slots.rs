@@ -120,6 +120,7 @@ unsafe fn dense_callback(arr: *const crate::array::ArrayHeader, index: u32) -> f
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn callback_array_slot_slow(mut arr: *const crate::array::ArrayHeader, index: u32) -> f64 {
     let header = crate::gc::header_from_trusted_user_ptr(arr.cast());

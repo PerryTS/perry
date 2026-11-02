@@ -112,13 +112,25 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             ret_tok(m, call, o);
         }
         BuiltinNs::RegExp => {
-            implicit_args(m, call, "builtin constructor argument", Protocol::Any);
-            let what = if ns == BuiltinNs::Date {
-                "Date"
-            } else {
-                "RegExp"
-            };
-            let o = site_tmpl(m, call, what);
+            // ECMA-262 22.2.4.1 RegExp(pattern, flags), 22.2.3.2
+            // RegExpInitialize: IsRegExp reads `pattern[@@match]`; a pattern
+            // without [[RegExpMatcher]] that IsRegExp accepts gives `source`
+            // (and `flags` while `flags` is undefined); P and F go through
+            // ToString. Nothing else of an operand is read or called (the
+            // call arm adds the `constructor` read of `RegExp(re)`); surplus
+            // operands are ignored.
+            let c = m.calls[call as usize].clone();
+            if let Some(&p) = c.args.first() {
+                let wk = collections::WK_PREFIX;
+                string_methods::read_only(m, p, &format!("{wk}match"));
+                string_methods::read_prim(m, p, "source", "RegExp pattern source ToString");
+                string_methods::read_prim(m, p, "flags", "RegExp pattern flags ToString");
+                string_methods::to_prim(m, p, "RegExp pattern ToString");
+            }
+            if let Some(&f) = c.args.get(1) {
+                string_methods::to_prim(m, f, "RegExp flags ToString");
+            }
+            let o = site_tmpl(m, call, "RegExp");
             ret_tok(m, call, o);
         }
         BuiltinNs::TypedArray | BuiltinNs::ArrayBuffer => {

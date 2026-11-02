@@ -117,6 +117,7 @@ fn site_text(site: u64) -> String {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn violate(site: u64, what: &str, detail: String) -> ! {
     eprintln!(

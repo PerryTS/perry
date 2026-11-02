@@ -562,6 +562,16 @@ impl Model {
 
     // --------------------------------------------------------------- fields
 
+    /// ECMA-262 22.2.3.1 RegExpAlloc: every RegExp object holds `lastIndex`
+    /// as an own data property, `[[Configurable]]: false`, from birth: no
+    /// delete or defineProperty removes it or makes it an accessor, so a
+    /// lookup of it never reaches a prototype, whatever is written there.
+    pub(crate) fn regexp_last_index(&self, t: Tok, a: Atom) -> bool {
+        self.atoms[a as usize] == "lastIndex"
+            && matches!(&self.toks[t as usize], TokKind::Obj(tm, _)
+                if matches!(self.tmpls[*tm as usize].kind, TmplKind::BObj { what: "RegExp", .. }))
+    }
+
     pub fn field(&mut self, t: Tok, a: Atom) -> NodeId {
         if let Some(&n) = self.fields.get(&(t, a)) {
             return n;
@@ -572,6 +582,11 @@ impl Model {
         self.nodes[n as usize].of_marker = self.is_marker(t);
         self.fields.insert((t, a), n);
         self.field_keys.entry(t).or_default().push(a);
+        // A RegExp object's `lastIndex` is the Number 0 from birth
+        // (`regexp_last_index`).
+        if self.regexp_last_index(t, a) {
+            self.add_prim(n, prim::NUM);
+        }
         self.rel(|| format!("fieldnode {n} {t} {a}"));
         // A marker has no fields (`store_into`): its any-key field holds
         // only its reach marker. Under a named key it holds that key's
@@ -1957,6 +1972,7 @@ impl Model {
             ),
             Cons::Guard { test, from, dst } => format!("guard {n} {test} {from} {dst}"),
             Cons::Defined { dst } => format!("defined {n} {dst}"),
+            Cons::NotNullish { dst } => format!("notnullish {n} {dst}"),
             Cons::TopIfAny { dst, from, reason } => format!(
                 "topifany {n} {dst} {from} {}",
                 reason.map_or(-1, |r| r as i64)
@@ -2054,7 +2070,8 @@ impl Model {
             Cons::IterNext { dst } => format!("iternext {n} {dst}"),
             Cons::NewTargetHard { reason } => format!("newtargethard {n} {reason}"),
             Cons::ShareBuffer { ta } => format!("sharebuffer {n} {ta}"),
-            Cons::Arith { dst, add } => format!("arith {n} {dst} {}", *add as u8),
+            Cons::Arith { dst } => format!("arith {n} {dst}"),
+            Cons::Plus { str, num } => format!("plus {n} {str} {num}"),
             Cons::ArrayLenArg { dst } => format!("arraylenarg {n} {dst}"),
             Cons::IdxLoad { idx, dst } => format!("idxload {n} {idx} {dst}"),
             Cons::IdxKey { obj, dst } => format!("idxkey {n} {obj} {dst}"),
