@@ -54,6 +54,7 @@ mod native_fs;
 mod native_given_proto;
 mod native_member;
 mod native_proto;
+mod num_key;
 mod own_key_shadow;
 mod own_length;
 mod parent_value;
