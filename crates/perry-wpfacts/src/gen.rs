@@ -238,6 +238,9 @@ pub struct Gen<'a> {
     pub(crate) binding_writes: FxHashMap<u32, NodeId>,
     pub(crate) write_top: crate::pts::FxHashSet<u32>,
     pub(crate) stand_in_fc: FxHashMap<Tok, &'a crate::units::FnContract>,
+    /// DECISIONS 241: stores on a published function no contract describes
+    /// (`contract_check`): sunk, published unknown.
+    pub(crate) fn_store_top: crate::pts::FxHashSet<NodeId>,
     /// Classes with a parent value (§17.2), fed after the bodies.
     pub(crate) parent_values: Vec<(u32, TmplId, Option<String>)>,
     /// Classes whose evaluated parent fed the parent value.
@@ -482,6 +485,7 @@ impl<'a> Gen<'a> {
             param_guard: FxHashMap::default(),
             param_ty: Vec::new(),
             class_contracts: Vec::new(),
+            fn_store_top: Default::default(),
             unit_in: None,
             view: None,
             stand_ins: FxHashMap::default(),

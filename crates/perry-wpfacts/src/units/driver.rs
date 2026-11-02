@@ -817,6 +817,36 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             }
         }
         input.ctor_runs = news;
+        // DECISIONS 241: what the units store on the own properties of the
+        // functions they hold, joined the same way; every holder of a
+        // function whose join changed (its owner, the units reading its
+        // contract) solves again.
+        let mut fstores = input.fn_stores.clone();
+        for u in per_unit.iter().flatten() {
+            for (nm, fs) in &u.fn_stores_out {
+                fstores.entry(nm.clone()).or_default().join(fs);
+            }
+        }
+        let fstores_changed: FxHashSet<&str> = fstores
+            .iter()
+            .filter(|(k, v)| input.fn_stores.get(*k) != Some(*v))
+            .map(|(k, _)| k.as_str())
+            .collect();
+        if !fstores_changed.is_empty() {
+            for (si, u) in per_unit.iter().enumerate() {
+                let u = u.as_ref().expect("every unit solved");
+                if !u.stats.aborted
+                    && (u.fns_read.iter().any(|(n, _)| fstores_changed.contains(n.as_str()))
+                        || u.fns_defined.iter().any(|d| {
+                            d.strip_prefix("fn:").is_some_and(|n| fstores_changed.contains(n))
+                        }))
+                {
+                    seeds.push(si);
+                }
+            }
+        }
+        drop(fstores_changed);
+        input.fn_stores = fstores;
         // Decision 17: the store effects: last round's joined with what
         // every unit's latest solve stores (D16), so they only grow too.
         // The owners of a layout whose effect keys grew perform them,
@@ -1421,6 +1451,9 @@ pub(super) fn unit_io(
         }
         for (n, c) in &u.ctor_runs_out {
             o.push((format!("news:{n}"), sd(&synthetic, c)));
+        }
+        for (n, c) in &u.fn_stores_out {
+            o.push((format!("fstores:{n}"), digest(c)));
         }
         for (d, k, kinds) in &u.stores_out {
             o.push((format!("store:{d}.{k}"), sd(&synthetic, kinds)));
