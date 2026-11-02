@@ -458,7 +458,34 @@ fn imports_formatter_with_mods(
     for (name, src) in mods {
         let path = format!("{name}.ts");
         let m = perry_parser::parse_typescript(src, &path).expect("parses");
-        hirs.push((path.clone(), perry_hir::lower_module(&m, name, &path).expect("lowers")));
+        let mut h = perry_hir::lower_module(&m, name, &path).expect("lowers");
+        // A literal `import("./x")` of another listed module: its target, as
+        // `collect_modules` folds it.
+        let mut dyn_targets = Vec::new();
+        perry_hir::for_each_dynamic_import_mut(&mut h, &mut |e| {
+            if let perry_hir::Expr::DynamicImport { paths, arg, .. } = e {
+                if let perry_hir::Expr::String(s) = arg.as_ref() {
+                    *paths = vec![s.clone()];
+                    dyn_targets.push(s.clone());
+                }
+            }
+        });
+        for source in dyn_targets {
+            h.imports.push(perry_hir::Import {
+                source,
+                specifiers: Vec::new(),
+                is_native: false,
+                module_kind: Default::default(),
+                resolved_path: None,
+                type_only: false,
+                runtime_erased: false,
+                is_dynamic: true,
+                is_dynamic_target: false,
+                is_deferred_require: false,
+                is_adopted_require: false,
+            });
+        }
+        hirs.push((path.clone(), h));
     }
     for (_, h) in hirs.iter_mut() {
         for imp in &mut h.imports {
@@ -718,12 +745,13 @@ fn a_guarded_object_create_is_a_fresh_object() {
 /// Rule 7 for a member `extends` (@effect/platform-node's
 /// `NodeHttpIncomingMessage extends Inspectable.Class`): the HIR keeps the
 /// trailing name (`Class`) and the evaluated member; the name binds nothing
-/// in the module, the evaluation is the parent. With the parent ⊤, `this`
-/// in the constructor was ⊤ and `this[k] = ..` an any-key store on ⊤.
+/// in the module, the evaluation is the parent. The module is loaded only by
+/// `import()` (DECISIONS 225): its body, and with it the evaluation of the
+/// parent, is walked when an active body loads it, during the solve, after
+/// `feed_parent_values`. With the parent ⊤, `this` in the constructor was ⊤
+/// and `this[k] = ..` an any-key store on ⊤.
 const INSP: &str = r#"
-export const Class = /*#__PURE__*/function () {
-  return class Class { toJSON() { return { _id: "x" }; } };
-}();
+export class Class { toString() { return "x"; } }
 "#;
 const MSG: &str = r#"
 import * as Inspectable from "./insp";
@@ -732,14 +760,21 @@ export class Msg extends Inspectable.Class {
   constructor(source: any) { super(); (this as any)[String(source)] = 1; this.source = source; }
 }
 "#;
+const LOADER: &str = r#"
+export async function load(n: number) { const { Msg } = await import("./msg"); return new Msg(n); }
+"#;
 #[test]
 fn a_member_extends_evaluated_is_its_parent() {
-    let tail = format!("{MAKE_CALLED}\nimport {{ Msg }} from \"./msg\";\nconsole.log(new Msg(process.argv.length));");
-    let mods = [("insp", INSP), ("msg", MSG)];
+    let tail = format!("{MAKE_CALLED}\nimport {{ load }} from \"./loader\";\nload(process.argv.length).then((m: any) => console.log(m));");
+    let mods = [("insp", INSP), ("msg", MSG), ("loader", LOADER)];
     for interp in [false, true] {
         assert!(
             !imports_formatter_with_mods("", &tail, interp, &mods),
             "interp={interp}: a member `extends` keeps the formatter import live"
         );
     }
+    // The fixture can fail: an unknown parent makes `this` unknown.
+    let unknown = MSG.replace("extends Inspectable.Class", "extends (require(String(process.argv.length)) as any).Class");
+    let mods = [("insp", INSP), ("msg", unknown.as_str()), ("loader", LOADER)];
+    assert!(imports_formatter_with_mods("", &tail, false, &mods));
 }
