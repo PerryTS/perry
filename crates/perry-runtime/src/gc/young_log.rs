@@ -113,7 +113,7 @@ impl<K: Copy + Ord> YoungLog<K> {
         // behind: the notes made while the caller walks the batch land here.
         let mut keys = std::mem::replace(&mut self.keys, std::mem::take(&mut self.spare));
         self.keys.clear();
-        crate::cold_sort::sort_by(&mut keys, |a, b| a.cmp(b));
+        keys.sort_unstable();
         keys.dedup();
         keys
     }
