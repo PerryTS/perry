@@ -1919,6 +1919,32 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
         (BuiltinNs::Function, _) => {
             // Not a method of the Function constructor (TypeError).
         }
+        // Rule 12: called as a value (the generic arm of a guarded or
+        // patched namespace call, an alias), the builtin is the operation
+        // its intrinsic lowers to (`Expr::ObjectDefineProperty`), see
+        // `define_property_value`. `Object.defineProperty` returns the
+        // target, `Reflect.defineProperty` a boolean. A spread argument
+        // leaves the operands unknown.
+        (BuiltinNs::Object | BuiltinNs::Reflect, "defineProperty") => {
+            let c = m.calls[call as usize].clone();
+            match (c.args.first(), c.args.get(1), c.args.get(2)) {
+                (Some(&o), Some(&k), Some(&d)) if c.spread.is_empty() => {
+                    define_property_value(m, o, k, d, ns);
+                    if ns == BuiltinNs::Object {
+                        m.edge(o, c.ret);
+                    } else {
+                        ret_prim(m, call, prim::BOOL);
+                    }
+                }
+                _ => unknown_method_proto(
+                    m,
+                    call,
+                    &format!("argument of builtin {ns:?}.defineProperty"),
+                    None,
+                    true,
+                ),
+            }
+        }
         (_, n) => unknown_method_proto(
             m,
             call,
@@ -1926,6 +1952,82 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
             None,
             true,
         ),
+    }
+}
+
+/// Rule 12: `defineProperty(o, k, d)` called as a value. A constant key
+/// (the one key of its argument node, `Model::key_nodes`) defines that key
+/// by the descriptor (`Cons::DefineDesc`); any other key is E5 HARD on the
+/// target, the descriptor's `value` stored under any key and its get/set
+/// installed under the computed key. The descriptor is read, not handed
+/// over.
+fn define_property_value(m: &mut Model, o: NodeId, k: NodeId, d: NodeId, ns: BuiltinNs) {
+    let r = m.reason(&format!("E5 {ns:?}.defineProperty"));
+    m.cons(
+        k,
+        Cons::Implicit {
+            reason: r,
+            proto: Protocol::ToPrimitive,
+        },
+    );
+    let site = m.anon_post_site("defineProperty");
+    if let Some(key) = m.key_nodes.get(&k).copied() {
+        m.cons(
+            d,
+            Cons::DefineDesc {
+                o,
+                key,
+                site,
+                reason: r,
+            },
+        );
+        return;
+    }
+    let star = m.atom(crate::STAR_KEY);
+    m.define_on.insert((o, star, true));
+    m.define_on.insert((o, star, false));
+    m.cons(
+        o,
+        Cons::Hard {
+            kind: Hard::E5DefineProperty,
+            reason: r,
+        },
+    );
+    let va = m.atom("value");
+    let v = m.node_l("define-value");
+    m.cons(
+        d,
+        Cons::Load {
+            key: Key::Named(va),
+            dst: v,
+        },
+    );
+    m.cons(
+        o,
+        Cons::Store {
+            key: Key::Any,
+            src: v,
+            site,
+        },
+    );
+    for (name, setter) in [("get", false), ("set", true)] {
+        let a = m.atom(name);
+        let f = m.node_l("define-accessor");
+        m.cons(
+            d,
+            Cons::Load {
+                key: Key::Named(a),
+                dst: f,
+            },
+        );
+        m.cons(
+            f,
+            Cons::Accessor {
+                holder: o,
+                key: star,
+                setter,
+            },
+        );
     }
 }
 

@@ -73,7 +73,24 @@ impl<'a> Gen<'a> {
                 return self.call_value(c, ThisArg::Undef, vec![lit], vec![]);
             }
         }
-        let a: Vec<NodeId> = args.iter().map(|x| self.expr(fx, x)).collect();
+        let mut a: Vec<NodeId> = args.iter().map(|x| self.expr(fx, x)).collect();
+        // Rule 12: a constant key of a `defineProperty` method call is the
+        // one key its argument node holds (`Model::key_nodes`). When the
+        // callee is the builtin (the generic arm of a guarded or patched
+        // namespace call), the value call defines that key, as the
+        // intrinsic does (`builtins::define_property_value`).
+        if let (Expr::PropertyGet { property, .. }, Some(k)) = (callee, args.get(1)) {
+            if property == "defineProperty" {
+                if let Some(crate::gen_const::Const::Str(s)) = self.const_eval(fx.module, k) {
+                    let key = self.m.atom(&s);
+                    let n = self.m.node_l("define-key-arg");
+                    self.m.edge(a[1], n);
+                    self.m.key_nodes.insert(n, key);
+                    self.m.accessor_atoms.insert(key);
+                    a[1] = n;
+                }
+            }
+        }
         self.call_lit_arg = match args.first().map(|x| self.const_eval(fx.module, x)) {
             Some(Some(crate::gen_const::Const::Str(s))) => Some(self.m.atom(&s)),
             _ => None,

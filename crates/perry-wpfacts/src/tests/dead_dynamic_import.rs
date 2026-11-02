@@ -941,3 +941,61 @@ export function go() {
     let quiet = src.replace("con.emit(", "void (");
     assert!(!imports_formatter_with_mods("", &tail, false, &[("cli", quiet.as_str())]));
 }
+
+/// Rule 12: tsc's CommonJS re-export, `Object.defineProperty(exports, "X",
+/// { enumerable: true, get: function () { return m.X; } })`. With dynamic
+/// code that names the global scope the call is guarded, and a descriptor
+/// holding a closure cannot sit in both arms: the one call is the generic
+/// `globalThis.Object.defineProperty(..)`. Called as a value, the builtin is
+/// the intrinsic's operation: the getter is installed on the target, not
+/// handed to unknown code with the target and the value it returns. Before,
+/// `pg` escaped through the getter, `PG` ran with `this` ⊤ (pg/lib/index.js),
+/// `Client` was stored into ⊤ and `delete this.own[k]` in its method was an
+/// any-key delete on ⊤.
+const REEXPORT: &str = r#"
+class Client { own: any = {}; drop(k: any) { delete this.own[k]; } }
+function PG(this: any, c: any) { this.Client = c; }
+const pg: any = new (PG as any)(Client);
+export const reexp: any = {};
+Object.defineProperty(reexp, "pg", { enumerable: true, get: function () { return pg; } });
+"#;
+const REEXPORT_CALL: &str = "Object.defineProperty(reexp, \"pg\", { enumerable: true, get: function () { return pg; } });";
+#[test]
+fn a_guarded_define_property_re_export_keeps_its_getter() {
+    let tail = format!(
+        "{MAKE_CALLED}\nimport {{ reexp }} from \"./mk\";\nnew reexp.pg.Client().drop(String(process.argv.length));"
+    );
+    for interp in [false, true] {
+        assert!(
+            !imports_formatter_with_make(REEXPORT, &tail, interp),
+            "interp={interp}: a guarded defineProperty re-export keeps the formatter import live"
+        );
+    }
+    // A constant key defines that key only: an unknown value defined under
+    // another key is not read by `reexp.pg`.
+    let other = format!(
+        "{REEXPORT}Object.defineProperty(reexp, \"u\", {{ value: (globalThis as any)[String(process.argv.length)] }});\n"
+    );
+    assert!(!imports_formatter_with_make(&other, &tail, true));
+    // A computed key: the guarded value call is the intrinsic's computed
+    // definition, whatever that proves.
+    let computed = REEXPORT.replace("reexp, \"pg\",", "reexp, String(process.argv.length),");
+    assert_ne!(computed, REEXPORT);
+    assert_eq!(
+        imports_formatter_with_make(&computed, &tail, true),
+        imports_formatter_with_make(&computed, &tail, false)
+    );
+    // Reflect's form is the same operation.
+    let reflect = REEXPORT.replace("Object.defineProperty(", "Reflect.defineProperty(");
+    assert!(!imports_formatter_with_make(&reflect, &tail, true));
+    // The fixture can fail: with a spread argument the operands are unknown,
+    // the getter is handed over, `pg` with it, `PG` runs with `this` ⊤ and
+    // stores `Client` into ⊤; its `this` is ⊤ and the delete an any-key
+    // delete on ⊤.
+    let unknown = REEXPORT.replace(
+        REEXPORT_CALL,
+        "const args: any = [reexp, \"pg\", { enumerable: true, get: function () { return pg; } }];\nObject.defineProperty(...args);",
+    );
+    assert_ne!(unknown, REEXPORT);
+    assert!(imports_formatter_with_make(&unknown, &tail, true));
+}
