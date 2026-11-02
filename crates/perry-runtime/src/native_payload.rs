@@ -326,12 +326,31 @@ fn family_prototype(family: &NativePayloadFamily) -> *mut ObjectHeader {
     // export carries `prototype` before any instance exists); adopt the one
     // it published instead of building a second.
     let constructor = match family.constructor_export {
-        Some((module, export)) => crate::object::bound_native_callable_export_value(module, export),
+        Some((module, export)) => {
+            crate::object::native_module::constructor_shapes::native_constructor_value(
+                module, export,
+            )
+        }
         None => anonymous_constructor(family.name, family.constructor_length),
     };
     let existing = PAYLOAD_PROTOTYPES.with(|slots| slots[index].load(Ordering::Acquire));
     if existing != 0 {
         return existing as *mut ObjectHeader;
+    }
+    // A constructor whose shape already carries its prototype (linked into
+    // node's chain when the export was created) keeps it: that object is the
+    // family prototype, and replacing it would orphan the chain and every
+    // reference already taken to `C.prototype`.
+    if family.constructor_export.is_some()
+        && crate::value::JSValue::from_bits(constructor.to_bits()).is_pointer()
+    {
+        let own = crate::closure::closure_get_dynamic_prop(
+            crate::value::js_nanbox_get_pointer(constructor) as usize,
+            "prototype",
+        );
+        if let Some(proto) = any_object(own) {
+            return adopt_prototype(family, proto);
+        }
     }
     let proto = crate::object::js_object_alloc(0, 0);
     if proto.is_null() {
