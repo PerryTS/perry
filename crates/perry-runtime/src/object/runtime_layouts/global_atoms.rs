@@ -4,6 +4,7 @@
 //! name exists from `seed_static_atoms` on: populate keys the global object
 //! with it and allocates no name, and every key of the global object is an atom.
 use super::*;
+use super::intrinsic_private_atoms::REGEXP_PROTOTYPE;
 
 macro_rules! global_atom {
     ($string:ident, $atom:ident, $name:literal, $image_export:literal, $atom_export:literal) => {
@@ -26,7 +27,7 @@ macro_rules! global_atom {
             link_section = "perry_atoms"
         )]
         #[export_name = $atom_export]
-        static $atom: StaticAtom = StaticAtom {
+        pub(crate) static $atom: StaticAtom = StaticAtom {
             hash: atom_hash($name.as_bytes()),
             string: std::ptr::addr_of!($string.string),
             kind: crate::codegen_abi::ATOM_KIND_STRING,
@@ -191,3 +192,171 @@ global_atom!(G123, GA123, "navigator", "perry_image_literal_0_6e6176696761746f72
 global_atom!(G124, GA124, "NaN", "perry_image_literal_0_4e614e", "perry_atom_4e614e");
 global_atom!(G125, GA125, "Infinity", "perry_image_literal_0_496e66696e697479", "perry_atom_496e66696e697479");
 global_atom!(G126, GA126, "undefined", "perry_image_literal_0_756e646566696e6564", "perry_atom_756e646566696e6564");
+
+// The global object's own builtin keys in their enumeration (populate) order,
+// each with its attribute byte: 2 = writable, configurable (not enumerable);
+// 0 = writable, enumerable, configurable; 7 = read-only, not enumerable, not
+// configurable (NaN, Infinity, undefined); 57/59 = the sessionStorage /
+// localStorage accessors (getter and setter) as populate defines them; 24 =
+// enumerable getter only. The last key is the realm's private
+// `[[RegExpPrototype]]` slot (66 = private, not enumerable), which populate
+// stores with the RegExp intrinsic. The global object is born on this layout
+// (`js_get_global_this`) in one publish, and population fills its slots.
+runtime_layout!(GLOBAL_OBJECT, 0x5254_0012, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [
+    GA0 => 2,
+    GA1 => 0,
+    GA2 => 2,
+    GA3 => 2,
+    GA4 => 2,
+    GA5 => 2,
+    GA6 => 2,
+    GA7 => 2,
+    GA8 => 2,
+    GA9 => 2,
+    GA10 => 2,
+    GA11 => 2,
+    GA12 => 2,
+    GA13 => 2,
+    GA14 => 2,
+    GA15 => 2,
+    GA16 => 2,
+    GA17 => 2,
+    GA18 => 2,
+    GA19 => 2,
+    GA20 => 2,
+    GA21 => 2,
+    GA22 => 2,
+    GA23 => 2,
+    GA24 => 2,
+    GA25 => 2,
+    GA26 => 2,
+    GA27 => 2,
+    GA28 => 2,
+    GA29 => 2,
+    GA30 => 2,
+    GA31 => 2,
+    GA32 => 2,
+    GA33 => 2,
+    GA34 => 2,
+    GA35 => 2,
+    GA36 => 2,
+    GA37 => 2,
+    GA38 => 2,
+    GA39 => 2,
+    GA40 => 2,
+    GA41 => 2,
+    GA42 => 2,
+    GA43 => 2,
+    GA44 => 2,
+    GA45 => 2,
+    GA46 => 2,
+    GA47 => 2,
+    GA48 => 2,
+    GA49 => 2,
+    GA50 => 2,
+    GA51 => 2,
+    GA52 => 2,
+    GA53 => 2,
+    GA54 => 2,
+    GA55 => 2,
+    GA56 => 2,
+    GA57 => 2,
+    GA58 => 2,
+    GA59 => 2,
+    GA60 => 2,
+    GA61 => 2,
+    GA62 => 2,
+    GA63 => 2,
+    GA64 => 2,
+    GA65 => 2,
+    GA66 => 2,
+    GA67 => 2,
+    GA68 => 2,
+    GA69 => 2,
+    GA70 => 2,
+    GA71 => 2,
+    GA72 => 2,
+    GA73 => 2,
+    GA74 => 59,
+    GA75 => 57,
+    GA76 => 2,
+    GA77 => 2,
+    GA78 => 2,
+    GA79 => 2,
+    GA80 => 2,
+    GA81 => 2,
+    GA82 => 2,
+    GA83 => 2,
+    GA84 => 0,
+    GA85 => 0,
+    GA86 => 0,
+    GA87 => 0,
+    NP_ATOM_SET_TIMEOUT => 0,
+    GA88 => 0,
+    GA89 => 0,
+    GA90 => 0,
+    GA91 => 0,
+    GA92 => 0,
+    GA93 => 0,
+    GA94 => 2,
+    GA95 => 2,
+    GA96 => 2,
+    GA97 => 2,
+    GA98 => 2,
+    GA99 => 2,
+    GA100 => 2,
+    GA101 => 2,
+    GA102 => 2,
+    GA103 => 2,
+    GA104 => 2,
+    GA105 => 2,
+    GA106 => 2,
+    GA107 => 2,
+    GA108 => 2,
+    GA109 => 2,
+    GA110 => 2,
+    GA111 => 2,
+    GA112 => 2,
+    GA113 => 2,
+    GA114 => 0,
+    GA115 => 0,
+    GA116 => 0,
+    GA117 => 0,
+    GA118 => 0,
+    GA119 => 0,
+    GA120 => 0,
+    GA121 => 0,
+    GA122 => 24,
+    GA123 => 24,
+    GA124 => 7,
+    GA125 => 7,
+    GA126 => 7,
+    REGEXP_PROTOTYPE => 66,
+]);
+
+/// The global object's own key named `name` (FNV-1a `hash`), found through
+/// its static layout's index: the builtin name's image atom.
+#[inline]
+pub(crate) fn builtin_global_atom(name: &[u8], hash: u64) -> Option<*const StringHeader> {
+    const MASK: usize = GLOBAL_OBJECT::INDEX.len() - 1;
+    let mut at = hash as usize & MASK;
+    loop {
+        let pos = GLOBAL_OBJECT::INDEX[at];
+        if pos == u32::MAX {
+            return None;
+        }
+        let atom = GLOBAL_OBJECT::KEYS[pos as usize].atom;
+        // SAFETY: the layout's atoms are this binary's static image atoms.
+        unsafe {
+            if (*atom).hash == hash {
+                let string = (*atom).string;
+                if (*string).byte_len as usize == name.len()
+                    && std::slice::from_raw_parts(crate::string::string_data(string), name.len()) == name
+                {
+                    return Some(string);
+                }
+            }
+        }
+        at = (at + 1) & MASK;
+    }
+}

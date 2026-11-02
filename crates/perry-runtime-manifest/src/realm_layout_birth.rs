@@ -108,7 +108,13 @@ pub(super) fn ordinary(expression: &str, entry: &[Token<'_>]) -> Result<Value, S
     let fields = descriptor(
         include_str!("../../perry-runtime/src/object/runtime_layouts/stream_prototypes.rs"),
         name,
-    )?;
+    )
+    .or_else(|_| {
+        descriptor(
+            include_str!("../../perry-runtime/src/object/runtime_layouts/global_atoms.rs"),
+            name,
+        )
+    })?;
     let (kind, rest) = match fields.get(1).and_then(|f| f.strip_prefix("kind=")) {
         Some(kind) => (kind.to_owned(), &fields[2..]),
         None => ("0".to_owned(), &fields[1..]),

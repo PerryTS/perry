@@ -242,7 +242,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
             // realm global adopts them, a `vm`/eval realm gets its own pair.
             let (object_ctor, _) = object_intrinsics_for_realm(singleton());
             if !object_ctor.is_null() {
-                let name_key = crate::string::js_string_from_bytes(b"Object".as_ptr(), 6);
+                let name_key = super::global_name_key(b"Object");
                 super::super::define_builtin_data_property(
                     singleton(),
                     name_key,
@@ -876,7 +876,6 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
             super::super::native_module::bound_native_callable_export_value("perf_hooks", name);
         js_object_set_field_by_name(singleton(), key, value);
     }
-    super::super::native_module::install_global_webcrypto(singleton());
     let getter = crate::closure::js_closure_alloc(
         crate::fn_info!(#[realm("crypto.<get>", provider = closure_alloc)] export crate::object::global_this::ctor_thunks::global_this_crypto_getter_thunk, 0; with_declared(0)),
         0,

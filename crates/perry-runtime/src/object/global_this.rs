@@ -198,5 +198,8 @@ pub(crate) use typed_array::array_buffer_is_view_thunk;
 pub(crate) fn global_name_key(name: impl AsRef<[u8]>) -> *mut crate::StringHeader {
     let name = name.as_ref();
     let hash = crate::object::key_bytes_hash(name.as_ptr(), name.len());
+    if let Some(atom) = crate::object::runtime_layouts::builtin_global_atom(name, hash) {
+        return atom as *mut crate::StringHeader;
+    }
     crate::string::js_string_pool_atom(name.as_ptr(), name.len() as u32, hash, 0)
 }

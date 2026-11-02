@@ -403,6 +403,13 @@ pub fn read(runtime_src: &Path) -> Result<Vec<Value>, String> {
                             atom(perry_abi::ATOM_KIND_STRING, Some(literal(args[1])?), 0),
                         )?;
                     }
+                    "global_atom" if args.len() == 5 && args[1].len() == 1 => {
+                        insert_atom(
+                            &mut atoms,
+                            args[1][0].text,
+                            atom(perry_abi::ATOM_KIND_STRING, Some(literal(args[2])?), 0),
+                        )?;
+                    }
                     "atom" if args.len() == 6 && args[0].len() == 1 && args[1].len() == 1 => {
                         insert_atom(
                             &mut atoms,
