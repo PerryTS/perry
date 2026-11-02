@@ -1201,6 +1201,7 @@ impl<'a> Gen<'a> {
             parent_value: None,
             parent_links: Vec::new(),
             null_proto: c.declared_keys_null_proto(),
+            chain_miss: false,
             species: None,
         });
         self.mods[mi as usize].classes.insert(c.name.clone(), tm);
@@ -1723,6 +1724,7 @@ impl<'a> Gen<'a> {
             parent_value: None,
             parent_links: Vec::new(),
             null_proto: false,
+            chain_miss: false,
             species: None,
         });
         tm
@@ -1761,6 +1763,7 @@ impl<'a> Gen<'a> {
             parent_value: None,
             parent_links: Vec::new(),
             null_proto: false,
+            chain_miss: false,
             species: None,
         });
         tm

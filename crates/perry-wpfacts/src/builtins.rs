@@ -234,6 +234,7 @@ fn site_tmpl(m: &mut Model, call: CallId, what: &'static str) -> Tok {
         parent_value: None,
         parent_links: Vec::new(),
         null_proto: false,
+        chain_miss: false,
         species: None,
     });
     let t = m.tok(TokKind::Obj(tm, NO_CTX));

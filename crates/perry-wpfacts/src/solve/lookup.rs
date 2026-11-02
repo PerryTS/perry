@@ -268,6 +268,38 @@ impl Model {
         }
     }
 
+    /// DECISIONS 242(2): a [[Get]], call or [[Set]] of `key` on `t` that may
+    /// pass `t`'s own keys onto its prototype chain marks `t`'s template
+    /// (`Template::chain_miss`). A definite own data key (DECISIONS 234's
+    /// `definite`, or a key every spread source surely holds) stops it at
+    /// the object; a key a class prototype of its chain defines stops it
+    /// before `Object.prototype`.
+    pub(crate) fn note_chain_miss(&mut self, t: Tok, key: Key) {
+        let Some(tm) = self.tmpl_of(t) else {
+            return;
+        };
+        let tpl = &self.tmpls[tm as usize];
+        if tpl.chain_miss || !tpl.kind.is_fact_unit() {
+            return;
+        }
+        if let Key::Named(a) = key {
+            if self.is_private_atom(a) {
+                return;
+            }
+            if !self.is_proto_key(key) && (tpl.definite.contains(&a) || self.spread_sure(tm, a)) {
+                return;
+            }
+            let mut p = Some(tm);
+            while let Some(c) = p {
+                if self.tmpls[c as usize].proto_members.contains(&a) {
+                    return;
+                }
+                p = self.tmpls[c as usize].parent;
+            }
+        }
+        self.tmpls[tm as usize].chain_miss = true;
+    }
+
     /// The reads of `tm` that found a key no longer sure read `undefined`.
     pub(crate) fn flush_present_reads(&mut self, tm: TmplId) {
         let reads = self.present_reads.remove(&tm).unwrap_or_default();
@@ -279,6 +311,7 @@ impl Model {
                 kept.push((a, dst));
             } else {
                 self.add_prim(dst, prim::UNDEF);
+                self.tmpls[tm as usize].chain_miss = true;
             }
         }
         if !kept.is_empty() {
@@ -363,6 +396,7 @@ impl Model {
         // closedness (`closed_param`): it settles nothing and never turns
         // off, while an argument marker's depends on members that may still
         // join after this load (CHB5).
+        self.note_chain_miss(t, key);
         let closed = self.closed_param(t);
         let present = closed
             || match (key, self.tmpl_of(t)) {

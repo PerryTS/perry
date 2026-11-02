@@ -524,6 +524,7 @@ impl<'a> Gen<'a> {
             parent_value: None,
             parent_links: Vec::new(),
             null_proto: false,
+            chain_miss: false,
             species: None,
             declared: vec![],
             reserved: Vec::new(),
@@ -902,6 +903,7 @@ impl<'a> Gen<'a> {
             parent_value: None,
             parent_links: Vec::new(),
             null_proto: false,
+            chain_miss: false,
             species: None,
         });
         self.m.funcs[ctor as usize].ctor_of = Some(tm);

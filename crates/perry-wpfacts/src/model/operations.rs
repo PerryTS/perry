@@ -1642,6 +1642,7 @@ impl Model {
             parent_value: None,
             parent_links: Vec::new(),
             null_proto: false,
+            chain_miss: false,
             species: None,
         });
         tm
@@ -1679,6 +1680,7 @@ impl Model {
             parent_value: None,
             parent_links: Vec::new(),
             null_proto: false,
+            chain_miss: false,
             species: None,
         });
         let t = self.tok(TokKind::Obj(tm, NO_CTX));

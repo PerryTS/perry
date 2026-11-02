@@ -422,6 +422,22 @@ fn template_facts(
     // accessor anywhere.
     let chain = chain_tokens(m, tm);
     let mut chain_problem: Option<String> = None;
+    // DECISIONS 242(2,3): an accessor under any key on `Object.prototype`
+    // reaches an object only through a key it does not own definitely
+    // (`Template::chain_miss`), or through keys made by [[Set]] (a
+    // constructor's `this.k =`). A literal's birth keys are defined
+    // (CreateDataProperty): no prototype accessor runs for them.
+    let star = m.atom(crate::STAR_KEY);
+    let set_born = match &tpl.kind {
+        TmplKind::Lit { .. }
+        | TmplKind::Class {
+            literal_shape: true,
+            ..
+        } => false,
+        _ => !tpl.birth_keys.is_empty(),
+    };
+    let chain_miss = tpl.chain_miss || set_born;
+    let objproto_tok = m.tok_index.get(&TokKind::ObjectProto).copied();
     let mut accessor_keys: Vec<Atom> = tpl.accessor_keys.clone();
     for t in &ts {
         if let Some(ks) = m.accessor_keys.get(t) {
@@ -455,7 +471,8 @@ fn template_facts(
             }
         }
         if let Some(ks) = m.accessor_keys.get(&p) {
-            accessor_keys.extend(ks.iter().copied());
+            let unreached = Some(p) == objproto_tok && !chain_miss;
+            accessor_keys.extend(ks.iter().copied().filter(|&k| !(unreached && k == star)));
         }
     }
     if let Some(r) = objproto_hard {
@@ -464,7 +481,6 @@ fn template_facts(
     if let Some(r) = global {
         chain_problem.get_or_insert_with(|| r.clone());
     }
-    let star = m.atom(crate::STAR_KEY);
     // This obligation affects every receiver sharing the chain, even when
     // a site's own token has not escaped (DEC220).
     if accessor_keys.contains(&star) {

@@ -415,6 +415,14 @@ pub struct Template {
     /// stand-in has no members and no prototype, so a lookup through it ends
     /// there and never reaches `Object.prototype`.
     pub null_proto: bool,
+    /// DECISIONS 242: a lookup on an object of this template may pass its
+    /// own keys and reach the prototype chain: a [[Get]] or call of a key
+    /// that is not a definite own data key (a computed key included), or a
+    /// [[Set]] of one (which may add it). Set by the solve
+    /// (`Model::note_chain_miss`). Without one, an accessor under any key on
+    /// `Object.prototype` reaches the template only if its keys are made by
+    /// [[Set]] (a constructor's `this.k =`), never a literal's birth keys.
+    pub chain_miss: bool,
     /// An array a builtin made with ArraySpeciesCreate (ECMA-262 10.4.2.3:
     /// `slice`, `splice`, `concat`, `map`, `filter`, `flat`, `flatMap`): the
     /// node of the constructors the algorithm may take, each receiver's
