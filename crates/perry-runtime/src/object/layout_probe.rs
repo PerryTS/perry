@@ -1915,22 +1915,47 @@ pub unsafe extern "C" fn perry_probe_set(
     hash: u64,
     value: f64,
 ) -> i32 {
+    match set_plan(dir, obj_bits, key_bits, hash, value) {
+        SetPlan::Stored(stored) => stored,
+        SetPlan::Add(obj, r, bits) => i32::from(probe_add(dir, obj, r, key_bits, hash, bits)),
+    }
+}
+
+/// What the store probe found: the store it made (1) or its decline (0),
+/// or a key its receiver's complete own list proves absent (an ordinary,
+/// unfrozen object with no overflow), with the value word to add.
+enum SetPlan {
+    Stored(i32),
+    Add(*mut ObjectHeader, *const ShapeRecord, u64),
+}
+
+/// [`perry_probe_set`] up to the key add: the own store, or the receiver
+/// and record an add starts from. GC leaf.
+#[inline(always)]
+unsafe fn set_plan(
+    dir: *const u8,
+    obj_bits: u64,
+    key_bits: u64,
+    hash: u64,
+    value: f64,
+) -> SetPlan {
+    use SetPlan::Stored;
     if obj_bits & TAG_MASK != POINTER_TAG {
-        return 0;
+        return Stored(0);
     }
     let payload = (obj_bits & POINTER_MASK) as usize;
     if payload < perry_abi::RECEIVER_HANDLE_FLOOR {
-        return 0;
+        return Stored(0);
     }
     let obj = payload as *mut ObjectHeader;
     let word = (*obj).parent_class_id;
     let r = record_of(dir, LayoutWord(word));
     if r.is_null() || (*r).object_kind() != super::ShapeObjectKind::Ordinary {
-        return 0;
+        return Stored(0);
     }
     let gc = crate::value::addr_class::honest_header(payload);
     if gc._reserved & crate::gc::OBJ_FLAG_FROZEN != 0 {
-        return 0;
+        return Stored(0);
     }
     let bits = if value.to_bits() == POINTER_TAG {
         crate::value::TAG_UNDEFINED
@@ -1943,14 +1968,14 @@ pub unsafe extern "C" fn perry_probe_set(
         // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
         let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
         if !meta.is_null() && (*meta).overflow != 0 {
-            return store_target::overflow(
+            return Stored(store_target::overflow(
                 obj,
                 r,
                 (*meta).overflow as usize as *mut _,
                 key_bits,
                 hash,
                 bits,
-            );
+            ));
         }
     }
     match own_position(r, key_bits, hash) {
@@ -1964,7 +1989,7 @@ pub unsafe extern "C" fn perry_probe_set(
                     crate::object::key_attrs::keys_entry(keys, pos),
                 )
             {
-                return 0;
+                return Stored(0);
             }
             let slot = crate::object::key_attrs::key_storage_slot(keys, pos);
             if slot < (*r).live_inline_slot_count {
@@ -1975,13 +2000,44 @@ pub unsafe extern "C" fn perry_probe_set(
                 if *address == TAG_HOLE
                     && !hole_fill_admitted(dir, obj, r, keys, pos, key_bits, hash)
                 {
-                    return 0;
+                    return Stored(0);
                 }
             }
-            store_target::checked_slot(obj, r, slot, bits)
+            Stored(store_target::checked_slot(obj, r, slot, bits))
         }
-        Err(true) => i32::from(probe_add(dir, obj, r, key_bits, hash, bits)),
-        Err(false) => 0,
+        Err(true) => SetPlan::Add(obj, r, bits),
+        Err(false) => Stored(0),
+    }
+}
+
+/// A symbol-keyed `[[Set]]` on an ordinary receiver through the store probe
+/// (DEC 243(3)): an own plain writable entry takes the value in place; a key
+/// the receiver's complete own list proves absent, whose add nothing on the
+/// chain intercepts, is the canonical key-add transition, as a string key's
+/// is. `false`, having changed nothing, for everything else: the full
+/// symbol `[[Set]]` runs.
+///
+/// # Safety
+/// `obj_bits` any value bits; `sym_bits` a symbol value.
+pub(crate) unsafe fn symbol_store(obj_bits: u64, sym_bits: u64, value: f64) -> bool {
+    let symbol = (sym_bits & POINTER_MASK) as *const crate::symbol::SymbolHeader;
+    // Only a well-known symbol can be one the runtime watches stores of
+    // (`@@isConcatSpreadable`, a collection's `@@iterator`).
+    if (*symbol).registered & perry_abi::SYMBOL_WELL_KNOWN != 0 {
+        crate::symbol::note_symbol_key_installed(symbol as usize);
+        crate::object::map_set_subclass::note_iterator_symbol_write(
+            (obj_bits & POINTER_MASK) as usize,
+            symbol as usize,
+        );
+    }
+    let hash = (*symbol).id;
+    let dir = super::ordinary_dir_addr();
+    match set_plan(dir, obj_bits, sym_bits, hash, value) {
+        SetPlan::Stored(stored) => stored != 0,
+        SetPlan::Add(obj, r, bits) => {
+            write::add_admitted(dir, obj, r, sym_bits, hash)
+                && crate::object::shaped_symbols::append(obj, symbol as usize, bits)
+        }
     }
 }
 
@@ -2058,3 +2114,7 @@ mod accessor_tests;
 #[cfg(test)]
 #[path = "layout_probe_global_tests.rs"]
 mod global_tests;
+
+#[cfg(test)]
+#[path = "layout_probe_symbol_store_tests.rs"]
+mod symbol_store_tests;
