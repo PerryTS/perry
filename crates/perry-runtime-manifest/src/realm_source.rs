@@ -1383,15 +1383,18 @@ mod tests {
         let source = r#"const T: &[&str] = &["a", "b"]; fn f() { crate::realm_decl! { birth crate::array::realm_string_array(T, false); realm { Example.list, elements_source = T, integrity = frozen } } }"#;
         let d = &inline(source).unwrap()[0];
         assert_eq!(header_word(d), "40967");
-        assert_eq!(
-            d.get("own_key_order").unwrap().encode(),
-            r#"["0","1","length"]"#
-        );
+        assert_eq!(d.get("own_key_order").unwrap().encode(), r#"["length"]"#);
+        // The holder carries only length; the elements are storage.
         let attrs = d.get("properties").unwrap().array().unwrap();
-        assert!(attrs
-            .iter()
-            .any(|p| p.get("key").unwrap().string() == Some("length")
-                && p.get("attributes") == Some(&Value::Number("0".into()))));
+        assert_eq!(attrs.len(), 1);
+        assert!(
+            attrs[0].get("key").unwrap().string() == Some("length")
+                && attrs[0].get("attributes") == Some(&Value::Number("0".into()))
+        );
+        assert_eq!(
+            d.get("storage").unwrap().encode(),
+            r#"{"elements":[{"kind":"string","value":"a"},{"kind":"string","value":"b"}],"kind":"array"}"#
+        );
         assert!(inline(&source.replace("elements_source = T", "elements_source = U")).is_err());
     }
 
