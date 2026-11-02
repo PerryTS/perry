@@ -16,9 +16,11 @@ pub(super) fn own_keys(class: &Class) -> Result<OwnKeys, String> {
         // Its argument values have already been evaluated before allocation.
         keys.push((FamilyKey::Name(field.name.clone()), true));
     }
+    // The strict positional constructor only stores its arguments.
     Ok(OwnKeys {
         keys,
         super_inert: true,
+        leaks: false,
     })
 }
 

@@ -202,3 +202,175 @@ fn checked_read_admits_a_literal_family_by_its_layout_word() {
         "the receiver class test must admit the literal family's word:\n{cid_blocks}"
     );
 }
+
+/// SHC6: a class whose fields are all defined before anyone can observe the
+/// instance. The first initializer runs code (`new Array().fill(0)`) but never
+/// names the receiver, so the family holds the birth layout from birth on.
+const CH_FREE: &str = r#"
+interface Kinged { k(): number }
+class G {
+  private board: number[] = new Array<number>(8).fill(0);
+  private side: string = "white";
+  private wk = -1;
+  constructor(s: string) { this.wk = s.length; }
+  private king(c: string): number { return c === "white" ? this.wk + this.board.length : 0; }
+  k(): number { return this.king(this.side); }
+}
+function probe(r: Kinged): number { return r.k(); }
+console.log(probe(new G("..K..k")));
+"#;
+
+/// SHC6: the first initializer calls a method on the half-built instance:
+/// `seed` runs while `side` and `wk` are still holes of the family layout.
+const CH_OBSERVED: &str = r#"
+interface Kinged { k(): number }
+class G {
+  private board: number = this.seed();
+  private side: string = "white";
+  private wk = -1;
+  constructor(s: string) { this.wk = s.length; }
+  private seed(): number { return 8; }
+  private king(c: string): number { return c === "white" ? this.wk + this.board : 0; }
+  k(): number { return this.king(this.side); }
+}
+function probe(r: Kinged): number { return r.k(); }
+console.log(probe(new G("..K..k")));
+"#;
+
+/// Facts proving the receiver of `k`'s `this.king(...)` (the tower site: `this`
+/// in `G.k`) a `G` whose layout is fixed. `probe`'s interface call takes the
+/// slow method call, so the site the tower lowers is the one inside `G__k`.
+fn tower_facts(m: &Module) -> crate::codegen::ProgramFactsView {
+    use crate::codegen::{ElisionFacts, FactsClass, FactsRecv};
+    let class = m.classes.iter().find(|c| c.name == "G").expect("class G");
+    let k = class
+        .methods
+        .iter()
+        .find(|f| f.name == "k")
+        .expect("method G.k");
+    let mut elision = ElisionFacts::default();
+    elision.this_of.insert(
+        k.id,
+        FactsRecv {
+            class_ids: vec![class.id],
+            nullable: false,
+            checked: false,
+        },
+    );
+    elision.classes.insert(
+        class.id,
+        FactsClass {
+            display: class.name.clone(),
+            fixed_layout: true,
+            fields: Vec::new(),
+        },
+    );
+    crate::codegen::ProgramFactsView {
+        elision: std::sync::Arc::new(elision),
+        ..Default::default()
+    }
+}
+
+/// `ir_with_facts` with the static shape ids assigned the way the driver does:
+/// the tower cases a class only when its prototype layout is static
+/// (`static_prototype::chain`).
+fn tower_ir(m: &Module) -> String {
+    let mut opts = ir_opts();
+    opts.program_layouts = std::sync::Arc::new(crate::layout_families::compute(
+        [("main.ts", m)],
+        true,
+        &Default::default(),
+    ));
+    let births = crate::module_birth_shapes(m, opts.clone()).unwrap();
+    let ids = crate::assign_static_shape_ids(births.iter().map(|b| &b.shape));
+    opts.static_shape_ids = ids.into_iter().collect();
+    opts.program_facts = tower_facts(m);
+    String::from_utf8(compile_module(m, opts).unwrap()).expect("LLVM IR should be UTF-8")
+}
+
+fn g_family_init_count(m: &Module) -> (u32, usize) {
+    family_init_count(m, "G")
+}
+
+fn family_init_count(m: &Module, name: &str) -> (u32, usize) {
+    let layouts = crate::layout_families::compute([("main.ts", m)], true, &Default::default());
+    let class = m.classes.iter().find(|c| c.name == name).expect("class");
+    let fam = layouts.families.get(&class.id).expect("G has a family");
+    (fam.init_count, fam.keys.len())
+}
+
+/// Field definitions after a receiver-free initializer are still the
+/// initialization (`FamilyLayout::init_count`); one that names the receiver
+/// ends it at its own key.
+#[test]
+fn init_count_counts_definitions_no_observer_can_precede() {
+    assert_eq!(g_family_init_count(&module(CH_FREE)), (3, 3));
+    assert_eq!(g_family_init_count(&module(CH_OBSERVED)), (0, 3));
+}
+
+/// The facts prove `fixed_layout` and the family holds the birth layout:
+/// the tower case is the unchecked `$pshape` call.
+#[test]
+fn a_proven_tower_case_calls_the_clone_unchecked_when_the_family_holds_the_birth_layout() {
+    let m = module(CH_FREE);
+    let ir = tower_ir(&m);
+    let k = function_body(&ir, "G__k(");
+    assert!(
+        k.contains("idispatch.case0") && k.contains("G__king$pshape"),
+        "the fixture no longer routes the tower case to the clone:\n{k}"
+    );
+    assert!(
+        !k.contains("idispatch.case0.generic"),
+        "a proven case whose family holds the birth layout needs no recheck:\n{k}"
+    );
+}
+
+/// SHC6 (a): an instance observed before its fields are defined holds the
+/// family's holes, which the clone compiled for the birth pair reads raw.
+/// `fixed_layout` alone does not license the unchecked call: the case keeps
+/// its recheck (a family-born instance then takes the public body).
+#[test]
+fn a_proven_tower_case_keeps_its_recheck_when_the_family_does_not_hold_the_birth_layout() {
+    let m = module(CH_OBSERVED);
+    let ir = tower_ir(&m);
+    let k = function_body(&ir, "G__k(");
+    assert!(
+        k.contains("idispatch.case0.pshape")
+            && k.contains("G__king$pshape")
+            && k.contains("idispatch.case0.generic"),
+        "the case must recheck before it enters the clone:\n{k}"
+    );
+}
+
+/// SHC6: a parent constructor that hands the receiver to code (`reg(this)`)
+/// lets the receiver-free initializer `a = peek()` observe the instance
+/// before `p` is defined (node reads `undefined`): the child's keys are no
+/// initialization. The same child under a parent that only stores keeps
+/// them.
+#[test]
+fn init_count_stops_after_a_parent_constructor_hands_out_the_receiver() {
+    let src = |parent_body: &str| {
+        format!(
+            r#"
+let seen: any = null;
+function reg(o: any): void {{ seen = o; }}
+function peek(): any {{ return seen === null ? 0 : seen.p; }}
+class P {{ q: number; constructor() {{ this.q = 1; {parent_body} }} }}
+class C extends P {{
+  a: any = peek();
+  p: any = 5;
+  constructor() {{ super(); }}
+}}
+console.log(String(new C().a));
+"#
+        )
+    };
+    let leaking = family_init_count(&module(&src("reg(this);")), "C");
+    let sealed = family_init_count(&module(&src("")), "C");
+    assert_eq!(sealed, (3, 3), "a sealed parent keeps the child's definitions");
+    assert_eq!(leaking.1, 3);
+    assert!(
+        leaking.0 <= 1,
+        "keys defined after the parent handed out the receiver are no initialization: {leaking:?}"
+    );
+}

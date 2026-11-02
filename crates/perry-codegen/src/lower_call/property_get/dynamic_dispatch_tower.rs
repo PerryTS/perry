@@ -86,7 +86,15 @@ pub(super) fn tower_pshape_route(
 /// kept in a contract build (which checks the facts at run time), with
 /// interpreted code present (`interp_guard`), and for every class the facts
 /// do not list as fixed.
-pub(super) fn tower_layout_proven(ctx: &FnCtx<'_>, cid: u32) -> bool {
+///
+/// `fixed_layout` speaks of the layout an instance is born with. A class with
+/// a family is born on the family layout, whose slots hold the hole until
+/// their keys are stored: the clone, compiled for the birth pair, may enter
+/// unchecked only when the family holds that pair's instance before anyone
+/// can observe it ([`births_match_clone_layout`]).
+///
+/// [`births_match_clone_layout`]: crate::lower_call::direct_method_guard::births_match_clone_layout
+pub(super) fn tower_layout_proven(ctx: &FnCtx<'_>, owner: &str, cid: u32) -> bool {
     let proved = !ctx.wpfacts_off
         && !ctx.wpfacts.interp_guard
         && !crate::codegen::helpers::check_contracts()
@@ -94,7 +102,8 @@ pub(super) fn tower_layout_proven(ctx: &FnCtx<'_>, cid: u32) -> bool {
             .wpfacts
             .classes
             .get(&cid)
-            .is_some_and(|class| class.fixed_layout);
+            .is_some_and(|class| class.fixed_layout)
+        && crate::lower_call::direct_method_guard::births_match_clone_layout(ctx, owner, cid);
     if proved {
         crate::facts_consumed::used();
     }

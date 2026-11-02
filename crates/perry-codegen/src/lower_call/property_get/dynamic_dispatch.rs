@@ -570,7 +570,7 @@ pub(crate) fn try_lower_instance_method_call(
                         // (`fixed_layout`): the arm needs no recheck.
                         let owner = impl_owner[i].as_deref().unwrap_or_default();
                         let layout_proven =
-                            proven.is_some() && tower_layout_proven(ctx, implementors[i].0);
+                            proven.is_some() && tower_layout_proven(ctx, owner, implementors[i].0);
                         emit_tower_pshape_call(
                             ctx,
                             i,
