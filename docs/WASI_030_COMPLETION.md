@@ -257,6 +257,25 @@ proof. All 486 indexed evidence files, their sizes, hashes and exact regular
 file set were verified locally. New repeated-label and returned-actor profiles,
 public tooling, providers, installed P3 packages and qualified landing remain.
 
+The [labeled-resource receipt](validation/wasi-p3-labeled-resources-20261102.json)
+qualifies actual repeated-label resource futures at source `27928e3ef6`.
+All 16 phases pass across plain, instrumented and forced-moving execution,
+with 32 wrong-owner rejections and 12 exactly-once native drops per mode.
+The moving guest relocates 6,412 objects with evacuation verification. The
+canonical import, `left` and `right` keep three distinct nominal identities;
+rejected future writes retain the original owners and leave the writer usable.
+Composition retains interface annotations while binding resources, then emits
+plain 0.3.0 extern names: the unprojected control failed actual execution because
+`implements` belongs to 0.3.1. The nominal graph patches remain. All 45 WIT/C
+tests (two ignored), 222 component-host tests and the strict Tokio audit pass.
+Native artifacts and guest archives retain their `3a20cda3b5` identity and
+selected-input reuse proof. The same evidence qualifies the balanced P2 archive:
+23 direct smoke/core/gap checks and 52 isolated installed-Linux-package checks
+pass with the pinned Wasmtime 48.0.0 CLI. P3 uses the independent Wasmtime 48.0.8
+engine and Turnloop providers. All 629 indexed evidence files and their exact
+sizes, hashes and regular-file set were verified locally. Returned-actor
+lifecycle auditing and public async generation remain open.
+
 | Requirement | Required evidence | Current state |
 | --- | --- | --- |
 | Canonical async imports and exports | Public generated components compose in both directions; overlapping calls, immediate/delayed completion, errors, post-return work and Store reuse | Experimental scalar/compound and recorded synchronous-started import profiles qualified on Linux; public CLI guarded |
@@ -264,10 +283,10 @@ public tooling, providers, installed P3 packages and qualified landing remain.
 | Guest `future<T>` and `stream<T>` | Readable/writable ownership, arbitrary supported WIT payloads, void, bounded writes, backpressure, final partial chunks, closure, cancellation and cleanup across suspension | Experimental reads/writes and sync/async factories qualified on Linux, including owned exported-resource records through named-interface factories: latest receipt has 17 resource phases plus 20 earlier-profile regressions, 17,356 and 12,870 relocated guest objects respectively, and 38 WIT/C tests. Runtime125 unit evidence is separately sourced with unchanged production inputs; 30 writer and 26 reader sanitizer cases pass. Subsequent imported/shared-resource receipt qualifies 19 imported phases, 17 strengthened local-resource phases and 20 transport regressions with 40 WIT/C tests. The subsequent synchronous-started import receipt qualifies 19 new phases plus all 56 earlier regressions at the new runtime, with 40 WIT/C and 129 fresh runtime unit tests. Repeated-label composition and wrong-owner rejection now pass unit validation; actual repeated-label endpoint interop, wider lifecycle coverage, staged-profile canonical cancellation and public adapters remain |
 | WASI 0.3.0 command output | A public command/runtime profile with `wasi:cli/run@0.3.0`, explicit system-interface versions and execution in a host providing the declared 0.3.0 imports; no implicit reliance on P2 compatibility | Integration branch implements `--target wasip3`. The fresh Linux prod/release WebSocket receipt at `6ea71cc1a3` qualifies 27 functional phases including eight real socket client cases. The earlier `02cf3068ae` receipt separately qualifies eleven compiled P3 commands and 45 command phases. Full current command regressions, installed platform qualification and landing remain; `--target wasi` retains P2 |
 | Complete supported 0.3.0 WASI interfaces | Commands, clocks, randomness, filesystem, TCP/UDP/DNS and HTTP execute through Turnloop with capability checks, I/O cancellation and shutdown | Linux provider/command/HTTP receipts exist; complete current-profile matrix still required |
-| Cross-language interoperability | Public Perry output composed with independent Rust and maintained-C components, including resources and future/stream payloads | Scalar/compound cancellation examples and current actual resource-bearing endpoint/named-interface factory profiles exist; subsequent shared-resource receipt qualifies imported resources and cross-export record/future aliases on Linux; repeated-label nominal composition passes unit validation; actual generated repeated-label endpoint interop and the wider value matrix remain unqualified |
+| Cross-language interoperability | Public Perry output composed with independent Rust and maintained-C components, including resources and future/stream payloads | Scalar/compound cancellation examples, imported resources and cross-export record/future aliases execute on Linux. The labeled-resource receipt also qualifies generated C/Perry/C futures with repeated labels and wrong-owner rejection. Public async CLI and the wider value matrix remain unqualified |
 | Runtime integration | Promise/nextTick task isolation, rejection identity, ALS, suspended-value tracing, teardown and positive moving-GC witnesses | Public ALS constructors/methods link from runtime alone; recorded Linux imports/exports and moving-GC profiles pass. Actual P3 libraries now preserve agent TLS across SDK tasks, including canonical WAIT/resume. The recorded synchronous-started import profile also qualifies ALS across interleaved native loans/exchanges and both moving modes. Shared-provider regression and wider platform/package coverage remain |
 | HTTP layouts | Current supported layouts and limitations explicitly tested; concurrent root handlers, nested/imported fallback, streaming bodies and cancellation | Linux supported layouts qualified; broader composition coverage open |
-| Platform and packaging | Current source-matched ordinary/instrumented artifacts and installed public tools run on Linux x86_64, macOS ARM64 and Windows x64 | Current Turnloop execution qualified on Linux; Windows compile only |
+| Platform and packaging | Current source-matched ordinary/instrumented artifacts and installed public tools run on Linux x86_64, macOS ARM64 and Windows x64 | Current Turnloop execution and the balanced installed P2 bundle qualify on Linux; installed P3 packages remain open and Windows has compile evidence only |
 | Durable regression coverage | Required CI executes the advertised profiles and fails if the actual guest, cancellation or GC witness is absent | Existing gates cover implemented profiles; extend for completed profiles |
 | Dependency and compatibility invariants | No Tokio anywhere, existing P1/P2 profiles retained, coherent compiler/runtime/adapter ABI, no workspace version bump | Strict Tokio ban merged; verify every dependency and landing change |
 

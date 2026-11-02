@@ -1,0 +1,80 @@
+{
+  "date": "2026-11-02",
+  "platform": "Linux x86_64",
+  "source": "27928e3ef679de9ee142fb24701f381dc8e9abb9",
+  "artifactSource": "3a20cda3b54da93aeeb633a5dda491d226d20c16",
+  "scope": "P2 balanced builder and isolated installed package; generated repeated-label resource futures in 0.3.0 output",
+  "p2Reports": {
+    "smoke": 7,
+    "core": 6,
+    "gap": 10,
+    "installed qualification/smoke": 7,
+    "installed qualification/acceptance": 35,
+    "installed qualification/gap": 10
+  },
+  "p2RuntimeReuse": {
+    "source": "3a20cda3b54da93aeeb633a5dda491d226d20c16",
+    "originalRun": "/root/codex-components-p2-20261021/wasi-030-v188-p2-balanced",
+    "runtimeBytes": 48392432,
+    "runtimeSha256": "55c3556cd7ef046355aedb535601d3fda2b28f185e9b75eee3954bde58e41db4",
+    "archiveRebuilt": false,
+    "previousSevenCompilationsPassed": true,
+    "previousFailure": "missing wasmtime executable in PATH; no guest executed",
+    "unwindArgumentsVerified": true,
+    "runtimeOptLevel": "s",
+    "wasmtime": "wasmtime 48.0.0 (f1412a598 2026-08-20)",
+    "rustflagsEnvironmentUnmodified": true
+  },
+  "labelPhasesPassed": 16,
+  "labelModes": [
+    "plain",
+    "instrumented",
+    "forced moving"
+  ],
+  "wrongOwnerRejectionsPerMode": 32,
+  "exactlyOnceNativeDropsPerMode": 12,
+  "nominalInterfaces": {
+    "perry:guest-endpoint-labels/foreign@1.0.0": "t0",
+    "left": "t9",
+    "right": "t13"
+  },
+  "moving": {
+    "guestCopiedObjects": 6412,
+    "guestEvacuationVerified": true
+  },
+  "witTestsPassed": 45,
+  "witTestsIgnored": 2,
+  "componentHostTestsPassed": 222,
+  "wasmImplementsRequiredByExecutable": false,
+  "nominalGraphPatchesRetained": true,
+  "strictTokioBanPassed": true,
+  "baselineControl": "Unprojected labeled component actually fails native compilation with cm-implements disabled",
+  "componentModelFeatureSource": "https://github.com/WebAssembly/WASI/blob/main/docs/ComponentModelFeatures.md",
+  "sourceBaseArchive": {
+    "archive": "wasi-030-v192-evidence.tar.gz",
+    "indexedFiles": 486,
+    "bytes": 940359712,
+    "sha256": "b48df8ab5ff8083ecff5b3cc4a937a0a2e835c7a192d950d133b91d4279dec90"
+  },
+  "sourcePatchAppliesToThatArchiveSource": true,
+  "limitations": [
+    "Native artifacts and guest runtime archives retain 3a20 source; WIT projection and independent host/generators execute at 27928",
+    "P2 CLI is pinned Wasmtime 48.0.0; P3 independent engine is Wasmtime 48.0.8 with Turnloop providers",
+    "Returned-actor fixture failure and correction have separate qualification",
+    "Public async CLI, complete current providers, P3 installed platform packages and landing remain incomplete"
+  ],
+  "fullWasi030Qualified": false,
+  "evidence": {
+    "archive": {
+      "archive": "wasi-030-v198-evidence.tar.gz",
+      "indexedFiles": 629,
+      "bytes": 334787211,
+      "sha256": "43be1d385903676b84f69ec7702f43b058407bfefd6f1cb2490188688e955f11"
+    },
+    "exactRegularFileSetVerified": true,
+    "allIndexedSizesAndHashesVerified": true,
+    "archiveExtracted": false
+  },
+  "returnedActorQualificationPending": true,
+  "pointInTimeQualification": true
+}
