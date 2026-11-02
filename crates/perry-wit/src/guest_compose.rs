@@ -11,6 +11,7 @@ use wac_graph::{
 use wasm_encoder::{Component, ComponentExportSection, RawSection};
 use wasmparser::{ComponentExternalKind as Kind, Parser, Payload, Validator, WasmFeatures};
 mod interface;
+mod profile;
 #[cfg(test)]
 mod tests;
 
@@ -248,7 +249,7 @@ pub fn compose_experimental_guest(producer: &[u8], facade: &[u8], plan: &[u8]) -
         validate: false,
         ..EncodeOptions::default()
     })?;
-    publish(&encoded, &exports)
+    profile::wasi_030(publish(&encoded, &exports)?)
 }
 
 fn publish(encoded: &[u8], exports: &[Export]) -> Result<Vec<u8>> {
