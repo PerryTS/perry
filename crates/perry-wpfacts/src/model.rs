@@ -130,10 +130,14 @@ pub enum BuiltinNs {
     String,
     Boolean,
     Function,
-    /// `Map` / `WeakMap`: `new` builds a collection of the entries' contents.
+    /// `Map`: `new` builds a collection of the entries' contents.
     Map,
-    /// `Set` / `WeakSet`: `new` builds a collection of the values.
+    /// `Set`: `new` builds a collection of the values.
     Set,
+    /// `WeakMap`: as `Map`, with the members of `%WeakMap.prototype%`.
+    WeakMap,
+    /// `WeakSet`: as `Set`, with the members of `%WeakSet.prototype%`.
+    WeakSet,
     /// The program's `require` from `module.createRequire` (one per
     /// program: every CommonJS wrapper shares it). A call resolves its
     /// constant specifier ([`Model::call_lit`]): a compiled module's path

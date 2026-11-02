@@ -709,7 +709,8 @@ impl Model {
     pub fn is_elem_array(&self, t: Tok) -> bool {
         matches!(self.toks[t as usize], TokKind::Obj(tm, _)
             if matches!(self.tmpls[tm as usize].kind,
-                TmplKind::Arr { .. } | TmplKind::Args { .. } | TmplKind::BObj { what: "Collection", .. }))
+                TmplKind::Arr { .. } | TmplKind::Args { .. }
+                | TmplKind::BObj { what: "Collection" | "Map" | "Set" | "WeakMap" | "WeakSet", .. }))
             && !self.is_marker(t)
     }
 
