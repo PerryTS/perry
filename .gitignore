@@ -88,6 +88,7 @@ tests/test-*
 !tests/test_compiler_output_regression.py
 !tests/test_gc_1090_evidence_report.py
 !tests/test_native_abi_evidence_report.py
+!tests/test_changelog_archive.py
 !tests/test_typed_feedback_runtime_evidence.py
 !tests/test_perf_frontier_report.py
 !tests/test_test262_focused_report.py
