@@ -555,4 +555,43 @@ mod tests {
             cell_symbol("Array_prototype")
         );
     }
+
+    #[test]
+    fn worker_diagnostic_capabilities_own_only_their_shared_result_layouts() {
+        let worker_reach =
+            reach("import { Worker } from 'node:worker_threads'; new Worker('', { eval: true });");
+        assert!(!worker_reach.is_full());
+        let worker = RealmPlan::from_reach(&worker_reach).unwrap();
+        for record in ["RECORD_F426_0", "RECORD_Q436_0"] {
+            assert!(
+                worker
+                    .runtime_layouts
+                    .contains_key(&format!("%Layout:{record}%")),
+                "missing Worker result {record}"
+            );
+        }
+        for record in [
+            "RECORD_F427_0",
+            "RECORD_F429_0",
+            "RECORD_Q435_0",
+            "RECORD_Q439_0",
+            "RECORD_Q440_0",
+        ] {
+            assert!(
+                !worker
+                    .runtime_layouts
+                    .contains_key(&format!("%Layout:{record}%")),
+                "unrelated result {record}"
+            );
+        }
+        let perf = RealmPlan::from_reach(&reach(
+            "import { performance } from 'node:perf_hooks'; performance.eventLoopUtilization();",
+        ))
+        .unwrap();
+        assert!(perf.runtime_layouts.contains_key("%Layout:RECORD_F426_0%"));
+        let process = RealmPlan::from_reach(&reach("process.cpuUsage();")).unwrap();
+        assert!(process
+            .runtime_layouts
+            .contains_key("%Layout:RECORD_Q436_0%"));
+    }
 }
