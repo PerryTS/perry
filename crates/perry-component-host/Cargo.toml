@@ -24,7 +24,7 @@ url.workspace = true
 socket2 = { workspace = true, features = ["all"] }
 perry-wit = { path = "../perry-wit" }
 perry-abi.workspace = true
-wasmtime = { version = "48.0.7", default-features = false, features = ["anyhow", "std", "runtime", "cranelift", "component-model", "gc-drc"] }
+wasmtime = { version = "48.0.8", default-features = false, features = ["anyhow", "std", "runtime", "cranelift", "component-model", "gc-drc"] }
 
 
 # Reuse the OS randomness provider already selected by the workspace.

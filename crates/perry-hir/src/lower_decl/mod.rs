@@ -23,6 +23,7 @@ mod interface_decl;
 mod lexical_block;
 mod private_members;
 mod static_init;
+mod super_arrow_this;
 mod type_alias;
 mod typeof_narrow;
 

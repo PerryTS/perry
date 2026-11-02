@@ -17,18 +17,20 @@ const IMAGE_GC_FLAGS: u8 = 0x15;
 const STRING_IMAGE_MARKER: u16 = 0x494d;
 
 pub(super) fn name(entry: &StringEntry) -> String {
-    let spelling: String = if entry.bytes.len() <= SPELLED_NAME_MAX_BYTES {
-        entry.bytes.iter().map(|b| format!("{b:02x}")).collect()
+    name_of(&entry.bytes, entry.is_wtf8)
+}
+
+/// The record symbol of a string with these bytes: spelled in hex up to
+/// `SPELLED_NAME_MAX_BYTES`, else named by length and SHA-256.
+pub(super) fn name_of(bytes: &[u8], is_wtf8: bool) -> String {
+    let spelling: String = if bytes.len() <= SPELLED_NAME_MAX_BYTES {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
     } else {
-        let digest = Sha256::digest(&entry.bytes);
+        let digest = Sha256::digest(bytes);
         let hash: String = digest.iter().map(|b| format!("{b:02x}")).collect();
-        format!("s{}_{}", entry.bytes.len(), hash)
+        format!("s{}_{}", bytes.len(), hash)
     };
-    format!(
-        "perry_image_literal_{}_{}",
-        u8::from(entry.is_wtf8),
-        spelling
-    )
+    format!("perry_image_literal_{}_{}", u8::from(is_wtf8), spelling)
 }
 
 pub(super) fn pointer(entry: &StringEntry) -> String {

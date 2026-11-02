@@ -6567,6 +6567,11 @@ pub fn run_with_parse_cache(
         perry_hir::has_deferred_dynamic_code_sites()
             || ctx.native_module_imports.contains("vm")
             || ctx.uses_data_url_dynamic_import,
+        // A real eval-like source site (DECISIONS 235); the link decision
+        // above also counts a `Function` member name.
+        !perry_hir::interpreted_source_sites().is_empty()
+            || ctx.native_module_imports.contains("vm")
+            || ctx.uses_data_url_dynamic_import,
         &ctx.patched_builtins.dynamic_code_reach,
         &ctx.cjs_wrap_debug_sources,
         super::program_facts::module_roots(&ctx),

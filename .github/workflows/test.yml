@@ -3728,7 +3728,7 @@ jobs:
       matrix:
         include:
           - target: macos-aarch64
-            os: macos-14
+            os: macos-15
           - target: windows-x86_64
             os: ubuntu-latest
     runs-on: ${{ matrix.os }}
@@ -4322,10 +4322,10 @@ jobs:
           # `module.declare_function("llvm.assume", VOID, &[I1])` in
           # `crates/perry-codegen/src/runtime_decls.rs`. Apple Clang
           # ≥21 (Xcode 26 / local) auto-recognised the intrinsic;
-          # Apple Clang 15 (macos-14 runner / Xcode 15.x / LLVM 17)
-          # errored with `error: use of undefined value '@llvm.assume'`.
+          # Apple Clang 15 (the former macos-14 runner / Xcode 15.x /
+          # LLVM 17; macos-15 now ships Xcode 16) errored with `error: use of undefined value '@llvm.assume'`.
           # Space-separated skip list (associative arrays require bash
-          # 4+; macOS-14 ships bash 3.2). Word-boundary match keeps the
+          # 4+; macOS runners ship bash 3.2). Word-boundary match keeps the
           # substring lookup safe.
           # test_phase2v3_3_show_toast_set_text imports `setText` and
           # `showToast` from perry/ui. The cross-platform stubs in
@@ -5033,7 +5033,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - os: macos-15
             ui_backend: perry-ui-macos
             shell: bash
             # stdlib/http/snippets.ts excluded since v0.5.886: it links
@@ -5058,7 +5058,7 @@ jobs:
             # in v0.5.429 — both targets are portable and the ubuntu-24.04
             # matrix entry below already verifies them at 1× billing
             # weight. Keep ios-simulator here because it requires Apple
-            # SDK that only macos-14 has.
+            # SDK that only macOS runners (now macos-15, Xcode 16) have.
             cmd_xcompile_blocking: "./scripts/run_doc_tests.sh --verbose --xcompile-only --xcompile-only-target=ios-simulator"
             cmd_xcompile_advisory: "./scripts/run_doc_tests.sh --verbose --xcompile-only"
             # Baseline captured from a clean CI run of 24723671119 (900x970).
@@ -5184,7 +5184,7 @@ jobs:
             libwebkitgtk-6.0-dev libshumate-dev
 
       - name: Surface Android NDK location (for cross-compile)
-        if: matrix.os == 'macos-14' || matrix.os == 'ubuntu-24.04'
+        if: matrix.os == 'macos-15' || matrix.os == 'ubuntu-24.04'
         run: |
           # 1. Discover NDK location on the runner.
           NDK=""
@@ -5220,7 +5220,7 @@ jobs:
           echo "Android NDK wired: CLANG=$CLANG"
 
       - name: Install Apple SDK Rust targets (macOS only)
-        if: matrix.os == 'macos-14'
+        if: matrix.os == 'macos-15'
         run: |
           rustup target add aarch64-apple-ios-sim
           # tvOS-sim is Rust Tier-3 — perry auto-rebuilds with
@@ -5229,7 +5229,7 @@ jobs:
           rustup toolchain install nightly --component rust-src --profile minimal || true
 
       - name: Install Android Rust target (macOS + Ubuntu)
-        if: matrix.os == 'macos-14' || matrix.os == 'ubuntu-24.04'
+        if: matrix.os == 'macos-15' || matrix.os == 'ubuntu-24.04'
         run: rustup target add aarch64-linux-android
 
       - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
@@ -5247,13 +5247,13 @@ jobs:
           scripts/gc_call_effects/sidecars.sh target/release
 
       - name: Verify macOS application bundle packaging
-        if: matrix.os == 'macos-14'
+        if: matrix.os == 'macos-15'
         env:
           RUST_TEST_THREADS: '1'
         run: PERRY_RUNTIME_DIR="$PWD/target/release" cargo test --release -p perry --test macos_app_bundle
 
       - name: Pre-build Apple UI libs for cross-compile (macOS only)
-        if: matrix.os == 'macos-14'
+        if: matrix.os == 'macos-15'
         run: |
           # iOS-sim is Rust Tier-2 — builds with stable. tvOS-sim is Tier-3
           # and needs nightly + -Zbuild-std; perry's auto-optimize handles
@@ -5261,7 +5261,7 @@ jobs:
           cargo build --release -p perry-ui-ios --target aarch64-apple-ios-sim
 
       - name: Lint docs/src markdown fences (repo-wide)
-        if: matrix.os == 'macos-14'
+        if: matrix.os == 'macos-15'
         run: cargo run --release --quiet -p perry-doc-tests -- --lint docs/src
 
       # #11560: the uuid / nanoid / validator / fastify / mysql2 / ioredis
@@ -5326,7 +5326,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-14]
+        os: [ubuntu-latest, macos-15]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     steps:
@@ -6496,7 +6496,7 @@ jobs:
         include:
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
-          - os: macos-14
+          - os: macos-15
             target: aarch64-apple-darwin
           - os: windows-latest
             target: x86_64-pc-windows-msvc

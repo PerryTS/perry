@@ -96,6 +96,7 @@ pub(crate) fn run(
     modules: &BTreeMap<PathBuf, perry_hir::Module>,
     export_sources: perry_wpfacts::ExportSources,
     dynamic_code: bool,
+    interpreted_sources: bool,
     dynamic_code_reach: &perry_hir::dynamic_code::DynamicCodeReach,
     wrapped: &std::collections::HashMap<PathBuf, super::types::CjsWrapDebugSource>,
     roots: Vec<String>,
@@ -137,6 +138,7 @@ pub(crate) fn run(
         explain: std::env::var("PERRY_FACTS_EXPLAIN").is_ok_and(|v| v == "1")
             || perry_codegen::fallback_diag::enabled(),
         dynamic_code_reach: dynamic_code_reach.clone(),
+        interpreted_sources,
         dynamic_code: dynamic_code.then(|| {
             "E14 the program can run interpreted code (deferred new Function/eval or node:vm)"
                 .into()
@@ -495,7 +497,10 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
         let fields = t
             .fields
             .iter()
-            .filter(|f| (f.definite || f.declared || f.reserved) && f.data_field)
+            // A private field's row is not codegen's: codegen finds a
+            // private field by its completed shape (#11791), and its view
+            // looks a public key up by spelling (`ElisionFacts::field`).
+            .filter(|f| (f.definite || f.declared || f.reserved) && f.data_field && !f.private)
             .filter_map(|f| {
                 let (classes, nullable) = holder_classes(f).unwrap_or_default();
                 Some(FactsField {
@@ -572,6 +577,7 @@ pub(crate) fn live_dynamic_imports(
     modules: &BTreeMap<PathBuf, perry_hir::Module>,
     export_sources: perry_wpfacts::ExportSources,
     dynamic_code: bool,
+    interpreted_sources: bool,
     dynamic_code_reach: &perry_hir::dynamic_code::DynamicCodeReach,
     roots: Vec<String>,
 ) -> Option<std::collections::BTreeSet<(String, String)>> {
@@ -600,6 +606,7 @@ pub(crate) fn live_dynamic_imports(
         ),
         export_sources,
         dynamic_code_reach: dynamic_code_reach.clone(),
+        interpreted_sources,
         dynamic_code: dynamic_code.then(|| {
             "E14 the program can run interpreted code (deferred new Function/eval or node:vm)"
                 .into()

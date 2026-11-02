@@ -48,6 +48,17 @@ pub(crate) unsafe fn closure_has_generator_body(closure: *const ClosureHeader) -
         && (*info).flags & (super::FN_GENERATOR | super::FN_ASYNC_GENERATOR) != 0
 }
 
+/// Inline slots a function's bag is born with beyond its keys when its
+/// first own key is a program's define or store (`object::function_own_put`):
+/// such a function usually takes several (ArkType's callable nodes,
+/// `Object.assign` of attachments, then class fields), and each one past the
+/// birth bound would otherwise go to the spill buffer. A bag born holding a
+/// known key set (builtin metadata, `closure_define_first_props`) is born
+/// exact: room there only re-publishes its shape at a later add.
+/// Two slots: measured on Supabase startup (0: 6.015 G, 2: 5.998 G, 4 and 6:
+/// 6.27 G, the larger bags cost one more minor collection).
+pub(crate) const BAG_ROOM: u32 = 2;
+
 const STATE_PROTO: &str = "p";
 const DELETED_PREFIX: &str = "d:";
 const INTERNAL_PREFIX: &str = "i:";
@@ -110,6 +121,20 @@ pub(crate) unsafe fn bag_born_with_attrs(
     entries: &[(&str, f64)],
     attrs: &[u8],
 ) -> bool {
+    bag_born::<0>(ptr, entries, attrs)
+}
+
+/// [`bag_born_with_attrs`] with [`BAG_ROOM`] inline slots past its keys.
+///
+/// # Safety
+/// As [`bag_born_with_attrs`].
+pub(crate) unsafe fn bag_born_with_room(ptr: usize, entries: &[(&str, f64)], attrs: &[u8]) -> bool {
+    bag_born::<BAG_ROOM>(ptr, entries, attrs)
+}
+
+/// [`bag_born_with_attrs`] with `ROOM` inline slots past its keys.
+#[inline(always)]
+unsafe fn bag_born<const ROOM: u32>(ptr: usize, entries: &[(&str, f64)], attrs: &[u8]) -> bool {
     let _no_move = crate::gc::GcSuppressScope::new();
     if !bag_of(ptr).is_null()
         || entries.iter().any(|(key, _)| {
@@ -184,7 +209,9 @@ pub(crate) unsafe fn bag_born_with_attrs(
                     .or_else(|| super::closure_length(closure))
                     .unwrap_or(0) as f64
                 } else if (*closure).code() == super::BOUND_FUNCTION_FUNC_PTR {
-                    super::bound_function_lazy_name(ptr)
+                    // The bag records it: computed, not defined (a define
+                    // would birth a bag inside this birth).
+                    super::dispatch::bound::bound_function_name_value(ptr).0
                 } else {
                     let name =
                         crate::builtins::function_name_for_closure(closure).unwrap_or_default();
@@ -209,9 +236,9 @@ pub(crate) unsafe fn bag_born_with_attrs(
                     key == intrinsic && value.to_bits() == expected.to_bits()
                 })
         {
-            crate::object::alloc::object_alloc_null_proto_with_key_attrs(entries, attrs)
+            born_alloc::<ROOM>(entries, attrs)
         } else if entries.iter().all(|(key, _)| names.contains(key)) {
-            crate::object::alloc::object_alloc_null_proto_with_key_attrs(own, own_attrs)
+            born_alloc::<ROOM>(own, own_attrs)
         } else {
             let mut all = Vec::with_capacity(entries.len() + count);
             let mut all_attrs = Vec::with_capacity(entries.len() + count);
@@ -224,11 +251,21 @@ pub(crate) unsafe fn bag_born_with_attrs(
                 all.push((key, value));
                 all_attrs.push(attrs.get(i).copied().unwrap_or(0));
             }
-            crate::object::alloc::object_alloc_null_proto_with_key_attrs(&all, &all_attrs)
+            born_alloc::<ROOM>(&all, &all_attrs)
         }
     };
     install_bag(ptr, bag);
     true
+}
+
+/// A function bag's birth allocation, with `ROOM` inline slots past its keys.
+#[inline(always)]
+unsafe fn born_alloc<const ROOM: u32>(entries: &[(&str, f64)], attrs: &[u8]) -> *mut ObjectHeader {
+    if ROOM == 0 {
+        crate::object::alloc::object_alloc_null_proto_with_key_attrs(entries, attrs)
+    } else {
+        crate::object::alloc::object_alloc_null_proto_with_key_attrs_room::<ROOM>(entries, attrs)
+    }
 }
 
 /// Own data lookup in an ordinary (or dictionary-mode) bag by key bytes.

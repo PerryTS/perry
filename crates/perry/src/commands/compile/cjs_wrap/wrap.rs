@@ -270,6 +270,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
         is_entry_module,
         compile_packages,
         None,
+        None,
         &mut Vec::new(),
         None,
     )
@@ -284,6 +285,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
     is_entry_module: bool,
     compile_packages: Option<&HashSet<String>>,
     native_addon_paths: Option<&std::collections::BTreeMap<PathBuf, String>>,
+    demanded_exports: Option<&std::collections::BTreeSet<String>>,
     messages: &mut Vec<String>,
     computed_require_warnings: Option<&mut Vec<String>>,
 ) -> (String, Option<usize>) {
@@ -1264,6 +1266,20 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
         .map(|n| format!("export {{ {n} }};"))
         .collect::<Vec<_>>()
         .join("\n");
+    // Names importers ask of a module whose `module.exports` value the source
+    // does not spell out (`CompilationContext::cjs_demanded_exports`): each
+    // is a snapshot of that property once the body has run, as for the
+    // names read from the source.
+    for name in demanded_exports.into_iter().flatten() {
+        if !is_js_reserved_word(name)
+            && is_identifier_name(name)
+            && !named_exports.contains(name)
+            && !hoisted_class_names.contains(name)
+            && !named_reexport_names.contains(name)
+        {
+            named_exports.push(name.clone());
+        }
+    }
 
     let named_export_decls = named_exports
         .iter()
@@ -1969,3 +1985,16 @@ mod cache_invalidation_tests;
 #[cfg(test)]
 #[path = "native_addon_tests.rs"]
 mod native_addon_tests;
+
+#[cfg(test)]
+#[path = "opaque_exports_tests.rs"]
+mod opaque_exports_tests;
+
+/// An ASCII JavaScript identifier, usable as `export const <name>`.
+fn is_identifier_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_' || c == '$')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+}

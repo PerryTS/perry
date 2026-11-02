@@ -19,6 +19,7 @@ fn project_addon_require_and_resolve_share_the_authorized_id() {
             false,
             None,
             Some(&paths),
+            None,
             &mut Vec::new(),
             None,
         );
@@ -52,6 +53,7 @@ fn exact_project_mapping_wins_over_nested_package_name() {
         false,
         None,
         Some(&paths),
+        None,
         &mut Vec::new(),
         None,
     );
@@ -76,6 +78,7 @@ fn package_addon_keeps_its_package_logical_id() {
         false,
         None,
         Some(&BTreeMap::new()),
+        None,
         &mut Vec::new(),
         None,
     );
