@@ -1272,6 +1272,8 @@ pub struct Model {
     /// Points-to entries ever inserted (work bound; see `max_pts`).
     pub pts_entries: u64,
     pub max_pts: u64,
+    /// PERRY_ACT_TRACE_GUARD diagnostics: (module, kind, test node).
+    pub trace_guards: Vec<(String, &'static str, NodeId)>,
     /// Solve work so far and its bound (0 = none); see `FactsConfig::max_work`.
     pub work: u64,
     pub max_work: u64,
@@ -2037,6 +2039,12 @@ pub struct Model {
     /// Diagnostics (`PERRY_FACTS_EXPLAIN=1`): where ⊤ first entered each
     /// node: (source node or `NO_NODE`, reason id). Never read by facts.
     pub explain: bool,
+    /// PERRY_ACT_TRACE_GUARD: record ⊤ first arrivals without the explain log.
+    pub top_trace: bool,
+    /// PERRY_ACT_TRACE_GUARD: the node whose constraint is being applied.
+    pub trace_apply_node: NodeId,
+    /// PERRY_ACT_TRACE_GUARD: targets of any-key defines.
+    pub trace_define_on: Vec<NodeId>,
     pub top_pred: FxHashMap<NodeId, (NodeId, u32)>,
     pub cur_src: NodeId,
     pub cur_why: u32,

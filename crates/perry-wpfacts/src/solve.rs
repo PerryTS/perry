@@ -106,7 +106,7 @@ impl Model {
         if top_new && self.diagnostic.is_some() {
             self.diagnostic_predecessor(n, self.cur_src, self.cur_why);
         }
-        if top_new && self.explain {
+        if top_new && (self.explain || self.top_trace) {
             self.top_pred
                 .entry(n)
                 .or_insert((self.cur_src, self.cur_why));
@@ -308,7 +308,7 @@ impl Model {
                     d.seeds.entry(n).or_insert(w.clone());
                 }
             }
-            if self.explain {
+            if self.explain || self.top_trace {
                 let r = self.reason(&w);
                 let saved = (self.cur_src, self.cur_why);
                 self.cur_src = NO_NODE;
@@ -404,7 +404,14 @@ impl Model {
         let saved = (self.cur_src, self.cur_why);
         self.cur_src = n;
         self.cur_why = u32::MAX;
+        let tsaved = self.trace_apply_node;
+        if self.top_trace {
+            self.trace_apply_node = n;
+        }
         self.with_s(|m| m.apply(n, &c, &toks, prim));
+        if self.top_trace {
+            self.trace_apply_node = tsaved;
+        }
         (self.cur_src, self.cur_why) = saved;
         self.bufs.push(toks);
     }
@@ -980,6 +987,9 @@ impl Model {
         self.apply_tokens_in(n, c, toks, prim);
     }
     fn apply_tokens_in(&mut self, n: NodeId, c: &Cons, toks: Tokens<'_>, prim: u16) {
+        if self.top_trace {
+            self.trace_apply_node = n;
+        }
         if self.sum_skip(n, c) {
             return;
         }

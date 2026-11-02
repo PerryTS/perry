@@ -162,7 +162,7 @@ impl Model {
         if top && self.diagnostic.is_some() {
             self.diagnostic_predecessor(dst, src, self.cur_why);
         }
-        if top && self.explain {
+        if top && (self.explain || self.top_trace) {
             self.top_pred
                 .entry(dst)
                 .or_insert((self.cur_src, self.cur_why));

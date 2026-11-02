@@ -481,3 +481,51 @@ fn a_guarded_set_prototype_of_returns_its_target() {
         true
     ));
 }
+
+/// Rule 3: an operand of a construct the model does not follow (here the
+/// runtime's `crypto.getRandomValues` fill, effect's Random.js
+/// `getInitialSeed`) is the value handed over, not the prototypes on its
+/// chain: those are reached along the chain (`Model::chain_sinks`), as the
+/// prototypes of an escaped value are, so no builtin prototype is written.
+#[test]
+fn an_unmodeled_operand_does_not_hand_over_its_prototypes() {
+    let seed = "const seed = crypto.getRandomValues(new Uint32Array(2)); console.log(seed[0]);";
+    assert!(!imports_formatter_with_make("", seed, false));
+    assert!(!imports_formatter_with_make("", seed, true));
+}
+
+// CJS3 exploration (temporary)
+const PGT: &str = r#"
+const typeParsers: any = { text: {}, binary: {} };
+export function setTypeParser(oid: any, format: any, parseFn?: any) {
+  if (typeof format == "function") { parseFn = format; format = "text"; }
+  typeParsers[format][oid] = parseFn;
+}
+"#;
+const YREV: &str = r#"
+export function applyReviver(reviver: any, obj: any, key: any, val: any): any {
+  if (val && typeof val === "object") {
+    if (Array.isArray(val)) {
+      for (let i = 0, len = val.length; i < len; ++i) {
+        const v0 = val[i]; const v1 = applyReviver(reviver, val, String(i), v0);
+        if (v1 === undefined) delete val[i]; else if (v1 !== v0) val[i] = v1;
+      }
+    } else {
+      for (const [k, v0] of Object.entries(val)) {
+        const v1 = applyReviver(reviver, val, k, v0);
+        if (v1 === undefined) delete val[k]; else if (v1 !== v0) val[k] = v1;
+      }
+    }
+  }
+  return reviver.call(obj, key, val);
+}
+"#;
+#[test]
+fn cjs3_explore() {
+    let tail_p = "import { setTypeParser } from \"./mk\";\nsetTypeParser(20, (v: string) => Number(v)); setTypeParser(1114, \"text\", (v: string) => v);";
+    let tail_y = "import { applyReviver } from \"./mk\";\nconsole.log(applyReviver((k: any, v: any) => v, { \"\": JSON.parse(process.argv[2]) }, \"\", JSON.parse(process.argv[2])));";
+    for interp in [false, true] {
+        eprintln!("EXPLORE3 interp={interp} pg={}", imports_formatter_with_make(PGT, tail_p, interp));
+        eprintln!("EXPLORE3 interp={interp} yaml={}", imports_formatter_with_make(YREV, tail_y, interp));
+    }
+}

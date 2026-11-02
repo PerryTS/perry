@@ -188,6 +188,9 @@ impl Model {
         if !self.define_any_on.insert(descs) {
             return;
         }
+        if self.top_trace {
+            self.trace_define_on.push(o);
+        }
         self.cons(
             o,
             Cons::Hard {

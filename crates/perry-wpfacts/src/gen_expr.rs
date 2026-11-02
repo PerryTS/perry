@@ -705,6 +705,12 @@ impl<'a> Gen<'a> {
                 else_expr,
             } => {
                 let (t, then_test, else_test) = self.guard_test(fx, condition);
+                if let Some(pat) = std::env::var_os("PERRY_ACT_TRACE_GUARD") {
+                    let path = self.modules[mi as usize].0;
+                    if path.contains(pat.to_str().unwrap_or("\0")) {
+                        self.m.trace_guards.push((path.to_string(), "cond", t));
+                    }
+                }
                 let a = self.expr(fx, then_expr);
                 let b = self.expr(fx, else_expr);
                 let out = self.tmp("cond");

@@ -208,6 +208,46 @@ pub fn note_native_write(m: &mut Model, t: Tok, key: Option<Key>, what: &str) {
             k.map(|a| m.atoms[a as usize].clone())
         );
     }
+    if m.top_trace && !m.shared_replay && k.is_none() {
+        let f = m.cur_fn;
+        let fname = if f == crate::model::NO_FN { "-".to_string() } else { m.funcs[f as usize].name.clone() };
+        eprintln!("perry: acttrace nativewrite any-key on {} in {} :: {what}", on.rsplit("node_modules/").next().unwrap_or(&on), fname.rsplit("node_modules/").next().unwrap_or(&fname));
+        let mut c = m.trace_apply_node;
+        for _ in 0..60 {
+            if (c as usize) >= m.labels.len() { break; }
+            let f = m.node_fn.get(c as usize).copied().unwrap_or(crate::model::NO_FN);
+            let fname = if f == crate::model::NO_FN { "-".to_string() } else { m.funcs[f as usize].name.clone() };
+            let w = m.top_pred.get(&c).map(|&(_, why)| if why == u32::MAX { String::new() } else { m.reasons[why as usize].clone() }).unwrap_or_default();
+            eprintln!("perry: acttrace nwhop node={c} label={} fn={} why={w}", m.labels[c as usize], fname.rsplit("node_modules/").next().unwrap_or(&fname));
+            match m.top_pred.get(&c) {
+                Some(&(src, _)) if src != crate::model::NO_NODE => c = src,
+                _ => break,
+            }
+        }
+        eprintln!("perry: acttrace nworigin {}", m.top_origin(m.trace_apply_node));
+        if t == TOP {
+            for o in m.trace_define_on.clone() {
+                eprintln!("perry: acttrace defon node={o} label={} haspred={} n={}", m.labels[o as usize], m.top_pred.contains_key(&o), m.trace_define_on.len());
+                if !m.top_pred.contains_key(&o) { continue; }
+                let mut c = o;
+                for _ in 0..80 {
+                    if (c as usize) >= m.labels.len() { break; }
+                    let f = m.node_fn.get(c as usize).copied().unwrap_or(crate::model::NO_FN);
+                    let fname = if f == crate::model::NO_FN { "-".to_string() } else { m.funcs[f as usize].name.clone() };
+                    let w = m.top_pred.get(&c).map(|&(_, why)| if why == u32::MAX { String::new() } else { m.reasons[why as usize].clone() }).unwrap_or_default();
+                    eprintln!("perry: acttrace defhop node={c} label={} fn={} why={w}", m.labels[c as usize], fname.rsplit("node_modules/").next().unwrap_or(&fname));
+                    match m.top_pred.get(&c) {
+                        Some(&(src, _)) if src != crate::model::NO_NODE => c = src,
+                        _ => break,
+                    }
+                }
+                eprintln!("perry: acttrace deforigin {}", m.top_origin(o));
+            }
+            let bt = std::backtrace::Backtrace::force_capture().to_string();
+            let fr: Vec<&str> = bt.lines().filter(|l| l.contains("perry_wpfacts::")).take(14).map(|l| l.trim()).collect();
+            eprintln!("perry: acttrace nwbt {}", fr.join(" <- "));
+        }
+    }
     let r = m.reason(&format!("native prototype may be written: {what} on {on}"));
     m.native_writes.insert((t, k), r);
     replay_native_missing(m);

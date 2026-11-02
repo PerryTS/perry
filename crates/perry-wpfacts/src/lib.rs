@@ -333,6 +333,7 @@ fn generate<'a>(
     g.export_sources = cfg.export_sources.clone();
     g.roots = cfg.roots.clone();
     g.dynimport_sabotage = cfg.sabotage.as_deref() == Some("dynimport");
+    g.m.top_trace = std::env::var_os("PERRY_ACT_TRACE_GUARD").is_some();
     g.unit_in = published;
     g.view = view;
     let interp = cfg.dynamic_code.clone().unwrap_or_else(|| "-".into());
@@ -460,9 +461,80 @@ fn activation_pass<'a>(
         ..Default::default()
     };
     let (mut g, _, _) = generate(sorted, cfg, None, None, Some(act), t0);
+    let trace = std::env::var_os("PERRY_ACT_TRACE").is_some();
+    if trace {
+        eprintln!("perry: acttrace gen work={} pts={}", g.m.work, g.m.pts_entries);
+    }
     g.m.solve();
-    while !g.m.aborted && g.walk_activated() {
+    let mut round = 0u32;
+    while !g.m.aborted && {
+        if trace {
+            eprintln!("perry: acttrace round {round} solved work={} pts={} t={:.0}s", g.m.work, g.m.pts_entries, t0.elapsed().as_secs_f64());
+        }
+        round += 1;
+        g.walk_activated()
+    } {
+        if trace {
+            eprintln!("perry: acttrace round {round} walked work={} pts={}", g.m.work, g.m.pts_entries);
+        }
         g.m.solve();
+    }
+    if trace {
+        eprintln!(
+            "perry: acttrace end aborted={} work={} max_work={} pts={} max_pts={} t={:.0}s",
+            g.m.aborted, g.m.work, g.m.max_work, g.m.pts_entries, g.m.max_pts, t0.elapsed().as_secs_f64()
+        );
+    }
+    if let Some(pat) = std::env::var_os("PERRY_ACT_TRACE_ESC") {
+        let pat = pat.to_string_lossy().to_string();
+        let mut rows: Vec<(String, String)> = g.m.escaped.iter()
+            .map(|(&t, &r)| (g.m.tok_name(t), g.m.reasons.get(r as usize).cloned().unwrap_or_else(|| format!("#{r}"))))
+            .filter(|(n, _)| n.contains(&pat))
+            .collect();
+        rows.sort();
+        for (n, r) in rows.iter().take(60) {
+            eprintln!("perry: acttrace esc {} :: {}", n.rsplit("node_modules/").next().unwrap_or(n), r.replace(['\n', '\r'], " "));
+        }
+    }
+    for (path, kind, n) in std::mem::take(&mut g.m.trace_guards) {
+        let node = &g.m.nodes[n as usize];
+        let toks: Vec<String> = node.pts.to_sorted().iter().take(6).map(|&t| g.m.tok_name(t)).collect();
+        eprintln!(
+            "perry: acttrace guard {kind} {path} node={n} label={} prim={:#x} pts={} top={} toks={toks:?}",
+            g.m.labels.get(n as usize).copied().unwrap_or("-"), node.prim, node.pts.len(), node.pts.contains_tok(crate::model::TOP) as u8
+        );
+        if node.pts.contains_tok(crate::model::TOP) {
+            let mut hops = Vec::new();
+            let mut c = n;
+            for _ in 0..40 {
+                match g.m.top_pred.get(&c) {
+                    Some(&(src, why)) if src != crate::model::NO_NODE => {
+                        let f = g.m.node_fn.get(src as usize).copied().unwrap_or(crate::model::NO_FN);
+                        let fname = if f == crate::model::NO_FN { "-".to_string() } else {
+                            let fi = &g.m.funcs[f as usize];
+                            format!("{}@{}", fi.name, g.modules.get(fi.module as usize).map(|m| m.0.rsplit("node_modules/").next().unwrap_or(m.0)).unwrap_or("?"))
+                        };
+                        let tok = g.m.all_fields.iter().chain(g.m.field_any.iter()).chain(g.m.named_any.iter())
+                            .find(|(_, &n)| n == src).map(|(&t, _)| g.m.tok_name(t)).unwrap_or_default();
+                        let w = if why == u32::MAX { String::new() } else { g.m.reasons[why as usize].clone() };
+                        eprintln!("perry: acttrace hop node={src} label={} fn={fname} tok={} why={w}", g.m.labels[src as usize], tok.rsplit("node_modules/").next().unwrap_or(&tok));
+                        hops.push(g.m.labels[src as usize]); c = src;
+                    }
+                    _ => break,
+                }
+            }
+            eprintln!("perry: acttrace topchain node={n} hops={hops:?} origin={}", g.m.top_origin(n));
+        }
+    }
+    if let Some(out) = std::env::var_os("PERRY_ACT_DUMP") {
+        use std::io::Write;
+        if let Ok(mut w) = std::fs::File::create(out).map(std::io::BufWriter::new) {
+            for f in 0..g.m.funcs.len() as u32 {
+                let fi = &g.m.funcs[f as usize];
+                let path = sorted.get(fi.module as usize).map(|m| m.0).unwrap_or("?");
+                let _ = writeln!(w, "{}\t{}\t{}\t{}", path, fi.func_id, fi.name, g.m.body_active(f) as u8);
+            }
+        }
     }
     if g.m.aborted {
         return None;

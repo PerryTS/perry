@@ -350,6 +350,21 @@ impl Model {
             }
             Cons::Hard { kind, reason } => {
                 for &t in toks {
+                    if self.top_trace && t == TOP && { static K: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0); K.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 6 } {
+                        let mut c = n;
+                        for _ in 0..80 {
+                            let f = self.node_fn.get(c as usize).copied().unwrap_or(crate::model::NO_FN);
+                            let fname = if f == crate::model::NO_FN { "-".to_string() } else { self.funcs[f as usize].name.clone() };
+                            let w = self.top_pred.get(&c).map(|&(_, why)| if why == u32::MAX { String::new() } else { self.reasons[why as usize].clone() }).unwrap_or_default();
+                            eprintln!("perry: acttrace hardhop node={c} label={} fn={} why={w}", self.labels[c as usize], fname.rsplit("node_modules/").next().unwrap_or(&fname));
+                            match self.top_pred.get(&c) {
+                                Some(&(src, _)) if src != crate::model::NO_NODE => c = src,
+                                _ => break,
+                            }
+                        }
+                        let preds: Vec<String> = (0..self.nodes.len()).filter(|&i| self.nodes[i].succ.contains(&n)).take(8).map(|i| format!("{i}:{}", self.labels[i])).collect();
+                        eprintln!("perry: acttrace hardon {} :: {} preds={preds:?}", self.top_origin(n), self.reasons[reason as usize].rsplit("node_modules/").next().unwrap_or(""));
+                    }
                     if self.explain && t == TOP {
                         eprintln!(
                             "perry: wpfacts explain: {} on ⊤: {} (receiver: {})",

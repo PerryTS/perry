@@ -1067,10 +1067,14 @@ impl Model {
         // (`fnproto_write` fails closed). The runtime's own operations and
         // callbacks are not that: they never write the intrinsics, and a
         // compiled function called from unknown code sees ⊤ parameters, whose
-        // writes `store_into` records.
+        // writes `store_into` records. One reached along the operand's
+        // prototype chain (`chain_escape`) is not the construct's operand:
+        // the construct is handed the value, and what it writes is the
+        // value's own, as for a store into ⊤ below.
         if self.array_member_write.is_none()
             && t != TOP
             && self.tok_on_array_chain(t)
+            && !self.chain_escape
             && self.reasons[reason as usize].starts_with(crate::gen_expr::UNMODELED_OPERAND)
         {
             let what = format!("reaches unmodeled code ({})", self.reasons[reason as usize]);
@@ -1078,6 +1082,7 @@ impl Model {
         }
         if self.fnproto_write.is_none()
             && matches!(self.toks[t as usize], TokKind::ObjectProto)
+            && !self.chain_escape
             && self.reasons[reason as usize].starts_with(crate::gen_expr::UNMODELED_OPERAND)
         {
             let what = format!("reaches unmodeled code ({})", self.reasons[reason as usize]);
@@ -1086,7 +1091,8 @@ impl Model {
         if matches!(
             self.toks[t as usize],
             TokKind::ObjectProto | TokKind::NativeProto(_)
-        ) && self.reasons[reason as usize].starts_with(crate::gen_expr::UNMODELED_OPERAND)
+        ) && !self.chain_escape
+            && self.reasons[reason as usize].starts_with(crate::gen_expr::UNMODELED_OPERAND)
         {
             let what = format!("reaches unmodeled code ({})", self.reasons[reason as usize]);
             crate::builtins::note_native_write(self, t, None, &what);
@@ -1928,7 +1934,7 @@ impl Model {
             kind,
             Hard::E5DefineProperty | Hard::E6SetPrototypeOf | Hard::E7Delete | Hard::E15With
         ) {
-            let what = match self.explain {
+            let what = match self.explain || self.top_trace {
                 true => format!("{} ({})", kind.code(), self.reasons[reason as usize]),
                 false => kind.code().to_string(),
             };

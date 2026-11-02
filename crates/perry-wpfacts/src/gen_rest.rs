@@ -729,8 +729,11 @@ impl<'a> Gen<'a> {
             }
             Expr::ObjectDefineProperties(o, props) => {
                 let on = self.expr(fx, o);
+                if self.m.top_trace {
+                    self.m.trace_define_on.push(on);
+                }
                 let pn = self.expr(fx, props);
-                let why = if self.m.explain {
+                let why = if self.m.explain || self.m.top_trace {
                     format!(
                         "E5 Object.defineProperties at {}::{}",
                         self.mods[fx.module as usize].path, self.m.funcs[fx.f as usize].name
