@@ -277,23 +277,26 @@ def level(pads, kind, n, am, ah):
     return True
 
 
-# .data.rel.ro lies in the RELRO region, which the linker anchors at its END (page aligned): a pad in it moves
-# the section start, not its end. The region also holds what follows the section (.dynamic, .got, the first
-# .got.plt slots), whose size differs between arms (link-time-resolved GOT slots; the 64-byte section alignment
-# turns 0x18 more .got into a 0x40 lower RW LOAD start, .tdata, .tbss, .init_array, .fini_array and .data.rel.ro).
-# So the section END differs between arms and equal section sizes do not give equal starts. Two knobs:
-#   end pad  lowers the marker (the runtime's bytes start at: section end - runtime tail - end pad)
-#   mid pad  lowers the section start and the RW start, and leaves the marker where it is
-# Equal markers first (end pad), then equal section starts (mid pad); the RELRO size then coincides as well.
+# .data.rel.ro lies in the RELRO region, which the linker anchors at its END: the region ends on a page boundary and
+# its start floats down by the region size. The region also holds what follows the section (.dynamic, .got, the
+# first .got.plt slots), whose size differs between arms (link-time-resolved GOT slots), and the runtime part of
+# the section differs whenever the runtime archive does. From the section start S, the marker M and the region end E:
+#   M - S = compiled bytes + mid pad                        (the inner part, set by the mid pad)
+#   E - M = runtime bytes + end pad + .dynamic, .got, ...   (the tail, set by the end pad)
+# Equal tails and equal inner parts give equal region sizes, hence the same page-aligned end (the RW base before
+# the region is the same in both arms), hence equal M and S. Leveling only the markers, with the end taken as
+# fixed, leaves a runtime size difference in the region end (page quantized) that a .data pad then absorbs: the
+# runtime bytes after the region coincide but GNU_RELRO does not (NXPA2a10: 127 atom records moved into
+# .data.rel.ro, +0x2010).
 ANCHORED = ".data.rel.ro"
 
 
-def anchored(pads, mk_m, mk_h, st_m, st_h):
+def anchored(pads, mk_m, mk_h, st_m, st_h, end_m, end_h):
     n = ANCHORED
     old = {a: (pads[a]["end"].get(n, 0), pads[a]["mid"].get(n, 0)) for a in pads}
-    for kind, i, diff in (("end", 0, mk_h - mk_m), ("mid", 1, st_h - st_m)):
+    for kind, i, diff in (("end", 0, (end_h - mk_h) - (end_m - mk_m)), ("mid", 1, (mk_h - st_h) - (mk_m - st_m))):
         if diff:
-            d = old["head"][i] - old["main"][i] + diff
+            d = old["head"][i] - old["main"][i] - diff
             pads["head"][kind][n], pads["main"][kind][n] = max(d, 0), max(-d, 0)
             return True
     return False
@@ -335,7 +338,8 @@ def plan(main_bin, head_bin, pads_json, pad_dir):
     for n in sorted(mk_m, key=lambda k: mk_m[k][0]) if not changed else ():
         (mm, em, sm), (mh, eh, sh) = mk_m[n], mk_h[n]
         if n == ANCHORED:
-            changed = anchored(pads, mm, mh, sm, sh)
+            rm, rh = segments(main_bin)["GNU_RELRO"], segments(head_bin)["GNU_RELRO"]
+            changed = anchored(pads, mm, mh, sm, sh, rm[0] + rm[1], rh[0] + rh[1])
         else:
             changed = level(pads, "mid", n, mm, mh)
             if not changed and em is not None:
