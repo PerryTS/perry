@@ -77,8 +77,6 @@ const FUNCTION_PROTO_CACHE: usize = 2;
 const STRING_PROTO_CACHE: usize = 3;
 const NUMBER_PROTO_CACHE: usize = 4;
 const BOOLEAN_PROTO_CACHE: usize = 5;
-/// Row index of the intrinsic `Map.prototype` cell (#11869).
-const MAP_PROTO_CACHE: usize = 6;
 
 /// **THIS THREAD's** lazily-memoized intrinsic prototype addresses, indexed
 /// by [`ARRAY_PROTO_CACHE`] / [`OBJECT_PROTO_CACHE`]. `usize::MAX` marks a
@@ -162,7 +160,6 @@ static PROTOTYPE_ADDR_BUILTINS: [crate::object::BuiltinConstructorIdentity;
     crate::object::BuiltinConstructorIdentity::String,
     crate::object::BuiltinConstructorIdentity::Number,
     crate::object::BuiltinConstructorIdentity::Boolean,
-    crate::object::BuiltinConstructorIdentity::Map,
 ];
 
 /// How many intrinsic entries a realm has: one per builtin declaration
@@ -518,7 +515,7 @@ pub(crate) fn object_prototype_addr_matches(addr: usize) -> bool {
 /// The mutating #6981 cases run on cells they own; nothing hands out a writable
 /// reference to the realm's real intrinsic cells (#7955).
 #[cfg(test)]
-pub(crate) fn test_prototype_addr_cache_wiring() -> [(usize, &'static [u8]); 7] {
+pub(crate) fn test_prototype_addr_cache_wiring() -> [(usize, &'static [u8]); 6] {
     [
         (
             ARRAY_PROTO_CACHE,
@@ -554,19 +551,7 @@ pub(crate) fn test_prototype_addr_cache_wiring() -> [(usize, &'static [u8]); 7] 
                 .name()
                 .as_bytes(),
         ),
-        (
-            MAP_PROTO_CACHE,
-            PROTOTYPE_ADDR_BUILTINS[MAP_PROTO_CACHE].name().as_bytes(),
-        ),
     ]
-}
-
-/// The intrinsic `%Map.prototype%` of this thread's realm. Primed while
-/// global constructors still name their intrinsics and rewritten by the
-/// shared prototype-address root scanner.
-#[inline]
-pub(crate) fn map_prototype_addr() -> usize {
-    resolve_prototype_addr(MAP_PROTO_CACHE)
 }
 
 /// Number of cells this thread owns — i.e. how many

@@ -215,6 +215,23 @@ macro_rules! runtime_layout {
                         < crate::object::runtime_layouts::RUNTIME_LAYOUT_ROWS,
                 "a runtime layout word lies outside the runtime layout rows"
             );
+            /// The descriptor when the program's realm reaches this layout,
+            /// `None` when the program carries no definition. For code that
+            /// asks whether an object is on this layout: such a probe is not
+            /// a birth and must not abort for a layout the realm never names.
+            #[inline(always)]
+            pub fn reached() -> Option<*mut PerryLayoutDesc> {
+                #[cfg(not(any(test, feature = "test-layout-descriptors")))]
+                {
+                    // SAFETY: as in `desc`.
+                    let desc = unsafe { DEFINITION };
+                    (!desc.is_null()).then_some(desc)
+                }
+                #[cfg(any(test, feature = "test-layout-descriptors"))]
+                {
+                    Some(std::ptr::addr_of_mut!(super::$name))
+                }
+            }
             /// The descriptor a birth of this layout names. A program whose
             /// realm does not reach the layout carries no definition, and a
             /// birth there aborts naming the layout.
