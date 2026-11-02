@@ -725,6 +725,37 @@ pub(super) unsafe fn visit_gc_rewrite_slots_inline<const DIAGNOSTICS: bool>(
     });
 }
 
+/// [`visit_gc_rewrite_slots`] through the ONE shared, out-of-line copy of the
+/// rewrite-descriptor and layout decoder. The walker's slot action is a
+/// separate function either way (it was never inlined into the decoder), so
+/// the shared copy trades a direct call per descriptor for an indirect one;
+/// what it removes is the per-walker instantiation of the whole decoder.
+/// Enumerates exactly the same slots, in the same order.
+pub(super) unsafe fn visit_gc_rewrite_slots_shared<const DIAGNOSTICS: bool>(
+    header: *mut GcHeader,
+    mut visit: impl FnMut(GcMutableSlot),
+) {
+    visit_gc_rewrite_slot_descriptors_shared::<DIAGNOSTICS>(header, &mut |descriptor| unsafe {
+        descriptor.visit_slots_inline(&mut visit);
+    });
+}
+
+/// The shared decoder body behind [`visit_gc_rewrite_slots_shared`]: one copy
+/// per `DIAGNOSTICS`, never inlined into a walker.
+#[inline(never)]
+pub(super) unsafe fn visit_gc_rewrite_slot_descriptors_shared<const DIAGNOSTICS: bool>(
+    header: *mut GcHeader,
+    visit: &mut dyn FnMut(GcMutableSlotDescriptor),
+) {
+    #[cfg(test)]
+    if (*header).obj_type == crate::gc::GC_TYPE_NATIVE_HANDLE
+        && crate::native_payload::callback_sabotage("rewrite")
+    {
+        return;
+    }
+    visit_gc_rewrite_slot_descriptors_with::<DIAGNOSTICS, true>(header, visit);
+}
+
 /// Test-only sabotage for the inline mask walk
 /// ([`HeapChildSlotIterator::take_inline_mask_word`]): a fast path that
 /// enumerates a DIFFERENT set than the iterator it replaces must be caught, so
