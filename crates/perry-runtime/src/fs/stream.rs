@@ -33,12 +33,6 @@ struct StreamListener {
     once: bool,
 }
 
-#[derive(Clone)]
-struct PipeDestination {
-    value: f64,
-    end: bool,
-}
-
 /// #9493: a chunk `WriteStream.write()`/`end()` accepted, awaiting its turn.
 struct PendingWrite {
     bytes: Vec<u8>,
@@ -61,7 +55,6 @@ pub(crate) struct StreamState {
     auto_close: bool,
     emit_close: bool,
     listeners: StdHashMap<String, Vec<StreamListener>>,
-    pipes: Vec<PipeDestination>,
     object_value: f64,
     opened: bool,
     errored: bool,
@@ -70,8 +63,6 @@ pub(crate) struct StreamState {
     finished: bool,
     closed: bool,
     destroyed: bool,
-    paused: bool,
-    pumping: bool,
     writable_length: usize,
     writable_need_drain: bool,
     /// #9493: chunks accepted by `write()`/`end()` and not yet written. Node
@@ -238,7 +229,6 @@ impl StreamState {
             auto_close: true,
             emit_close: true,
             listeners: StdHashMap::new(),
-            pipes: Vec::new(),
             object_value: f64::from_bits(crate::value::TAG_UNDEFINED),
             opened: false,
             errored: false,
@@ -247,8 +237,6 @@ impl StreamState {
             finished: false,
             closed: false,
             destroyed: false,
-            paused: true,
-            pumping: false,
             writable_length: 0,
             writable_need_drain: false,
             pending_writes: Vec::new(),
@@ -351,9 +339,6 @@ pub(crate) fn scan_fs_stream_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
                 for listener in listeners {
                     visitor.visit_nanbox_f64_slot(&mut listener.callback);
                 }
-            }
-            for pipe in &mut state.pipes {
-                visitor.visit_nanbox_f64_slot(&mut pipe.value);
             }
             // #9493: the deferred-write queue holds JS callbacks across turns.
             for write in &mut state.pending_writes {
@@ -712,27 +697,13 @@ fn update_common_props(props: &CommonProps) {
         b"pending",
         bool_value(!props.opened && props.error_msg_is_none),
     );
-    set_object_field_rooted(&scope, &obj, b"closed", bool_value(props.closed));
-    set_object_field_rooted(&scope, &obj, b"destroyed", bool_value(props.destroyed));
     match props.kind {
         StreamKind::Read => {
-            set_object_field_rooted(
-                &scope,
-                &obj,
-                b"readable",
-                bool_value(!props.ended && !props.destroyed),
-            );
-            set_object_field_rooted(&scope, &obj, b"readableEnded", bool_value(props.ended));
-            set_object_field_rooted(&scope, &obj, b"readableLength", 0.0);
-            set_object_field_rooted(
-                &scope,
-                &obj,
-                b"readableHighWaterMark",
-                props.high_water_mark as f64,
-            );
             set_object_field_rooted(&scope, &obj, b"bytesRead", props.bytes_read as f64);
         }
         StreamKind::Write => {
+            set_object_field_rooted(&scope, &obj, b"closed", bool_value(props.closed));
+            set_object_field_rooted(&scope, &obj, b"destroyed", bool_value(props.destroyed));
             set_object_field_rooted(
                 &scope,
                 &obj,
@@ -932,11 +903,13 @@ fn close_fd_for_state(state: &mut StreamState) -> Option<(i32, FdOwner)> {
     };
     state.fd = None;
     state.closed = true;
-    fd_is_registered(fd).then_some((fd, state.owner))
+    // Node's ReadStream tests `!fd`, so fd 0 (stdin) is never closed on destroy.
+    let keep_open = state.kind == StreamKind::Read && fd == 0;
+    (fd_is_registered(fd) && !keep_open).then_some((fd, state.owner))
 }
 
-fn maybe_close_stream(id: usize, force: bool) {
-    // `Some(emit_close)` when the stream transitioned to closed in THIS call.
+/// Closes the stream's fd once. `Some(emit_close)` when this call closed it.
+fn close_stream_fd(id: usize, force: bool) -> Option<bool> {
     let closed_now = with_stream_props_mut(id, |state| {
         if state.closed {
             return None;
@@ -947,9 +920,7 @@ fn maybe_close_stream(id: usize, force: bool) {
         let close = close_fd_for_state(state);
         Some((state.emit_close, close))
     });
-    let Some(((should_emit_close, close), _props)) = closed_now else {
-        return;
-    };
+    let ((should_emit_close, close), _props) = closed_now?;
     if let Some((fd, owner)) = close {
         match owner {
             FdOwner::FileHandle(handle) => {
@@ -966,28 +937,33 @@ fn maybe_close_stream(id: usize, force: bool) {
     // The state registry is the authoritative rooted copy of this receiver;
     // refresh after the close so this snapshot cannot publish a stale address.
     refresh_props(id);
-    if should_emit_close {
-        emit_event0(id, "close");
-    }
-    // 2026-07-09 GC audit wave 2: the state is terminal — the fd is closed
-    // and 'close' has been delivered — but the registry record previously
-    // kept EVERY GC-rooted value alive forever (listener closures, pipe
-    // targets, and the stream object itself via `object_value`, all visited
-    // by `scan_fs_stream_roots_mut`). Release them now so the stream's
-    // object graph becomes collectable. The slim record itself stays so the
-    // late-listener replay arms in `stream_on_common`
-    // ('error'/'end'/'finish'/'close') keep answering from the terminal
-    // booleans + `error_msg`; those read no rooted values.
+    Some(should_emit_close)
+}
+
+/// A terminal stream's registry record must not keep its object graph alive
+/// (listener closures and the stream object itself, all visited by
+/// `scan_fs_stream_roots_mut`). The slim record stays so the late-listener
+/// replay arms in `stream_on_common` answer from the terminal booleans.
+fn release_stream_roots(id: usize) {
     STREAM_REGISTRY.with(|registry| {
         if let Some(state) = registry.borrow_mut().get_mut(&id) {
             state.listeners.clear();
-            state.pipes.clear();
             state.object_value = f64::from_bits(crate::value::TAG_UNDEFINED);
             if let FdOwner::FileHandle(handle) = &mut state.owner {
                 *handle = f64::from_bits(crate::value::TAG_UNDEFINED);
             }
         }
     });
+}
+
+fn maybe_close_stream(id: usize, force: bool) {
+    let Some(should_emit_close) = close_stream_fd(id, force) else {
+        return;
+    };
+    if should_emit_close {
+        emit_event0(id, "close");
+    }
+    release_stream_roots(id);
 }
 
 fn normalize_write_args(chunk: f64, encoding: f64, cb: f64) -> (Option<f64>, Option<f64>) {
@@ -1203,8 +1179,6 @@ fn throw_plain_type_error_value(message: &str) -> ! {
 
 mod options_init;
 use options_init::*;
-mod read_turn;
-use read_turn::*;
 mod stream_errors;
 use stream_errors::*;
 mod utf8_stream;
@@ -1234,27 +1208,18 @@ pub(crate) extern "C" fn write_stream_close_impl(
     current_receiver_value(this)
 }
 
-fn read_chunk_value(bytes: &[u8], encoding: Option<&str>) -> f64 {
-    if let Some(encoding) = encoding {
-        let ptr = encoded_string_ptr(bytes, encoding);
-        f64::from_bits(JSValue::string_ptr(ptr).bits())
-    } else {
-        buffer_value_from_bytes(bytes)
-    }
-}
-
-fn read_next_chunk(id: usize) -> Result<Option<(Vec<u8>, Option<String>)>, FsReadFailure> {
-    let (fd, pos, amount, encoding) = STREAM_REGISTRY.with(|registry| {
+fn read_next_chunk(id: usize) -> Result<Option<Vec<u8>>, FsReadFailure> {
+    let (fd, pos, amount) = STREAM_REGISTRY.with(|registry| {
         let registry = registry.borrow();
         let Some(state) = registry.get(&id) else {
-            return (None, 0, 0, None);
+            return (None, None, 0);
         };
         if state.kind != StreamKind::Read || state.ended || state.destroyed {
-            return (None, 0, 0, None);
+            return (None, None, 0);
         }
         if let Some(end) = state.end {
             if state.position > end {
-                return (state.fd, state.position, 0, state.encoding.clone());
+                return (state.fd, None, 0);
             }
         }
         let mut amount = state.high_water_mark.max(1);
@@ -1262,7 +1227,7 @@ fn read_next_chunk(id: usize) -> Result<Option<(Vec<u8>, Option<String>)>, FsRea
             let remaining = end.saturating_sub(state.position).saturating_add(1);
             amount = amount.min(remaining as usize);
         }
-        (state.fd, state.position, amount, state.encoding.clone())
+        (state.fd, state.start.map(|_| state.position), amount)
     });
     if amount == 0 {
         return Ok(None);
@@ -1276,8 +1241,12 @@ fn read_next_chunk(id: usize) -> Result<Option<(Vec<u8>, Option<String>)>, FsRea
         let Some(file) = registry.get_mut(&fd) else {
             return Err(ebadf());
         };
-        file.seek(SeekFrom::Start(pos))
-            .map_err(FsReadFailure::read)?;
+        // Without `start` the read continues from the fd's own offset, which
+        // is also all a pipe or tty has.
+        if let Some(pos) = pos {
+            file.seek(SeekFrom::Start(pos))
+                .map_err(FsReadFailure::read)?;
+        }
         let mut buffer = vec![0; amount];
         let read = file.read(&mut buffer).map_err(FsReadFailure::read)?;
         buffer.truncate(read);
@@ -1293,275 +1262,23 @@ fn read_next_chunk(id: usize) -> Result<Option<(Vec<u8>, Option<String>)>, FsRea
     }) {
         update_common_props(&props);
     }
-    Ok(Some((result, encoding)))
+    Ok(Some(result))
 }
 
+/// Ends a read stream whose bytes `fs.promises.writeFile` consumed directly.
 fn finish_read_stream(id: usize) {
-    let should_emit = with_stream_props_mut(id, |state| {
+    let object = STREAM_REGISTRY.with(|registry| {
+        let mut registry = registry.borrow_mut();
+        let state = registry.get_mut(&id)?;
         if state.ended {
             return None;
         }
         state.ended = true;
-        state.paused = true;
-        Some(true)
+        Some(state.object_value)
     });
-    if let Some((true, props)) = should_emit {
-        update_common_props(&props);
-        emit_event0(id, "end");
-        maybe_close_stream(id, false);
+    if let Some(object) = object.filter(|object| object_ptr_from_value(*object).is_some()) {
+        call_js_method0(object, b"destroy");
     }
-}
-
-fn install_pipe_drain_resume(source_id: usize, dest: f64) {
-    let closure = js_closure_alloc(
-        crate::fn_info!(read_stream_resume_from_drain_impl, 0; with_declared(0)),
-        1,
-    );
-    crate::closure::closure_set_capture_word(closure, 0, source_id as i64);
-    let listener = f64::from_bits(JSValue::pointer(closure as *const u8).bits());
-    let _ = call_js_method2(dest, b"once", string_value(b"drain"), listener);
-}
-
-extern "C" fn read_stream_resume_from_drain_impl(
-    closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
-) -> f64 {
-    let id = stream_id_of(closure);
-    STREAM_REGISTRY.with(|registry| {
-        if let Some(state) = registry.borrow_mut().get_mut(&id) {
-            state.paused = false;
-        }
-    });
-    read_stream_pump(id);
-    undefined_value()
-}
-
-fn write_to_pipes(id: usize, chunk: f64) {
-    let pipes = STREAM_REGISTRY.with(|registry| {
-        registry
-            .borrow()
-            .get(&id)
-            .map(|state| state.pipes.clone())
-            .unwrap_or_default()
-    });
-    for pipe in pipes {
-        let ret = call_js_method1(pipe.value, b"write", chunk);
-        if ret.to_bits() == crate::value::TAG_FALSE {
-            STREAM_REGISTRY.with(|registry| {
-                if let Some(state) = registry.borrow_mut().get_mut(&id) {
-                    state.paused = true;
-                }
-            });
-            install_pipe_drain_resume(id, pipe.value);
-            break;
-        }
-    }
-}
-
-fn end_pipes(id: usize) {
-    let pipes = STREAM_REGISTRY.with(|registry| {
-        registry
-            .borrow()
-            .get(&id)
-            .map(|state| state.pipes.clone())
-            .unwrap_or_default()
-    });
-    for pipe in pipes {
-        if pipe.end {
-            let _ = call_js_method0(pipe.value, b"end");
-        }
-    }
-}
-
-fn read_stream_pump(id: usize) {
-    if emit_pending_read_error(id) {
-        return;
-    }
-
-    let should_start = STREAM_REGISTRY.with(|registry| {
-        let mut registry = registry.borrow_mut();
-        let Some(state) = registry.get_mut(&id) else {
-            return false;
-        };
-        if state.kind != StreamKind::Read
-            || state.paused
-            || state.pumping
-            || state.ended
-            || state.destroyed
-            || state.error_msg.is_some()
-        {
-            return false;
-        }
-        state.pumping = true;
-        true
-    });
-    if !should_start {
-        return;
-    }
-    loop {
-        let result = read_next_chunk(id);
-        match result {
-            Ok(Some((bytes, encoding))) => {
-                let chunk = read_chunk_value(&bytes, encoding.as_deref());
-                emit_event1(id, "data", chunk);
-                write_to_pipes(id, chunk);
-                let keep_going = STREAM_REGISTRY.with(|registry| {
-                    let registry = registry.borrow();
-                    let Some(state) = registry.get(&id) else {
-                        return false;
-                    };
-                    !state.paused && !state.ended && !state.destroyed && state.error_msg.is_none()
-                });
-                if !keep_going {
-                    break;
-                }
-            }
-            Ok(None) => {
-                STREAM_REGISTRY.with(|registry| {
-                    if let Some(state) = registry.borrow_mut().get_mut(&id) {
-                        state.pumping = false;
-                    }
-                });
-                end_pipes(id);
-                finish_read_stream(id);
-                return;
-            }
-            Err(failure) => {
-                STREAM_REGISTRY.with(|registry| {
-                    if let Some(state) = registry.borrow_mut().get_mut(&id) {
-                        state.pumping = false;
-                    }
-                });
-                record_read_failure(id, failure);
-                maybe_close_stream(id, false);
-                return;
-            }
-        }
-    }
-    STREAM_REGISTRY.with(|registry| {
-        if let Some(state) = registry.borrow_mut().get_mut(&id) {
-            state.pumping = false;
-        }
-    });
-}
-
-pub(crate) extern "C" fn read_stream_on_impl(
-    closure: *const ClosureHeader,
-    this: crate::closure::JsThis,
-    event: f64,
-    cb: f64,
-) -> f64 {
-    let id = stream_id_of(closure);
-    stream_on_common(id, event, cb, false);
-    if event_name(event) == "data" {
-        STREAM_REGISTRY.with(|registry| {
-            if let Some(state) = registry.borrow_mut().get_mut(&id) {
-                state.paused = false;
-            }
-        });
-        schedule_read_stream_turn(id);
-    }
-    current_receiver_value(this)
-}
-
-pub(crate) extern "C" fn read_stream_once_impl(
-    closure: *const ClosureHeader,
-    this: crate::closure::JsThis,
-    event: f64,
-    cb: f64,
-) -> f64 {
-    let id = stream_id_of(closure);
-    stream_on_common(id, event, cb, true);
-    if event_name(event) == "data" {
-        STREAM_REGISTRY.with(|registry| {
-            if let Some(state) = registry.borrow_mut().get_mut(&id) {
-                state.paused = false;
-            }
-        });
-        schedule_read_stream_turn(id);
-    }
-    current_receiver_value(this)
-}
-
-pub(crate) extern "C" fn read_stream_pipe_impl(
-    closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
-    dest: f64,
-    options: f64,
-) -> f64 {
-    let id = stream_id_of(closure);
-    let pipe_end = option_bool_default(options, b"end", true);
-    STREAM_REGISTRY.with(|registry| {
-        if let Some(state) = registry.borrow_mut().get_mut(&id) {
-            state.pipes.push(PipeDestination {
-                value: dest,
-                end: pipe_end,
-            });
-            state.paused = false;
-        }
-    });
-    schedule_read_stream_turn(id);
-    dest
-}
-
-pub(crate) extern "C" fn read_stream_pause_impl(
-    closure: *const ClosureHeader,
-    this: crate::closure::JsThis,
-) -> f64 {
-    STREAM_REGISTRY.with(|registry| {
-        if let Some(state) = registry.borrow_mut().get_mut(&stream_id_of(closure)) {
-            state.paused = true;
-        }
-    });
-    current_receiver_value(this)
-}
-
-pub(crate) extern "C" fn read_stream_resume_impl(
-    closure: *const ClosureHeader,
-    this: crate::closure::JsThis,
-) -> f64 {
-    let id = stream_id_of(closure);
-    STREAM_REGISTRY.with(|registry| {
-        if let Some(state) = registry.borrow_mut().get_mut(&id) {
-            state.paused = false;
-        }
-    });
-    schedule_read_stream_turn(id);
-    current_receiver_value(this)
-}
-
-pub(crate) extern "C" fn read_stream_is_paused_impl(
-    closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
-) -> f64 {
-    let paused = STREAM_REGISTRY.with(|registry| {
-        registry
-            .borrow()
-            .get(&stream_id_of(closure))
-            .map(|state| state.paused)
-            .unwrap_or(true)
-    });
-    bool_value(paused)
-}
-
-pub(crate) extern "C" fn read_stream_close_impl(
-    closure: *const ClosureHeader,
-    this: crate::closure::JsThis,
-    cb: f64,
-) -> f64 {
-    let id = stream_id_of(closure);
-    if is_callable_value(cb) {
-        add_listener(id, "close", cb, true);
-    }
-    if let Some(((), props)) = with_stream_props_mut(id, |state| {
-        state.destroyed = true;
-        state.paused = true;
-        Some(())
-    }) {
-        update_common_props(&props);
-    }
-    maybe_close_stream(id, true);
-    current_receiver_value(this)
 }
 
 fn stream_on_common(id: usize, event_value: f64, cb: f64, once: bool) {
@@ -1572,24 +1289,7 @@ fn stream_on_common(id: usize, event_value: f64, cb: f64, once: bool) {
             return None;
         };
         match event.as_str() {
-            // A read stream still opens eagerly, so its `'open'`/`'ready'` are
-            // replayed to the listeners attached right after construction. A
-            // write stream opens on a later turn (#9493) and emits them for
-            // real; Node never fires either for a supplied fd.
-            "open"
-                if state.kind == StreamKind::Read
-                    && state.opened
-                    && !matches!(state.owner, FdOwner::External | FdOwner::FileHandle(_)) =>
-            {
-                state.fd.map(|fd| ("open", fd as f64))
-            }
-            "ready" if state.kind == StreamKind::Read && state.opened => {
-                Some(("ready", undefined_value()))
-            }
             "error" if state.errored => stored_error_value(state).map(|err| ("error", err)),
-            "end" if state.kind == StreamKind::Read && state.ended => {
-                Some(("end", undefined_value()))
-            }
             "finish" if state.kind == StreamKind::Write && state.finished => {
                 Some(("finish", undefined_value()))
             }
@@ -1601,7 +1301,7 @@ fn stream_on_common(id: usize, event_value: f64, cb: f64, once: bool) {
         if is_callable_value(cb) {
             let cb_ptr = extract_closure_ptr(cb);
             if !cb_ptr.is_null() {
-                if name == "open" || name == "error" {
+                if name == "error" {
                     crate::closure::js_closure_call1(
                         cb_ptr,
                         crate::closure::plain_call_receiver(),
@@ -1675,77 +1375,289 @@ fn create_write_stream_with_state(state: StreamState) -> f64 {
     })
 }
 
+/// `fs.ReadStream.prototype` as user code reads it, with its `Readable` parent.
+fn read_stream_prototype() -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let ctor = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
+        "fs",
+        "ReadStream",
+    ));
+    let key = js_string_from_bytes(b"prototype".as_ptr(), 9);
+    let key = scope.root_nanbox_f64(f64::from_bits(JSValue::string_ptr(key).bits()));
+    crate::proxy::js_reflect_get(
+        ctor.get_nanbox_f64(),
+        key.get_nanbox_f64(),
+        ctor.get_nanbox_f64(),
+    )
+}
+
+/// Whether `value`'s prototype chain reaches `fs.ReadStream.prototype`.
+pub(crate) fn is_read_stream_instance(value: f64) -> bool {
+    if object_ptr_from_value(value).is_none() {
+        return false;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target = scope.root_nanbox_f64(read_stream_prototype());
+    let current = scope.root_nanbox_f64(crate::object::js_object_get_prototype_of(value));
+    for _ in 0..64 {
+        if current.get_nanbox_u64() == target.get_nanbox_u64() {
+            return true;
+        }
+        if object_ptr_from_value(current.get_nanbox_f64()).is_none() {
+            return false;
+        }
+        let next = crate::object::js_object_get_prototype_of(current.get_nanbox_f64());
+        current.set_nanbox_f64(next);
+    }
+    false
+}
+
+fn read_stream_object(id: usize) -> Option<f64> {
+    STREAM_REGISTRY.with(|registry| {
+        registry
+            .borrow()
+            .get(&id)
+            .map(|state| state.object_value)
+            .filter(|object| object_ptr_from_value(*object).is_some())
+    })
+}
+
+/// The Readable's `read` hook: defers one `read(2)` to a later turn, as Node's
+/// asynchronous fs read does, so `readable` fires before the next chunk lands.
+extern "C" fn read_stream_read_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _size: f64,
+) -> f64 {
+    let id = stream_id_of(closure);
+    let deliver = make_stream_closure(
+        crate::fn_info!(read_stream_deliver_impl, 0; with_declared(0)),
+        id,
+    );
+    let _ = crate::timer::js_set_immediate_callback(deliver as i64);
+    undefined_value()
+}
+
+/// Performs the deferred `read(2)` and pushes the Buffer, EOF, or error.
+extern "C" fn read_stream_deliver_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    let id = stream_id_of(closure);
+    let outcome = read_next_chunk(id);
+    let Some(object) = read_stream_object(id) else {
+        return undefined_value();
+    };
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let object = scope.root_nanbox_f64(object);
+    match outcome {
+        Ok(Some(bytes)) => {
+            let chunk = scope.root_nanbox_f64(buffer_value_from_bytes(&bytes));
+            call_js_method1(object.get_nanbox_f64(), b"push", chunk.get_nanbox_f64());
+        }
+        Ok(None) => {
+            call_js_method1(object.get_nanbox_f64(), b"push", null_value());
+        }
+        Err(failure) => {
+            let error = scope.root_nanbox_f64(unsafe { failure.error_value() });
+            call_js_method1(object.get_nanbox_f64(), b"destroy", error.get_nanbox_f64());
+        }
+    }
+    undefined_value()
+}
+
+/// The Readable's `construct` hook. The fd is already open, so this only
+/// reports the open outcome as Node's `_construct` does.
+extern "C" fn read_stream_construct_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    callback: f64,
+) -> f64 {
+    let id = stream_id_of(closure);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let callback = scope.root_nanbox_f64(callback);
+    let (stored, message, opened_fd) = STREAM_REGISTRY.with(|registry| {
+        let registry = registry.borrow();
+        let Some(state) = registry.get(&id) else {
+            return (undefined_value(), None, None);
+        };
+        let opened_fd = state
+            .fd
+            .filter(|_| state.opened && matches!(state.owner, FdOwner::Path));
+        (state.error_value, state.error_msg.clone(), opened_fd)
+    });
+    let stored = scope.root_nanbox_f64(stored);
+    let cb_ptr = extract_closure_ptr(callback.get_nanbox_f64());
+    if cb_ptr.is_null() {
+        return undefined_value();
+    }
+    let has_stored = !JSValue::from_bits(stored.get_nanbox_f64().to_bits()).is_undefined();
+    if has_stored || message.is_some() {
+        let error = if has_stored {
+            stored
+        } else {
+            scope.root_nanbox_f64(make_error_value(message.as_deref().unwrap_or_default()))
+        };
+        crate::closure::js_closure_call1(
+            extract_closure_ptr(callback.get_nanbox_f64()),
+            crate::closure::plain_call_receiver(),
+            error.get_nanbox_f64(),
+        );
+        return undefined_value();
+    }
+    crate::closure::js_closure_call0(cb_ptr, crate::closure::plain_call_receiver());
+    if let (Some(fd), Some(object)) = (opened_fd, read_stream_object(id)) {
+        let object = scope.root_nanbox_f64(object);
+        call_js_method2(
+            object.get_nanbox_f64(),
+            b"emit",
+            string_value(b"open"),
+            fd as f64,
+        );
+        call_js_method1(object.get_nanbox_f64(), b"emit", string_value(b"ready"));
+    }
+    undefined_value()
+}
+
+/// The Readable's `destroy` hook (Node's `_destroy`): the fd closes on every
+/// destroy, whatever `autoClose` says; `autoClose` only gates auto-destroy.
+extern "C" fn read_stream_destroy_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    error: f64,
+    callback: f64,
+) -> f64 {
+    let id = stream_id_of(closure);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let error = scope.root_nanbox_f64(error);
+    let callback = scope.root_nanbox_f64(callback);
+    if let Some(((), props)) = with_stream_props_mut(id, |state| {
+        state.destroyed = true;
+        Some(())
+    }) {
+        update_common_props(&props);
+    }
+    close_stream_fd(id, true);
+    release_stream_roots(id);
+    // Node completes `_destroy` from the asynchronous `close(2)` callback, so
+    // `close` is never emitted in the turn that called `destroy()`.
+    let done = scope.root_raw_mut_ptr(js_closure_alloc(
+        crate::fn_info!(read_stream_destroy_done_impl, 0; with_declared(0)),
+        2,
+    ));
+    done.with_mut_ptr(|done| {
+        crate::closure::js_closure_set_capture_f64(done, 0, callback.get_nanbox_f64());
+        crate::closure::js_closure_set_capture_f64(done, 1, error.get_nanbox_f64());
+    });
+    let _ = done.with_mut_ptr(|done: *mut ClosureHeader| {
+        crate::timer::js_set_immediate_callback(done as i64)
+    });
+    undefined_value()
+}
+
+extern "C" fn read_stream_destroy_done_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    let callback = crate::closure::js_closure_get_capture_f64(closure, 0);
+    let error = crate::closure::js_closure_get_capture_f64(closure, 1);
+    let cb_ptr = extract_closure_ptr(callback);
+    if !cb_ptr.is_null() {
+        crate::closure::js_closure_call1(cb_ptr, crate::closure::plain_call_receiver(), error);
+    }
+    undefined_value()
+}
+
+/// `ReadStream.prototype.close(cb)`.
+extern "C" fn read_stream_close_impl(
+    _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+    cb: f64,
+) -> f64 {
+    let this = current_receiver_value(this);
+    if object_ptr_from_value(this).is_none() {
+        return undefined_value();
+    }
+    if is_callable_value(cb) {
+        call_js_method2(this, b"once", string_value(b"close"), cb);
+    }
+    call_js_method0(this, b"destroy");
+    undefined_value()
+}
+
 fn create_read_stream_with_state(state: StreamState) -> f64 {
+    // The Readable parent link is applied by the fs attach handler, and the
+    // stream constructors must be materialized after their own install. A
+    // program installs both only when codegen saw namespace use.
+    crate::object::js_nm_install_fs();
     let id = alloc_stream(state);
     store_open_failure(id);
-    let method_funcs: [(&str, *const crate::closure::JsFunctionInfo); 10] = [
+    let (high_water_mark, encoding, auto_close, emit_close) = STREAM_REGISTRY.with(|registry| {
+        let registry = registry.borrow();
+        let state = registry.get(&id).expect("read stream state is registered");
         (
-            "on",
-            crate::fn_info!(read_stream_on_impl, 2; with_declared(2)),
+            state.high_water_mark,
+            state.encoding.clone(),
+            state.auto_close,
+            state.emit_close,
+        )
+    });
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let options = scope.root_nanbox_f64(object_value(crate::object::js_object_alloc(0, 0)));
+    let hooks: [(&[u8], *const crate::closure::JsFunctionInfo); 3] = [
+        (
+            b"read",
+            crate::fn_info!(read_stream_read_impl, 1; with_declared(1)),
         ),
         (
-            "once",
-            crate::fn_info!(read_stream_once_impl, 2; with_declared(2)),
+            b"construct",
+            crate::fn_info!(read_stream_construct_impl, 1; with_declared(1)),
         ),
         (
-            "addListener",
-            crate::fn_info!(read_stream_on_impl, 2; with_declared(2)),
-        ),
-        (
-            "pipe",
-            crate::fn_info!(read_stream_pipe_impl, 2; with_declared(2)),
-        ),
-        (
-            "pause",
-            crate::fn_info!(read_stream_pause_impl, 0; with_declared(0)),
-        ),
-        (
-            "resume",
-            crate::fn_info!(read_stream_resume_impl, 0; with_declared(0)),
-        ),
-        (
-            "isPaused",
-            crate::fn_info!(read_stream_is_paused_impl, 0; with_declared(0)),
-        ),
-        (
-            "close",
-            crate::fn_info!(read_stream_close_impl, 1; with_declared(1)),
-        ),
-        (
-            "destroy",
-            crate::fn_info!(read_stream_close_impl, 1; with_declared(1)),
-        ),
-        (
-            "emit",
-            crate::fn_info!(stream_emit_impl, 2; with_declared(2)),
+            b"destroy",
+            crate::fn_info!(read_stream_destroy_impl, 2; with_declared(2)),
         ),
     ];
-    let obj = build_stream_object(id, CLASS_ID_FS_READ_STREAM, &method_funcs);
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let value = scope.root_nanbox_f64(object_value(obj));
+    for (name, info) in hooks {
+        let closure = make_stream_closure(info, id);
+        let hook = scope.root_nanbox_f64(f64::from_bits(
+            JSValue::pointer(closure as *const u8).bits(),
+        ));
+        set_object_field_rooted(&scope, &options, name, hook.get_nanbox_f64());
+    }
+    set_object_field_rooted(&scope, &options, b"highWaterMark", high_water_mark as f64);
+    set_object_field_rooted(&scope, &options, b"autoDestroy", bool_value(auto_close));
+    set_object_field_rooted(&scope, &options, b"emitClose", bool_value(emit_close));
+    if let Some(encoding) = encoding {
+        set_object_field_str_rooted(&scope, &options, b"encoding", &encoding);
+    }
+    // A real node:stream Readable supplies `read()`, `readable` events,
+    // listener management and the async iterator; the hooks above are the
+    // file-backed source.
+    let value = scope.root_nanbox_f64(crate::node_stream::js_node_stream_readable_new(
+        options.get_nanbox_f64(),
+    ));
+    // File bytes arrive through the read hook, not node:stream's chunk buffer.
+    crate::node_stream::async_iterator::mark_foreign_readable(value.get_nanbox_f64());
+    let prototype = scope.root_nanbox_f64(read_stream_prototype());
+    if let Some(object) = object_ptr_from_value(value.get_nanbox_f64()) {
+        crate::object::prototype_chain::object_link_created_prototype(
+            object as usize,
+            prototype.get_nanbox_u64(),
+        );
+    }
     if let Some(((), props)) = with_stream_props_mut(id, |state| {
         state.object_value = value.get_nanbox_f64();
         Some(())
     }) {
         update_common_props(&props);
     }
-    // Like Node's, a read stream must be async-iterable: `for await (const chunk of
-    // fs.createReadStream(p))`, and the `typeof stream[Symbol.asyncIterator] ===
-    // "function"` probe that stream-consuming libraries run before accepting a
-    // stream at all. `emit_event0`/`emit_event1` forward to node:stream's listener
-    // registry so the iterator this installs actually receives the chunks.
-    crate::node_stream::async_iterator::install_foreign_readable_async_iterator_symbol(
-        value.get_nanbox_f64(),
+    let close = make_stream_closure(
+        crate::fn_info!(read_stream_close_impl, 1; with_declared(1)),
+        id,
     );
-    let has_open_failure = STREAM_REGISTRY.with(|registry| {
-        registry
-            .borrow()
-            .get(&id)
-            .is_some_and(|state| state.error_msg.is_some())
-    });
-    if has_open_failure {
-        schedule_read_stream_turn(id);
-    }
+    let close = scope.root_nanbox_f64(f64::from_bits(JSValue::pointer(close as *const u8).bits()));
+    set_object_field_rooted(&scope, &value, b"close", close.get_nanbox_f64());
     value.get_nanbox_f64()
 }
 
