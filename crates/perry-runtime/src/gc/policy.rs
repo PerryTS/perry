@@ -5,6 +5,14 @@ use super::*;
 pub(super) const GC_FLAG_IN_ALLOC: u8 = 0b01;
 /// Bit 1 of GC_FLAGS — suppression flag (JSON.parse).
 pub(super) const GC_FLAG_SUPPRESSED: u8 = 0b10;
+/// Bit 2 of GC_FLAGS: an allocation-point trigger check reached
+/// [`gc_check_trigger_evaluate`] while [`GC_FLAG_SUPPRESSED`] was set and was
+/// turned away. The check is owed, not answered: the outermost
+/// [`GcSuppressScope`] runs it when it drops. A `gc_suppress` window
+/// ([`gc_unsuppress`]) clears it instead, because that window's owner prices
+/// its whole growth itself at the window's end (JSON.parse's
+/// `finish_parse_gc_accounting`, `gc_bump_malloc_trigger`).
+pub(super) const GC_FLAG_TRIGGER_OWED: u8 = 0b100;
 
 crate::perry_thread_local! {
     pub(super) static GC_FLAGS: Cell<u8> = const { Cell::new(0) };
@@ -1748,8 +1756,12 @@ pub fn gc_suppress() {
 }
 
 /// Resume GC triggers after suppression.
+///
+/// A trigger check turned away inside the window is dropped here, not run:
+/// every `gc_suppress` caller accounts for the window's growth itself right
+/// after this call (see [`GC_FLAG_TRIGGER_OWED`]).
 pub fn gc_unsuppress() {
-    GC_FLAGS.with(|f| f.set(f.get() & !GC_FLAG_SUPPRESSED));
+    GC_FLAGS.with(|f| f.set(f.get() & !(GC_FLAG_SUPPRESSED | GC_FLAG_TRIGGER_OWED)));
 }
 
 /// True while GC triggers are suppressed (see [`gc_suppress`]).
@@ -1769,6 +1781,16 @@ pub(crate) fn gc_is_suppressed() -> bool {
 /// `ObjectMeta` record) where that accounting is pure overhead. Nesting-safe:
 /// the previous suppression state is restored on drop, so a scope opened
 /// inside an outer `gc_suppress` window does not unsuppress it early.
+///
+/// A trigger check that an allocation inside the scope reached is OWED, not
+/// dropped: [`gc_check_trigger_evaluate`] records it in
+/// [`GC_FLAG_TRIGGER_OWED`] and the outermost scope runs it as it drops,
+/// which is an allocation point like any other (the allocation-point arms
+/// defer to a precise safepoint or collect non-moving under the conservative
+/// scan). Without that, a trigger whose arena block boundary falls inside a
+/// scope is lost until the next boundary: a loop of small Maps whose every
+/// block boundary landed in `ensure_capacity`'s scope ran with no minor at
+/// all and grew the nursery without bound.
 pub(crate) struct GcSuppressScope {
     was_suppressed: bool,
 }
@@ -1784,11 +1806,31 @@ impl GcSuppressScope {
 }
 
 impl Drop for GcSuppressScope {
+    #[inline]
     fn drop(&mut self) {
         if !self.was_suppressed {
-            GC_FLAGS.with(|f| f.set(f.get() & !GC_FLAG_SUPPRESSED));
+            let flags = GC_FLAGS.with(|f| {
+                let flags = f.get();
+                f.set(flags & !(GC_FLAG_SUPPRESSED | GC_FLAG_TRIGGER_OWED));
+                flags
+            });
+            if flags & GC_FLAG_TRIGGER_OWED != 0 {
+                run_owed_trigger_check();
+            }
         }
     }
+}
+
+/// The trigger check a [`GcSuppressScope`] turned away, run as the outermost
+/// scope drops. Not while unwinding: a panic leaves the heap in whatever state
+/// the scope was protecting, exactly as [`flush_deferred_gc_request`] skips it.
+#[cold]
+#[inline(never)]
+fn run_owed_trigger_check() {
+    if std::thread::panicking() {
+        return;
+    }
+    gc_check_trigger();
 }
 
 /// Rebaseline the malloc-count AND arena-bytes triggers to the current
@@ -3279,6 +3321,8 @@ fn gc_check_trigger_evaluate() {
     // Issue #62: single TLS access covers both `in_alloc` and `suppressed`.
     let flags = GC_FLAGS.with(|f| f.get());
     if flags & GC_FLAG_SUPPRESSED != 0 {
+        // Owed, not answered: the outermost `GcSuppressScope` runs it on drop.
+        GC_FLAGS.with(|f| f.set(flags | GC_FLAG_TRIGGER_OWED));
         return;
     }
     if !gc_budgeted_cycle_active() && flags & GC_FLAG_IN_ALLOC != 0 {
