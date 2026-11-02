@@ -466,92 +466,77 @@ pub unsafe fn dispatch_with_arity(
 ) -> f64 {
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
     let k = declared_arity as usize;
-    // Pad once: one fixed `[f64; 32]` filled with `undefined`, the provided
-    // prefix copied in, then every arm below reads constant indices with no
-    // bounds check and no per-argument branch (the `wide_call` pattern).
-    // Surplus arguments beyond the arm's width are ignored, as before.
-    let mut slots = [undef; 32];
-    let provided = args.len().min(slots.len());
-    slots[..provided].copy_from_slice(&args[..provided]);
-    macro_rules! a {
-        ($i:expr) => {
-            slots[$i]
-        };
-    }
-    // One match arm per declared arity. Each arm calls the body through the
-    // body-call funnel with exactly N (padded) JS arguments. Arities up to 32 have exact arms so high-arity closures dispatched
-    // dynamically — e.g. qs's recursive `stringify`, which declares 18
-    // params and self-calls with 18 args (#3527) — call their body
-    // correctly instead of mis-calling and corrupting registers; wider
-    // bodies take the padded ladder in `wide_call` (#10420). The
-    // `arm!` macro builds the (padded) call args from the arg-index token list.
+    // Pad per arm: each arm below fills a `[f64; N]` of exactly its own arity
+    // with `undefined`, copies the provided prefix in, and reads constant
+    // indices (no bounds checks, no per-argument branch). A small arity pays
+    // a few scalar moves, not the widest arm's fill and a `memcpy`; the
+    // `wide_call` ladder does the same per width. Surplus arguments beyond the
+    // arm's arity are ignored, as before.
     macro_rules! arm {
-        ($($i:tt),* $(,)?) => {
-            crate::closure::body_call::js_body_call!(func_ptr, closure, this $(, a!($i))*)
-        };
+        ($n:literal; $($i:tt),* $(,)?) => {{
+            #[allow(unused_mut)]
+            let mut slots = [undef; $n];
+            let provided = args.len().min($n);
+            slots[..provided].copy_from_slice(&args[..provided]);
+            crate::closure::body_call::js_body_call!(func_ptr, closure, this $(, slots[$i])*)
+        }};
     }
     match k {
-        0 => arm!(),
-        1 => arm!(0),
-        2 => arm!(0, 1),
-        3 => arm!(0, 1, 2),
-        4 => arm!(0, 1, 2, 3),
-        5 => arm!(0, 1, 2, 3, 4),
-        6 => arm!(0, 1, 2, 3, 4, 5),
-        7 => arm!(0, 1, 2, 3, 4, 5, 6),
-        8 => arm!(0, 1, 2, 3, 4, 5, 6, 7),
-        9 => arm!(0, 1, 2, 3, 4, 5, 6, 7, 8),
-        10 => arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9),
-        11 => arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10),
-        12 => arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
-        13 => arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12),
-        14 => arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13),
-        15 => arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14),
-        16 => arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15),
-        17 => arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16),
-        18 => arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17),
-        19 => arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18),
-        20 => arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19),
-        21 => arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20),
-        22 => arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21),
-        23 => {
-            arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22)
+        0 => arm!(0;),
+        1 => arm!(1; 0),
+        2 => arm!(2; 0, 1),
+        3 => arm!(3; 0, 1, 2),
+        4 => arm!(4; 0, 1, 2, 3),
+        5 => arm!(5; 0, 1, 2, 3, 4),
+        6 => arm!(6; 0, 1, 2, 3, 4, 5),
+        7 => arm!(7; 0, 1, 2, 3, 4, 5, 6),
+        8 => arm!(8; 0, 1, 2, 3, 4, 5, 6, 7),
+        9 => arm!(9; 0, 1, 2, 3, 4, 5, 6, 7, 8),
+        10 => arm!(10; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9),
+        11 => arm!(11; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10),
+        12 => arm!(12; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
+        13 => arm!(13; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12),
+        14 => arm!(14; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13),
+        15 => arm!(15; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14),
+        16 => arm!(16; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15),
+        17 => arm!(17; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16),
+        18 => arm!(18; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17),
+        19 => arm!(19; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18),
+        20 => arm!(20; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19),
+        21 => arm!(21; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20),
+        22 => {
+            arm!(22; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21)
         }
-        24 => arm!(
-            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23
-        ),
-        25 => arm!(
-            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
-            24
-        ),
-        26 => arm!(
-            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
-            24, 25
-        ),
-        27 => arm!(
-            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
-            24, 25, 26
-        ),
-        28 => arm!(
-            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
-            24, 25, 26, 27
-        ),
-        29 => arm!(
-            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
-            24, 25, 26, 27, 28
-        ),
-        30 => arm!(
-            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
-            24, 25, 26, 27, 28, 29
-        ),
-        31 => arm!(
-            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
-            24, 25, 26, 27, 28, 29, 30
-        ),
-        32 => arm!(
-            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
-            24, 25, 26, 27, 28, 29, 30, 31
-        ),
+        23 => {
+            arm!(23; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22)
+        }
+        24 => {
+            arm!(24; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23)
+        }
+        25 => {
+            arm!(25; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24)
+        }
+        26 => {
+            arm!(26; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25)
+        }
+        27 => {
+            arm!(27; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26)
+        }
+        28 => {
+            arm!(28; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27)
+        }
+        29 => {
+            arm!(29; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28)
+        }
+        30 => {
+            arm!(30; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29)
+        }
+        31 => {
+            arm!(31; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30)
+        }
+        32 => {
+            arm!(32; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31)
+        }
         // #10420: more than 32 declared params used to return `undefined`
         // without calling the body.
         _ => super::dispatch_wide_abi(closure, func_ptr, this, args, k),
