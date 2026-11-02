@@ -354,7 +354,7 @@ pub unsafe fn dispatch_rest_bundled(
     macro_rules! rest_arm {
         ($n:literal; $($i:tt),* $(,)?) => {{
             let provided = provided.min($n);
-            #[allow(unused_mut)]
+            #[allow(unused_mut, unused_variables)]
             let mut slots: [f64; $n] = if $n <= 8 {
                 std::array::from_fn(|i| {
                     if i < provided {
@@ -486,7 +486,7 @@ pub unsafe fn dispatch_with_arity(
             // A narrow arm selects each slot (`undefined` past `provided`):
             // a few scalar moves, no `memcpy` call for a length only known at
             // run time. A wide arm copies the prefix.
-            #[allow(unused_mut)]
+            #[allow(unused_mut, unused_variables)]
             let mut slots: [f64; $n] = if $n <= 8 {
                 std::array::from_fn(|i| if i < provided { args[i] } else { undef })
             } else {
