@@ -296,7 +296,6 @@ pub fn compute(modules: &[(String, &Module)], cfg: &FactsConfig) -> ProgramFacts
 mod contracts;
 #[path = "lib/program_facts.rs"]
 mod program_facts;
-use program_facts::big_nodes;
 use contracts::arg_contract_of;
 use contracts::atoms_of;
 use contracts::chain_unsettled;
@@ -316,6 +315,7 @@ use contracts::open_templates;
 use contracts::unnamed_methods;
 use contracts::value_contract_of;
 use contracts::value_contract_of_toks;
+use program_facts::big_nodes;
 
 /// Generation and the summaries for one analysis of `sorted` (with `act`,
 /// DECISIONS 225: only the bodies that can run are walked; an unfixed set
@@ -392,13 +392,12 @@ fn generate<'a>(
         // DECISIONS 241: this unit's contract functions read what every
         // unit stored on their own properties.
         if published.is_some_and(|p| !p.fn_stores.is_empty()) {
-            let mut fs: Vec<model::FnIdx> = g
-                .m
-                .contract_fns
-                .iter()
-                .copied()
-                .filter(|&f| g.m.funcs[f as usize].func_id != u32::MAX)
-                .collect();
+            let mut fs: Vec<model::FnIdx> =
+                g.m.contract_fns
+                    .iter()
+                    .copied()
+                    .filter(|&f| g.m.funcs[f as usize].func_id != u32::MAX)
+                    .collect();
             fs.sort_unstable();
             for f in fs {
                 let name = fn_contract_name(&g, f).0;
@@ -1260,8 +1259,10 @@ fn compute_act<'a>(
         // Per name: per key the stored values (prim, toks), the computed
         // key's, and whether unknown code reached it.
         type Held = (u16, Vec<model::Tok>);
-        let mut by: std::collections::BTreeMap<String, (std::collections::BTreeMap<String, Held>, Option<Held>, bool)> =
-            Default::default();
+        let mut by: std::collections::BTreeMap<
+            String,
+            (std::collections::BTreeMap<String, Held>, Option<Held>, bool),
+        > = Default::default();
         let add = |h: &mut Held, n: model::NodeId| {
             let nd = &g.m.nodes[n as usize];
             h.0 |= nd.prim;
@@ -1271,13 +1272,12 @@ fn compute_act<'a>(
                 }
             }
         };
-        let mut stored: Vec<(model::Tok, Option<model::Atom>, model::NodeId)> = g
-            .m
-            .fn_stored
-            .iter()
-            .map(|(&(t, a), &n)| (t, Some(a), n))
-            .chain(g.m.fn_stored_any.iter().map(|(&t, &n)| (t, None, n)))
-            .collect();
+        let mut stored: Vec<(model::Tok, Option<model::Atom>, model::NodeId)> =
+            g.m.fn_stored
+                .iter()
+                .map(|(&(t, a), &n)| (t, Some(a), n))
+                .chain(g.m.fn_stored_any.iter().map(|(&t, &n)| (t, None, n)))
+                .collect();
         stored.sort_unstable();
         for (t, a, n) in stored {
             let Some(name) = name_of(t) else { continue };
@@ -1300,11 +1300,27 @@ fn compute_act<'a>(
         for (name, (keys, any, top)) in by {
             let mut fs = units::FnStores::default();
             for (k, (prim, ts)) in keys {
-                let vc = value_contract_of_toks(&g, &templates, prim, ts, &contracts_out, &mut layouts_out, &open_tm);
+                let vc = value_contract_of_toks(
+                    &g,
+                    &templates,
+                    prim,
+                    ts,
+                    &contracts_out,
+                    &mut layouts_out,
+                    &open_tm,
+                );
                 fs.keys.push((k, vc));
             }
             if let Some((prim, ts)) = any {
-                fs.any = Some(value_contract_of_toks(&g, &templates, prim, ts, &contracts_out, &mut layouts_out, &open_tm));
+                fs.any = Some(value_contract_of_toks(
+                    &g,
+                    &templates,
+                    prim,
+                    ts,
+                    &contracts_out,
+                    &mut layouts_out,
+                    &open_tm,
+                ));
             }
             if top || g.m.aborted {
                 let because = if g.m.aborted {
