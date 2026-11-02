@@ -9,6 +9,7 @@ pub static CALLABLE_EXPORT_TABLE: &[(&str, &[&str])] = &[
         "assert",
         &[
             "Assert",
+            "AssertionError",
             "deepEqual",
             "deepStrictEqual",
             "doesNotMatch",
@@ -33,6 +34,7 @@ pub static CALLABLE_EXPORT_TABLE: &[(&str, &[&str])] = &[
         "assert/strict",
         &[
             "Assert",
+            "AssertionError",
             "deepEqual",
             "deepStrictEqual",
             "doesNotMatch",
@@ -1237,7 +1239,7 @@ pub fn canonical_native_callable_property<'a>(
 pub fn canonical_native_callable_module<'a>(module: &'a str, property: &str) -> &'a str {
     match (module, property) {
         ("util.types" | "util/types", _) => "util/types",
-        ("assert/strict", "Assert") => "assert",
+        ("assert/strict", "Assert" | "AssertionError") => "assert",
         ("inspector/promises", name) if name != "Session" => "inspector",
         _ => module,
     }

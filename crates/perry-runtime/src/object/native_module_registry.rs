@@ -81,6 +81,7 @@ pub extern "C" fn js_nm_install_assert() {
         nm_dispatch_assert as NmDispatchFn as *mut (),
         Ordering::Relaxed,
     );
+    nm_register_ctor(NmBucket::Assert, super::assert::nm_ctor_assert);
 }
 /// Seed `globalThis.AsyncLocalStorage` with the `async_hooks` constructor
 /// BEFORE any module init runs. Next.js's `node-environment-baseline.js` does
