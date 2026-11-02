@@ -51,7 +51,10 @@ def main() -> int:
         features += ",perry-runtime/gc-instruments"
     if args.image_selftest:
         features += ",perry-runtime/wasm-image-selftest"
-    command = ["cargo", "build", "--locked", "--release", "-p", "perry-runtime-static",
+    # Optimize the WASI runtime crate for size while retaining ThinLTO and
+    # the checkout's unwind settings. Native production profiles are separate.
+    command = ["cargo", "--config", 'profile.release.package.perry-runtime.opt-level="s"',
+               "build", "--locked", "--release", "-p", "perry-runtime-static",
                "--target", target, "--no-default-features", "--features", features,
                "--message-format=json-render-diagnostics"]
     # Cargo may legitimately reuse a fresh archive. Observe the target
