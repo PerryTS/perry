@@ -82,3 +82,51 @@ fn a_bound_argument_made_in_a_summary_that_stays_local_is_proven() {
     assert!(proven(&run(&src, false), "m"), "whole program");
 }
 
+
+/// Rule 10: a bound value that reaches unknown code is called there (its
+/// target runs with the bound receiver and arguments, unknown arguments
+/// after them) or constructed; its target and bound values do not reach
+/// that code themselves.
+fn escaped(target_decl: &str, bind: &str) -> String {
+    format!(
+        r#"
+{target_decl}
+class Host {{
+  k = 2;
+  m = 3;
+}}
+const h = new Host();
+(globalThis as any).k = {bind};
+console.log(h.m);
+"#
+    )
+}
+
+#[test]
+fn an_escaped_bound_function_runs_its_target_with_its_bound_values() {
+    let leak = "function leak(o: Host): Host { (globalThis as any).g = o; return o; }";
+    let leak_this = "function leakThis(this: Host): Host { (globalThis as any).g = this; return this; }";
+    for src in [escaped(leak, "leak.bind(null, h)"), escaped(leak_this, "leakThis.bind(h)")] {
+        assert!(!proven(&run(&src, false), "m"), "whole program\n{src}");
+        assert!(!proven(&run(&src, true), "m"), "per unit\n{src}");
+    }
+    // Its result reaches unknown code.
+    let ret = escaped("function same(o: Host): Host { return o; }", "same.bind(null, h)");
+    assert!(!proven(&run(&ret, false), "m"), "whole program");
+}
+
+#[test]
+fn an_escaped_bound_constructor_may_be_constructed() {
+    // Called, `this` is `null`; only `new` stores `h` into an instance that
+    // reaches unknown code.
+    let keep = "function Keep(this: any, o: Host) { this.o = o; }\nnew (Keep as any)(new Host());";
+    let src = escaped(keep, "(Keep as any).bind(null, h)");
+    assert!(!proven(&run(&src, false), "m"), "whole program\n{src}");
+    assert!(!proven(&run(&src, true), "m"), "per unit");
+}
+
+#[test]
+fn an_escaped_bound_function_whose_target_keeps_its_values_is_proven() {
+    let src = escaped("function inert(o: Host): number { return 1; }", "inert.bind(null, h)");
+    assert!(proven(&run(&src, false), "m"), "whole program");
+}

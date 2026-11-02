@@ -1501,6 +1501,10 @@ pub struct Model {
     pub bound_synth: crate::pts::FxHashSet<CallId>,
     /// (bound value, `new`) → its merged call.
     pub bound_merged: FxHashMap<(u32, bool), CallId>,
+    /// The `new` an escaped bound value's unknown holder may make
+    /// (`Model::escape_bound`): it constructs only a target unknown code
+    /// may construct (`Model::unknown_constructs`).
+    pub bound_unknown_new: crate::pts::FxHashSet<CallId>,
     /// Lookups that visited a holder token: replayed when an accessor is
     /// installed on it later.
     pub visits: FxHashMap<Tok, crate::pts::FxHashSet<(Tok, Key, ChainAct)>>,

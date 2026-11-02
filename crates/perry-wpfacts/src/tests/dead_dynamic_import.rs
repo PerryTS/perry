@@ -852,3 +852,36 @@ fn native_member_parent_is_the_native_parent(src: &str) {
         &[("cl", &mutable)]
     ));
 }
+
+/// Rule 10 (pg `Client`: `con.on('errorMessage', this._handleErrorMessage.bind(this))`):
+/// a bound function passed to code outside the program exposes neither its
+/// target nor its bound receiver (ES 10.4.1: internal slots); that code may
+/// only call it, which runs the target with the bound `this`, or construct
+/// it. Before, the escape sank the target, so `this` inside it was ⊤ and
+/// `delete this.own[k]` an any-key delete on ⊤.
+const BOUND_CLI: &str = r#"
+import { EventEmitter } from "events";
+export class Conn extends EventEmitter { named: any = {}; }
+export class Cli extends EventEmitter {
+  connection: any; own: any = {};
+  constructor() { super(); this.connection = new Conn(); const con = this.connection; con.on("err", this.onErr.bind(this)); }
+  onErr(msg: any) { delete this.own[String(msg)]; }
+}
+"#;
+#[test]
+fn an_escaped_bound_method_keeps_its_bound_receiver() {
+    let tail = format!("{MAKE_CALLED}\nimport {{ Cli }} from \"./cli\";\nconst c = new Cli();\nconsole.log(c.own);");
+    for interp in [false, true] {
+        assert!(
+            !imports_formatter_with_mods("", &tail, interp, &[("cli", BOUND_CLI)]),
+            "interp={interp}: an escaped bound method keeps the formatter import live"
+        );
+    }
+    // The fixture can fail: bound to an unknown receiver, `this` is ⊤ and
+    // the delete is an any-key delete on ⊤ again.
+    let unknown = BOUND_CLI.replace(
+        "this.onErr.bind(this)",
+        "this.onErr.bind((globalThis as any)[String(process.argv.length)])",
+    );
+    assert!(imports_formatter_with_mods("", &tail, false, &[("cli", unknown.as_str())]));
+}

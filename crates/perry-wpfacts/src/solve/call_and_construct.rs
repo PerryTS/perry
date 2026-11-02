@@ -422,6 +422,68 @@ impl Model {
         call
     }
 
+    /// Bound value `b` reaches unknown code. It holds its target, receiver
+    /// and arguments in internal slots (ES 10.4.1): that code reaches none
+    /// of them, it may only call or construct it. [[Call]] runs the target
+    /// with the bound `this` whoever calls; [[Construct]] constructs the
+    /// target (`this` is the new instance). The bound arguments come first,
+    /// then the caller's, ⊤: the holder's any-key field, which the escape
+    /// made ⊤, is spread into both calls. Their results reach that code. So
+    /// `con.on(ev, this.h.bind(this))` keeps `this` in `h` the receiver it
+    /// was bound to, as an arrow `(m) => this.h(m)` does.
+    ///
+    /// Published to another unit beyond any contract (DECISIONS 212), the
+    /// holder is that units code, which reaches this units values only
+    /// through what leaves with it: the parts leave (DECISIONS 203).
+    fn escape_bound(&mut self, b: u32, reason: u32) {
+        let (target, bthis, bargs) = self.bound[b as usize].clone();
+        if self.reasons[reason as usize] == crate::gen::UNDESCRIBED {
+            for n in [target, bthis].into_iter().chain(bargs) {
+                self.sink_node(n, reason);
+            }
+            return;
+        }
+        let holder = self.tok(TokKind::Bound(b));
+        for new in [false, true] {
+            let arr = self.node_l("bound-arr");
+            self.add_tok(arr, holder);
+            let ret = self.node_l("bound-ret");
+            let call = self.calls.len() as CallId;
+            self.calls.push(CallSite {
+                this: if new {
+                    ThisArg::Undef
+                } else {
+                    ThisArg::Node(bthis)
+                },
+                args: bargs.clone(),
+                spread: vec![arr],
+                ret,
+                site: 0,
+            });
+            self.bound_synth.insert(call);
+            self.rel(|| format!("boundescape {call} {b} {}", new as u8));
+            if new {
+                self.bound_unknown_new.insert(call);
+                self.cons(target, Cons::New { call });
+            } else {
+                self.cons(target, Cons::Call { call });
+            }
+            self.sink_node(ret, reason);
+        }
+    }
+
+    /// Unknown code given function `f` may construct it: a function `new`
+    /// may run (a construction phase or an instance layout) that has
+    /// [[Construct]] (no arrow, no generator step) and is this unit's own.
+    fn unknown_constructs(&self, f: FnIdx) -> bool {
+        let fi = &self.funcs[f as usize];
+        !(fi.lexical_this
+            || fi.gen_step
+            || fi.ctor_of.is_some()
+            || fi.func_id == u32::MAX
+            || !(self.fn_birth.contains_key(&f) || self.fn_inst.contains_key(&f)))
+    }
+
     /// A solver-made call `call` through bound value `b`: its arguments
     /// join the merged call's, its result is the merged call's.
     fn into_merged(&mut self, call: CallId, b: u32, new: bool) {
@@ -600,6 +662,10 @@ impl Model {
                 self.call_tok(call, t, None);
                 self.ctor_ret_objects(call, t, c.ret);
             }
+            // An escaped bound value's unknown `new`: only of a target
+            // unknown code may construct (`escape_bound`).
+            TokKind::Func(f, _)
+                if self.bound_unknown_new.contains(&call) && !self.unknown_constructs(f) => {}
             TokKind::Func(f, _) => {
                 let tm = self.fn_inst_template(f);
                 let ctx = self.birth_ctx(call);
@@ -1546,14 +1612,7 @@ impl Model {
         // Published through its contract, the units constructing it pass
         // their arguments (`ctor_runs`): constructed by `Gen::published_ctors`.
         let published = self.pub_reason == Some(reason) || self.field_fn_reason == Some(reason);
-        if published
-            || fi.lexical_this
-            || fi.gen_step
-            || fi.ctor_of.is_some()
-            || fi.func_id == u32::MAX
-            || !(self.fn_birth.contains_key(&f) || self.fn_inst.contains_key(&f))
-            || !self.unknown_new.insert(f)
-        {
+        if published || !self.unknown_constructs(f) || !self.unknown_new.insert(f) {
             return;
         }
         let ret = self.node_l("top-new");
@@ -1869,12 +1928,7 @@ impl Model {
                     self.escape(c, reason);
                 }
             }
-            TokKind::Bound(b) => {
-                let (target, bthis, bargs) = self.bound[b as usize].clone();
-                for n in [target, bthis].into_iter().chain(bargs) {
-                    self.sink_node(n, reason);
-                }
-            }
+            TokKind::Bound(b) => self.escape_bound(b, reason),
             _ => {}
         }
     }
