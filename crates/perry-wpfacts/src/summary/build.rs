@@ -398,6 +398,49 @@ fn returns_own_closure(s: &Summary) -> bool {
     false
 }
 
+/// `f`'s result is a closure it creates over its own frame, through
+/// copies: the closure value of a child that captures one of `f`'s own
+/// nodes reaches `f`'s result along `f`'s copy edges (`returns_own_closure`
+/// read on the model, before any slice exists).
+fn results_in_own_closure(
+    m: &Model,
+    lex: &Lex,
+    capt: &FxHashMap<FnIdx, Vec<NodeId>>,
+    cvs: &FxHashMap<FnIdx, Vec<NodeId>>,
+    f: FnIdx,
+) -> bool {
+    let ret = m.funcs[f as usize].ret;
+    if ret == NO_NODE {
+        return false;
+    }
+    let mut seen: FxHashSet<NodeId> = FxHashSet::default();
+    let mut work: Vec<NodeId> = Vec::new();
+    for &g in &lex.children[f as usize] {
+        let own = capt
+            .get(&g)
+            .is_some_and(|v| v.iter().any(|&x| m.node_fn[x as usize] == f));
+        if !own {
+            continue;
+        }
+        for &cv in cvs.get(&g).map(|v| v.as_slice()).unwrap_or(&[]) {
+            if seen.insert(cv) {
+                work.push(cv);
+            }
+        }
+    }
+    while let Some(x) = work.pop() {
+        if x == ret {
+            return true;
+        }
+        for &y in &m.nodes[x as usize].succ {
+            if m.node_fn[y as usize] == f && seen.insert(y) {
+                work.push(y);
+            }
+        }
+    }
+    false
+}
+
 fn plan(
     m: &Model,
     ix: &Index,
@@ -466,7 +509,15 @@ fn plan(
         // literals. The call joins the slice through its callee holder, so
         // every instance runs its own copy and births under its own lexical
         // context (rule C, design §10).
-        for (x, _) in caps {
+        // This is a closure maker's body only: its runs are the ones rule C
+        // splits per call site. Any other body runs once per program site
+        // already (kind 0) or once for all; an own copy there only doubles
+        // its closures (the instance's and the shared body's), and a reader
+        // that is not per instance (a method of a class the body declares)
+        // then calls both copies, which merges what the runs kept apart
+        // (awfy cd.js, a CJS module body: RLC6).
+        let maker = results_in_own_closure(m, lex, &capt, cvs, f);
+        for (x, _) in caps.iter().filter(|_| maker) {
             if m.node_fn[*x as usize] != f || pinned.contains(x) {
                 continue;
             }
