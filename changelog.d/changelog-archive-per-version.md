@@ -1,0 +1,10 @@
+`changelog.d/` is a pending queue again, and a release's fragments are archived under the version that shipped them instead of being deleted.
+
+Perry had 4,211 fragments in `changelog.d/` (5.7 MB of text) because the documented fold — `./scripts/cut_release_notes.sh --fold vX.Y.Z` — was a manual *post-release* step that never once ran: `git log --grep='fold changesets'` returned 0 commits. Every release body was therefore the whole accumulated backlog, and from v0.5.1520 on it exceeded GitHub's 125,000-character limit and was truncated, pointing at a tree that carried the same backlog.
+
+- Released fragments move to `changelog/vX.Y.Z/`, with a `manifest.json` recording the version, the fold source and the entry count. Nothing is deleted: `git log --follow changelog/vX.Y.Z/<fragment>` still reaches the PR that wrote it.
+- `--notes-only --version vX.Y.Z` reads that folder when it exists and the pending queue otherwise, so a release's notes are reproducible and the fold may land **before** the tag, on the release branch, as part of the reviewed commit. `release-packages.yml` and `scripts/publish/release.mts` pass the version.
+- The fold archives what the tag shipped (`git show`), not what the worktree holds, and warns when a fragment was edited after the release.
+- `scripts/check_changelog_archive.py` is a new required `lint` gate: it fails on a malformed archive, on a fragment that is both archived and pending, and on a pending queue over 6,000 fragments — the signature of a fold that stopped happening. Both it and `scripts/cut_release_notes.sh` carry a `--self-test`, also run by `scripts/pre-tag-check.sh`.
+
+The existing backlog is archived: the 1,509 entries recorded at tag `v0.5.1520` are in `changelog/v0.5.1520/`, byte-identical to the tag, and 2,713 fragments remain pending for the next release.
