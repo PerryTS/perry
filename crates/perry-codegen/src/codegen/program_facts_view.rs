@@ -22,6 +22,10 @@ pub struct ProgramFactsView {
     pub fallback: std::sync::Arc<crate::fallback_diag::Facts>,
     pub digest: u64,
     pub dynamic_code_reach: perry_hir::dynamic_code::DynamicCodeReach,
+    /// The program's realm reach R, on the entry module only: its `main`
+    /// emits the runtime layouts R reaches (DESIGN §3.2 item 9). Other
+    /// modules emit no realm data.
+    pub realm_reach: Option<std::sync::Arc<perry_hir::realm_reach::RealmReach>>,
     pub contract_section: std::sync::Arc<Vec<u8>>,
     pub elision: std::sync::Arc<ElisionFacts>,
 }

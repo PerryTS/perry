@@ -341,7 +341,7 @@ pub(crate) fn collect_readdir_recursive_strings(
             Some((e.path(), is_dir))
         })
         .collect();
-    items.sort_by(|a, b| a.0.cmp(&b.0));
+    crate::cold_sort::sort_by(&mut items, |a, b| a.0.cmp(&b.0));
     for (path, _) in &items {
         let rel = path
             .strip_prefix(root)
@@ -365,7 +365,7 @@ pub(crate) fn collect_readdir_recursive_dirents(
         return;
     };
     let mut paths: Vec<std::path::PathBuf> = entries.flatten().map(|e| e.path()).collect();
-    paths.sort();
+    crate::cold_sort::sort_by(&mut paths, |a, b| a.cmp(b));
     let mut dirs = Vec::new();
     for path in &paths {
         let Ok(meta) = fs::symlink_metadata(path) else {
@@ -470,7 +470,7 @@ pub extern "C" fn js_fs_readdir_sync(path_value: f64, options_value: f64) -> f64
                             }
                         }
                     }
-                    items.sort_by(|a, b| a.0.cmp(&b.0));
+                    crate::cold_sort::sort_by(&mut items, |a, b| a.0.cmp(&b.0));
 
                     let mut arr = js_array_alloc(items.len() as u32);
                     for (name, ft) in &items {
@@ -486,7 +486,7 @@ pub extern "C" fn js_fs_readdir_sync(path_value: f64, options_value: f64) -> f64
                             names.push(name.to_string());
                         }
                     }
-                    names.sort();
+                    crate::cold_sort::sort_by(&mut names, |a, b| a.cmp(b));
 
                     let mut arr = js_array_alloc(names.len() as u32);
                     for name in &names {

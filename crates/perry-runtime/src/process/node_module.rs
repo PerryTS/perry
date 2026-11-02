@@ -126,7 +126,7 @@ pub extern "C" fn js_module_module_new(id: f64, parent: f64) -> f64 {
     }
     let exports = scope.root_nanbox_f64(module_object_value(unsafe {
         crate::object::runtime_layouts::perry_build_runtime_record(
-            std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_PCHECKED031),
+            crate::object::runtime_layouts::RECORD_PCHECKED031::desc(),
             std::ptr::NonNull::<f64>::dangling().as_ptr(),
         )
     }));
@@ -1774,7 +1774,7 @@ mod static_record_layout_tests {
         unsafe {
             assert_eq!(
                 (*pointer).parent_class_id,
-                (*std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_Q452_0)).layout_id
+                (*crate::object::runtime_layouts::RECORD_Q452_0::desc()).layout_id
             );
         }
     }

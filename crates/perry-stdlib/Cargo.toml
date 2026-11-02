@@ -430,6 +430,9 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [dev-dependencies]
+# Test-only runtime layout definitions (DESIGN 3.2 item 10): these tests
+# link the runtime without a compiled program.
+perry-runtime = { workspace = true, features = ["test-layout-descriptors"] }
 # Property tests for the container FFI bridge (gated behind `container` feature
 # at the test-file level via `#[cfg(feature = "container")]`).
 proptest = "1"

@@ -383,40 +383,131 @@ fn make_assertion_error(
     operator: &str,
     generated: bool,
 ) -> f64 {
-    // One-shot registration so AssertionError instances satisfy
-    // `instanceof Error` (see `instanceof.rs`: extends_builtin_error path).
-    static REGISTER_ASSERTION_ERROR: std::sync::Once = std::sync::Once::new();
-    REGISTER_ASSERTION_ERROR.call_once(|| {
-        js_register_class_extends_error(crate::error::CLASS_ID_ASSERTION_ERROR);
-    });
-    let obj = js_object_alloc(crate::error::CLASS_ID_ASSERTION_ERROR, 8);
-    {
-        let set = |key: &str, value: f64| {
-            let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
-            js_object_set_field_by_name(obj, key_ptr, value);
-        };
-        set("name", string_f64("AssertionError"));
-        set("code", string_f64("ERR_ASSERTION"));
-        set("message", string_f64(&message));
-        set("actual", actual);
-        set("expected", expected);
-        // An absent operator surfaces as `undefined` (matching Node), not an
-        // empty string. The assert.* helpers always pass a non-empty operator,
-        // so this only affects `new AssertionError({ ... })` with no operator.
-        set(
-            "operator",
-            if operator.is_empty() {
+    assertion_error_on(None, message, actual, expected, operator, generated)
+}
+
+/// The AssertionError fields on `receiver` (`super(options)` of a class
+/// extending AssertionError: the derived `new` already made `this`, with the
+/// subclass prototype), or on a fresh object born linked to
+/// `AssertionError.prototype`.
+fn assertion_error_on(
+    receiver: Option<*mut ObjectHeader>,
+    message: String,
+    actual: f64,
+    expected: f64,
+    operator: &str,
+    generated: bool,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let actual = scope.root_nanbox_f64(actual);
+    let expected = scope.root_nanbox_f64(expected);
+    let receiver = receiver.map(|receiver| scope.root_raw_mut_ptr(receiver));
+    // node: `class AssertionError extends Error`. The instance is born linked
+    // to `assert.AssertionError.prototype`, whose [[Prototype]] is
+    // `Error.prototype`: the chain answers `instanceof` and `constructor`.
+    let obj = if let Some(receiver) = receiver {
+        receiver
+    } else {
+        let prototype = {
+            let constructor =
+                scope.root_nanbox_f64(super::native_module::assert_assertion_error_export(0));
+            let ptr = crate::value::js_nanbox_get_pointer(constructor.get_nanbox_f64()) as usize;
+            scope.root_nanbox_f64(if ptr == 0 {
                 undefined_f64()
             } else {
-                string_f64(operator)
-            },
+                crate::closure::closure_get_dynamic_prop(ptr, "prototype")
+            })
+        };
+        let obj = scope.root_raw_mut_ptr(js_object_alloc(0, 8));
+        if crate::value::JSValue::from_bits(prototype.get_nanbox_u64()).is_pointer() {
+            super::prototype_chain::object_link_class_default_prototype(
+                obj.get_raw_mut_ptr::<ObjectHeader>() as usize,
+                prototype.get_nanbox_u64(),
+            );
+        }
+        obj
+    };
+    // node's own keys, in its order: `message` and `name` are not enumerable.
+    let define = |key: &str, value: f64, enumerable: bool| {
+        let value = scope.root_nanbox_f64(value);
+        let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+        super::define_builtin_data_property(
+            obj.get_raw_mut_ptr::<ObjectHeader>(),
+            key_ptr,
+            value.get_nanbox_f64(),
+            key.to_string(),
+            super::PropertyAttrs::new(true, enumerable, true),
         );
-        set(
-            "generatedMessage",
-            f64::from_bits(crate::value::JSValue::bool(generated).bits()),
-        );
+    };
+    define("message", string_f64(&message), false);
+    define(
+        "generatedMessage",
+        f64::from_bits(crate::value::JSValue::bool(generated).bits()),
+        true,
+    );
+    define("name", string_f64("AssertionError"), false);
+    define("code", string_f64("ERR_ASSERTION"), true);
+    define("actual", actual.get_nanbox_f64(), true);
+    define("expected", expected.get_nanbox_f64(), true);
+    // An absent operator surfaces as `undefined` (matching Node), not an
+    // empty string. The assert.* helpers always pass a non-empty operator,
+    // so this only affects `new AssertionError({ ... })` with no operator.
+    define(
+        "operator",
+        if operator.is_empty() {
+            undefined_f64()
+        } else {
+            string_f64(operator)
+        },
+        true,
+    );
+    define("diff", string_f64("simple"), true);
+    crate::value::js_nanbox_pointer(obj.get_raw_mut_ptr::<ObjectHeader>() as i64)
+}
+
+/// `AssertionError.prototype.toString`: `${name} [${code}]: ${message}`, read
+/// from the receiver like node's own method.
+pub(crate) extern "C" fn js_assert_assertion_error_to_string(
+    _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    let receiver = this.as_f64();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(receiver);
+    let read = |key: &str| -> String {
+        let value = unsafe {
+            crate::value::js_dynamic_object_get_property(
+                receiver.get_nanbox_f64(),
+                key.as_ptr().cast(),
+                key.len(),
+            )
+        };
+        value_to_string(value)
+    };
+    let name = read("name");
+    let code = read("code");
+    let message = read("message");
+    string_f64(&format!("{name} [{code}]: {message}"))
+}
+
+/// `new <assert constructor export>(...)` reached through the export's value
+/// (`new ns.AssertionError(o)`, `const { Assert } = require("assert")`).
+/// `None` for an export that is no constructor of this module.
+pub(crate) unsafe fn assert_export_construct(
+    property: &str,
+    args: *const f64,
+    len: usize,
+) -> Option<f64> {
+    let options = if len == 0 || args.is_null() {
+        undefined_f64()
+    } else {
+        *args
+    };
+    match property {
+        "AssertionError" => Some(js_assert_assertion_error_ctor(options)),
+        "Assert" => Some(js_assert_assert_ctor(options)),
+        _ => None,
     }
-    crate::value::js_nanbox_pointer(obj as i64)
 }
 
 fn throw_assertion(
@@ -828,7 +919,7 @@ pub extern "C" fn js_assert_strict_equal(actual: f64, expected: f64, message: f6
         return undefined_f64();
     }
     throw_assertion(
-        assertion_message(message, "Expected values to be strictly equal"),
+        assertion_message(message, "Expected values to be strictly equal:"),
         actual,
         expected,
         "strictEqual",
@@ -1187,9 +1278,9 @@ pub extern "C" fn js_assert_does_not_reject(input: f64, expected: f64, message: 
 }
 
 /// `new assert.AssertionError({actual, expected, operator, message, ...})`
-/// constructor. Reuses `make_assertion_error` so the resulting object
-/// carries the `CLASS_ID_ASSERTION_ERROR` class id, satisfies
-/// `instanceof Error`, and has the standard `actual` / `expected` /
+/// constructor. Reuses `make_assertion_error` so the resulting object is
+/// linked to `assert.AssertionError.prototype` (and through it to
+/// `Error.prototype`) and has the standard `actual` / `expected` /
 /// `operator` / `code` / `message` / `generatedMessage` fields Node
 /// attaches.
 ///
@@ -1203,6 +1294,26 @@ pub extern "C" fn js_assert_does_not_reject(input: f64, expected: f64, message: 
 /// themselves, not by this direct-construction path.
 #[no_mangle]
 pub extern "C" fn js_assert_assertion_error_ctor(options: f64) -> f64 {
+    assertion_error_from_options(None, options)
+}
+
+/// `super(options)` in a class extending `AssertionError`: initialize the
+/// derived receiver, which keeps its own (subclass) prototype.
+pub(crate) fn js_assert_assertion_error_init_receiver(receiver: f64, options: f64) -> f64 {
+    let jv = crate::value::JSValue::from_bits(receiver.to_bits());
+    let receiver = if jv.is_pointer()
+        // SAFETY: a POINTER-tagged value; the probe validates the header.
+        && unsafe { crate::value::addr_class::try_read_gc_header(jv.as_pointer::<u8>() as usize) }
+            .is_some_and(|header| crate::gc_type_is_object!(header.obj_type))
+    {
+        Some(jv.as_pointer::<ObjectHeader>() as *mut ObjectHeader)
+    } else {
+        None
+    };
+    assertion_error_from_options(receiver, options)
+}
+
+fn assertion_error_from_options(receiver: Option<*mut ObjectHeader>, options: f64) -> f64 {
     let opts_is_obj = {
         let jv = crate::value::JSValue::from_bits(options.to_bits());
         jv.is_pointer() && !jv.as_pointer::<u8>().is_null()
@@ -1248,7 +1359,14 @@ pub extern "C" fn js_assert_assertion_error_ctor(options: f64) -> f64 {
         } else {
             (value_to_string(message_v), false)
         };
-        make_assertion_error(message, actual, expected, &operator_str, generated)
+        assertion_error_on(
+            receiver,
+            message,
+            actual,
+            expected,
+            &operator_str,
+            generated,
+        )
     }
 }
 
@@ -1282,7 +1400,7 @@ pub extern "C" fn js_assert_assert_ctor(options: f64) -> f64 {
     if jv.is_pointer() {
         let obj = jv.as_pointer::<ObjectHeader>() as *mut ObjectHeader;
         if !obj.is_null() {
-            let ctor = bound_native_callable_export_value("assert", "Assert");
+            let ctor = super::native_module::assert_assert_export(0);
             let key = crate::string::js_string_from_bytes(
                 b"constructor".as_ptr(),
                 "constructor".len() as u32,

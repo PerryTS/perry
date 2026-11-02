@@ -25,7 +25,7 @@ fn resolved_symbol_keys_and_attributes_are_link_time_data() {
                 slot: 0,
             },
         ];
-        let (address, fixups) = emit_image_key_list(&mut module, "keys", &keys);
+        let (address, fixups) = emit_image_key_list(&mut module, "keys", &keys, None);
         assert_eq!(address, "getelementptr (i8, ptr @keys, i64 8)");
         let ir = module.to_ir();
         // Attribute array + key list; the symbol is never an undefined slot.
@@ -60,7 +60,7 @@ fn resolved_symbol_keys_and_attributes_are_link_time_data() {
 #[test]
 fn empty_key_list_has_no_cell_or_relocation() {
     let mut module = LlModule::new("x86_64-unknown-linux-gnu");
-    let (address, fixups) = emit_image_key_list(&mut module, "empty", &[]);
+    let (address, fixups) = emit_image_key_list(&mut module, "empty", &[], None);
     assert_eq!(address, "null");
     assert!(fixups.is_empty());
     assert!(!module.to_ir().contains("@empty"));
