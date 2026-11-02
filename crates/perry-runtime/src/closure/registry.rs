@@ -466,14 +466,16 @@ pub unsafe fn dispatch_with_arity(
 ) -> f64 {
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
     let k = declared_arity as usize;
-    let provided = args.len();
+    // Pad once: one fixed `[f64; 32]` filled with `undefined`, the provided
+    // prefix copied in, then every arm below reads constant indices with no
+    // bounds check and no per-argument branch (the `wide_call` pattern).
+    // Surplus arguments beyond the arm's width are ignored, as before.
+    let mut slots = [undef; 32];
+    let provided = args.len().min(slots.len());
+    slots[..provided].copy_from_slice(&args[..provided]);
     macro_rules! a {
         ($i:expr) => {
-            if $i < provided {
-                args[$i]
-            } else {
-                undef
-            }
+            slots[$i]
         };
     }
     // One match arm per declared arity. Each arm calls the body through the
