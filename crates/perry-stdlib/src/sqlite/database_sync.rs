@@ -41,8 +41,8 @@ macro_rules! builtin {
 pub(crate) static DB_FAMILY: NativePayloadFamily = NativePayloadFamily {
     class_id: SQLITE_DATABASE_SYNC,
     links_owner: true,
-    name: "DatabaseSync",
-    constructor_export: Some(("sqlite", "DatabaseSync")),
+    name: "Database",
+    constructor_export: Some(("sqlite", "Database")),
     constructor_length: 1,
     install_prototype: install_db_prototype,
 };
@@ -660,27 +660,26 @@ unsafe fn node_sqlite_path_bytes(value: f64) -> Option<Vec<u8>> {
 // ---- prototype -----------------------------------------------------------
 
 fn install_db_prototype(proto: &mut PayloadPrototype) {
-    proto.method("open", builtin!(db_open_thunk, 0), 0);
-    proto.method("close", builtin!(db_close_thunk, 0), 0);
-    proto.method("exec", builtin!(db_exec_thunk, 1), 1);
-    proto.method("prepare", builtin!(db_prepare_thunk, 2), 1);
-    proto.method("serialize", builtin!(db_serialize_thunk, 1), 0);
-    proto.method("deserialize", builtin!(db_deserialize_thunk, 1), 1);
-    proto.method("function", builtin!(db_function_thunk, 3), 2);
-    proto.method("aggregate", builtin!(db_aggregate_thunk, 2), 2);
-    proto.method("enableDefensive", builtin!(db_enable_defensive_thunk, 1), 1);
-    proto.method("setAuthorizer", builtin!(db_set_authorizer_thunk, 1), 1);
-    proto.method("createTagStore", builtin!(db_create_tag_store_thunk, 1), 0);
-    proto.method("createSession", builtin!(db_create_session_thunk, 1), 0);
-    proto.method("applyChangeset", builtin!(db_apply_changeset_thunk, 2), 1);
-    proto.method(
+    proto.method_enumerable("open", builtin!(db_open_thunk, 0));
+    proto.method_enumerable("close", builtin!(db_close_thunk, 0));
+    proto.method_enumerable("prepare", builtin!(db_prepare_thunk, 2));
+    proto.method_enumerable("exec", builtin!(db_exec_thunk, 1));
+    proto.method_enumerable("function", builtin!(db_function_thunk, 3));
+    proto.method_enumerable("createTagStore", builtin!(db_create_tag_store_thunk, 1));
+    proto.method_enumerable("location", builtin!(db_location_thunk, 1));
+    proto.method_enumerable("aggregate", builtin!(db_aggregate_thunk, 2));
+    proto.method_enumerable("createSession", builtin!(db_create_session_thunk, 1));
+    proto.method_enumerable("applyChangeset", builtin!(db_apply_changeset_thunk, 2));
+    proto.method_enumerable(
         "enableLoadExtension",
         builtin!(db_enable_load_extension_thunk, 1),
-        1,
     );
-    proto.method("loadExtension", builtin!(db_load_extension_thunk, 1), 1);
-    proto.method("location", builtin!(db_location_thunk, 1), 0);
-    proto.method("createModule", builtin!(db_create_module_thunk, 2), 0);
+    proto.method_enumerable("enableDefensive", builtin!(db_enable_defensive_thunk, 1));
+    proto.method_enumerable("loadExtension", builtin!(db_load_extension_thunk, 1));
+    proto.method_enumerable("serialize", builtin!(db_serialize_thunk, 1));
+    proto.method_enumerable("deserialize", builtin!(db_deserialize_thunk, 1));
+    proto.method_enumerable("setAuthorizer", builtin!(db_set_authorizer_thunk, 1));
+    proto.method_enumerable("createModule", builtin!(db_create_module_thunk, 2));
     proto.symbol_method(
         "dispose",
         "[Symbol.dispose]",

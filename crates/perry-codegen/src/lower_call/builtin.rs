@@ -768,7 +768,7 @@ pub(super) fn lower_builtin_new<'a>(
         // node:sqlite DatabaseSync — keep full NaN-boxed values for path and
         // options so the runtime can preserve Node-shaped validation errors.
         // The result is an ordinary object (#11919).
-        "DatabaseSync" => {
+        "DatabaseSync" | "NodeSqliteDatabaseSync" => {
             // #6986: `path_value` was held in a bare SSA register across
             // `options_value`'s lowering (an arbitrary user expression).
             let path_idx = adopt_optional_arg(ctx, args, 0, group)?;

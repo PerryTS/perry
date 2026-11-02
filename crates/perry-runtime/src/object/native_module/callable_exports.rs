@@ -162,7 +162,7 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
             crate::gc::gc_collect_minor();
         }
     });
-    let exposed_name = if export_module_name == "fs" {
+    let exposed_name = if export_module_name == "fs" || export_module_name == "sqlite" {
         native_callable_export_display_name(export_module_name, property_name)
     } else if export_module_name == "url" && property_name == "resolveObject" {
         realm_native_url_resolveObject_metadata!(name)

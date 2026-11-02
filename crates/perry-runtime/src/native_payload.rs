@@ -105,6 +105,13 @@ impl PayloadPrototype {
         crate::object::install_proto_method(self.proto, name, info, arity);
     }
 
+    /// Install a builtin method with `.length` 0 that is enumerable, as node
+    /// installs the `node:sqlite` prototype methods.
+    pub fn method_enumerable(&mut self, name: &str, info: *const crate::closure::JsFunctionInfo) {
+        let value = crate::object::install_proto_method(self.proto, name, info, 0);
+        self.data(name, value, true, true, true);
+    }
+
     /// Install a non-enumerable, configurable builtin getter.
     pub fn getter(&mut self, name: &str, info: *const crate::closure::JsFunctionInfo) {
         let closure = crate::closure::js_closure_alloc(info, 0);

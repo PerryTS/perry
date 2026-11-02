@@ -68,8 +68,8 @@ pub(crate) fn own_getter(
 pub(crate) static STMT_FAMILY: NativePayloadFamily = NativePayloadFamily {
     class_id: SQLITE_STATEMENT_SYNC,
     links_owner: false,
-    name: "StatementSync",
-    constructor_export: Some(("sqlite", "StatementSync")),
+    name: "Statement",
+    constructor_export: Some(("sqlite", "Statement")),
     constructor_length: 0,
     install_prototype: install_stmt_prototype,
 };
@@ -725,34 +725,24 @@ extern "C" fn stmt_expanded_sql_getter(_c: *const ClosureHeader, this: JsThis) -
 }
 
 fn install_stmt_prototype(proto: &mut PayloadPrototype) {
-    proto.method("run", builtin_rest!(stmt_run_thunk), 0);
-    proto.method("get", builtin_rest!(stmt_get_thunk), 0);
-    proto.method("all", builtin_rest!(stmt_all_thunk), 0);
-    proto.method("iterate", builtin_rest!(stmt_iterate_thunk), 0);
-    proto.method("columns", builtin!(stmt_columns_thunk, 0), 0);
-    proto.method(
-        "setReadBigInts",
-        builtin!(stmt_set_read_bigints_thunk, 1),
-        1,
-    );
-    proto.method(
-        "setReturnArrays",
-        builtin!(stmt_set_return_arrays_thunk, 1),
-        1,
-    );
-    proto.method(
+    proto.method_enumerable("iterate", builtin_rest!(stmt_iterate_thunk));
+    proto.method_enumerable("all", builtin_rest!(stmt_all_thunk));
+    proto.method_enumerable("get", builtin_rest!(stmt_get_thunk));
+    proto.method_enumerable("run", builtin_rest!(stmt_run_thunk));
+    proto.method_enumerable("columns", builtin!(stmt_columns_thunk, 0));
+    proto.method_enumerable("stat", builtin!(stmt_stat_thunk, 1));
+    proto.method_enumerable("resetStats", builtin!(stmt_reset_stats_thunk, 0));
+    proto.method_enumerable(
         "setAllowBareNamedParameters",
         builtin!(stmt_set_allow_bare_thunk, 1),
-        1,
     );
-    proto.method(
+    proto.method_enumerable(
         "setAllowUnknownNamedParameters",
         builtin!(stmt_set_allow_unknown_thunk, 1),
-        1,
     );
-    proto.method("stat", builtin!(stmt_stat_thunk, 1), 0);
-    proto.method("resetStats", builtin!(stmt_reset_stats_thunk, 0), 0);
-    proto.method("close", builtin!(stmt_close_thunk, 0), 0);
+    proto.method_enumerable("setReadBigInts", builtin!(stmt_set_read_bigints_thunk, 1));
+    proto.method_enumerable("setReturnArrays", builtin!(stmt_set_return_arrays_thunk, 1));
+    proto.method_enumerable("close", builtin!(stmt_close_thunk, 0));
     proto.symbol_method(
         "dispose",
         "[Symbol.dispose]",
