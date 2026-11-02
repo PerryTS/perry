@@ -1555,13 +1555,9 @@ pub fn compact_and_assemble(
             asm_path.display()
         )
     })?;
+    let mut text = None;
     if let Some((rewritten, stats)) = compacted {
-        fs::write(asm_path, rewritten).with_context(|| {
-            format!(
-                "Failed to write compacted assembly at {}",
-                asm_path.display()
-            )
-        })?;
+        text = Some(rewritten);
         log::debug!(
             "perry-codegen: gc map {} -> {} bytes ({} functions, {} records, {} roots)",
             stats.original_bytes,
@@ -1576,8 +1572,51 @@ pub fn compact_and_assemble(
         // only place the real numbers exist.
         crate::statepoint_report::note_gc_map(stats.functions, stats.records, stats.roots);
     }
+    if matches!(format_for(target), ObjectFormat::Coff) {
+        if let Some(stripped) = strip_v1_epilogue_markers(text.as_deref().unwrap_or(&asm)) {
+            text = Some(stripped);
+        }
+    }
+    if let Some(text) = text {
+        fs::write(asm_path, text).with_context(|| {
+            format!(
+                "Failed to write compacted assembly at {}",
+                asm_path.display()
+            )
+        })?;
+    }
 
     assemble(clang, target, asm_path, obj_path, codegen_args)
+}
+
+/// COFF only: the text without `.seh_startepilogue` / `.seh_endepilogue`,
+/// or `None` when there is nothing to drop.
+///
+/// The text was printed by Perry's own LLVM, but it is assembled by whatever
+/// clang the machine has. LLVM 20+ brackets every Windows x64 epilogue with
+/// these two directives; older assemblers reject them ("unknown directive"),
+/// which failed every Windows compile, `console.log("hello")` included, on a
+/// host whose clang predates the bundled LLVM (GitHub's windows-2022 image
+/// ships clang 20.1.8; Perry bundles LLVM 22).
+///
+/// The markers only feed unwind info version 2, which a function opts into
+/// with `.seh_unwindversion 2`. Without that directive the assembler records
+/// them and writes nothing for them: the object is byte-identical with or
+/// without them. A file that does request v2 is left untouched; it needs an
+/// assembler that understands it.
+fn strip_v1_epilogue_markers(asm: &str) -> Option<String> {
+    const MARKERS: [&str; 2] = [".seh_startepilogue", ".seh_endepilogue"];
+    let is_marker = |line: &str| MARKERS.contains(&line.trim());
+    if asm.contains(".seh_unwindversion") || !asm.lines().any(is_marker) {
+        return None;
+    }
+    let mut out = String::with_capacity(asm.len());
+    for line in asm.split_inclusive('\n') {
+        if !is_marker(line) {
+            out.push_str(line);
+        }
+    }
+    Some(out)
 }
 
 /// The subset of the codegen's clang argv that selects the target MACHINE.
@@ -1623,18 +1662,33 @@ fn assemble(
         .output()
         .with_context(|| format!("Failed to invoke {}", clang.display()))?;
     if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(anyhow!(
             "assembling the compacted stack map failed (status={}).\n\
              assembly left at: {}\n\
              \n\
-             stderr:\n{}",
+             stderr:\n{}{}",
             output.status,
             asm_path.display(),
-            String::from_utf8_lossy(&output.stderr)
+            stderr,
+            assembler_skew_hint(&stderr, clang)
         ));
     }
     let _ = fs::remove_file(asm_path);
     Ok(())
+}
+
+/// The text was printed by Perry's bundled LLVM; an assembler that does not
+/// know one of its directives is older than that LLVM.
+fn assembler_skew_hint(stderr: &str, clang: &Path) -> String {
+    if !stderr.contains("unknown directive") {
+        return String::new();
+    }
+    format!(
+        "\nhint: {} is older than the LLVM that printed this assembly. Set \
+         PERRY_LLVM_CLANG to a clang at least as new as Perry's bundled LLVM.\n",
+        clang.display()
+    )
 }
 
 #[cfg(test)]
