@@ -1133,7 +1133,12 @@ buffer_slow_path_accesses_static = 0
 
 [[workloads.dynamic_fractional_array_index.ir_checks]]
 name = "dynamic_fractional_get_uses_runtime_key"
-contains = "js_array_get_index_or_string"
+section = "llvm_before"
+function_contains = "dynamicFractionalArrayIndexChecksum"
+regex_all = [
+  '''(?P<norm>%[\w.]+) = call i32 @perry_array_index_normalize_i32\(double (?P<key>%[\w.]+)\)[^\n]*\n\s*(?P<ok>%[\w.]+) = icmp sge i32 (?P=norm), 0\n\s*br i1 (?P=ok), label %aidx\.canonical\.\d+, label %aidx\.runtime_key\.\d+''',
+  '''aidx\.runtime_key\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<k>%[\w.]+) = bitcast i64 %[\w.]+ to double\n\s*%[\w.]+ = call double @perry_array_read_cold_shared\(double %[\w.]+, double (?P=k), i64 0\)''',
+]
 detail = "dynamic fractional array reads preserve the original numeric key"
 
 [[workloads.dynamic_fractional_array_index.ir_checks]]
@@ -1206,7 +1211,7 @@ buffer_slow_path_accesses_static = 0
 
 [[workloads.raw_numeric_object_fields.stdout_checks]]
 name = "raw_numeric_object_fields_checksum"
-equals = "raw_numeric_object_fields:26.25\n"
+equals = "raw_numeric_object_fields:27.25\n"
 detail = "raw numeric object field fixture stdout checksum"
 
 # Declared-family births (#12870) replaced the retired ClassField tower.
@@ -1227,7 +1232,7 @@ name = "raw_field_l2c_shape_bound"
 section = "llvm_before"
 function_contains = "forceDynamicRead"
 regex_all = [
-  '''l2c.word\.\d+:\n(?:(?!\n\n)[\s\S])*?load i32, ptr %[\w.]+(?:(?!\n\n)[\s\S])*?and i32 %[\w.]+, -1073741825(?:(?!\n\n)[\s\S])*?(?P<index>%[\w.]+) = zext i32 %[\w.]+ to i64(?:(?!\n\n)[\s\S])*?(?P<limit>%[\w.]+) = load i64, ptr %[\w.]+\n\s*(?P<ok>%[\w.]+) = icmp ult i64 (?P=index), (?P=limit)\n\s*br i1 (?P=ok), label %l2c\.record\.\d+, label %l2c\.miss\.\d+''',
+  '''l2c.word\.\d+:\n(?:(?!\n\n)[\s\S])*?load i32, ptr %[\w.]+(?:(?!\n\n)[\s\S])*?and i32 %[\w.]+, -1275068417(?:(?!\n\n)[\s\S])*?(?P<index>%[\w.]+) = zext i32 %[\w.]+ to i64(?:(?!\n\n)[\s\S])*?(?P<limit>%[\w.]+) = load i64, ptr %[\w.]+\n\s*(?P<ok>%[\w.]+) = icmp ult i64 (?P=index), (?P=limit)\n\s*br i1 (?P=ok), label %l2c\.record\.\d+, label %l2c\.miss\.\d+''',
 ]
 detail = "The masked shape index must be below the published record bound."
 
@@ -1245,7 +1250,7 @@ name = "raw_field_l2s_shape_bound"
 section = "llvm_before"
 function_contains = "forceDynamicWrite"
 regex_all = [
-  '''l2s.word\.\d+:\n(?:(?!\n\n)[\s\S])*?load i32, ptr %[\w.]+(?:(?!\n\n)[\s\S])*?and i32 %[\w.]+, -1073741825(?:(?!\n\n)[\s\S])*?(?P<index>%[\w.]+) = zext i32 %[\w.]+ to i64(?:(?!\n\n)[\s\S])*?(?P<limit>%[\w.]+) = load i64, ptr %[\w.]+\n\s*(?P<ok>%[\w.]+) = icmp ult i64 (?P=index), (?P=limit)\n\s*br i1 (?P=ok), label %l2c\.record\.\d+, label %l2s\.miss\.\d+''',
+  '''l2s.word\.\d+:\n(?:(?!\n\n)[\s\S])*?load i32, ptr %[\w.]+(?:(?!\n\n)[\s\S])*?and i32 %[\w.]+, -1275068417(?:(?!\n\n)[\s\S])*?(?P<index>%[\w.]+) = zext i32 %[\w.]+ to i64(?:(?!\n\n)[\s\S])*?(?P<limit>%[\w.]+) = load i64, ptr %[\w.]+\n\s*(?P<ok>%[\w.]+) = icmp ult i64 (?P=index), (?P=limit)\n\s*br i1 (?P=ok), label %l2c\.record\.\d+, label %l2s\.miss\.\d+''',
 ]
 detail = "The masked shape index must be below the published record bound."
 
@@ -1340,7 +1345,7 @@ name = "raw_field_family_shape"
 section = "llvm_before"
 function_contains = "rawNumericObjectFieldsChecksum"
 regex_all = [
-  '''class_family\.word\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<receiver>%[\w.]+) = load i32, ptr %[\w.]+(?:(?!\n\n)[\s\S])*?(?P<declared>%[\w.]+) = load i32, ptr %[\w.]+(?:(?!\n\n)[\s\S])*?(?P<range>%[\w.]+) = icmp ult i32 %[\w.]+, 1073741824\n\s*(?P<same>%[\w.]+) = icmp eq i32 (?P=receiver), (?P=declared)\n\s*(?P<admit>%[\w.]+) = and i1 (?P=range), (?P=same)\n\s*(?P<ok>%[\w.]+) = or i1 false, (?P=admit)\n\s*br i1 (?P=ok), label %class_family\.load\.\d+, label %class_family\.next\.\d+''',
+  '''class_family\.word\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<receiver>%[\w.]+) = load i32, ptr %[\w.]+(?:(?!\n\n)[\s\S])*?(?P<declared>%[\w.]+) = load i32, ptr %[\w.]+(?:(?!\n\n)[\s\S])*?(?P<range>%[\w.]+) = icmp ult i32 %[\w.]+, 268435456\n\s*(?P<same>%[\w.]+) = icmp eq i32 (?P=receiver), (?P=declared)\n\s*(?P<admit>%[\w.]+) = and i1 (?P=range), (?P=same)\n\s*(?P<ok>%[\w.]+) = or i1 false, (?P=admit)\n\s*br i1 (?P=ok), label %class_family\.load\.\d+, label %class_family\.next\.\d+''',
 ]
 detail = "The family read requires a valid declared shape identical to the receiver shape."
 
@@ -1383,6 +1388,17 @@ claim = "The dynamic value parameter materializes once at the function ABI, befo
 function = "perry_fn_raw_numeric_object_fields_ts__forceDynamicWrite"
 source_function = "forceDynamicWrite"
 block_label = "stack_guard.ok.1"
+expr_kind = "materialize_js_value_bits"
+consumer = "materialize_js_value_bits"
+native_rep_name = "js_value_bits"
+materialization_reason = "function_abi"
+
+[[workloads.raw_numeric_object_fields.native_rep_checks.review_materializations]]
+name = "dynamic_write_value_inlined_abi"
+claim = "The inlined forceDynamicWrite(parsed, parsed.next) binds its dynamic value parameter once (the probe result's bits, a bitcast) before the checked shape/record/representation store and its refusal fallback."
+function = "perry_fn_raw_numeric_object_fields_ts__rawNumericObjectFieldsChecksum"
+source_function = "rawNumericObjectFieldsChecksum"
+block_label = "pget.recv_merge.90"
 expr_kind = "materialize_js_value_bits"
 consumer = "materialize_js_value_bits"
 native_rep_name = "js_value_bits"
