@@ -216,56 +216,32 @@ pub(crate) fn is_function_prototype_object_value(value: f64) -> bool {
     addr != 0 && addr == crate::array::function_prototype_addr()
 }
 
-/// `<name>.prototype` of this realm's builtin constructor `name`.
+/// This realm's intrinsic `%<name>.prototype%`, or `undefined` when `name`
+/// declares no builtin with a prototype.
 ///
-/// `"Function"` is answered from the memoized intrinsic (#10497) — the same
-/// object the by-name walk below finds, unless user code has reassigned the
-/// writable `globalThis.Function`, in which case the memo is the spec's
-/// %Function.prototype% and the walk would not be. `Map`, `Array`, `Object`
-/// and the typed-array kinds are answered from their realm intrinsics the same
-/// way. Every other name keeps the walk.
+/// `name` names the INTRINSIC (ECMA-262 Realm [[Intrinsics]]), never the
+/// writable `globalThis.<name>` binding: after `globalThis.Date = X`, a Date
+/// still inherits from `%Date.prototype%`, not from `X.prototype`. Every
+/// family answers from the realm's intrinsic cells
+/// (`array::intrinsic_prototype_addr`); `%Object.prototype%` from its own
+/// memo (it exists before the realm global), Buffer from its original
+/// prototype.
 pub(crate) fn builtin_prototype_value(name: &str) -> f64 {
     if name == "Buffer" {
         return crate::object::native_module::buffer_original_prototype_value();
     }
-    if name == "Map" {
-        let addr = crate::array::map_prototype_addr();
-        if addr != 0 {
-            return crate::value::js_nanbox_pointer(addr as i64);
+    let addr = if name == "Object" {
+        crate::array::object_prototype_addr()
+    } else {
+        match crate::object::BuiltinConstructorIdentity::for_name(name) {
+            Some(identity) => crate::array::intrinsic_prototype_addr(identity),
+            None => 0,
         }
-    }
-    if name == "Function" {
-        let addr = crate::array::function_prototype_addr();
-        if addr != 0 {
-            return crate::value::js_nanbox_pointer(addr as i64);
-        }
-    }
-    // The realm's own intrinsics: a user `globalThis.Array = X` replaces the
-    // binding, never %Array.prototype% (nor what an array inherits from).
-    let intrinsic = match name {
-        "Array" => crate::array::array_prototype_addr(),
-        "Object" => crate::array::object_prototype_addr(),
-        _ => 0,
     };
-    if intrinsic != 0 {
-        return crate::value::js_nanbox_pointer(intrinsic as i64);
-    }
-    if let Some(kind) = crate::typedarray_hook_slots::kind_for_name(name) {
-        let proto = super::typed_array::typed_array_kind_intrinsic_prototype_value(kind);
-        if crate::value::JSValue::from_bits(proto.to_bits()).is_pointer() {
-            return proto;
-        }
-    }
-    let ctor = js_get_global_this_builtin_value(name.as_ptr(), name.len());
-    let ctor_bits = ctor.to_bits();
-    if (ctor_bits >> 48) != 0x7FFD {
+    if addr == 0 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    let ctor_ptr = (ctor_bits & crate::value::POINTER_MASK) as usize;
-    if ctor_ptr == 0 {
-        return f64::from_bits(crate::value::TAG_UNDEFINED);
-    }
-    crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype")
+    crate::value::js_nanbox_pointer(addr as i64)
 }
 
 /// #5902: is `value` literally `Array.prototype[method]`?

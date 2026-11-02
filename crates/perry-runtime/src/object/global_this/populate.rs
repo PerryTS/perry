@@ -490,13 +490,10 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
                         | "BigUint64Array"
                 )
             {
-                // `%TypedArray%` keeps each kind's intrinsic prototype in
-                // capture `kind`: the realm's answer for that family, which
-                // a later `globalThis.<Kind>Array = X` cannot change.
-                if let Some(kind) = crate::typedarray_hook_slots::kind_for_name(name) {
+                if name == "Uint8Array" {
                     crate::closure::js_closure_set_capture_f64(
                         typed_array_intrinsic_ctor,
-                        kind as u32,
+                        0,
                         crate::value::js_nanbox_pointer(proto_obj as i64),
                     );
                 }
@@ -578,6 +575,11 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
                 unsafe { super::proto_room::fit_builtin_prototype(proto_obj) };
             }
             finish_builtin_prototype(declaration, proto_obj);
+        }
+        // The realm's [[Intrinsics]] entry for this family: what its
+        // instances inherit from, whatever `globalThis.<name>` later holds.
+        if !proto_obj.is_null() {
+            crate::array::note_intrinsic_prototype(declaration.identity, proto_obj as usize);
         }
         let name_bytes = name.as_bytes();
         let name_key =
