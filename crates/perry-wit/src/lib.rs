@@ -9,13 +9,19 @@ mod typescript;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub use guest_c::canonical_guest;
 #[doc(hidden)]
 pub use guest_c::experimental_async_guest;
+pub use guest_c::{canonical_guest, canonical_guest_p3};
 #[doc(hidden)]
 pub use guest_compose::compose_experimental_guest;
 pub use resolve::{parse, parse_file};
 pub use typescript::{typescript, typescript_guest};
+
+/// Compose a generated WASI 0.3.0 producer and sibling facade using their plan.
+/// Preserve all nominal resource aliases and emit the 0.3.0 extern-name profile.
+pub fn compose_guest_p3(producer: &[u8], facade: &[u8], plan: &[u8]) -> anyhow::Result<Vec<u8>> {
+    guest_compose::compose_experimental_guest(producer, facade, plan)
+}
 
 /// This is a binding manifest version, independent of a WIT package version.
 pub const SCHEMA_VERSION: u32 = 1;

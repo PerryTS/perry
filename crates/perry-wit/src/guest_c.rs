@@ -25,21 +25,27 @@ pub fn canonical_guest(path: &Path, selected: Option<&str>) -> Result<BTreeMap<S
     generate_guest(path, selected, false)
 }
 
-/// Experimental async generation, including the Linux-qualified resource
-/// ownership/cancellation and guest endpoint read/write profiles. Typed
-/// factories and post-return writers behind sync/async exports are qualified
-/// on Linux, including recorded imported/exported resource endpoint profiles
-/// and shared record/future aliases across interfaces. Repeated interface labels,
-/// and the wider lifecycle matrix remain unqualified. The recorded Linux
-/// profile also qualifies async imports staged by sync exports with checked
-/// borrow lifetimes; see docs/WASI_030_COMPLETION.md.
-/// Public --guest-c async output and future/stream values remain guarded.
+/// Generate rooted-frame WASI 0.3.0 C adapters and the separate producer facade.
+/// Compile the user guest as a P3 static library, link each component separately,
+/// then use `compose_guest_p3` with the generated facade plan.
+pub fn canonical_guest_p3(
+    path: &Path,
+    selected: Option<&str>,
+) -> Result<BTreeMap<String, Vec<u8>>> {
+    generate_guest(path, selected, true)
+}
+
+/// Rooted-frame P3 generation used by `--guest-c --target wasip3` and the
+/// independent qualification tools. The historical name remains available
+/// for those tools; the public library entry is `canonical_guest_p3`.
+/// See docs/WASI_030_COMPLETION.md for the executed profiles and remaining
+/// platform/provider qualification. The default C profile stays synchronous.
 #[doc(hidden)]
 pub fn experimental_async_guest(
     path: &Path,
     selected: Option<&str>,
 ) -> Result<BTreeMap<String, Vec<u8>>> {
-    generate_guest(path, selected, true)
+    canonical_guest_p3(path, selected)
 }
 
 fn generate_guest(
