@@ -1566,16 +1566,11 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
             ret_tok(m, call, pb);
         }
         (BuiltinNs::Object, "values" | "entries") => {
+            // EnumerableOwnProperties: own properties only.
             let arr = site_tmpl(m, call, "Array");
             let fa = m.field_any(arr);
             if let Some(o) = arg(m, call, 0) {
-                m.cons(
-                    o,
-                    Cons::Load {
-                        key: Key::Any,
-                        dst: fa,
-                    },
-                );
+                m.cons(o, Cons::OwnValues { dst: fa });
             }
             m.add_prim(fa, prim::STR);
             if name == "entries" {

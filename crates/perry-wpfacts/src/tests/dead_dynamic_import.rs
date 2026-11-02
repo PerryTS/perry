@@ -520,12 +520,44 @@ export function applyReviver(reviver: any, obj: any, key: any, val: any): any {
   return reviver.call(obj, key, val);
 }
 "#;
+/// Object.entries/values read own properties only (EnumerableOwnProperties),
+/// and a `JSON.parse` object is fresh data: its own properties are its
+/// modeled fields. yaml's `applyReviver` deletes `val[k]` for the keys
+/// `Object.entries(val)` gave; without the two rules `val` holds
+/// Object.prototype's builtin methods (inherited, never an entry) or ⊤ (own
+/// values of an opaque builtin object), the delete is an any-key E7 on a
+/// native prototype or on ⊤, and the language objects reach unknown code.
 #[test]
-fn cjs3_explore() {
-    let tail_p = "import { setTypeParser } from \"./mk\";\nsetTypeParser(20, (v: string) => Number(v)); setTypeParser(1114, \"text\", (v: string) => v);";
-    let tail_y = "import { applyReviver } from \"./mk\";\nconsole.log(applyReviver((k: any, v: any) => v, { \"\": JSON.parse(process.argv[2]) }, \"\", JSON.parse(process.argv[2])));";
+fn object_entries_of_parsed_json_are_its_own_data() {
+    let tail = r#"import { applyReviver } from "./mk";
+const r = applyReviver((k: any, v: any) => v, { "": JSON.parse(process.argv[2]) }, "", JSON.parse(process.argv[2]));
+process.exitCode = r === undefined ? 1 : 0;"#;
     for interp in [false, true] {
-        eprintln!("EXPLORE3 interp={interp} pg={}", imports_formatter_with_make(PGT, tail_p, interp));
-        eprintln!("EXPLORE3 interp={interp} yaml={}", imports_formatter_with_make(YREV, tail_y, interp));
+        assert!(
+            !imports_formatter_with_make(YREV, tail, interp),
+            "interp={interp}: Object.entries of JSON.parse data keeps the formatter import live"
+        );
     }
 }
+
+/// @supabase/auth-js `polyfillGlobalThis` ends with `delete
+/// Object.prototype.__magic__`: a delete of one constant key of a native
+/// prototype writes that key and no other. Noted under the key, never as an
+/// any-key write (which makes every builtin key written: the options' reads
+/// in the generator turn opaque and the language objects reach unknown code).
+const POLYFILL: &str = r#"
+export function polyfillGlobalThis(): void {
+  delete (Object.prototype as any).__magic__;
+}
+"#;
+#[test]
+fn a_keyed_delete_on_a_native_prototype_writes_its_key() {
+    let tail = "import { polyfillGlobalThis } from \"./mk\";\npolyfillGlobalThis();";
+    for interp in [false, true] {
+        assert!(
+            !imports_formatter_with_make(POLYFILL, tail, interp),
+            "interp={interp}: delete Object.prototype.__magic__ keeps the formatter import live"
+        );
+    }
+}
+

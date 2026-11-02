@@ -1880,6 +1880,14 @@ impl Model {
     }
 
     pub fn mark_hard(&mut self, t: Tok, kind: Hard, reason: u32) {
+        self.mark_hard_key(t, kind, reason, None);
+    }
+
+    /// `mark_hard` of an operation under constant key `key` (a
+    /// `defineProperty`/`delete` naming it): on a prototype of the runtime
+    /// or a builtin namespace it writes that key and no other, so the
+    /// native-write notes take the key (`None`: any key, as `mark_hard`).
+    pub fn mark_hard_key(&mut self, t: Tok, kind: Hard, reason: u32, key: Option<Atom>) {
         self.virt_revoke(t, None);
         // DECISIONS 234: under a computed key, a defineProperty on a
         // prototype of the runtime, or through ⊤ (which may be one), may
@@ -1900,7 +1908,7 @@ impl Model {
                 self.top_reshape(None);
                 self.note_shared(SharedWrite::Removed(None));
             } else if self.is_chain_proto(t) {
-                self.reshape(None);
+                self.reshape(key);
             } else {
                 self.note_inst(t, true);
             }
@@ -1922,13 +1930,15 @@ impl Model {
             kind,
             Hard::E5DefineProperty | Hard::E6SetPrototypeOf | Hard::E15With
         ) {
-            self.note_array_member_write(t, None, None, kind.code());
+            let k = key.filter(|_| kind != Hard::E15With).map(Key::Named);
+            self.note_array_member_write(t, k, None, kind.code());
         }
         if matches!(
             kind,
             Hard::E5DefineProperty | Hard::E7Delete | Hard::E15With
         ) {
-            self.note_fnproto_write(t, None, kind.code());
+            let k = key.filter(|_| kind != Hard::E15With).map(Key::Named);
+            self.note_fnproto_write(t, k, kind.code());
         }
         if matches!(
             kind,
@@ -1942,7 +1952,10 @@ impl Model {
             // chain is noted by the prototype it is given (`ProtoFrom`,
             // `settle_native_given`). Another unit's gives one unknown here.
             if kind != Hard::E6SetPrototypeOf || self.shared_replay {
-                crate::builtins::note_native_write(self, t, None, &what);
+                let k = key
+                    .filter(|_| matches!(kind, Hard::E5DefineProperty | Hard::E7Delete))
+                    .map(Key::Named);
+                crate::builtins::note_native_write(self, t, k, &what);
             }
         }
         if t == TOP {

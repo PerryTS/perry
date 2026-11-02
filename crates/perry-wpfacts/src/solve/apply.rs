@@ -344,7 +344,7 @@ impl Model {
                         let k = self.atoms[key as usize].clone();
                         self.note_shared(SharedWrite::Removed(Some(k)));
                     } else {
-                        self.mark_hard(t, Hard::E7Delete, reason);
+                        self.mark_hard_key(t, Hard::E7Delete, reason, Some(key));
                     }
                 }
             }
@@ -434,7 +434,7 @@ impl Model {
                             self.note_shared(SharedWrite::Accessor(Shared::Top, k.clone()));
                             self.note_shared(SharedWrite::Removed(Some(k)));
                         }
-                        _ => self.mark_hard(t, Hard::E5DefineProperty, reason),
+                        _ => self.mark_hard_key(t, Hard::E5DefineProperty, reason, Some(key)),
                     }
                 }
             }
