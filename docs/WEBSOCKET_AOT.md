@@ -90,8 +90,10 @@ output control before five rotated process measurements.
 | `z` | 3,650,936 | 37.8% | +7.2% |
 
 The WASI archive builder selects `s` with the existing ThinLTO profile. These
-measurements qualify the P1 experiment; the subsequent builder change still
-requires its fresh P1/P2/P3 qualification. Native build profiles are unchanged.
+measurements qualify the P1 experiment. The balanced production cohort above
+subsequently qualifies fresh P1/P3 output; the
+[installed P2 receipt](validation/wasi-p3-labeled-resources-20261102.json)
+qualifies the P2 builder and installed Linux bundle. Native build profiles are unchanged.
 The separate `z` plus FatLTO counterexperiment increased final module size and
 process time, so it was rejected. All 121 indexed files in the profile evidence
 archive were verified locally, including both runtime archives, modules,
@@ -187,8 +189,8 @@ The footprint comparison also spans different memory models. The
 [js2wasm project](https://github.com/loopdive/js2) emits WasmGC and requires
 post-MVP engine features. Perry's WASI output carries its linear-memory runtime
 and collector. Record required engine features and host memory alongside guest
-bytes when reproducing the comparison. Fresh release archives incorporating
-the integrated runtime pruning still produce a roughly 5.85 MB P1 module;
+bytes when reproducing the comparison. The fresh balanced cohort produces a
+4.75 MB P1 module, about 30 times the reproduced 158 KB scriptc module;
 the large footprint remains a competitive gap. Further size work should
 attribute the remaining retained functions. A WasmGC backend would be a separate compiler
 project from completing the current WASI 0.3 component profile.

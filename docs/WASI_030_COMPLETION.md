@@ -51,7 +51,8 @@ capabilities and generated typed future/stream transport. Normal debug-mode
 tests cover joint resource/endpoint custody, nominal payload types, duplicate
 transfers, actual relocation, queued disposal and finalization. Guest reads,
 writes and factories behind async exports are implemented experimentally and
-qualified on Linux below. Public generation stays guarded.
+qualified on Linux below. Public generation was guarded at that milestone;
+the later public workflow receipt is recorded below.
 
 The [endpoint transport receipt](validation/wasi-p3-endpoint-transport-20261101.json)
 now qualifies that experimental library profile on Linux: 15 acceptance phases,
@@ -276,14 +277,37 @@ engine and Turnloop providers. All 629 indexed evidence files and their exact
 sizes, hashes and regular-file set were verified locally. Returned-actor
 lifecycle auditing and public async generation remain open.
 
+The [public workflow and actor lifecycle receipt](validation/wasi-public-p3-20261102.json)
+qualifies the maintained public commands on Linux. `perry-wit --guest-c --target
+wasip3` generates adapters and typed bindings; `perry-wit compose` creates the
+component. Twelve public phases and fifteen nested resource-label phases pass,
+including native loading through generated TypeScript bindings, an async-only
+world, three invalid borrowed-endpoint controls, exactly-once ownership checks
+and 6,412 relocated guest objects. All 46 WIT tests pass with assertions enabled;
+two remain ignored. The [authoring guide](WASI_P3_COMPONENTS.md) gives the full
+workflow. The default synchronous adapter profile retains its guard.
+
+The same receipt separately qualifies the actual inline-returned actor
+lifecycle in plain, instrumented and moving guests. Each mode completes four
+native children after their callers return, then cancels four still-pending
+callers with exactly-once child/gate retirement and no late delivery. The moving
+guest copies 34,108 objects with evacuation verified. Inline return supplies no
+canonical subtask handle; cancellation here retires the caller Store. It does
+not claim canonical CANCEL delivery to that handleless actor. Existing live-handle
+canonical cancellation retains its separate compound receipt. All 351 indexed
+evidence files, sizes, hashes and the exact regular-file set were verified
+locally. Native artifacts, WIT tools and independent probes retain their
+distinct recorded sources. Installed P3 platforms, providers, required CI and
+landing remain open.
+
 | Requirement | Required evidence | Current state |
 | --- | --- | --- |
-| Canonical async imports and exports | Public generated components compose in both directions; overlapping calls, immediate/delayed completion, errors, post-return work and Store reuse | Experimental scalar/compound and recorded synchronous-started import profiles qualified on Linux; public CLI guarded |
-| Resource ownership across async calls | Imported/exported nominal resources, compound aliases, pre-start cancellation, returned-result races, borrow expiry at return/cancel, exactly-once drops and moving GC | Actual experimental entry point qualifies basic and compound C/Perry/C profiles on Linux, including 24 duplicate-owner rejections, 188 exactly-once drops, unclaimed results and moving GC; public async CLI remains guarded |
-| Guest `future<T>` and `stream<T>` | Readable/writable ownership, arbitrary supported WIT payloads, void, bounded writes, backpressure, final partial chunks, closure, cancellation and cleanup across suspension | Recorded Linux profiles exercise reads/writes, synchronous and asynchronous factories, shared imported/exported resource records, partial writes, cancellation retry, close discard and ALS. The labeled-resource receipt adds 16 actual C/Perry/C phases, 32 wrong-owner rejections and 12 exactly-once drops per mode, 6,412 relocated objects, and 45 WIT/C tests. Public adapters, the returned-actor lifecycle audit and the wider value/lifecycle matrix remain open |
+| Canonical async imports and exports | Public generated components compose in both directions; overlapping calls, immediate/delayed completion, errors, post-return work and Store reuse | Recorded scalar/compound and synchronous-started import profiles qualify on Linux. The explicit public P3 CLI now qualifies repeated-label futures and an async-only component through typed native bindings. Broader public-profile and platform qualification remains |
+| Resource ownership across async calls | Imported/exported nominal resources, compound aliases, pre-start cancellation, returned-result races, borrow expiry at return/cancel, exactly-once drops and moving GC | Recorded basic/compound C/Perry/C profiles include duplicate-owner rejection, unclaimed results and moving GC. The maintained public P3 path also verifies repeated-label resource futures, 32 wrong-owner rejections and 12 exactly-once drops per mode |
+| Guest `future<T>` and `stream<T>` | Readable/writable ownership, arbitrary supported WIT payloads, void, bounded writes, backpressure, final partial chunks, closure, cancellation and cleanup across suspension | Linux profiles exercise reads/writes, sync/async factories, shared imported/exported resources, partial writes, cancellation retry, close discard and ALS. Public resource-future generation/composition passes ordinary and moving execution; handleless returned actors pass completion and caller retirement. Wider value/lifecycle and installed-platform coverage remains |
 | WASI 0.3.0 command output | A public command/runtime profile with `wasi:cli/run@0.3.0`, explicit system-interface versions and execution in a host providing the declared 0.3.0 imports; no implicit reliance on P2 compatibility | Integration branch implements `--target wasip3`. The fresh Linux prod/release WebSocket receipt at `6ea71cc1a3` qualifies 27 functional phases including eight real socket client cases. The earlier `02cf3068ae` receipt separately qualifies eleven compiled P3 commands and 45 command phases. Full current command regressions, installed platform qualification and landing remain; `--target wasi` retains P2 |
 | Complete supported 0.3.0 WASI interfaces | Commands, clocks, randomness, filesystem, TCP/UDP/DNS and HTTP execute through Turnloop with capability checks, I/O cancellation and shutdown | Linux provider/command/HTTP receipts exist; complete current-profile matrix still required |
-| Cross-language interoperability | Public Perry output composed with independent Rust and maintained-C components, including resources and future/stream payloads | Scalar/compound cancellation examples, imported resources and cross-export record/future aliases execute on Linux. The labeled-resource receipt also qualifies generated C/Perry/C futures with repeated labels and wrong-owner rejection. Public async CLI and the wider value matrix remain unqualified |
+| Cross-language interoperability | Public Perry output composed with independent Rust and maintained-C components, including resources and future/stream payloads | Recorded scalar/compound, imported-resource and cross-export aliases execute on Linux. The maintained public P3 path now qualifies generated C/Perry/C resource futures with an independent Rust host, repeated labels and wrong-owner rejection. Wider value/platform coverage remains |
 | Runtime integration | Promise/nextTick task isolation, rejection identity, ALS, suspended-value tracing, teardown and positive moving-GC witnesses | Public ALS constructors/methods link from runtime alone; recorded Linux imports/exports and moving-GC profiles pass. Actual P3 libraries now preserve agent TLS across SDK tasks, including canonical WAIT/resume. The recorded synchronous-started import profile also qualifies ALS across interleaved native loans/exchanges and both moving modes. Shared-provider regression and wider platform/package coverage remain |
 | HTTP layouts | Current supported layouts and limitations explicitly tested; concurrent root handlers, nested/imported fallback, streaming bodies and cancellation | Linux supported layouts qualified; broader composition coverage open |
 | Platform and packaging | Current source-matched ordinary/instrumented artifacts and installed public tools run on Linux x86_64, macOS ARM64 and Windows x64 | Current Turnloop execution and the balanced installed P2 bundle qualify on Linux; installed P3 packages remain open and Windows has compile evidence only |

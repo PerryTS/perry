@@ -1,0 +1,63 @@
+{
+  "date": "2026-11-02",
+  "platform": "Linux x86_64",
+  "publicWitSource": "59fde022264260178c4b4ada881b8881ecdae172",
+  "publicAcceptanceSource": "29eb34e10278c20556af6cef8ad54fdd6edb91f6",
+  "returnedActorSource": "f020a48876862e6da11fe1791e933fb3ee70efc4",
+  "nativeArtifactSource": "3a20cda3b54da93aeeb633a5dda491d226d20c16",
+  "independentLabelHostSource": "27928e3ef679de9ee142fb24701f381dc8e9abb9",
+  "publicPipeline": {
+    "exitCode": 0,
+    "publicP3PipelineQualified": true,
+    "generatedTypedNativeBindingsExecuted": true,
+    "invalidBorrowedEndpointsRejectedBeforeOutput": true,
+    "fullWasi030Qualified": false
+  },
+  "publicPhasesPassed": 12,
+  "labelPhasesPassed": 15,
+  "labelMoving": {
+    "guestCopiedObjects": 6412,
+    "guestEvacuationVerified": true
+  },
+  "returnedActorMoving": {
+    "copiedObjects": 34108,
+    "evacuationVerified": true
+  },
+  "returnedActorModes": [
+    "plain",
+    "instrumented",
+    "forced moving"
+  ],
+  "childCompletionsPerMode": 4,
+  "callerCancellationsPerMode": 4,
+  "inlineReturnHasNoHandle": true,
+  "canonicalCancelDeliveredToInlineReturnedActor": false,
+  "witTestsPassed": 46,
+  "witTestsIgnored": 2,
+  "witDebugAssertions": true,
+  "buildMethod": "Pinned nightly manual rustc with exact cached Cargo dependency fingerprints; root unwind flags forwarded unchanged",
+  "buildFlagsEnvironmentUnmodified": true,
+  "normalRuntimeUnitTestsReexecuted": false,
+  "sourceBaseArchive": "wasi-030-v192-evidence.tar.gz",
+  "sourcePatchesApplyToVerifiedBaseArchive": true,
+  "preservedSetupFailure": "v211 normal-debug link exceeded gcc argument size; v212 removes irrelevant native search directories",
+  "fullWasi030Qualified": false,
+  "evidence": {
+    "archive": {
+      "archive": "wasi-030-v214-evidence.tar.gz",
+      "indexedFiles": 351,
+      "bytes": 165240814,
+      "sha256": "72c771335afb075e93570ee2c177963d0229c1af153dd37f29f6fd0a5d5107bd"
+    },
+    "exactRegularFileSetVerified": true,
+    "allIndexedSizesAndHashesVerified": true,
+    "archiveExtracted": false
+  },
+  "limitations": [
+    "Linux source-built qualification only; installed P3 Linux, macOS ARM64 and Windows x64 packages remain open",
+    "WIT tools, independent probes and native/runtime archives retain the distinct recorded sources",
+    "Inline returned actors have no canonical cancellation handle; the tested cancellation retires the caller Store",
+    "Complete current provider/HTTP matrix, required CI integration and qualified landing remain incomplete"
+  ],
+  "pointInTimeQualification": true
+}
