@@ -6337,6 +6337,7 @@ pub fn run_with_parse_cache(
             module_source: if args.debug_symbols
                 || opt_report_format == Some(OptReportFormat::Text)
                 || perry_codegen::fallback_diag::enabled()
+                || perry_codegen::verify_facts::enabled()
             {
                 match ctx.cjs_wrap_debug_sources.get(path) {
                     Some(w) => Some(w.wrapped_source.clone()),
@@ -6575,6 +6576,7 @@ pub fn run_with_parse_cache(
         &ctx.patched_builtins.dynamic_code_reach,
         &ctx.cjs_wrap_debug_sources,
         super::program_facts::module_roots(&ctx),
+        &ctx.cache_dir,
     );
     program_step("whole-program facts", Some(facts_started));
     #[allow(clippy::type_complexity)]
