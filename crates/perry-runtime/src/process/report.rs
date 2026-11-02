@@ -169,7 +169,7 @@ fn process_report_object(trigger: &str, filename: Option<&str>) -> f64 {
         JSValue::from_bits(
             (module_object_value(unsafe {
                 crate::object::runtime_layouts::perry_build_runtime_record(
-                    std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_PCHECKED031),
+                    crate::object::runtime_layouts::RECORD_PCHECKED031::desc(),
                     std::ptr::NonNull::<f64>::dangling().as_ptr(),
                 )
             }))
@@ -272,7 +272,7 @@ fn process_report_javascript_stack_object() -> f64 {
         JSValue::from_bits(
             (module_object_value(unsafe {
                 crate::object::runtime_layouts::perry_build_runtime_record(
-                    std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_PCHECKED031),
+                    crate::object::runtime_layouts::RECORD_PCHECKED031::desc(),
                     std::ptr::NonNull::<f64>::dangling().as_ptr(),
                 )
             }))
@@ -303,7 +303,7 @@ fn process_report_javascript_heap_object() -> f64 {
         JSValue::from_bits(
             (module_object_value(unsafe {
                 crate::object::runtime_layouts::perry_build_runtime_record(
-                    std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_PCHECKED031),
+                    crate::object::runtime_layouts::RECORD_PCHECKED031::desc(),
                     std::ptr::NonNull::<f64>::dangling().as_ptr(),
                 )
             }))
@@ -326,7 +326,7 @@ fn process_report_resource_usage_object() -> f64 {
         JSValue::from_bits(
             (module_object_value(unsafe {
                 crate::object::runtime_layouts::perry_build_runtime_record(
-                    std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_PCHECKED031),
+                    crate::object::runtime_layouts::RECORD_PCHECKED031::desc(),
                     std::ptr::NonNull::<f64>::dangling().as_ptr(),
                 )
             }))

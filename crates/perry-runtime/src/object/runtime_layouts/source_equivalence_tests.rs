@@ -6,7 +6,7 @@ use super::*;
 fn legacy_runtime_descriptor_facts_survive_single_source_migration() {
     unsafe {
         check(
-            std::ptr::addr_of!(READABLE_STATE),
+            READABLE_STATE::desc(),
             "READABLE_STATE",
             0x52540001,
             crate::codegen_abi::native_layout_word("READABLE_STATE", 1),
@@ -39,7 +39,7 @@ fn legacy_runtime_descriptor_facts_survive_single_source_migration() {
             ],
         );
         check(
-            std::ptr::addr_of!(WRITABLE_STATE),
+            WRITABLE_STATE::desc(),
             "WRITABLE_STATE",
             0x52540002,
             crate::codegen_abi::native_layout_word("WRITABLE_STATE", 1),
@@ -73,7 +73,7 @@ fn legacy_runtime_descriptor_facts_survive_single_source_migration() {
             ],
         );
         check(
-            std::ptr::addr_of!(URL_SEARCH_PARAMS),
+            URL_SEARCH_PARAMS::desc(),
             "URL_SEARCH_PARAMS",
             0x52540003,
             crate::codegen_abi::native_layout_word("URL_SEARCH_PARAMS", 1),
@@ -82,7 +82,7 @@ fn legacy_runtime_descriptor_facts_survive_single_source_migration() {
             &[0, 1, u32::MAX, u32::MAX],
         );
         check(
-            std::ptr::addr_of!(URL_COMPONENTS),
+            URL_COMPONENTS::desc(),
             "URL_COMPONENTS",
             0x52540004,
             crate::codegen_abi::native_layout_word("URL_COMPONENTS", 1),
@@ -137,7 +137,7 @@ fn legacy_runtime_descriptor_facts_survive_single_source_migration() {
             ],
         );
         check(
-            std::ptr::addr_of!(ITERATOR_RESULT),
+            ITERATOR_RESULT::desc(),
             "ITERATOR_RESULT",
             0x52540005,
             crate::codegen_abi::native_layout_word("ITERATOR_RESULT", 0),
@@ -146,7 +146,7 @@ fn legacy_runtime_descriptor_facts_survive_single_source_migration() {
             &[u32::MAX, 1, 0, u32::MAX],
         );
         check(
-            std::ptr::addr_of!(ITERATOR_RESULT_DONE_FIRST),
+            ITERATOR_RESULT_DONE_FIRST::desc(),
             "ITERATOR_RESULT_DONE_FIRST",
             0x52540006,
             crate::codegen_abi::native_layout_word("ITERATOR_RESULT_DONE_FIRST", 0),
@@ -155,7 +155,7 @@ fn legacy_runtime_descriptor_facts_survive_single_source_migration() {
             &[u32::MAX, 0, 1, u32::MAX],
         );
         check(
-            std::ptr::addr_of!(TIMEOUT),
+            TIMEOUT::desc(),
             "TIMEOUT",
             0x52540007,
             crate::codegen_abi::native_layout_word("TIMEOUT", 1),
@@ -164,7 +164,7 @@ fn legacy_runtime_descriptor_facts_survive_single_source_migration() {
             &[u32::MAX, u32::MAX],
         );
         check(
-            std::ptr::addr_of!(IMMEDIATE),
+            IMMEDIATE::desc(),
             "IMMEDIATE",
             0x52540008,
             crate::codegen_abi::native_layout_word("IMMEDIATE", 1),
@@ -173,7 +173,7 @@ fn legacy_runtime_descriptor_facts_survive_single_source_migration() {
             &[u32::MAX, u32::MAX],
         );
         check(
-            std::ptr::addr_of!(REGEX_EXEC_NAMED),
+            REGEX_EXEC_NAMED::desc(),
             "REGEX_EXEC_NAMED",
             0x52540009,
             crate::codegen_abi::native_layout_word("REGEX_EXEC_NAMED", 0),
@@ -187,7 +187,7 @@ fn legacy_runtime_descriptor_facts_survive_single_source_migration() {
             &[u32::MAX, u32::MAX, u32::MAX, 1, 2, 0, 3, u32::MAX],
         );
         check(
-            std::ptr::addr_of!(REGEX_EXEC_INDICES_NAMED),
+            REGEX_EXEC_INDICES_NAMED::desc(),
             "REGEX_EXEC_INDICES_NAMED",
             0x5254000A,
             crate::codegen_abi::native_layout_word("REGEX_EXEC_INDICES_NAMED", 0),
@@ -219,7 +219,7 @@ fn legacy_runtime_descriptor_facts_survive_single_source_migration() {
             ],
         );
         check(
-            std::ptr::addr_of!(REGEX_INDICES_GROUPS_NAMED),
+            REGEX_INDICES_GROUPS_NAMED::desc(),
             "REGEX_INDICES_GROUPS_NAMED",
             0x5254000B,
             crate::codegen_abi::native_layout_word("REGEX_INDICES_GROUPS_NAMED", 0),
@@ -228,7 +228,7 @@ fn legacy_runtime_descriptor_facts_survive_single_source_migration() {
             &[u32::MAX, 0, 1, u32::MAX],
         );
         check(
-            std::ptr::addr_of!(ARRAY_NAMED),
+            ARRAY_NAMED::desc(),
             "ARRAY_NAMED",
             0x5254000D,
             crate::codegen_abi::native_layout_word("ARRAY_NAMED", 0),
@@ -237,7 +237,7 @@ fn legacy_runtime_descriptor_facts_survive_single_source_migration() {
             &[u32::MAX, 0],
         );
         check(
-            std::ptr::addr_of!(SQLITE_COLUMN_METADATA),
+            SQLITE_COLUMN_METADATA::desc(),
             "SQLITE_COLUMN_METADATA",
             0x53514c01,
             crate::codegen_abi::native_layout_word("SQLITE_COLUMN_METADATA", 0),

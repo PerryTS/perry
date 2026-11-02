@@ -58,7 +58,7 @@ fn js_fs_opendir_value_inner(path_value: f64, include_path: bool) -> Result<f64,
                 items.push((name.to_string(), ft));
             }
         }
-        items.sort_by(|a, b| a.0.cmp(&b.0));
+        crate::cold_sort::sort_by(&mut items, |a, b| a.0.cmp(&b.0));
         for (name, ft) in items {
             entries.push(build_dirent_object(
                 &name,

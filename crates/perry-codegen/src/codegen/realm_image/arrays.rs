@@ -191,6 +191,7 @@ pub(crate) fn emit_array(
             dense_prefix: parts.length,
             named: named_facts.map(|_| named.as_str()),
             slots: &elements,
+            owner: None,
         },
     ));
     Ok(tags)

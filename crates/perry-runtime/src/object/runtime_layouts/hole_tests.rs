@@ -100,7 +100,7 @@ runtime_layout!(
     link_section = "perry_layouts"
 )]
 static mut CLASS_HOLEY: PerryLayoutDesc = PerryLayoutDesc {
-    image_keys: crate::object::image_keys::image_key_list!(HOLEY::KEYS),
+    image_keys: std::ptr::null_mut(),
     shape_id: 0,
     gc_plan: 0,
     family: 0x41574203,
@@ -139,7 +139,7 @@ runtime_layout!(
     link_section = "perry_literal_layouts"
 )]
 static mut LITERAL_FAMILY: PerryLayoutDesc = PerryLayoutDesc {
-    image_keys: crate::object::image_keys::image_key_list!(LITERAL_OPTIONAL::KEYS),
+    image_keys: std::ptr::null_mut(),
     shape_id: 0,
     gc_plan: 0,
     family: 0x7f000016,
@@ -299,10 +299,7 @@ unsafe fn born(
 #[test]
 fn layout_holes_are_absent_for_every_reader() {
     crate::gc::initialize_runtime_fixture();
-    for desc in [
-        std::ptr::addr_of!(HOLEY),
-        std::ptr::addr_of!(HOLEY_PERMUTED),
-    ] {
+    for desc in [HOLEY::desc(), HOLEY_PERMUTED::desc()] {
         soft_ne!(
             unsafe { layout_id(desc) },
             0,
@@ -440,7 +437,7 @@ unsafe fn assert_absent_own(object: *mut ObjectHeader, key: &StaticAtom) {
 #[test]
 fn layout_hole_reads_answer_per_object() {
     crate::gc::initialize_runtime_fixture();
-    let desc = std::ptr::addr_of!(HOLEY);
+    let desc = HOLEY::desc();
     let scope = crate::gc::RuntimeHandleScope::new();
     let full = unsafe { born(desc, &scope) };
     let holey = unsafe { born(desc, &scope) };
@@ -491,9 +488,8 @@ fn layout_hole_reads_answer_per_object() {
 fn solid_layout_has_no_hole_bit() {
     crate::gc::initialize_runtime_fixture();
     let scope = crate::gc::RuntimeHandleScope::new();
-    let object = scope.root_raw_mut_ptr(unsafe {
-        crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(SOLID))
-    });
+    let object = scope
+        .root_raw_mut_ptr(unsafe { crate::object::layout_desc::perry_alloc_layout(SOLID::desc()) });
     unsafe {
         object.with_mut_ptr(|obj| {
             for (i, key) in [&H_A, &H_B, &H_C, &H_D].iter().enumerate() {
@@ -539,7 +535,7 @@ fn deleting_absent_class_family_keys_preserves_birth_word() {
 fn ordinary_hole_delete_keeps_the_existing_order_representation() {
     let _global = crate::gc::global_side_table_test_lock();
     unsafe {
-        let obj = crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(HOLEY));
+        let obj = crate::object::layout_desc::perry_alloc_layout(HOLEY::desc());
         assert!(!crate::object::layout_desc::is_family_layout_word(
             (*obj).parent_class_id
         ));
@@ -560,10 +556,7 @@ fn absent_layout_methods_throw_or_resolve_an_inherited_method() {
         this.as_f64()
     }
     crate::gc::initialize_runtime_fixture();
-    for descriptor in [
-        std::ptr::addr_of!(HOLEY),
-        std::ptr::addr_of!(HOLEY_PERMUTED),
-    ] {
+    for descriptor in [HOLEY::desc(), HOLEY_PERMUTED::desc()] {
         let scope = crate::gc::RuntimeHandleScope::new();
         let object = unsafe { born(descriptor, &scope) };
         let receiver =
@@ -656,7 +649,7 @@ fn classless_optional_family_keeps_shape_and_routes_unknown_keys_to_overflow() {
     crate::gc::initialize_runtime_fixture();
     let scope = crate::gc::RuntimeHandleScope::new();
     let ordinary = scope.root_raw_mut_ptr(unsafe {
-        crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(LITERAL_OPTIONAL))
+        crate::object::layout_desc::perry_alloc_layout(LITERAL_OPTIONAL::desc())
     });
     ordinary.with_const_ptr(|obj: *const ObjectHeader| unsafe {
         assert!(crate::object::layout_desc::family_desc_of(obj).is_none());
@@ -792,9 +785,8 @@ fn classless_optional_family_keeps_shape_and_routes_unknown_keys_to_overflow() {
         );
         assert_eq!(js_object_get_field_by_name_f64(obj, H_A.string), 17.0);
     });
-    let mixed = scope.root_raw_mut_ptr(unsafe {
-        crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(HOLEY))
-    });
+    let mixed = scope
+        .root_raw_mut_ptr(unsafe { crate::object::layout_desc::perry_alloc_layout(HOLEY::desc()) });
     mixed.with_const_ptr(|obj: *const ObjectHeader| unsafe {
         assert!(
             crate::object::layout_desc::family_desc_of(obj).is_none(),
@@ -828,7 +820,7 @@ mod first_birth {
         link_section = "perry_literal_layouts"
     )]
     static mut LITERAL: PerryLayoutDesc = PerryLayoutDesc {
-        image_keys: crate::object::image_keys::image_key_list!(KEYS),
+        image_keys: std::ptr::null_mut(),
         shape_id: 0,
         gc_plan: 0,
         family: 0x7f000015,

@@ -81,15 +81,15 @@ fn builtin_prototypes_are_born_on_their_static_layouts() {
         for (obj, desc) in [
             (
                 op as *const ObjectHeader,
-                std::ptr::addr_of!(crate::object::runtime_layouts::OBJECT_PROTOTYPE),
+                crate::object::runtime_layouts::OBJECT_PROTOTYPE::desc(),
             ),
             (
                 fp as *const ObjectHeader,
-                std::ptr::addr_of!(crate::object::runtime_layouts::FUNCTION_PROTOTYPE),
+                crate::object::runtime_layouts::FUNCTION_PROTOTYPE::desc(),
             ),
             (
                 holder as *const ObjectHeader,
-                std::ptr::addr_of!(crate::object::runtime_layouts::ARRAY_PROTOTYPE_NAMED),
+                crate::object::runtime_layouts::ARRAY_PROTOTYPE_NAMED::desc(),
             ),
         ] {
             let r = record_of(test_dir(), LayoutWord((*obj).parent_class_id));
@@ -292,19 +292,19 @@ fn builtin_prototypes_stay_on_their_declared_layout_ids() {
             (
                 op,
                 op as *const ObjectHeader,
-                std::ptr::addr_of!(crate::object::runtime_layouts::OBJECT_PROTOTYPE),
+                crate::object::runtime_layouts::OBJECT_PROTOTYPE::desc(),
                 "toString",
             ),
             (
                 fp,
                 fp as *const ObjectHeader,
-                std::ptr::addr_of!(crate::object::runtime_layouts::FUNCTION_PROTOTYPE),
+                crate::object::runtime_layouts::FUNCTION_PROTOTYPE::desc(),
                 "call",
             ),
             (
                 ap,
                 holder as *const ObjectHeader,
-                std::ptr::addr_of!(crate::object::runtime_layouts::ARRAY_PROTOTYPE_NAMED),
+                crate::object::runtime_layouts::ARRAY_PROTOTYPE_NAMED::desc(),
                 "map",
             ),
         ];
@@ -350,17 +350,17 @@ fn sealed_runtime_prototypes_take_the_store_funnel() {
             (
                 "URL",
                 url as *mut ObjectHeader,
-                std::ptr::addr_of!(crate::object::runtime_layouts::URL_COMPONENTS),
+                crate::object::runtime_layouts::URL_COMPONENTS::desc(),
             ),
             (
                 "Timeout",
                 timeout,
-                std::ptr::addr_of!(crate::object::runtime_layouts::TIMEOUT),
+                crate::object::runtime_layouts::TIMEOUT::desc(),
             ),
             (
                 "Immediate",
                 immediate,
-                std::ptr::addr_of!(crate::object::runtime_layouts::IMMEDIATE),
+                crate::object::runtime_layouts::IMMEDIATE::desc(),
             ),
         ] {
             assert!(!proto.is_null());

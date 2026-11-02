@@ -11,11 +11,6 @@ pub(crate) fn register_static_layouts() {
 /// caller already holds (`js_shape_run_static_seed`).
 #[inline(always)]
 pub(crate) fn register_static_layouts_in(program: &crate::codegen_abi::PerryProgramTableV1) {
-    #[cfg(target_family = "wasm")]
-    assert!(
-        image_layouts().next().is_some(),
-        "Wasm layout constructors did not run"
-    );
     // A lazy image span publishes at its rows' first touch, never here; a
     // program with one takes the walk around it, a program without walks
     // exactly as before.
@@ -54,18 +49,6 @@ unsafe fn register_around_lazy_span(program: &crate::codegen_abi::PerryProgramTa
             }
         }
     }
-    #[cfg(target_family = "wasm")]
-    {
-        let section = (end.saturating_sub(start)) / size;
-        for (index, item) in inventory::iter::<crate::wasm_image::Layout>
-            .into_iter()
-            .enumerate()
-        {
-            if !register_static_row(section + index, item.0) {
-                return;
-            }
-        }
-    }
 }
 
 /// One static row at startup; false stops the walk (no ids left).
@@ -99,14 +82,15 @@ unsafe fn register_static_row(index: usize, desc: *mut PerryLayoutDesc) -> bool 
     }
 }
 
-/// Is `word` a layout of the runtime's own image (the ABI's native rows)?
-/// Generated code never names such a descriptor, so every object carrying
-/// one is born by a runtime funnel ([`layout_word_for_birth`]), which draws
-/// its id and installs its shape at the first birth.
+/// Is `word` a runtime layout's (`runtime_layout!`: the ABI's native rows,
+/// and in perry-runtime's tests the test band)? Generated code never names
+/// such a descriptor, so every object carrying one is born by a runtime
+/// funnel ([`layout_word_for_birth`]), which draws its id and installs its
+/// shape at the first birth.
 #[inline]
 pub(super) fn is_runtime_layout_word(word: u32) -> bool {
     word & crate::codegen_abi::LAYOUT_TAG != 0
-        && LayoutWord(word).row().0 < crate::codegen_abi::NATIVE_LAYOUT_ROWS
+        && LayoutWord(word).row().0 < super::super::runtime_layouts::RUNTIME_LAYOUT_ROWS
 }
 
 /// The registered word of `desc` for a birth in this agent. A runtime
@@ -126,8 +110,9 @@ pub(crate) unsafe fn layout_word_for_birth(desc: *const PerryLayoutDesc) -> Opti
 #[cold]
 #[inline(never)]
 unsafe fn install_runtime_layout(desc: *const PerryLayoutDesc) -> Option<()> {
-    let requested = layout_id_of_index(descriptor_index(desc)?)?;
-    let id = register_bound(desc, requested, &[], None, false);
+    // A runtime layout is its own emitted symbol with no position, so it
+    // requests no id: it draws one at its first install (§2.4a decision 1).
+    let id = register_bound(desc, 0, &[], None, false);
     (id != 0 && super::super::shapes::shape_record_for_word(LayoutWord(id)).is_some()).then_some(())
 }
 
@@ -456,6 +441,8 @@ pub(super) unsafe fn register_bound(
     }
     let proposed = if let Some(id) = existing {
         id
+    } else if is_runtime_layout_word(d.layout_id) {
+        super::super::shapes::allocate_declared_layout_id(proto_id).0
     } else if lazy {
         super::super::shapes::allocate_declared_layout_for_kind(proto_id, kind).0
     } else if function {

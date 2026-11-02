@@ -159,9 +159,7 @@ fn source_map_prototype() -> f64 {
         // immediately: allocating closures below can run a moving GC.
 
         let proto = unsafe {
-            crate::realm_decl! { birth crate::object::runtime_layouts::perry_alloc_runtime_record(std::ptr::addr_of!(
-                crate::object::runtime_layouts::RECORD_Q443_0
-            )); realm { "node:module.SourceMap.prototype", members = { constructor; findEntry; findOrigin; lineLengths = accessor(get = "node:module.SourceMap.prototype.lineLengths.<get>"); payload = accessor(get = "node:module.SourceMap.prototype.payload.<get>"); }; } }
+            crate::realm_decl! { birth crate::object::runtime_layouts::perry_alloc_runtime_record(crate::object::runtime_layouts::RECORD_Q443_0::desc()); realm { "node:module.SourceMap.prototype", members = { constructor; findEntry; findOrigin; lineLengths = accessor(get = "node:module.SourceMap.prototype.lineLengths.<get>"); payload = accessor(get = "node:module.SourceMap.prototype.payload.<get>"); }; } }
         };
         let value = module_object_value(proto);
         slot.set(value.to_bits());
@@ -561,7 +559,7 @@ fn source_map_origin_object(
     let Some(entry) = entry else {
         return module_object_value(unsafe {
             crate::object::runtime_layouts::perry_build_runtime_record(
-                std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_PCHECKED031),
+                crate::object::runtime_layouts::RECORD_PCHECKED031::desc(),
                 std::ptr::NonNull::<f64>::dangling().as_ptr(),
             )
         });
@@ -622,7 +620,7 @@ extern "C" fn source_map_find_entry_thunk(
     let Some(entry) = source_map_lookup(payload.get_nanbox_f64(), query_line, query_col) else {
         return module_object_value(unsafe {
             crate::object::runtime_layouts::perry_build_runtime_record(
-                std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_PCHECKED031),
+                crate::object::runtime_layouts::RECORD_PCHECKED031::desc(),
                 std::ptr::NonNull::<f64>::dangling().as_ptr(),
             )
         });
@@ -679,7 +677,7 @@ extern "C" fn source_map_find_origin_thunk(
     if line == Some(0.0) && col == Some(0.0) {
         return module_object_value(unsafe {
             crate::object::runtime_layouts::perry_build_runtime_record(
-                std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_PCHECKED031),
+                crate::object::runtime_layouts::RECORD_PCHECKED031::desc(),
                 std::ptr::NonNull::<f64>::dangling().as_ptr(),
             )
         });

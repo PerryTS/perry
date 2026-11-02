@@ -522,9 +522,9 @@ pub(crate) fn create_url_object(url_string: &str) -> *mut ObjectHeader {
 
     // Component storage and its intrinsic prototype are declared at startup.
     let obj = unsafe {
-        let obj = crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(
-            crate::object::runtime_layouts::URL_COMPONENTS
-        ));
+        let obj = crate::object::layout_desc::perry_alloc_layout(
+            crate::object::runtime_layouts::URL_COMPONENTS::desc(),
+        );
         // GC_STORE_AUDIT(POINTER_FREE): immutable runtime family brand.
         (*obj).class_id = crate::object::runtime_layouts::URL_CLASS_ID;
         obj
