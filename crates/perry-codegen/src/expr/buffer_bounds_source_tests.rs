@@ -141,3 +141,119 @@ fn counter_versioned_fast_copy_drops_only_what_its_entry_check_proved() {
         );
     }
 }
+
+/// A counter that needs no overflow exit (`i++` under `i < n`) is versioned
+/// the same way when its body indexes a view by the counter: one entry check
+/// on the actual values of the counter, the bound and the view length picks a
+/// copy without the per-access branch; the other copy keeps it. The outer
+/// loop here is such a loop; the inner one is an overflow-exit loop.
+#[test]
+fn plain_counter_loop_is_versioned_on_one_entry_check() {
+    let ir = function_ir(
+        "function sieve(n: number): number {
+           const marks = new Uint8Array(n + 1);
+           let count = 0;
+           for (let i = 2; i < n; i++) {
+             if (marks[i] === 0) {
+               count++;
+               for (let j = i * i; j < n; j += i) marks[j] = 1;
+             }
+           }
+           return count;
+         }
+         console.log(sieve(100));",
+        "sieve",
+    );
+    let entry_checks: Vec<&str> = ir
+        .split("\n\n")
+        .filter(|b| {
+            b.contains("label %for.counter.fast.") && b.contains("label %for.counter.checked.")
+        })
+        .collect();
+    let outer = entry_checks
+        .first()
+        .expect("the plain outer loop has an entry check");
+    let compares: Vec<&str> = outer
+        .lines()
+        .filter(|l| l.contains("icmp sle i64"))
+        .collect();
+    assert!(
+        compares.iter().any(|l| l.ends_with("2147483647")),
+        "entry check without the step-fits test:\n{outer}"
+    );
+    assert!(
+        compares.iter().any(|l| !l.ends_with("2147483647")),
+        "entry check without the length test:\n{outer}"
+    );
+    assert!(
+        outer.contains("icmp sge i32"),
+        "entry check without the counter-nonnegative test:\n{outer}"
+    );
+}
+
+/// The inner loop of the sieve starts at `i * i`; when that start is already
+/// past the bound the loop runs nothing, and says so before its entry check.
+#[test]
+fn overflow_exit_loop_skips_when_its_start_is_past_the_bound() {
+    let ir = function_ir(
+        "function sieve(n: number): number {
+           const marks = new Uint8Array(n + 1);
+           let count = 0;
+           for (let i = 2; i <= n; i++) {
+             if (marks[i] === 0) {
+               count++;
+               for (let j = i * i; j <= n; j += i) marks[j] = 1;
+             }
+           }
+           return count;
+         }
+         console.log(sieve(100));",
+        "sieve",
+    );
+    assert!(
+        ir.contains("for.counter.skip") && ir.contains("for.counter.go"),
+        "no early skip for an exhausted start:\n{ir}"
+    );
+}
+
+/// Indices the entry check says nothing about keep a branch on the lowered
+/// index: a local whose value wraps in i32, and a counter the body writes.
+#[test]
+fn unproven_index_locals_keep_their_branch_and_are_not_versioned() {
+    let wrapped = function_ir(
+        "function wrapped(k: number): number {
+           const m = new Uint8Array(8);
+           const idx = (k * 1073741825) | 0;
+           for (let r = 0; r < 3; r++) m[idx] = 3;
+           return m[0];
+         }
+         console.log(wrapped(7));",
+        "wrapped",
+    );
+    assert!(
+        wrapped.contains("bufacc.oob") && !wrapped.contains("@llvm.assume("),
+        "a wrapped index local lost its branch:\n{wrapped}"
+    );
+    assert!(
+        !wrapped.contains("for.counter.fast"),
+        "a loop whose index is not its counter was versioned:\n{wrapped}"
+    );
+    let written = function_ir(
+        "function written(n: number): number {
+           const m = new Uint8Array(8);
+           let c = 0;
+           for (let i = 0; i < n; i++) {
+             m[i] = 1;
+             i += 2;
+             c++;
+           }
+           return c;
+         }
+         console.log(written(100));",
+        "written",
+    );
+    assert!(
+        !written.contains("for.counter.fast"),
+        "a counter the body writes was versioned:\n{written}"
+    );
+}

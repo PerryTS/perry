@@ -6917,12 +6917,121 @@ fn lower_for_after_element_region(
     };
     ctx.repsel_context_allows_ptr_shape = saved_ptr_shape_context;
     lower_for_in_region(ctx, region, init, condition, update, body, &mut |ctx| {
-        if i32_counter::lower(ctx, init, condition, update, body)? {
-            Ok(())
-        } else {
-            lower_for_after_init(ctx, init, condition, update, body, "for")
-        }
+        lower_static_counter_versioned(ctx, init, condition, update, body, &mut |ctx| {
+            if i32_counter::lower(ctx, init, condition, update, body)? {
+                Ok(())
+            } else {
+                lower_for_after_init(ctx, init, condition, update, body, "for")
+            }
+        })
     })
+}
+
+/// Counter versioning for a `for` whose int32 counter needs no overflow exit
+/// (its step statically stays inside i32 under the guard). It uses the entry
+/// check of the overflow-exit loops (`counter_entry_check`), on the actual
+/// values of the counter slot, the guard bound and each fixed-length view the
+/// body indexes by the counter. When the check passes, the copy lowered under
+/// it takes every counter-indexed access as in bounds; when it fails, the
+/// loop is the ordinary one, with a real check per access. A loop that
+/// indexes no view by its counter has nothing to hoist and is not copied.
+fn lower_static_counter_versioned(
+    ctx: &mut FnCtx<'_>,
+    init: Option<&Stmt>,
+    condition: Option<&perry_hir::Expr>,
+    update: Option<&perry_hir::Expr>,
+    body: &[Stmt],
+    lower_copy: &mut dyn FnMut(&mut FnCtx<'_>) -> Result<()>,
+) -> Result<()> {
+    use perry_hir::{Expr, UpdateOp};
+    let (
+        Some(Stmt::Let {
+            id: counter_id,
+            init: Some(_),
+            ..
+        }),
+        Some(update),
+    ) = (init, update)
+    else {
+        return lower_copy(ctx);
+    };
+    let counter_id = *counter_id;
+    // Up-steps only: `i++`, `i = i + s`, `i = s + i`.
+    let steps_up = match update {
+        Expr::Update {
+            id,
+            op: UpdateOp::Increment,
+            ..
+        } => *id == counter_id,
+        other => overflow_exit_step_operand(other, counter_id).is_some(),
+    };
+    if !steps_up
+        || !ctx.i32_counter_slots.contains_key(&counter_id)
+        || ctx
+            .native_facts
+            .overflow_exit_counters()
+            .contains(&counter_id)
+    {
+        return lower_copy(ctx);
+    }
+    // Decide before emitting anything: a loop with no counter-indexed view
+    // gets no entry check, not even a dead one.
+    let mut views = Vec::new();
+    collect_counter_indexed_views(ctx, body, counter_id, &mut views);
+    if views.is_empty() {
+        return lower_copy(ctx);
+    }
+    let Some(entry) = counter_entry_check(ctx, counter_id, None, condition, Some(update), body)?
+    else {
+        return lower_copy(ctx);
+    };
+    lower_counter_versions(ctx, counter_id, entry, &mut |ctx, _fast| lower_copy(ctx))
+}
+
+/// Branch on a counter entry check. `lower_copy(ctx, true)` lowers the fast
+/// copy, with an `EntryGuard` proof for each view the check covered;
+/// `lower_copy(ctx, false)` lowers the ordinary copy. Both fall to one merge.
+fn lower_counter_versions(
+    ctx: &mut FnCtx<'_>,
+    counter_id: u32,
+    entry: CounterEntryCheck,
+    lower_copy: &mut dyn FnMut(&mut FnCtx<'_>, bool) -> Result<()>,
+) -> Result<()> {
+    let fast_idx = ctx.new_block("for.counter.fast");
+    let slow_idx = ctx.new_block("for.counter.checked");
+    let merge_idx = ctx.new_block("for.counter.merge");
+    let fast_label = ctx.block_label(fast_idx);
+    let slow_label = ctx.block_label(slow_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    ctx.block().cond_br(&entry.passed, &fast_label, &slow_label);
+
+    ctx.current_block = fast_idx;
+    let scope_id = ctx.next_loop_proof_scope_id();
+    for buffer_local_id in &entry.views {
+        ctx.bounded_buffer_index_pairs.push(BoundedBufferIndex {
+            index_local_id: counter_id,
+            buffer_local_id: *buffer_local_id,
+            scope_id,
+            bounds_width_units: 1,
+            bounds: BoundsState::Proven {
+                proof: BoundsProof::EntryGuard,
+            },
+        });
+    }
+    lower_copy(ctx, true)?;
+    ctx.bounded_buffer_index_pairs
+        .retain(|fact| fact.scope_id != scope_id);
+    if !ctx.block().is_terminated() {
+        ctx.block().br(&merge_label);
+    }
+
+    ctx.current_block = slow_idx;
+    lower_copy(ctx, false)?;
+    if !ctx.block().is_terminated() {
+        ctx.block().br(&merge_label);
+    }
+    ctx.current_block = merge_idx;
+    Ok(())
 }
 
 /// Lower a `for` (after its init) under the region `region` from
@@ -7075,6 +7184,7 @@ fn lower_overflow_exit_for(
         // Any other init was admitted because it fits i32 statically.
         _ => None,
     };
+    let mut exact_init: Option<String> = None;
     if let Some((op, left, right)) = exact_operands {
         // Allocate the counter's storage, then write the exact init.
         lower_stmt(
@@ -7117,6 +7227,7 @@ fn lower_overflow_exit_for(
         let value = blk.trunc(I64, &exact_opaque, I32);
         ctx.block().store(I1, &overflow, &flag_slot);
         store_overflow_exit_counter(ctx, counter_id, &value);
+        exact_init = Some(exact_opaque);
     } else {
         lower_stmt(ctx, init.expect("checked above"))?;
         ctx.block().store(I1, "false", &flag_slot);
@@ -7126,7 +7237,110 @@ fn lower_overflow_exit_for(
         flag_slot,
         checked: true,
     };
-    let Some(entry) = counter_entry_check(ctx, &state, condition, update, body)? else {
+    // An init already past the guard's bound runs no iteration, whatever the
+    // loop's copies would do. Say so before the entry check, so a loop that
+    // is skipped (a sieve's inner loop for most primes) pays one compare, not
+    // the whole check. Only a bare `counter < B` / `counter <= B` guard: a
+    // conjunction may evaluate other operands first.
+    if let (Some(exact), Some(cond @ perry_hir::Expr::Compare { .. }), Some(upd)) =
+        (&exact_init, condition, update)
+    {
+        if let Some((op, bound)) =
+            crate::collectors::exact_i32_range::upper_guard_conjuncts(cond, counter_id)
+                .into_iter()
+                .next()
+                .filter(|(_, bound)| {
+                    counter_guard_operand_is_invariant_i32(ctx, bound, counter_id, body, cond, upd)
+                })
+        {
+            let bound_i32 = match &bound {
+                perry_hir::Expr::Integer(n) => n.to_string(),
+                perry_hir::Expr::LocalGet(id) => {
+                    let slot = ctx.i32_counter_slots[id].clone();
+                    ctx.block().load(I32, &slot)
+                }
+                _ => unreachable!("checked invariant_i32"),
+            };
+            let blk = ctx.block();
+            let bound_i64 = blk.sext(I32, &bound_i32, I64);
+            let past = if matches!(op, perry_hir::CompareOp::Lt) {
+                blk.icmp_sge(I64, exact, &bound_i64)
+            } else {
+                blk.icmp_sgt(I64, exact, &bound_i64)
+            };
+            let skip_idx = ctx.new_block("for.counter.skip");
+            let go_idx = ctx.new_block("for.counter.go");
+            let skip_label = ctx.block_label(skip_idx);
+            let go_label = ctx.block_label(go_idx);
+            ctx.block().cond_br(&past, &skip_label, &go_label);
+            ctx.current_block = go_idx;
+            let result = lower_overflow_exit_for_after_skip(
+                ctx, init, condition, update, body, &state,
+            );
+            result?;
+            // The skip arm and the loop's exit meet after the loop.
+            let after_idx = ctx.new_block("for.counter.after");
+            let after_label = ctx.block_label(after_idx);
+            if !ctx.block().is_terminated() {
+                ctx.block().br(&after_label);
+            }
+            ctx.current_block = skip_idx;
+            ctx.block().br(&after_label);
+            ctx.current_block = after_idx;
+            return Ok(());
+        }
+    }
+    lower_overflow_exit_for_after_skip(ctx, init, condition, update, body, &state)
+}
+
+/// A guard operand the counter-versioned entry check may read once: an int32
+/// literal, or an int32 slot that neither the body, the guard nor the update
+/// writes.
+fn counter_guard_operand_is_invariant_i32(
+    ctx: &FnCtx<'_>,
+    e: &perry_hir::Expr,
+    counter_id: u32,
+    body: &[Stmt],
+    cond: &perry_hir::Expr,
+    update: &perry_hir::Expr,
+) -> bool {
+    use perry_hir::Expr;
+    match e {
+        Expr::Integer(n) => i32::try_from(*n).is_ok(),
+        Expr::LocalGet(id) => {
+            *id != counter_id
+                && ctx.i32_counter_slots.contains_key(id)
+                && !stmts_mutate_local(body, *id)
+                && !expr_mutates_local(cond, *id)
+                && !expr_mutates_local(update, *id)
+        }
+        _ => false,
+    }
+}
+
+fn lower_overflow_exit_for_after_skip(
+    ctx: &mut FnCtx<'_>,
+    init: Option<&Stmt>,
+    condition: Option<&perry_hir::Expr>,
+    update: Option<&perry_hir::Expr>,
+    body: &[Stmt],
+    state: &OverflowExitLoop,
+) -> Result<()> {
+    let state = OverflowExitLoop {
+        counter_id: state.counter_id,
+        flag_slot: state.flag_slot.clone(),
+        checked: state.checked,
+    };
+    let counter_id = state.counter_id;
+    let Some(entry) = counter_entry_check(
+        ctx,
+        counter_id,
+        Some(&state.flag_slot),
+        condition,
+        update,
+        body,
+    )?
+    else {
         return lower_for_after_init_impl(
             ctx,
             init,
@@ -7142,69 +7356,34 @@ fn lower_overflow_exit_for(
     // Counter versioning: one check on the actual values selects a copy whose
     // steps cannot overflow and whose accesses indexed by the counter are in
     // bounds (`counter_entry_check`); the checked copy handles the rest.
-    let fast_idx = ctx.new_block("for.counter.fast");
-    let slow_idx = ctx.new_block("for.counter.checked");
-    let merge_idx = ctx.new_block("for.counter.merge");
-    let fast_label = ctx.block_label(fast_idx);
-    let slow_label = ctx.block_label(slow_idx);
-    let merge_label = ctx.block_label(merge_idx);
-    ctx.block().cond_br(&entry.passed, &fast_label, &slow_label);
-
-    ctx.current_block = fast_idx;
-    let scope_id = ctx.next_loop_proof_scope_id();
-    for buffer_local_id in &entry.views {
-        ctx.bounded_buffer_index_pairs.push(BoundedBufferIndex {
-            index_local_id: counter_id,
-            buffer_local_id: *buffer_local_id,
-            scope_id,
-            bounds_width_units: 1,
-            bounds: BoundsState::Proven {
-                proof: BoundsProof::EntryGuard,
-            },
-        });
-    }
     let fast_state = OverflowExitLoop {
+        counter_id,
+        flag_slot: state.flag_slot.clone(),
         checked: false,
-        ..state
     };
-    lower_for_after_init_impl(
-        ctx,
-        init,
-        condition,
-        update,
-        body,
-        "for.counter.fast",
-        None,
-        true,
-        Some(&fast_state),
-    )?;
-    ctx.bounded_buffer_index_pairs
-        .retain(|fact| fact.scope_id != scope_id);
-    if !ctx.block().is_terminated() {
-        ctx.block().br(&merge_label);
-    }
-
-    ctx.current_block = slow_idx;
-    let state = OverflowExitLoop {
+    let slow_state = OverflowExitLoop {
+        counter_id,
+        flag_slot: state.flag_slot,
         checked: true,
-        ..fast_state
     };
-    lower_for_after_init_impl(
-        ctx,
-        init,
-        condition,
-        update,
-        body,
-        "for",
-        None,
-        true,
-        Some(&state),
-    )?;
-    if !ctx.block().is_terminated() {
-        ctx.block().br(&merge_label);
-    }
-    ctx.current_block = merge_idx;
-    Ok(())
+    lower_counter_versions(ctx, counter_id, entry, &mut |ctx, fast| {
+        let (state, prefix) = if fast {
+            (&fast_state, "for.counter.fast")
+        } else {
+            (&slow_state, "for")
+        };
+        lower_for_after_init_impl(
+            ctx,
+            init,
+            condition,
+            update,
+            body,
+            prefix,
+            None,
+            true,
+            Some(state),
+        )
+    })
 }
 
 /// The entry check of a counter-versioned loop.
@@ -7234,13 +7413,13 @@ struct CounterEntryCheck {
 /// label.
 fn counter_entry_check(
     ctx: &mut FnCtx<'_>,
-    state: &OverflowExitLoop,
+    counter_id: u32,
+    flag_slot: Option<&str>,
     condition: Option<&perry_hir::Expr>,
     update: Option<&perry_hir::Expr>,
     body: &[Stmt],
 ) -> Result<Option<CounterEntryCheck>> {
     use perry_hir::{CompareOp, Expr};
-    let counter_id = state.counter_id;
     let (Some(cond), Some(update)) = (condition, update) else {
         return Ok(None);
     };
@@ -7248,17 +7427,7 @@ fn counter_entry_check(
         return Ok(None);
     }
     let invariant_i32 = |ctx: &FnCtx<'_>, e: &Expr| -> bool {
-        match e {
-            Expr::Integer(n) => i32::try_from(*n).is_ok(),
-            Expr::LocalGet(id) => {
-                *id != counter_id
-                    && ctx.i32_counter_slots.contains_key(id)
-                    && !stmts_mutate_local(body, *id)
-                    && !expr_mutates_local(cond, *id)
-                    && !expr_mutates_local(update, *id)
-            }
-            _ => false,
-        }
+        counter_guard_operand_is_invariant_i32(ctx, e, counter_id, body, cond, update)
     };
     let Some((op, bound)) =
         crate::collectors::exact_i32_range::upper_guard_conjuncts(cond, counter_id)
@@ -7290,7 +7459,11 @@ fn counter_entry_check(
         None => "1".to_string(),
     };
     let counter = load_overflow_exit_counter(ctx, counter_id);
-    let overflowed = ctx.block().load(I1, &state.flag_slot);
+    // A loop with no overflow exit has no flag: its init and step are exact.
+    let overflowed = match flag_slot {
+        Some(slot) => ctx.block().load(I1, slot),
+        None => "false".to_string(),
+    };
     let mut lengths = Vec::new();
     for view_id in &views {
         let view = ctx
