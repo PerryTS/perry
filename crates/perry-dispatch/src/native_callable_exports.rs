@@ -830,7 +830,14 @@ pub static CALLABLE_EXPORT_TABLE: &[(&str, &[&str])] = &[
     ),
     (
         "sqlite",
-        &["DatabaseSync", "Session", "StatementSync", "backup"],
+        &[
+            "Database",
+            "DatabaseSync",
+            "Session",
+            "Statement",
+            "StatementSync",
+            "backup",
+        ],
     ),
     (
         "stream",
@@ -1210,6 +1217,10 @@ pub fn canonical_native_callable_property<'a>(
 ) -> &'a str {
     match (module_name, property_name) {
         ("domain", "create") => "createDomain",
+        // node 26: `Database` / `Statement` are the classes, the `*Sync`
+        // exports are the same values.
+        ("sqlite", "Database") => "DatabaseSync",
+        ("sqlite", "Statement") => "StatementSync",
         ("net", "Stream") => "Socket",
         ("fs", "FileReadStream") => "ReadStream",
         ("fs", "FileWriteStream") => "WriteStream",

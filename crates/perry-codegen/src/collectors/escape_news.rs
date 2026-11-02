@@ -65,6 +65,16 @@ pub fn collect_non_escaping_news(
             else if class_chain_has_unmodeled_base(class, classes) {
                 escaped.insert(*id);
             }
+            // #8969: a private field's definition is a claim on the object
+            // (`js_private_field_add`), and a private method or accessor
+            // installs the class brand on it (`js_private_brand_add`): both
+            // take the instance itself. A scalar-replaced binding has no
+            // object, only the per-field allocas and an uninitialised dummy
+            // `this`, so the claim received a stale stack word and threw
+            // "Cannot initialize #x on this object".
+            else if class_chain_has_private_instance_elements(class, classes) {
+                escaped.insert(*id);
+            }
         }
     }
 
@@ -88,6 +98,31 @@ pub fn collect_non_escaping_news(
 
     candidates.retain(|id, _| !escaped.contains(id));
     candidates
+}
+
+/// Does constructing `class` define a private element on the instance, from
+/// `class` or any class it extends? Cycle- and depth-guarded; a parent this
+/// module does not see is `class_chain_has_unmodeled_base`'s case.
+fn class_chain_has_private_instance_elements(
+    class: &perry_hir::Class,
+    classes: &std::collections::HashMap<String, &perry_hir::Class>,
+) -> bool {
+    let mut current = Some(class);
+    let mut depth = 0usize;
+    while let Some(c) = current {
+        if c.has_private_instance_elements() {
+            return true;
+        }
+        depth += 1;
+        if depth > 64 {
+            return true;
+        }
+        current = c
+            .extends_name
+            .as_deref()
+            .and_then(|name| classes.get(name).copied());
+    }
+    false
 }
 
 /// For scalar-replaced `new` locals, collect the fields that are accessed

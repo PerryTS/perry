@@ -884,6 +884,7 @@ pub(crate) fn dyn_to_int32(v: f64) -> i32 {
 /// its low 32 bits are `mant << e` (mod 2^32) — zero once `e >= 32` — negated
 /// modulo 2^32 for a negative sign.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn to_int32_beyond_i64(v: f64) -> i32 {
     let bits = v.to_bits();

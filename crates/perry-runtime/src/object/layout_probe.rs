@@ -927,6 +927,7 @@ unsafe fn plain_data_at(r: *const ShapeRecord, pos: u32) -> bool {
 /// Is position `pos` of record `r` an accessor or a private name (not
 /// [`plain_data_at`])? Out of line: the chain walk asks it only for a hole.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn attributed_at(r: *const ShapeRecord, pos: u32) -> bool {
     !plain_data_at(r, pos)
@@ -1613,6 +1614,7 @@ pub unsafe extern "C" fn perry_probe_own_method(
 
 /// [`perry_probe_own_method`]'s by-bytes scan of the key's text.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn own_method_by_bytes(recv: f64, key_bits: u64) -> f64 {
     let key = (key_bits & POINTER_MASK) as *const crate::StringHeader;
@@ -1757,6 +1759,7 @@ pub(crate) unsafe fn probe_has(obj_bits: u64, key_bits: u64, own_only: bool) -> 
 /// Is `obj` (class id nonzero) a class declaration's or a class
 /// evaluation's prototype object?
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn class_prototype_object(obj: *const ObjectHeader) -> bool {
     crate::object::class_value::class_decl_prototype_link((*obj).class_id) as usize == obj as usize

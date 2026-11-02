@@ -1357,6 +1357,32 @@ mod tests {
         assert_eq!(rows.to_bits(), 0x7FFC_0000_0000_0001);
     }
 
+    /// #13686: a TTY write stream sized by its own `columns`/`rows` keys keeps
+    /// `tty.WriteStream.prototype` as its [[Prototype]]: `Object.getPrototypeOf`
+    /// and inherited reads of `isTTY` and the stream methods all see it.
+    #[test]
+    fn sized_write_stream_keeps_write_stream_prototype() {
+        ensure_tty_prototypes();
+        let _no_move = crate::gc::GcSuppressScope::new();
+        let proto = crate::object::class_prototype_object(CLASS_ID_TTY_WRITE_STREAM);
+        assert!(!proto.is_null());
+        let obj = crate::object::js_object_alloc_class_with_keys(
+            CLASS_ID_TTY_WRITE_STREAM,
+            0,
+            0,
+            std::ptr::null(),
+            0,
+        );
+        crate::object::js_object_set_field_by_name(obj, named_key(b"columns"), 80.0);
+        crate::object::js_object_set_field_by_name(obj, named_key(b"rows"), 25.0);
+        let got = crate::object::js_object_get_prototype_of(ptr_value(obj));
+        assert_eq!(got.to_bits(), ptr_value(proto).to_bits());
+        let is_tty = crate::object::js_object_get_field_by_name(obj, named_key(b"isTTY"));
+        assert_eq!(is_tty.bits(), TAG_TRUE);
+        let cursor_to = crate::object::js_object_get_field_by_name(obj, named_key(b"cursorTo"));
+        assert!(cursor_to.is_pointer());
+    }
+
     #[test]
     fn resize_drain_with_no_callback_returns_zero() {
         RESIZE_PENDING.store(true, Ordering::Release);

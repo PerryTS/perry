@@ -318,6 +318,7 @@ pub fn map_cons(
             dst: n(dst),
         },
         Defined { dst } => Defined { dst: n(dst) },
+        NotNullish { dst } => NotNullish { dst: n(dst) },
         TopIfAny { dst, from, reason } => TopIfAny {
             dst: n(dst),
             from: n(from),
@@ -462,7 +463,11 @@ pub fn map_cons(
             f: n(f),
             setter,
         },
-        Arith { dst, add } => Arith { dst: n(dst), add },
+        Arith { dst } => Arith { dst: n(dst) },
+        Plus { str, num } => Plus {
+            str: n(str),
+            num: n(num),
+        },
         ArrayLenArg { dst } => ArrayLenArg { dst: n(dst) },
         ShareBuffer { ta } => ShareBuffer { ta },
         ThisTo { origin } => ThisTo { origin },
@@ -560,6 +565,7 @@ fn gen_kind(c: &Cons) -> bool {
             | OverrideThis { .. }
             | TopIfAny { .. }
             | Guard { .. }
+            | NotNullish { .. }
             | Hard { .. }
             | DeleteKey { .. }
             | DefineKey { .. }
@@ -576,6 +582,7 @@ fn gen_kind(c: &Cons) -> bool {
             | StoreIndexed { .. }
             | AccessorKeyed { .. }
             | Arith { .. }
+            | Plus { .. }
             | ArrayLenArg { .. }
             | IterNext { .. }
             | ProtoOf { .. }
@@ -590,7 +597,8 @@ fn gen_kind(c: &Cons) -> bool {
 }
 
 /// Read rules: their only output is `dst`; per-token effects (getters,
-/// protocols) are the same for every call.
+/// protocols) are the same for every call. (`Plus` has two outputs and is
+/// none here: it is never dropped as a dead read.)
 fn read_dst(c: &Cons) -> Option<NodeId> {
     use Cons::*;
     match *c {
@@ -599,7 +607,7 @@ fn read_dst(c: &Cons) -> Option<NodeId> {
         | CjsPublish { dst }
         | IdxLoad { dst, .. }
         | IdxKey { dst, .. }
-        | Arith { dst, .. }
+        | Arith { dst }
         | ArrayLenArg { dst }
         | IterNext { dst }
         | ProtoOf { dst }
@@ -617,8 +625,13 @@ impl Model {
         }
         if self.nodes[n as usize].obs {
             let dst = match *c {
-                Cons::TopIfAny { dst, .. } | Cons::Guard { dst, .. } | Cons::Defined { dst } => {
-                    Some(dst)
+                Cons::TopIfAny { dst, .. }
+                | Cons::Guard { dst, .. }
+                | Cons::Defined { dst }
+                | Cons::NotNullish { dst } => Some(dst),
+                // Two outputs: both must be observation nodes.
+                Cons::Plus { str, num } => {
+                    return !(self.nodes[str as usize].obs && self.nodes[num as usize].obs);
                 }
                 _ => read_dst(c),
             };

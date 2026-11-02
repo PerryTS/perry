@@ -159,10 +159,13 @@ pub(crate) unsafe fn declaration_parent_identity(
 /// Is ShapeId `id` a class evaluation's copy of family layout `family`: the
 /// layout's own facts (key list, slots, holes, kind, attributes, lanes) at
 /// the identity `MIXED | class | serial` an instance of the layout's class
-/// takes when it is linked to that evaluation's prototype? Such a record is
-/// the evaluation's family layout: every slot the family names is where the
-/// family puts it, and the record names the prototype the instance inherits
-/// from. Two directory reads; no descriptor copy.
+/// takes when it is linked to that evaluation's prototype, or at the
+/// family's own prototype identity and integrity with private brands added
+/// (#11791: a class with private methods or accessors brands its instance
+/// before its field definitions run, `shapes::transition_object_shape_add_brand`)?
+/// Such a record is the evaluation's family layout: every slot the family
+/// names is where the family puts it, and the record names the prototype the
+/// instance inherits from. Two directory reads; no descriptor copy.
 pub(crate) fn shape_is_evaluation_layout_of(id: LayoutWord, family: LayoutWord) -> bool {
     if id == family {
         return false;
@@ -176,7 +179,11 @@ pub(crate) fn shape_is_evaluation_layout_of(id: LayoutWord, family: LayoutWord) 
     // SAFETY: present records of this agent, read immediately.
     unsafe {
         let (r, f) = (&*r, &*f);
-        proto_id_links_class_instance(r.proto_id, f.proto_id)
+        // A brand changes no slot: the branded family layout is the family's.
+        let branded_family = r.proto_id == f.proto_id
+            && r.integrity_flags() == f.integrity_flags()
+            && r.brands() != f.brands();
+        (branded_family || proto_id_links_class_instance(r.proto_id, f.proto_id))
             && r.keys == f.keys
             && r.logical_key_count == f.logical_key_count
             && r.live_inline_slot_count == f.live_inline_slot_count

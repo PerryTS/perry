@@ -1,0 +1,82 @@
+{
+  "reference": {
+    "total": 12744,
+    "outlined_self": 0,
+    "active_cold_helpers": {
+      "perry_runtime::array::append::grow": {
+        "self": 8,
+        "inclusive": 131
+      },
+      "perry_runtime::array::indexing::read_cold::read_cold_entry": {
+        "self": 3,
+        "inclusive": 3
+      },
+      "perry_runtime::arena::from_space::walk_and_store": {
+        "self": 2,
+        "inclusive": 2
+      },
+      "perry_runtime::array::header::clean_arr_ptr_resolve": {
+        "self": 2,
+        "inclusive": 6
+      },
+      "perry_runtime::array::indexing::read_cold::read_cold_dispatch": {
+        "self": 6,
+        "inclusive": 676
+      },
+      "perry_runtime::buffer::store::layout::header_is_owned": {
+        "self": 4,
+        "inclusive": 11
+      },
+      "perry_runtime::object::own_override::push_or_own_declined": {
+        "self": 5,
+        "inclusive": 25
+      },
+      "<perry_runtime::arena::page_meta::compact::PageObjects>::reserve_for_push": {
+        "self": 0,
+        "inclusive": 1
+      }
+    }
+  },
+  "cold": {
+    "total": 12602,
+    "outlined_self": 18,
+    "active_cold_helpers": {
+      "perry_runtime::array::indexing::read_cold::read_cold_dispatch": {
+        "self": 9,
+        "inclusive": 656
+      },
+      "perry_runtime::object::own_override::push_or_own_declined": {
+        "self": 7,
+        "inclusive": 39
+      },
+      "perry_runtime::array::append::grow": {
+        "self": 17,
+        "inclusive": 165
+      },
+      "perry_runtime::arena::from_space::walk_and_store": {
+        "self": 2,
+        "inclusive": 3
+      },
+      "perry_runtime::buffer::store::layout::header_is_owned": {
+        "self": 2,
+        "inclusive": 8
+      },
+      "perry_runtime::array::indexing::read_cold::read_cold_entry": {
+        "self": 7,
+        "inclusive": 9
+      },
+      "perry_runtime::array::header::clean_arr_ptr_resolve": {
+        "self": 4,
+        "inclusive": 15
+      },
+      "perry_runtime::object::class_value::class_value_mint": {
+        "self": 0,
+        "inclusive": 3
+      },
+      "<perry_runtime::tls_hot::HotKey<core::cell::UnsafeCell<perry_runtime::string::intern::AtomTable>>>::resolve_and_cache": {
+        "self": 0,
+        "inclusive": 1
+      }
+    }
+  }
+}

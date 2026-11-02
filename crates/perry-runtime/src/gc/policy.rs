@@ -1883,6 +1883,7 @@ pub fn gc_collect_pending_suppressed_parse() -> bool {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn gc_collect_pending_suppressed_parse_slow() {
     GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|pending| pending.set(false));

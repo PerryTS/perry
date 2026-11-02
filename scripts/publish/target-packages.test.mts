@@ -14,13 +14,15 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { spawnSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 
 import {
   ALL_PACKAGES,
@@ -35,7 +37,7 @@ import {
   npmPackageDir,
   targetPackageName,
 } from './constants.mts'
-import { stageExt, stageTarget } from './stage-target.mts'
+import { isStrippableUiArchive, stageExt, stageTarget } from './stage-target.mts'
 
 const VERSION = '0.5.1700'
 const REVISION = 'a'.repeat(40)
@@ -83,6 +85,10 @@ test('ALL_PACKAGES: hosts, then ext packages, then targets, then the wrapper', (
     'x86_64-apple-darwin',
     'x86_64-unknown-linux-gnu',
     'aarch64-unknown-linux-gnu',
+    'x86_64-unknown-linux-musl',
+    'aarch64-unknown-linux-musl',
+    'x86_64-pc-windows-msvc',
+    'aarch64-pc-windows-msvc',
   ])
   assert.deepEqual(EXT_PACKAGES, EXT_TRIPLES.map(t => `@perryts/perry-ext-${t}`))
   assert.equal(
@@ -143,7 +149,15 @@ test('stageTarget: package.json has no os/cpu/bin/deps; target.json restates the
       files: ['libperry_runtime.a', 'libperry_runtime.a.gc-effects', 'libperry_stdlib.a', 'libperry_ui_android.a'],
     })
     const pkg = path.join(dir, 'pkg')
-    const staged = stageTarget({ bundleDir: src, packageDir: pkg, triple, version: VERSION })
+    const stripped: string[] = []
+    const staged = stageTarget({
+      bundleDir: src,
+      packageDir: pkg,
+      triple,
+      version: VERSION,
+      stripArchive: archive => stripped.push(path.basename(archive)),
+    })
+    assert.deepEqual(stripped, ['libperry_ui_android.a'], 'only the UI archive is stripped')
 
     const packageJson = JSON.parse(readFileSync(path.join(pkg, 'package.json'), 'utf8'))
     assert.equal(packageJson.name, '@perryts/perry-target-aarch64-linux-android')
@@ -259,17 +273,17 @@ test('stageExt: every ext archive of the release archive, hashed into target.jso
 // The script derives its repo root from its own path, so a copy of it with the
 // templates and a Cargo.toml stages into the fixture, never into this tree.
 
-// The kind, and whether the release archive carries ext archives (the
-// release legs build them for macOS and Linux glibc only).
+// The kind, and whether the release archive carries ext archives (every
+// release leg builds them: libperry_ext_*.a on Unix, perry_ext_*.lib on Windows).
 const PLATFORM_ARTIFACTS: Array<[string, 'unix' | 'win', boolean]> = [
   ['perry-macos-aarch64', 'unix', true],
   ['perry-macos-x86_64', 'unix', true],
   ['perry-linux-x86_64', 'unix', true],
   ['perry-linux-aarch64', 'unix', true],
-  ['perry-linux-x86_64-musl', 'unix', false],
-  ['perry-linux-aarch64-musl', 'unix', false],
-  ['perry-windows-x86_64', 'win', false],
-  ['perry-windows-aarch64', 'win', false],
+  ['perry-linux-x86_64-musl', 'unix', true],
+  ['perry-linux-aarch64-musl', 'unix', true],
+  ['perry-windows-x86_64', 'win', true],
+  ['perry-windows-aarch64', 'win', true],
 ]
 
 function fixtureRepo(dir: string): { repo: string; artifacts: string } {
@@ -298,7 +312,9 @@ function fixtureRepo(dir: string): { repo: string; artifacts: string } {
     const files = kind === 'win'
       ? ['perry.exe', 'LLVM-C.dll', 'perry_runtime.lib', 'perry_runtime.lib.gc-effects']
       : ['perry', 'libperry_runtime.a', 'libperry_runtime.a.gc-effects']
-    if (ext) files.push('libperry_ext_http.a', 'libperry_ext_zlib.a')
+    if (ext) {
+      files.push(...(kind === 'win' ? ['perry_ext_http.lib', 'perry_ext_zlib.lib'] : ['libperry_ext_http.a', 'libperry_ext_zlib.a']))
+    }
     for (const f of files) writeFileSync(path.join(out, f), f)
   }
   for (const triple of TARGET_TRIPLES) {
@@ -332,20 +348,21 @@ test('stage-npm.sh: stages every target package from its bundle', () => {
       assert.ok(existsSync(path.join(pkg, 'lib/libperry_runtime.a')))
       assert.equal(JSON.parse(readFileSync(path.join(pkg, 'package.json'), 'utf8')).name, targetPackageName(triple))
     }
-    assert.match(run.output, /4 ext packages and 6 target packages/)
+    assert.match(run.output, /8 ext packages and 6 target packages/)
     for (const triple of EXT_TRIPLES) {
       const pkg = path.join(repo, 'npm', `perry-ext-${triple}`)
       const targetJson = JSON.parse(readFileSync(path.join(pkg, 'target.json'), 'utf8'))
       assert.equal(targetJson.target_triple, triple)
-      assert.deepEqual(targetJson.files.map((f: { path: string }) => f.path), [
-        'lib/libperry_ext_http.a',
-        'lib/libperry_ext_zlib.a',
-      ])
+      assert.deepEqual(
+        targetJson.files.map((f: { path: string }) => f.path),
+        triple.includes('windows')
+          ? ['lib/perry_ext_http.lib', 'lib/perry_ext_zlib.lib']
+          : ['lib/libperry_ext_http.a', 'lib/libperry_ext_zlib.a'],
+      )
       assert.equal(JSON.parse(readFileSync(path.join(pkg, 'package.json'), 'utf8')).name, extPackageName(triple))
     }
-    // The host packages keep no ext archive; musl and Windows get no ext package.
+    // The host packages keep no ext archive.
     assert.ok(!existsSync(path.join(repo, 'npm/perry-linux-x64/lib/libperry_ext_http.a')))
-    assert.ok(!existsSync(path.join(repo, 'npm/perry-ext-x86_64-unknown-linux-musl')))
   })
 })
 
@@ -381,5 +398,65 @@ test('stage-npm.sh: a bundle file that differs from its manifest fails the stage
     const run = stageNpm(repo, artifacts)
     assert.notEqual(run.status, 0)
     assert.match(run.output, /perry-cross-wasm32-wasip2: libperry_runtime\.a is \d+ bytes/)
+  })
+})
+
+test('isStrippableUiArchive: UI archives of non-Apple targets only', () => {
+  assert.equal(isStrippableUiArchive('aarch64-linux-android', 'libperry_ui_android.a'), true)
+  assert.equal(isStrippableUiArchive('x86_64-pc-windows-msvc', 'perry_ui_windows.lib'), true)
+  assert.equal(isStrippableUiArchive('aarch64-apple-ios', 'libperry_ui_ios.a'), false)
+  assert.equal(isStrippableUiArchive('aarch64-linux-android', 'libperry_runtime.a'), false)
+  assert.equal(isStrippableUiArchive('aarch64-linux-android', 'libperry_ui_android.a.gc-effects'), false)
+})
+
+/** A tool from PATH or /usr/lib/llvm-*, or undefined. */
+function findTool(name: string): string | undefined {
+  const dirs = (process.env.PATH ?? '').split(path.delimiter)
+  try {
+    for (const d of readdirSync('/usr/lib')) if (d.startsWith('llvm-')) dirs.push(`/usr/lib/${d}/bin`)
+  } catch {}
+  return dirs.map(d => path.join(d, name)).find(f => existsSync(f))
+}
+
+test('stageTarget: the UI archive is stripped before its hash is recorded (real strip)', t => {
+  const objcopy = findTool('llvm-objcopy')
+  const llvmAr = findTool('llvm-ar')
+  const cc = findTool('cc') ?? findTool('clang')
+  if (!objcopy || !llvmAr || !cc) {
+    t.skip(`needs llvm-objcopy, llvm-ar and a C compiler (have ${[objcopy, llvmAr, cc].join(',')})`)
+    return
+  }
+  withTemp(dir => {
+    const triple = 'aarch64-linux-android'
+    const run = (cmd: string, args: string[]) => execFileSync(cmd, args, { cwd: dir, stdio: 'pipe' })
+    writeFileSync(path.join(dir, 'a.c'), 'int perry_test_sym(void) { return 7; }\n')
+    writeFileSync(path.join(dir, 'bc.bin'), Buffer.alloc(4096, 1))
+    run(cc, ['-c', 'a.c', '-o', 'plain.o'])
+    run(objcopy, ['--add-section', '.llvmbc=bc.bin', '--add-section', '.llvmcmd=bc.bin', 'plain.o', 'a.o'])
+    run(llvmAr, ['rcs', 'libperry_ui_android.a', 'a.o'])
+    const src = bundle(path.join(dir, 'bundle'), triple, { files: ['libperry_runtime.a'] })
+    // Add the real UI archive to the bundle and its manifest.
+    const archive = readFileSync(path.join(dir, 'libperry_ui_android.a'))
+    writeFileSync(path.join(src, 'libperry_ui_android.a'), archive)
+    const manifest = JSON.parse(readFileSync(path.join(src, 'manifest.json'), 'utf8'))
+    manifest.files.push({ path: 'libperry_ui_android.a', sha256: sha256(archive), size: archive.length })
+    writeFileSync(path.join(src, 'manifest.json'), JSON.stringify(manifest))
+
+    const pkg = path.join(dir, 'pkg')
+    const staged = stageTarget({ bundleDir: src, packageDir: pkg, triple, version: VERSION })
+
+    const out = path.join(pkg, 'lib', 'libperry_ui_android.a')
+    const entry = staged.files.find(f => f.path === 'lib/libperry_ui_android.a')!
+    assert.ok(entry.size < archive.length, 'the staged UI archive is smaller')
+    assert.equal(entry.size, statSync(out).size)
+    assert.equal(entry.sha256, sha256(readFileSync(out)), 'target.json hashes the stripped archive')
+    assert.notEqual(entry.sha256, sha256(archive))
+    const sections = execFileSync(findTool('llvm-objdump') ?? 'objdump', ['-h', out], { encoding: 'utf8' })
+    assert.doesNotMatch(sections, /\.llvmbc|\.llvmcmd/)
+    assert.match(execFileSync(findTool('llvm-nm') ?? 'nm', [out], { encoding: 'utf8' }), /perry_test_sym/)
+    // The runtime archive is not touched.
+    assert.deepEqual(readFileSync(path.join(pkg, 'lib', 'libperry_runtime.a')), readFileSync(path.join(src, 'libperry_runtime.a')))
+    // The extracted bundle itself is left as built.
+    assert.equal(sha256(readFileSync(path.join(src, 'libperry_ui_android.a'))), sha256(archive))
   })
 })

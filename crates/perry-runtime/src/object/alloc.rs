@@ -297,6 +297,7 @@ fn alloc_instance_keeping_keys(
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn alloc_instance_keeping_keys_collecting(
     total_size: usize,

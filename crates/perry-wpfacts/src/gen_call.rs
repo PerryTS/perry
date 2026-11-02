@@ -319,12 +319,18 @@ impl<'a> Gen<'a> {
             return;
         };
         let ret = self.m.funcs[f as usize].ret;
+        // RPG1b: its statements are ordered in its own body; a parameter
+        // default is not.
+        let saved = (self.order_ok, self.loop_depth);
+        (self.order_ok, self.loop_depth) = (false, 0);
         self.params(cfx, params);
         if *is_async || *is_generator {
             self.m
                 .add_top(ret, |_| "async/generator closure result".into());
         }
+        self.order_ok = true;
         self.stmts(cfx, body);
+        (self.order_ok, self.loop_depth) = saved;
         let _: &Vec<Stmt> = body;
     }
 

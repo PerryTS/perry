@@ -345,6 +345,32 @@ impl Model {
         false
     }
 
+    /// DECISIONS 241: `src` stored on function token `t` under `key`, kept
+    /// apart from what its field holds from the join, so the unit publishes
+    /// only its own stores. `prototype` is DECISIONS 210(1)'s.
+    fn note_fn_store(&mut self, t: Tok, key: Key, src: NodeId) {
+        let n = match key {
+            Key::Named(a) if self.atoms[a as usize] == "prototype" => return,
+            Key::Named(a) => match self.fn_stored.get(&(t, a)) {
+                Some(&n) => n,
+                None => {
+                    let n = self.node_named("fnstored", || format!("fnstored({t},{a})"));
+                    self.fn_stored.insert((t, a), n);
+                    n
+                }
+            },
+            Key::Any => match self.fn_stored_any.get(&t) {
+                Some(&n) => n,
+                None => {
+                    let n = self.node_named("fnstored", || format!("fnstoredany({t})"));
+                    self.fn_stored_any.insert(t, n);
+                    n
+                }
+            },
+        };
+        self.edge(src, n);
+    }
+
     pub(crate) fn store_into(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) {
         // A class private field: what its class's code stores (`private_field`);
         // on an object of this unit, its own field too.
@@ -707,6 +733,11 @@ impl Model {
             } else if self.is_cell_arr(t) {
                 self.arr_named_srcs.entry(t).or_default().push(src);
             }
+        }
+        // DECISIONS 241: what this unit stores on a function value's own
+        // property is published to every holder of it (`fn_stored`).
+        if self.unit_mode && matches!(self.toks[t as usize], TokKind::Func(..)) {
+            self.note_fn_store(t, key, src);
         }
         match key {
             Key::Named(a) => {

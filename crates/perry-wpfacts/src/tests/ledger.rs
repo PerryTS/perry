@@ -583,6 +583,9 @@ fn ledger_probe() {
 /// The closed list of reasons a published value contract is unknown
 /// (`ValueContract::unknown_because` / `unknown_for`, dump field `why`).
 const UNKNOWN_WHY: &[&str] = &[
+    // DECISIONS 241: unknown code reached a function value: it may store
+    // anything under any own key (`ProgramFacts::fn_stores_out`).
+    "function-reached-unknown-code",
     "unit-aborted",
     "undescribed-store-value",
     "undescribed-cell-write",

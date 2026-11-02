@@ -27,6 +27,10 @@ fi
 # `#[no_mangle] pub extern "C" fn` with no `#[cfg]` on the item or its
 # module (a cfg-gated *body* is fine; the symbol still exists everywhere).
 SENTINELS=(
+  # Fixed-record ABI pointers must remain emitted without being final-link roots.
+  perry_build_runtime_record
+  perry_alloc_runtime_record
+  perry_runtime_image_result
   js_gc_init
   js_typed_feedback_maybe_dump_trace
   perry_macos_bundle_chdir # added by #4833; absence = pre-#4833 stale archive

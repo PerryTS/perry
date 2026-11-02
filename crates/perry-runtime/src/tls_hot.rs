@@ -487,6 +487,7 @@ pub(crate) fn thread_identity() -> usize {
     target_pointer_width = "64"
 ))]
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn hot_uncached() -> &'static HotTls {
     let slots = hot_via_tls();

@@ -65,6 +65,7 @@ pub(super) fn image_child_is_collectable(child_addr: usize) -> bool {
 /// address) published `child_addr`. Returns whether the cell is newly
 /// remembered.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(super) fn remember_image_parent(parent_addr: usize, child_addr: usize) -> bool {
     if !image_child_is_collectable(child_addr) {
@@ -329,6 +330,7 @@ pub(super) fn for_each_image_cell(mut visit: impl FnMut(*mut GcHeader)) {
 /// image cell holding a collectable child must be remembered, whatever the
 /// child's generation. A store that bypassed the barrier leaves its cell out.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(super) fn verify_image_cells_remembered(stats: &mut OldYoungEdgeVerifyStats) {
     for_each_image_cell(|header| unsafe {
