@@ -365,7 +365,7 @@ pub(super) fn lower(
     // The scope index only keys `P.length`'s native read; the view claims no
     // noalias (a generic receiver may be any buffer), so no alias metadata
     // is emitted for it.
-    let scope_idx = ctx.buffer_alias_base + ctx.buffer_data_slots.len() as u32;
+    let scope_idx = ctx.buffer_alias_scopes.allocate();
     ctx.buffer_data_slots
         .insert(plan.receiver, (data_slot.clone(), scope_idx));
     ctx.receiver_descriptors.materialize_buffer_view(

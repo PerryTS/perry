@@ -249,6 +249,8 @@ pub use ctor_arity::{
 };
 mod checked_integer;
 #[cfg(test)]
+mod buffer_alias_metadata_tests;
+#[cfg(test)]
 mod declared_string_add_tests;
 #[cfg(test)]
 mod emission_order_tests;
@@ -4464,8 +4466,7 @@ fn lower_module(
     // function's count emit `!alias.scope !N` references with no matching
     // metadata definition (issue #71).
     closed_targets::apply(&mut llmod);
-    let total_buffer_scopes = llmod.buffer_alias_counter;
-    emit_buffer_alias_metadata(&mut llmod, total_buffer_scopes);
+    emit_buffer_alias_metadata(&mut llmod);
     llmod.number_loop_metadata();
     llmod
         .native_rep_records

@@ -50,7 +50,7 @@ pub(in crate::codegen) fn compile_static_method(
         params.insert(0, (I64, "%generator_owner".into()));
     }
     let ic_base = llmod.ic_counter;
-    let buffer_alias_base = llmod.buffer_alias_counter;
+    let buffer_alias_scopes = llmod.buffer_alias_scope_allocator();
     // The prologue's cache of this class's function object (see
     // `js_static_this_resolve_class`); thread-local when workers exist, so
     // each agent caches its own.
@@ -551,7 +551,7 @@ pub(in crate::codegen) fn compile_static_method(
         known_noalias_buffer_locals: native_facts.known_noalias_buffer_locals(),
         sealed_buffer_locals: native_facts.sealed_buffer_locals(),
         late_exposed_buffer_locals: native_facts.late_exposed_buffer_locals(),
-        buffer_alias_base,
+        buffer_alias_scopes,
     };
     crate::codegen::arguments::materialize_arguments_object(
         &mut ctx,

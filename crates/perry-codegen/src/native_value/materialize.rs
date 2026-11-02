@@ -508,6 +508,18 @@ fn nanbox_string_ref_boxed(ctx: &mut FnCtx<'_>, handle: &str) -> String {
         .phi(DOUBLE, &[(&null_box, &null_pred), (&tag_box, &tag_pred)])
 }
 
+/// An f64 operand that is an LLVM decimal constant (finite by construction;
+/// hex constants, which can spell NaN payloads, are not admitted).
+fn is_finite_f64_constant(lowered: &LoweredValue) -> bool {
+    matches!(&lowered.rep, NativeRep::F64)
+        && !lowered.value.starts_with('%')
+        && !lowered.value.starts_with("0x")
+        && lowered
+            .value
+            .parse::<f64>()
+            .is_ok_and(|value| value.is_finite())
+}
+
 pub(crate) fn materialize_js_value(
     ctx: &mut FnCtx<'_>,
     lowered: LoweredValue,
@@ -524,6 +536,13 @@ pub(crate) fn materialize_js_value(
     }
     if matches!(&lowered.rep, NativeRep::PromiseBoundary) {
         return materialize_promise_boundary_to_js_value(ctx, lowered, reason);
+    }
+    if is_finite_f64_constant(&lowered) {
+        // A finite f64 constant (a numeric literal: `i < 3840`, `kx <= 2`) is
+        // a JS number as written: boxing it is the identity, no instruction
+        // is emitted and no native value leaves its representation, so it is
+        // not a materialization and records none.
+        return lowered.value;
     }
     if matches!(&lowered.rep, NativeRep::SmallBigInt) {
         let from_native_rep = lowered.rep.name().to_string();
@@ -694,5 +713,25 @@ pub(crate) fn materialize_js_value_without_record(
         | NativeRep::PodRecord { .. }
         | NativeRep::PodRecordView { .. } => lowered.value.clone(),
         NativeRep::SmallBigInt => box_small_bigint_i128_to_js_value(ctx, &lowered.value),
+    }
+}
+
+
+#[cfg(test)]
+mod finite_constant_tests {
+    use super::*;
+
+    /// A numeric literal compared with a loop bound (`x < 3840`, `kx <= 2`)
+    /// is lowered to an f64 constant; boxing it is the identity and must not
+    /// record a `materialize_js_value` (reason runtime_api) in the native
+    /// region. A register still does, and so does a hex constant (it can
+    /// spell a NaN payload).
+    #[test]
+    fn a_finite_constant_is_a_js_number_and_records_nothing() {
+        assert!(is_finite_f64_constant(&LoweredValue::f64("3840.0")));
+        assert!(is_finite_f64_constant(&LoweredValue::f64("-2.5e3")));
+        assert!(!is_finite_f64_constant(&LoweredValue::f64("%r12")));
+        assert!(!is_finite_f64_constant(&LoweredValue::f64("0x7FF8000000000001")));
+        assert!(!is_finite_f64_constant(&LoweredValue::i32("7")));
     }
 }

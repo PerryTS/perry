@@ -50,6 +50,25 @@ fn push_statepoint_declarations(ir: &mut String) {
     }
 }
 
+/// The buffer alias scopes one function allocates. A scope owns three
+/// consecutive numbered metadata ids from the module counter: the scope node
+/// `S`, its single-scope list `S+1` (`!alias.scope`) and its noalias list
+/// `S+2` (every other scope). The scope id is the buffer's `scope_idx`.
+#[derive(Clone, Debug, Default)]
+pub struct BufferAliasScopes {
+    base: u32,
+    scopes: Vec<u32>,
+}
+
+impl BufferAliasScopes {
+    /// A fresh scope id, never handed out before in this module.
+    pub fn allocate(&mut self) -> u32 {
+        let id = self.base + 3 * self.scopes.len() as u32;
+        self.scopes.push(id);
+        id
+    }
+}
+
 pub struct LlModule {
     /// Per-compile module-state ownership, copied from CompileOptions.
     pub(crate) program_has_worker: bool,
@@ -86,14 +105,16 @@ pub struct LlModule {
     /// Module-wide counter for inline cache globals (`perry_ic_N`).
     /// Must be unique across all functions in the module.
     pub ic_counter: u32,
-    /// Module-wide counter for buffer alias-scope ids. Each function's
-    /// `FnCtx` reads this as its `buffer_alias_base` at creation, then
-    /// after the function lowers its body the counter is bumped by the
-    /// number of scopes that function allocated. Must be unique across
-    /// every function in the module so `!alias.scope !201` references
-    /// emitted on loads/stores match the metadata nodes emitted once
-    /// at the end of `compile_module` (closes #71).
-    pub buffer_alias_counter: u32,
+    /// The module's one numbered-metadata id counter (`!0 = !{}` is fixed;
+    /// ids start at 1). Every numbered node the module emits takes its id
+    /// from here: buffer alias scopes (three ids each, see
+    /// [`BufferAliasScopes`]), the alias domain, and loop IDs
+    /// ([`Self::number_loop_metadata`]). No table has a fixed base, so no
+    /// two tables can overlap however many nodes they hold.
+    next_metadata_id: u32,
+    /// Scope-node ids of every buffer alias scope committed by a lowered
+    /// function, in allocation order (closes #71: one module-wide table).
+    buffer_alias_scopes: Vec<u32>,
     pub(crate) native_rep_records: Vec<NativeRepRecord>,
     fp_flags: FpFlags,
     /// #8175: symbols that must be defined, declared, AND called with the
@@ -180,7 +201,8 @@ impl LlModule {
             symbol_prefix: String::new(),
             metadata_lines: Vec::new(),
             ic_counter: 0,
-            buffer_alias_counter: 0,
+            next_metadata_id: 1,
+            buffer_alias_scopes: Vec::new(),
             native_rep_records: Vec::new(),
             fp_flags,
             preserve_none_fns: Rc::new(RefCell::new(HashSet::new())),
@@ -308,6 +330,43 @@ impl LlModule {
             .unwrap_or_else(crate::gc_call_effects::GcEffects::outside_compilation)
     }
 
+    /// Take the next numbered metadata id from the module counter.
+    pub(crate) fn allocate_metadata_id(&mut self) -> u32 {
+        let id = self.next_metadata_id;
+        self.next_metadata_id += 1;
+        id
+    }
+
+    /// The allocator a function's `FnCtx` takes its buffer alias scopes
+    /// from: ids continue the module counter. Functions are lowered one at a
+    /// time; [`Self::commit_buffer_alias_scopes`] returns the ids before the
+    /// next function starts.
+    pub(crate) fn buffer_alias_scope_allocator(&self) -> BufferAliasScopes {
+        BufferAliasScopes {
+            base: self.next_metadata_id,
+            scopes: Vec::new(),
+        }
+    }
+
+    /// Publish the scopes one function allocated and move the module
+    /// counter past their ids.
+    pub(crate) fn commit_buffer_alias_scopes(&mut self, scopes: BufferAliasScopes) {
+        if scopes.scopes.is_empty() {
+            return;
+        }
+        assert_eq!(
+            scopes.base, self.next_metadata_id,
+            "buffer alias scopes allocated from a stale metadata id counter"
+        );
+        self.next_metadata_id = scopes.base + 3 * scopes.scopes.len() as u32;
+        self.buffer_alias_scopes.extend(scopes.scopes);
+    }
+
+    /// Scope-node ids of every committed buffer alias scope.
+    pub(crate) fn buffer_alias_scopes(&self) -> &[u32] {
+        &self.buffer_alias_scopes
+    }
+
     /// Append a raw metadata definition line (e.g. `!1 = distinct !{!1}`).
     /// Emitted after `!0 = !{}` in the module IR.
     pub fn add_metadata_line(&mut self, line: String) {
@@ -318,17 +377,11 @@ impl LlModule {
     /// numbered loop ID, once all functions are lowered. Each latch gets a
     /// distinct `!K = distinct !{!K, ...}` (LLVM loop IDs are per loop); the
     /// operand nodes (`!{!"perry.region", !"<id>"}` per region,
-    /// `!{!"perry.byte_view.fallback"}`) are shared. Ids follow the largest
-    /// numbered metadata line, so they cannot collide with the alias-scope
-    /// tables. Idempotent: a numbered tag keeps its id.
+    /// `!{!"perry.byte_view.fallback"}`) are shared. Ids come from the
+    /// module's one metadata id counter, so they cannot collide with the
+    /// alias-scope tables. Idempotent: a numbered tag keeps its id.
     pub(crate) fn number_loop_metadata(&mut self) {
-        let mut next = self
-            .metadata_lines
-            .iter()
-            .filter_map(|line| metadata_definition_id(line))
-            .max()
-            .unwrap_or(0)
-            + 1;
+        let mut next = self.next_metadata_id;
         let mut operand_nodes: HashMap<String, u32> = HashMap::new();
         let mut lines = Vec::new();
         let mut operand = |text: String, next: &mut u32, lines: &mut Vec<String>| -> u32 {
@@ -374,6 +427,7 @@ impl LlModule {
                 }
             }
         }
+        self.next_metadata_id = next;
         self.metadata_lines.extend(lines);
     }
 
