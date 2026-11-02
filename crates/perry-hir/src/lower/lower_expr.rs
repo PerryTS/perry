@@ -37,7 +37,7 @@ mod stream_module_value_tests;
 
 pub(crate) use arm_bin::lower_bin_expr;
 pub(crate) use arm_class::lower_class_expr;
-pub(crate) use arm_ident::lower_ident_expr;
+pub(crate) use arm_ident::{class_binding_read, lower_ident_expr};
 pub(crate) use arm_optchain::lower_opt_chain_expr;
 pub(crate) use arm_unary::lower_unary_expr;
 pub(crate) use assignment::lower_expr_assignment;
