@@ -26,7 +26,7 @@ pub(super) fn class_statics(
                 .get(&cobj)
                 .into_iter()
                 .flatten()
-                .filter(|&&k| Some(k as usize) != pa)
+                .filter(|&&k| Some(k as usize) != pa && !g.m.is_private_atom(k))
                 .filter_map(|&k| {
                     let n = *g.m.fields.get(&(cobj, k))?;
                     let ts = g.m.nodes[n as usize].pts.to_sorted();
@@ -81,6 +81,10 @@ pub(super) fn literal_field_fns(
     keys.dedup();
     let mut out = Vec::new();
     'key: for a in keys {
+        // A class private field is no key of the layout to a reader.
+        if g.m.is_private_atom(a) {
+            continue;
+        }
         let mut fs: Vec<(model::FnIdx, model::Tok)> = Vec::new();
         for &t in &mine {
             let Some(&n) = g.m.fields.get(&(t, a)) else {
@@ -114,7 +118,7 @@ pub(super) fn literal_field_fns(
         let fcs = fs
             .into_iter()
             .map(|(f, ft)| match g.stand_in_fc.get(&ft) {
-                Some(&c) if g.m.funcs[f as usize].func_id == u32::MAX => c.clone(),
+                Some(&c) if g.m.funcs[f as usize].func_id == u32::MAX => forwarded_fn(g, c),
                 _ => fn_contract_of(g, templates, f, layouts_out, open_tm),
             })
             .collect();
@@ -241,6 +245,8 @@ pub(super) fn nested_layouts(
                     literal_shape: true,
                     facts,
                     methods: Vec::new(),
+                    getters: Vec::new(),
+                    own_getters: own_getters(&g, itm),
                     native_parent: None,
                     parent: foreign_parent(&g, itm),
                     field_fns: Vec::new(),
@@ -261,6 +267,7 @@ pub(super) fn nested_layouts(
                     // (DECISIONS 101).
                     birth_keys: atoms_of(g, &g.m.tmpls[itm as usize].birth_keys),
                     definite: atoms_of(g, &g.m.tmpls[itm as usize].definite),
+                    reserved: atoms_of(g, &g.m.tmpls[itm as usize].reserved),
                     ctor_leaks: true,
                     ctor_returns: g.chain_returns(itm),
                     binding_prim: 0,
@@ -338,6 +345,78 @@ pub(super) fn chain_unsettled(g: &gen::Gen, tm: model::TmplId) -> bool {
     false
 }
 
+/// The getters on `tm`'s prototype chain inside this unit, as `methods`
+/// walks it (`ClassContract::getters`): key and function name.
+pub(super) fn proto_getters(g: &gen::Gen, tm: model::TmplId) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut cur = Some(tm);
+    while let Some(c) = cur {
+        if g.m.foreign.contains_key(&c) {
+            break;
+        }
+        if let Some(&proto) = g.m.tok_index.get(&model::TokKind::Proto(c)) {
+            for &a in g.m.accessor_keys.get(&proto).into_iter().flatten() {
+                let Some((gs, _)) = g.m.accessors.get(&(proto, a)) else {
+                    continue;
+                };
+                for &t in gs {
+                    let f = g.m.tok_fn(t);
+                    if f == model::NO_FN {
+                        continue;
+                    }
+                    let e = (
+                        g.m.atoms[a as usize].clone(),
+                        g.m.funcs[f as usize].name.clone(),
+                    );
+                    if !out.contains(&e) {
+                        out.push(e);
+                    }
+                }
+            }
+        }
+        cur = g.m.tmpls[c as usize].parent;
+    }
+    out.sort();
+    out
+}
+
+/// The own accessors of literal layout `tm` (`ClassContract::own_getters`):
+/// every accessor installed on an object of `tm` (its birth defines them,
+/// `js_object_define_accessor`), as key and getter name; a key with only a
+/// setter carries an empty name. The key hides the prototype chain for the
+/// reader, as it does in the owner.
+pub(super) fn own_getters(g: &gen::Gen, tm: model::TmplId) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for (&(h, a), (gs, ss)) in g.m.accessors.iter() {
+        if !matches!(g.m.toks[h as usize], model::TokKind::Obj(..)) || g.m.tmpl_of(h) != Some(tm) {
+            continue;
+        }
+        let key = g.m.atoms[a as usize].clone();
+        let mut any = false;
+        for &t in gs {
+            let f = g.m.tok_fn(t);
+            if f == model::NO_FN {
+                continue;
+            }
+            any = true;
+            let e = (key.clone(), g.m.funcs[f as usize].name.clone());
+            if !out.contains(&e) {
+                out.push(e);
+            }
+        }
+        // A setter-only key, or a getter that is no function (a computed
+        // or unknown value): the key is still an own accessor.
+        if !any && (!ss.is_empty() || !gs.is_empty()) {
+            let e = (key.clone(), String::new());
+            if !out.contains(&e) {
+                out.push(e);
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
 /// The first class up `tm`'s chain that is another unit's (a stand-in),
 /// by display (DECISIONS 104): the chain below it is this unit's own.
 pub(super) fn foreign_parent(g: &gen::Gen, tm: model::TmplId) -> Option<String> {
@@ -368,6 +447,17 @@ fn compiled_body_of(g: &gen::Gen, f: model::FnIdx) -> Option<(String, u32, bool)
             closure,
         )
     })
+}
+
+/// Another unit's function `fc` (a stand-in's contract) as this unit
+/// forwards it: whole, with the functions described inside it that have an
+/// owner's entry named (`units::name_owned_in_fn`, DECISIONS 106).
+pub(super) fn forwarded_fn(g: &gen::Gen, fc: &units::FnContract) -> units::FnContract {
+    let mut c = fc.clone();
+    if let Some(u) = g.unit_in {
+        units::name_owned_in_fn(&mut c, &|n| u.own_fn(n).is_some());
+    }
+    c
 }
 
 pub(super) fn fn_contract_of(
@@ -511,7 +601,7 @@ pub(super) fn fn_contract_of(
     // DECISIONS 140: the calls the body makes through a parameter marker,
     // each argument described as the result is.
     let mut param_calls: Vec<units::ParamCall> = Vec::new();
-    for &(f2, i, key, call) in &g.m.marker_calls {
+    for &(f2, i, path, key, call) in &g.m.marker_calls {
         if f2 != f {
             continue;
         }
@@ -524,10 +614,12 @@ pub(super) fn fn_contract_of(
             })
             .collect();
         let key = key.map(|a| g.m.atoms[a as usize].clone());
+        let path = path.map(|a| g.m.atoms[a as usize].clone());
         units::join_param_calls(
             &mut param_calls,
             &[units::ParamCall {
                 param: i,
+                path,
                 key,
                 args,
             }],
@@ -1006,7 +1098,7 @@ pub(super) fn describe_nodes(
                 // stand-in contract.
                 if let model::TokKind::Func(f2, _) = g.m.toks[t as usize] {
                     let fc = match g.stand_in_fc.get(&t) {
-                        Some(&fc) => fc.clone(),
+                        Some(&fc) => forwarded_fn(g, fc),
                         None if g.m.funcs[f2 as usize].func_id != u32::MAX => fn_named(g, f2),
                         None => {
                             ret_unknown = true;
@@ -1084,6 +1176,8 @@ pub(super) fn describe_nodes(
                             literal_shape,
                             facts: facts.clone(),
                             methods: Vec::new(),
+                            getters: Vec::new(),
+                            own_getters: own_getters(&g, tm),
                             native_parent: None,
                             parent: foreign_parent(&g, tm),
                             field_fns: Vec::new(),
@@ -1104,6 +1198,7 @@ pub(super) fn describe_nodes(
                             // (DECISIONS 101).
                             birth_keys: atoms_of(g, &g.m.tmpls[tm as usize].birth_keys),
                             definite: atoms_of(g, &g.m.tmpls[tm as usize].definite),
+                            reserved: atoms_of(g, &g.m.tmpls[tm as usize].reserved),
                             ctor_leaks: true,
                             ctor_returns: g.chain_returns(tm),
                             binding_prim: 0,
@@ -1355,10 +1450,14 @@ pub(super) fn describe_toks(
             // An array (DECISIONS 94): its elements are cell `arr:<display>`.
             model::TokKind::Obj(..) if g.m.is_cell_arr(t) => {
                 let d = g.arr_name(t);
-                let v = if g.m.is_box(t) {
+                let v = if g.m.is_box(t) && !crate::derive::exact_array(&g.m, t) {
                     &mut vc.boxes
-                } else {
+                } else if g.m.is_box(t) {
+                    &mut vc.arrayboxes
+                } else if crate::derive::exact_array(&g.m, t) {
                     &mut vc.arrays
+                } else {
+                    &mut vc.made_arrays
                 };
                 if !v.contains(&d) {
                     v.push(d);
@@ -1388,7 +1487,7 @@ pub(super) fn describe_toks(
             _ => {
                 if let Some(&fc) = g.stand_in_fc.get(&t) {
                     if !vc.fns.iter().any(|c| c.name == fc.name) {
-                        vc.fns.push(fc.clone());
+                        vc.fns.push(forwarded_fn(g, fc));
                     }
                 }
                 continue;
@@ -1430,6 +1529,8 @@ pub(super) fn describe_toks(
                     literal_shape,
                     facts,
                     methods: Vec::new(),
+                    getters: Vec::new(),
+                    own_getters: own_getters(&g, tm),
                     native_parent: None,
                     parent: foreign_parent(&g, tm),
                     field_fns: Vec::new(),
@@ -1450,6 +1551,7 @@ pub(super) fn describe_toks(
                     // (DECISIONS 101).
                     birth_keys: atoms_of(g, &g.m.tmpls[tm as usize].birth_keys),
                     definite: atoms_of(g, &g.m.tmpls[tm as usize].definite),
+                    reserved: atoms_of(g, &g.m.tmpls[tm as usize].reserved),
                     ctor_leaks: true,
                     ctor_returns: g.chain_returns(tm),
                     binding_prim: 0,
@@ -1620,6 +1722,8 @@ pub(super) fn fn_inst_contract(
         literal_shape: false,
         facts,
         methods,
+        getters: proto_getters(g, tm),
+        own_getters: Vec::new(),
         native_parent: None,
         parent: None,
         field_fns: Vec::new(),
@@ -1637,6 +1741,7 @@ pub(super) fn fn_inst_contract(
         ctor_fn: Some(fn_contract_of(g, templates, f, layouts_out, open_tm)),
         birth_keys: atoms_of(g, &tpl.birth_keys),
         definite: atoms_of(g, &tpl.definite),
+        reserved: atoms_of(g, &tpl.reserved),
         ctor_leaks: true,
         ctor_returns: m.ctor_returns_object(f),
         binding_prim: 0,
@@ -1749,7 +1854,7 @@ pub(super) fn arg_contract_of(
                 if let model::TokKind::Func(f, _) = g.m.toks[t as usize] {
                     match g.stand_in_fc.get(&t) {
                         Some(&fc) if !vc.fns.iter().any(|c| c.name == fc.name) => {
-                            vc.fns.push(fc.clone())
+                            vc.fns.push(forwarded_fn(g, fc))
                         }
                         Some(_) => {}
                         // Its closed publication (23), or a valid normal
@@ -1807,10 +1912,14 @@ pub(super) fn arg_contract_of(
                 // (`Gen::contract_check`), named as a value contract names it (94).
                 if g.m.is_cell_arr(t) {
                     let d = g.arr_name(t);
-                    let v = if g.m.is_box(t) {
+                    let v = if g.m.is_box(t) && !crate::derive::exact_array(&g.m, t) {
                         &mut vc.boxes
-                    } else {
+                    } else if g.m.is_box(t) {
+                        &mut vc.arrayboxes
+                    } else if crate::derive::exact_array(&g.m, t) {
                         &mut vc.arrays
+                    } else {
+                        &mut vc.made_arrays
                     };
                     if !v.contains(&d) {
                         v.push(d);
@@ -1884,6 +1993,8 @@ pub(super) fn arg_contract_of(
                             literal_shape: true,
                             facts: facts.clone(),
                             methods: Vec::new(),
+                            getters: Vec::new(),
+                            own_getters: own_getters(&g, tm),
                             native_parent: None,
                             parent: foreign_parent(&g, tm),
                             field_fns: Vec::new(),
@@ -1904,6 +2015,7 @@ pub(super) fn arg_contract_of(
                             // (DECISIONS 101).
                             birth_keys: atoms_of(g, &g.m.tmpls[tm as usize].birth_keys),
                             definite: atoms_of(g, &g.m.tmpls[tm as usize].definite),
+                            reserved: atoms_of(g, &g.m.tmpls[tm as usize].reserved),
                             ctor_leaks: true,
                             ctor_returns: g.chain_returns(tm),
                             binding_prim: 0,
@@ -1924,6 +2036,19 @@ pub(super) fn arg_contract_of(
                                 layouts_out,
                                 open_tm,
                             );
+                            // UEB: its fields as a published literal's
+                            // (`Gen::nested_fields` decided them for the
+                            // literals handed to a closed function,
+                            // `Gen::handed`): what they hold, by key.
+                            if cc.literal_shape
+                                && !contracts_out.iter().any(|(_, c)| &c.display == display)
+                            {
+                                cc.field_layouts =
+                                    nested_layouts(g, templates, tm, layouts_out, open_tm);
+                                cc.field_values =
+                                    field_value_contracts(g, templates, tm, layouts_out, open_tm);
+                                cc.field_tas = field_ta_contracts(g, tm);
+                            }
                         }
                         vc.layouts.push(cc)
                     }

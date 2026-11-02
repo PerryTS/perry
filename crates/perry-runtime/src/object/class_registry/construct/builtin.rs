@@ -48,7 +48,10 @@ pub(super) unsafe fn construct(
         BuiltinConstructorIdentity::BigInt => {
             return Some(crate::error::js_throw_bigint_constructor_type_error());
         }
-        BuiltinConstructorIdentity::Navigator => {
+        // WHATWG: the `AbortSignal` constructor throws; signals come from an
+        // `AbortController` or the static factories. A direct `new`, a value
+        // `new` and a live `super()` of a subclass all reach this switch.
+        BuiltinConstructorIdentity::Navigator | BuiltinConstructorIdentity::AbortSignal => {
             return Some(crate::error::js_throw_illegal_constructor_type_error());
         }
         BuiltinConstructorIdentity::Iterator => {

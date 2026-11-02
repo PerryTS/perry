@@ -372,7 +372,10 @@ unsafe fn keep_prototype_in_record(
         return;
     }
     let word = crate::object::shapes::object_prototype_word(object);
-    if word != 0 {
+    // A null identity answers from the shape word inline: there is no word
+    // to keep. A property holder's record slot is its owner's [[Prototype]]
+    // (`prototype_chain::object_static_prototype`), never the bag's own null.
+    if word != 0 && word != crate::value::TAG_NULL {
         (*meta).prototype = word;
         // GC_STORE_AUDIT(BARRIERED): meta-record prototype slot store (parent
         // = the meta record), as in the prototype funnel.

@@ -432,6 +432,7 @@ impl Model {
                     && !self.settle_bf_written()
                     && !self.settle_for_in()
                     && !self.settle_define()
+                    && !crate::builtins::settle_native_given(self)
                 {
                     break;
                 }
@@ -576,6 +577,12 @@ impl Model {
         // only its reach marker. Under a named key it holds that key's
         // reach marker instead (design §18.4).
         // A path marker's named field holds its step (DECISIONS 158).
+        // A class private field (`Model::private_atom`) is reached by its
+        // name only, by its class's code: no computed key writes or reads
+        // it, no spread copies it, no reflection lists it.
+        if self.is_private_atom(a) {
+            return n;
+        }
         if self.is_marker(t) && (!self.reach_marker.contains(&t) || self.is_path_marker(t)) {
             let r = self.keyed_reach_of(t, a);
             self.add_tok(n, r);
@@ -626,6 +633,12 @@ impl Model {
         if !self.spread_done.insert((s, d)) {
             return;
         }
+        if let Some(&tm) = self.lit_spread_site.get(&site) {
+            if self.tmpl_of(d) == Some(tm) {
+                let keys = self.spread_source_keys(s);
+                self.spread_source(tm, site, keys);
+            }
+        }
         if d == TOP || matches!(self.toks[d as usize], TokKind::BuiltinFn) {
             let r = self.reason("spread into a value from unmodeled code");
             let all = if s == TOP {
@@ -653,6 +666,9 @@ impl Model {
         }
         self.spread_to.entry(s).or_default().push((d, site));
         for a in self.field_keys.get(&s).cloned().unwrap_or_default() {
+            if self.is_private_atom(a) {
+                continue;
+            }
             let f = self.field(s, a);
             self.store_into(d, Key::Named(a), f, site);
         }
@@ -685,10 +701,18 @@ impl Model {
     /// construction, `push` and the like put at an index, and every store
     /// under a computed key) are no value of a named non-index key, which
     /// reads `named_any` instead. A marker's fields are its reach markers.
+    ///
+    /// A Map, Set, WeakMap or WeakSet (`builtins::is_collection`) likewise:
+    /// its entries (`field_any`) sit in internal slots and are no property
+    /// at all, so a named key (`map.get`) never reads them; a store under a
+    /// computed key is a property and reaches both.
     pub fn is_elem_array(&self, t: Tok) -> bool {
         matches!(self.toks[t as usize], TokKind::Obj(tm, _)
-            if matches!(self.tmpls[tm as usize].kind, TmplKind::Arr { .. }))
-            && !self.is_marker(t)
+        if match self.tmpls[tm as usize].kind {
+            TmplKind::Arr { .. } | TmplKind::Args { .. } => true,
+            TmplKind::BObj { what, .. } => builtins::is_collection(what),
+            _ => false,
+        }) && !self.is_marker(t)
     }
 
     /// The values of `t` under a key no store named: for an Array the ones
@@ -783,6 +807,33 @@ impl Model {
         // named-key replay in `visits` does not cover them.
         self.any_walk_holders.entry(t).or_default().push((t, act));
         self.accessor_hit(t, t, Key::Any, act);
+    }
+
+    /// What class private field `a` (`Model::private_atom`) holds on any
+    /// object: every store of the class's code under it lands here
+    /// (`store_into`). Only that code names it, all of it in this unit, and
+    /// an object holds it only once the class's own initializer ran on it
+    /// (the brand), so a read on a receiver this unit does not own (a
+    /// marker, ⊤, another unit's instance) finds what this holds: the
+    /// value never leaves through that receiver.
+    pub fn private_field(&mut self, a: Atom) -> NodeId {
+        if let Some(&n) = self.private_fields.get(&a) {
+            return n;
+        }
+        let n = self.node_named("private", || format!("private({a})"));
+        self.private_fields.insert(a, n);
+        n
+    }
+
+    /// `t` is an object of this unit (no marker, ⊤ or stand-in): its
+    /// private fields are its own field nodes.
+    pub(crate) fn owns_private(&self, t: Tok) -> bool {
+        match self.toks[t as usize] {
+            TokKind::Obj(tm, _) | TokKind::ClassObj(tm) => {
+                !self.is_marker(t) && !self.foreign.contains_key(&tm)
+            }
+            _ => false,
+        }
     }
 
     pub fn all_fields(&mut self, t: Tok) -> NodeId {
@@ -1042,10 +1093,33 @@ impl Model {
         for &c in &fresh {
             self.virt_by_class.entry(c).or_default().push(t);
         }
+        if !fresh.is_empty() {
+            self.flush_shadowed(Some(t));
+        }
         if let Some(&pn) = self.proto_node.get(&t) {
-            for p in fresh {
+            for &p in &fresh {
                 let pt = self.tok(TokKind::Proto(p));
                 self.add_tok(pn, pt);
+            }
+        }
+        // DECISIONS 231(b): an argument marker `t` joined before it was a
+        // receiver stands for its classes too, if it stands for receivers
+        // only (`virt_member`).
+        if fresh.is_empty() || self.virt_tok_open.contains(&t) {
+            return;
+        }
+        for r in self.virt_member_of.get(&t).cloned().unwrap_or_default() {
+            if self.virt_protos.contains_key(&r) {
+                self.register_virt(r, classes);
+            } else if self.arg_members.get(&r).is_some_and(|ms| {
+                ms.iter()
+                    .all(|m| self.virt_protos.contains_key(m) && !self.virt_tok_open.contains(m))
+            }) {
+                let mut cs: Vec<TmplId> = Vec::new();
+                for m in self.arg_members[&r].clone() {
+                    cs.extend(self.virt_protos[&m].iter().copied());
+                }
+                self.register_virt(r, &cs);
             }
         }
     }
@@ -1064,10 +1138,39 @@ impl Model {
         let n = self.node_l("virt-load");
         self.virt_nodes.insert((t, a), n);
         self.virt_tok_keys.entry(t).or_default().push(a);
-        let cv = self.cv(t, Key::Named(a));
+        // DECISIONS 234: an own definite data key of every instance shadows
+        // the builtin prototypes; its value is the own field.
+        let shadow = self.shadows(t, a);
+        let cv = self.cv_of(t, Key::Named(a), !shadow);
         self.edge(cv, n);
-        let own = self.virt_own(&classes, a);
-        if own {
+        if shadow {
+            self.note_shadowed(t, a, crate::model::ChainAct::Load(n), false);
+        }
+        // DECISIONS 231(c): the receiver token's own field is what this
+        // unit's code stores under `a` into instances and receivers of the
+        // classes and their subclasses (other units' store effects and ⊤
+        // stores into escaped ones arrive as such stores); its field (⊤)
+        // only where the key may hold a value no such store makes
+        // (`virt_own`, a subclass of another unit defining it, a shadowed
+        // key no store of this unit makes). A marker's own field stays its
+        // keyed reach: the caller's own value, which receiver flows carry
+        // relative to each caller (DECISIONS 179); the stored values beside
+        // it would be this unit's tokens on every caller's object.
+        let marker = self.is_marker(t);
+        let mut stored = false;
+        for &p in &classes {
+            if let Some(&s) = self.virt_stored.get(&(p, a)) {
+                if !marker {
+                    self.edge(s, n);
+                }
+                stored = true;
+            }
+        }
+        if self.virt_own(t, &classes, a)
+            || !self.virt_overriders(t, a).is_empty()
+            || (shadow && !stored)
+            || (stored && marker)
+        {
             let f = self.field(t, a);
             self.edge(f, n);
         }
@@ -1078,12 +1181,13 @@ impl Model {
     /// stands for in this unit's view: the class code stores it, uses a
     /// hard operation on one or lets one escape, or an accessor on the
     /// chain may answer it.
-    fn virt_own(&self, classes: &[TmplId], a: Atom) -> bool {
-        classes.iter().any(|&p| {
-            self.virt_open.contains(&p)
-                || self.virt_revoked.contains(&(p, a))
-                || self.chain_accessor_key(p, a)
-        })
+    fn virt_own(&self, t: Tok, classes: &[TmplId], a: Atom) -> bool {
+        self.virt_tok_open.contains(&t)
+            || classes.iter().any(|&p| {
+                self.virt_open.contains(&p)
+                    || self.virt_revoked.contains(&(p, a))
+                    || self.chain_accessor_key(p, a)
+            })
     }
 
     /// The classes of receiver token / marker `t` that another unit's
@@ -1111,7 +1215,7 @@ impl Model {
     /// (`override_node`); else nothing (`virt_load` holds the own field).
     pub(crate) fn virt_call(&mut self, t: Tok, a: Atom) -> Vec<NodeId> {
         let classes = self.virt_protos.get(&t).cloned().unwrap_or_default();
-        if self.virt_own(&classes, a) {
+        if self.virt_own(t, &classes, a) {
             return Vec::new();
         }
         let ps = self.virt_overriders(t, a);
@@ -1151,6 +1255,8 @@ impl Model {
             lexical_this: false,
             no_summary: true,
             gen_step: false,
+            gen_async: false,
+            gen_reyields: false,
             captures: Vec::new(),
             forwards_super: false,
             parent: NO_FN,
@@ -1194,41 +1300,118 @@ impl Model {
         if self.virt_by_class.is_empty() {
             return;
         }
-        let classes: Vec<TmplId> = match self.virt_protos.get(&t) {
+        for p in self.virt_classes(t) {
+            self.virt_open_class(p, key);
+        }
+    }
+
+    /// The published classes whose receivers may denote what `t` is or
+    /// stands for: its classes (an instance's template, a receiver's
+    /// classes) and their ancestors (a receiver of a class stands for its
+    /// subclasses' instances too).
+    fn virt_classes(&self, t: Tok) -> Vec<TmplId> {
+        let mut work: Vec<TmplId> = match self.virt_protos.get(&t) {
             Some(ps) => ps.clone(),
-            None => {
-                let Some(tm) = self.tmpl_of(t) else { return };
-                let mut out = Vec::new();
-                let mut work = vec![tm];
-                let mut seen: Vec<TmplId> = Vec::new();
-                while let Some(c) = work.pop() {
-                    if seen.contains(&c) {
-                        continue;
-                    }
-                    seen.push(c);
-                    if self.virt_by_class.contains_key(&c) {
-                        out.push(c);
-                    }
-                    let tp = &self.tmpls[c as usize];
-                    work.extend(tp.parent);
-                    work.extend(tp.parent_links.iter().copied());
-                }
-                out
-            }
+            None => match self.tmpl_of(t) {
+                Some(tm) => vec![tm],
+                None => return Vec::new(),
+            },
         };
-        for p in classes {
-            if self.virt_open.contains(&p) {
+        let mut out = Vec::new();
+        let mut seen: Vec<TmplId> = Vec::new();
+        while let Some(c) = work.pop() {
+            if seen.contains(&c) {
                 continue;
+            }
+            seen.push(c);
+            if self.virt_by_class.contains_key(&c) {
+                out.push(c);
+            }
+            let tp = &self.tmpls[c as usize];
+            work.extend(tp.parent);
+            work.extend(tp.parent_links.iter().copied());
+        }
+        out
+    }
+
+    /// DECISIONS 231(c): this unit's code stores `src` under `a` into `t`:
+    /// the receivers of the classes `t` may be an instance of read it as
+    /// their own field (`virt_load`).
+    pub(crate) fn virt_store(&mut self, t: Tok, a: Atom, src: NodeId) {
+        if self.virt_by_class.is_empty() {
+            return;
+        }
+        for p in self.virt_classes(t) {
+            let s = match self.virt_stored.get(&(p, a)) {
+                Some(&s) => s,
+                None => {
+                    let s = self.node_l("virt-stored");
+                    self.virt_stored.insert((p, a), s);
+                    for vt in self.virt_by_class.get(&p).cloned().unwrap_or_default() {
+                        if let Some(&n) = self.virt_nodes.get(&(vt, a)) {
+                            if self.is_marker(vt) {
+                                let f = self.field(vt, a);
+                                self.edge(f, n);
+                            } else {
+                                self.edge(s, n);
+                            }
+                        }
+                    }
+                    s
+                }
+            };
+            self.edge(src, s);
+        }
+    }
+
+    /// An instance or receiver `t` escaped: unknown code holds it, which per
+    /// unit is other units' code too, and its writes through ⊤ reach it
+    /// (`top_store`): each key stored into ⊤ may be any value on it.
+    pub(crate) fn virt_escape(&mut self, t: Tok) {
+        if self.virt_by_class.is_empty() {
+            return;
+        }
+        for p in self.virt_classes(t) {
+            if !self.virt_escaped.insert(p) {
+                continue;
+            }
+            let ks: Vec<Option<Atom>> = self.top_stored.iter().copied().collect();
+            for k in ks {
+                self.virt_open_class(p, k);
+            }
+        }
+    }
+
+    /// A write through ⊤ under key `k` (`None`: computed, or a write of any
+    /// key: a hard operation, an accessor, unmodeled code): on each escaped
+    /// instance the key may hold any value.
+    pub(crate) fn top_store(&mut self, k: Option<Atom>) {
+        if !self.top_stored.insert(k) {
+            return;
+        }
+        let ps: Vec<TmplId> = self.virt_escaped.iter().copied().collect();
+        for p in ps {
+            self.virt_open_class(p, k);
+        }
+    }
+
+    /// Key `key` (`None`: every key) of class `p`'s instances may hold a
+    /// value no store of this unit makes: its receivers read their own field.
+    fn virt_open_class(&mut self, p: TmplId, key: Option<Atom>) {
+        {
+            if self.virt_open.contains(&p) {
+                return;
             }
             let opened: Option<Atom> = match key {
                 Some(a) => {
                     if !self.virt_revoked.insert((p, a)) {
-                        continue;
+                        return;
                     }
                     Some(a)
                 }
                 None => {
                     self.virt_open.insert(p);
+                    self.flush_shadowed(None);
                     None
                 }
             };
@@ -1275,11 +1458,11 @@ impl Model {
     /// stored keys hold unknown values, what it reaches is escaped or
     /// touched as published). False: `t` escapes.
     pub(crate) fn admit_this(&mut self, t: Tok, tmpl: TmplId, this: u32, reason: u32) -> bool {
-        use crate::model::{MARK_ESCAPE, MARK_READ, MARK_TOUCH};
+        use crate::model::{MARK_ESCAPE, MARK_READ, MARK_TOUCHES};
         let Some(c) = self.this_contracts.get(this as usize).cloned() else {
             return false;
         };
-        if c.uses & (MARK_ESCAPE | MARK_TOUCH) != 0 {
+        if c.uses & (MARK_ESCAPE | MARK_TOUCHES) != 0 {
             return false;
         }
         // A published receiver token stands for its class's instances; a
@@ -1347,7 +1530,7 @@ impl Model {
         }
         // What the receiver reaches (its fields, transitively), as for an
         // argument (gen.rs `stand_in_fn_of`).
-        if c.reach & (MARK_ESCAPE | MARK_TOUCH) != 0 {
+        if c.reach & (MARK_ESCAPE | MARK_TOUCHES) != 0 {
             let h = self.node_l("admitted-this");
             let q = self.node_l("admitted-this-reach");
             self.cons(
@@ -1367,13 +1550,9 @@ impl Model {
             if c.reach & MARK_ESCAPE != 0 {
                 self.sink_node(q, reason);
             } else {
-                self.cons(
-                    q,
-                    Cons::Implicit {
-                        reason,
-                        proto: Protocol::Any,
-                    },
-                );
+                for proto in Protocol::of_touches(c.reach) {
+                    self.cons(q, Cons::Implicit { reason, proto });
+                }
             }
             self.add_tok(h, t);
         }
@@ -1558,7 +1737,9 @@ impl Model {
                 }
                 Some((g, j)) if g == f && j != u32::MAX => from.push(j),
                 _ => match own {
-                    Some(at) => self.mark_use(at, crate::model::MARK_ESCAPE),
+                    Some(at) => {
+                        self.mark_escape_why(at, &|_| "store: flow of another value".into())
+                    }
                     None => {
                         top = true;
                         self.escape(s, reason);
@@ -1634,7 +1815,7 @@ impl Model {
         if !calls && reads.is_empty() {
             return;
         }
-        self.mark_use(t, crate::model::MARK_TOUCH);
+        self.mark_use(t, proto.touch_bit());
         // A marker: the protocol runs on the values beside it; on the
         // marker it calls what the marker reaches under the protocol's
         // keys, an escape of that (`method_on`, DECISIONS 111). It has no
@@ -1644,12 +1825,12 @@ impl Model {
             match &keys {
                 None => {
                     let r = self.reach_of(t);
-                    self.mark_use(r, crate::model::MARK_ESCAPE);
+                    self.mark_escape_why(r, &|_| "protocol: on a marker".into());
                 }
                 Some(ks) => {
                     for &a in ks {
                         let m = self.marker_load(t, Some(a));
-                        self.mark_use(m, crate::model::MARK_ESCAPE);
+                        self.mark_escape_why(m, &|_| "protocol: on a marker".into());
                     }
                 }
             }
@@ -1773,6 +1954,8 @@ impl Model {
                 "overridethis {n} {tmpl} {} {reason}",
                 self.key_name(Key::Named(*key))
             ),
+            Cons::Guard { test, from, dst } => format!("guard {n} {test} {from} {dst}"),
+            Cons::Defined { dst } => format!("defined {n} {dst}"),
             Cons::TopIfAny { dst, from, reason } => format!(
                 "topifany {n} {dst} {from} {}",
                 reason.map_or(-1, |r| r as i64)
@@ -1812,10 +1995,19 @@ impl Model {
                 format!("implicit {n} {reason} {}", proto.name())
             }
             Cons::CreateProto { reason } => format!("createproto {n} {reason}"),
-            Cons::ChainUnion { key, dst, of } => {
-                format!("chainunion {n} {} {dst} {of}", self.key_name(*key))
+            Cons::ChainUnion {
+                key,
+                dst,
+                of,
+                builtin,
+            } => {
+                format!(
+                    "chainunion {n} {} {dst} {of} {builtin}",
+                    self.key_name(*key)
+                )
             }
             Cons::ProtoGiven { protos } => format!("protogiven {n} {protos}"),
+            Cons::ParentGiven { of } => format!("parentgiven {n} {of}"),
             Cons::ProtoClosure { dst } => format!("protoclosure {n} {dst}"),
             Cons::ProtoMethods { origin, key, call } => {
                 format!("protomethods {n} {origin} {} {call}", self.key_name(*key))
@@ -1875,6 +2067,7 @@ impl Model {
                 accessor,
             } => format!("definekeyed {n} {o} {reason} {}", *accessor as u8),
             Cons::StoreKeyed { o, src, site } => format!("storekeyed {n} {o} {src} {site}"),
+            Cons::StoreIndexed { o, src, site } => format!("storeindexed {n} {o} {src} {site}"),
             Cons::AccessorKeyed { holder, f, setter } => {
                 format!("accessorkeyed {n} {holder} {f} {}", *setter as u8)
             }
@@ -1906,6 +2099,7 @@ impl Model {
                 TmplKind::Lit { .. } => "literal",
                 TmplKind::FnInst { .. } => "fn instance",
                 TmplKind::Arr { .. } => "array",
+                TmplKind::Args { .. } => "arguments object",
                 TmplKind::ObjCreate { .. } => "Object.create object",
                 TmplKind::BObj { .. } => "builtin object",
             },

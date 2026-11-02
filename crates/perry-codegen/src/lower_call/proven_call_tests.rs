@@ -271,3 +271,38 @@ fn a_proven_call_of_a_captured_closure_with_fewer_arguments_is_direct() {
         "both calls are direct calls of add's body (the short one padded):\n{body}"
     );
 }
+
+/// `PERRY_VERIFY_FACTS` unset: a proven call carries no witness (no check
+/// call, no declaration use, no site string); the default build is the
+/// build without the verification mode. Set (`PERRY_VERIFY_FACTS=1 cargo
+/// test`), the same site asks `perry_wpfacts_check_call` and names its
+/// source position.
+#[test]
+fn the_facts_witness_is_emitted_only_by_the_verification_build() {
+    let m = lower(VALUE);
+    let g = param_id(&m, "twice", 0);
+    let inc = closure_id(&m, "inc");
+    let with = ir(
+        &m,
+        facts_for(
+            g,
+            vec![FactsBody {
+                func_id: inc,
+                params: 1,
+                closure: true,
+            }],
+        ),
+    );
+    let twice = body(&with, "twice");
+    if crate::verify_facts::witnesses() {
+        assert_eq!(
+            twice.matches("@perry_wpfacts_check_call(").count(),
+            2,
+            "each proven call is checked:\n{twice}"
+        );
+        assert!(with.contains("pc:?") || with.contains("pc:@"), "site names:\n{with}");
+    } else {
+        assert!(!twice.contains("perry_wpfacts_check"), "{twice}");
+        assert!(!with.contains("proven call bodies="), "no site string:\n{with}");
+    }
+}

@@ -88,6 +88,14 @@ unsafe fn define_other(
     record: Option<super::shapes::ShapeRecordRef>,
 ) -> Option<f64> {
     let addr = (obj_value.to_bits() & crate::value::POINTER_MASK) as usize;
+    // A function object: its own keys are its bag's layout, which its keyed
+    // Function shape names (`function_own_put`).
+    if record.is_none()
+        && crate::value::addr_class::try_read_gc_header(addr)
+            .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_CLOSURE)
+    {
+        return super::function_own_put::function_own_put(obj_value, key_value, value, true);
+    }
     let obj = addr as *mut ObjectHeader;
     if let Some(record) = record {
         if record.object_kind() == super::shapes::ShapeObjectKind::Ordinary

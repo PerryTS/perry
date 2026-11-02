@@ -2646,16 +2646,18 @@ fn function_source_array_literal_keeps_the_array_index_fast_path_armed() {
 /// registry lock; the control arm proves the counter this test reads moves.
 #[test]
 fn representation_change_takes_no_registry_lock_with_feedback_off() {
-    let _guard = typed_feedback_test_lock();
-    reset_typed_feedback_for_tests();
-    let addr = 0x7000_0000usize;
-    invalidate_representation_change_when(addr, false);
-    assert_eq!(
-        typed_feedback_snapshot().representation_invalidations,
-        0,
-        "feedback off: the registry must not be touched"
-    );
-    invalidate_representation_change_when(addr, true);
-    assert_eq!(typed_feedback_snapshot().representation_invalidations, 1);
-    reset_typed_feedback_for_tests();
+    crate::test_isolation::in_own_process(|| {
+        let _guard = typed_feedback_test_lock();
+        reset_typed_feedback_for_tests();
+        let addr = 0x7000_0000usize;
+        invalidate_representation_change_when(addr, false);
+        assert_eq!(
+            typed_feedback_snapshot().representation_invalidations,
+            0,
+            "feedback off: the registry must not be touched"
+        );
+        invalidate_representation_change_when(addr, true);
+        assert_eq!(typed_feedback_snapshot().representation_invalidations, 1);
+        reset_typed_feedback_for_tests();
+    });
 }

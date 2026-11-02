@@ -41,7 +41,7 @@ pub(crate) fn shadow_name_descriptor() -> &'static StaticAtom {
 }
 
 /// (start, end) of the atom section.
-fn atom_bounds() -> (usize, usize) {
+pub(super) fn atom_bounds() -> (usize, usize) {
     std::hint::black_box(std::ptr::addr_of!(ATOM_SECTION_SENTINEL) as usize);
     #[cfg(target_vendor = "apple")]
     {

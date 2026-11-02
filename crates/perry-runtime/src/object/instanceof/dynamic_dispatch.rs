@@ -110,16 +110,24 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
     // overrides even native constructor brand checks. The native generic hook
     // lives on Function.prototype, so the own-property gate distinguishes an
     // explicit override from that inherited default without recursion.
-    let symbols_absent = rhs.closure.is_some_and(|(closure, _)| unsafe {
-        let bag = (*closure).props;
-        bag.is_null()
-            || !crate::object::overflow::shadowed(bag)
-                && crate::object::shapes::object_shape_record(bag).is_some_and(|record| {
-                    // A legacy dictionary can have an ordinary keyless shape;
-                    // its private key list carries no immutable absence proof.
-                    record.keys() != 0 && record.proves_no_symbols()
-                })
-    });
+    // That inherited default is the hook only while the function's chain is
+    // its intrinsic one: a linked function's `@@hasInstance` is GetMethod's
+    // full [[Get]] over its chain (the intrinsic thunk, reached, answers the
+    // same ordinary walk).
+    let linked = rhs
+        .closure
+        .is_some_and(|(closure, _)| unsafe { linked_chain_may_hook(closure) });
+    let symbols_absent = !linked
+        && rhs.closure.is_some_and(|(closure, _)| unsafe {
+            let bag = (*closure).props;
+            bag.is_null()
+                || !crate::object::overflow::shadowed(bag)
+                    && crate::object::shapes::object_shape_record(bag).is_some_and(|record| {
+                        // A legacy dictionary can have an ordinary keyless shape;
+                        // its private key list carries no immutable absence proof.
+                        record.keys() != 0 && record.proves_no_symbols()
+                    })
+        });
     if !symbols_absent {
         let hi_sym = crate::symbol::well_known_symbol("hasInstance");
         if !hi_sym.is_null() {
@@ -131,8 +139,11 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
             // their ordinary symbol query.
             let owns_hook = if let Some((closure, _)) = rhs.closure {
                 let bag = unsafe { (*closure).props };
-                !bag.is_null()
-                    && unsafe { super::shaped_symbols::position(bag, hi_sym as usize).is_some() }
+                linked
+                    || !bag.is_null()
+                        && unsafe {
+                            super::shaped_symbols::position(bag, hi_sym as usize).is_some()
+                        }
             } else {
                 unsafe { crate::symbol::js_object_has_own_symbol(type_ref, hi_f64) }
             };
@@ -149,8 +160,21 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
                 value = lhs_h.get_nanbox_f64();
                 type_ref = rhs_h.get_nanbox_f64();
                 rhs.refresh_after_getter(type_ref);
-                if let HasInstanceOutcome::Result(result) = dispatch_own_has_instance(cb, value) {
-                    return result;
+                // A linked function whose chain reaches the intrinsic default
+                // takes the ordinary dispatch below (its native brand checks
+                // are that default's answer).
+                let intrinsic = linked && {
+                    let fp = crate::object::builtin_prototype_value("Function");
+                    crate::JSValue::from_bits(fp.to_bits()).is_pointer()
+                        && unsafe { crate::symbol::js_object_get_symbol_property(fp, hi_f64) }
+                            .to_bits()
+                            == cb.to_bits()
+                };
+                if !intrinsic {
+                    if let HasInstanceOutcome::Result(result) = dispatch_own_has_instance(cb, value)
+                    {
+                        return result;
+                    }
                 }
             }
         }
@@ -260,7 +284,7 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
         // with an individually recorded prototype chain (an instance of a
         // later evaluation) answers by its actual chain.
         if crate::object::class_value::class_value_is_first_evaluation(class_id)
-            && super::prototype_chain::object_static_prototype(value_addr(value)).is_some()
+            && super::prototype_chain::has_recorded_prototype(value_addr(value))
         {
             return f64::from_bits(if ordinary_has_instance_prototype_walk(value, type_ref) {
                 crate::value::TAG_TRUE
@@ -694,4 +718,62 @@ mod tests {
             crate::value::TAG_FALSE
         );
     }
+}
+
+/// Can the chain a linked function `closure` names supply an `@@hasInstance`
+/// other than `%Function.prototype%`'s default? Walks the hops before that
+/// default (or null): each must prove it owns no symbol key from its shape.
+/// `false` for a function on its intrinsic chain, or one whose linked chain
+/// proves absence hop by hop (a builtin constructor linked to its parent).
+///
+/// # Safety
+/// `closure` is a proven, live closure cell.
+unsafe fn linked_chain_may_hook(closure: *const crate::closure::ClosureHeader) -> bool {
+    let Some(mut bits) = crate::closure::closure_static_prototype(closure as usize) else {
+        return false;
+    };
+    let fp = crate::object::builtin_prototype_value("Function").to_bits();
+    for _ in 0..32 {
+        let v = crate::JSValue::from_bits(bits);
+        if bits == fp || v.is_null() {
+            return false;
+        }
+        if !v.is_pointer() {
+            return true;
+        }
+        let addr = v.as_pointer::<u8>() as usize;
+        let proves = |bag: *mut ObjectHeader| {
+            bag.is_null()
+                || !crate::object::overflow::shadowed(bag)
+                    && crate::object::shapes::object_shape_record(bag)
+                        .is_some_and(|record| record.keys() != 0 && record.proves_no_symbols())
+        };
+        if crate::closure::is_closure_ptr(addr) {
+            let hop = addr as *const crate::closure::ClosureHeader;
+            if crate::closure::shape::is_class_info((*hop).info) || !proves((*hop).props) {
+                return true;
+            }
+            bits = match crate::closure::closure_static_prototype(addr) {
+                Some(next) => next,
+                None => return false,
+            };
+            continue;
+        }
+        match crate::value::addr_class::try_read_gc_header(addr) {
+            Some(header)
+                if header.obj_type == crate::gc::GC_TYPE_OBJECT
+                    && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0 =>
+            {
+                if !proves(addr as *mut ObjectHeader) {
+                    return true;
+                }
+                bits = match crate::object::prototype_chain::object_static_prototype(addr) {
+                    Some(next) => next,
+                    None => crate::object::builtin_prototype_value("Object").to_bits(),
+                };
+            }
+            _ => return true,
+        }
+    }
+    true
 }

@@ -22,6 +22,7 @@ use front_contract::{front_call_block, verify_front_directory};
 
 fn ir_opts(debug_locations: bool, module_source: Option<&str>) -> CompileOptions {
     CompileOptions {
+        namespace_self_import: false,
         static_shape_ids: Vec::new(),
         program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),

@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2024 entries across 111 modules
+// Coverage: 2027 entries across 112 modules
 
 type PerryI8 = number & { readonly __perryI8?: never };
 type PerryI16 = number & { readonly __perryI16?: never };
@@ -3925,6 +3925,16 @@ declare module "tls" {
   export function getCiphers(...args: any[]): any;
   /** stdlib */
   export function setDefaultCACertificates(certs: any): any;
+}
+
+declare module "trace_events" {
+  /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
+  export function createTracing(...args: any[]): any;
+  /** stdlib */
+  export function getEnabledCategories(...args: any[]): any;
 }
 
 declare module "tty" {

@@ -14,6 +14,7 @@ use perry_hir::{Expr, Stmt};
 #[path = "gen/accessor_descriptor.rs"]
 mod accessor_descriptor;
 mod nodes;
+mod web;
 
 fn kids(e: &Expr) -> Vec<&Expr> {
     let mut v = Vec::new();
@@ -67,7 +68,6 @@ impl<'a> Gen<'a> {
         Some((class_name, args, arg("get"), arg("set")))
     }
 
-
     /// The class whose method home `home` reads, when it is that home.
     fn class_home_of(&self, fx: &Fx, home: &Expr) -> Option<TmplId> {
         match home {
@@ -102,6 +102,32 @@ impl<'a> Gen<'a> {
                 } else if m0 == "module" && method == "createRequire" && object.is_none() {
                     let t = self.m.tok(TokKind::Builtin(BuiltinNs::Require));
                     self.tok_node(t)
+                } else if let (true, Some(o)) =
+                    (module == "array" && method == "push_field_single", o)
+                {
+                    // `push_field_single` checks the receiver and runs its own
+                    // `push` otherwise, which is the method call itself.
+                    let push = self.m.atom("push");
+                    self.mcall(o, Key::Named(push), a, vec![])
+                } else if module == "array" && matches!(method.as_str(), "push_single" | "push") {
+                    // The array push the HIR folds for a receiver it proved an
+                    // array (`this.items.push(x)`): the arguments are its new
+                    // elements, as `Expr::ArrayPush` stores them; the result
+                    // is the new length. The grown array's write-back into its
+                    // holder stores the same array.
+                    match o {
+                        Some(o) => {
+                            for v in a {
+                                self.elem_store(fx, o, v, "push");
+                            }
+                        }
+                        None => {
+                            for v in a {
+                                self.to_sink(v, "argument of native module array.push");
+                            }
+                        }
+                    }
+                    self.prim_node(prim::NUM)
                 } else {
                     if module == "vm" || module == "node:vm" {
                         crate::builtins::set_dyn_eval(&mut self.m, "E14 node:vm");
@@ -122,11 +148,13 @@ impl<'a> Gen<'a> {
                 let _ = self.expr(fx, object);
                 self.prim_node(prim::BOOL)
             }
+            // The guard returns its receiver or throws (a receiver without
+            // the brand, any primitive among them): its value is the
+            // receiver's, nothing more.
             Expr::PrivateGuard { object, .. } => {
                 let o = self.expr(fx, object);
                 let out = self.tmp("privguard");
                 self.m.edge(o, out);
-                self.m.add_prim(out, prim::ALL);
                 out
             }
             Expr::ClassMethodHome { is_static, .. } => match fx.class {
@@ -240,36 +268,46 @@ impl<'a> Gen<'a> {
             | Expr::OsUserInfoBuffer
             | Expr::OsLoadavg
             | Expr::RegExpExecGroups
-            | Expr::ObjectKeys(..)
             | Expr::ForInKeys(..)
-            | Expr::ObjectGetOwnPropertyNames(..)
-            | Expr::ObjectGetOwnPropertySymbols(..)
-            | Expr::ReflectOwnKeys(..)
-            | Expr::StringSplit(..)
-            | Expr::StringMatch { .. }
-            | Expr::StringMatchAll { .. }
             | Expr::TaggedTemplateStrings { .. }
             | Expr::TemplateRaw(..)
-            | Expr::CryptoRandomBytes(..)
-            | Expr::TextEncoderEncodeInto { .. }
-            | Expr::UrlGetSearchParams(..)
-            | Expr::UrlSearchParamsGetAll { .. }
-            | Expr::UrlSearchParamsEntries(..)
-            | Expr::UrlSearchParamsKeys(..)
-            | Expr::UrlSearchParamsValues(..)
-            | Expr::UrlParse(..)
-            | Expr::UrlParseWithBase { .. } => {
+            | Expr::CryptoRandomBytes(..) => {
                 // Own keys and enumeration run no lookup; the others read
                 // elements or dispatch through `@@split` / `@@match`.
                 let proto = match e {
-                    Expr::ObjectKeys(..)
-                    | Expr::ForInKeys(..)
-                    | Expr::ObjectGetOwnPropertyNames(..)
-                    | Expr::ObjectGetOwnPropertySymbols(..)
-                    | Expr::ReflectOwnKeys(..) => Protocol::OwnKeys,
+                    Expr::ForInKeys(..) => Protocol::OwnKeys,
+                    // path.parse(p) ToString's its argument (validated as a
+                    // string); crypto.randomBytes(n) validates a number.
+                    Expr::PathParse(..) | Expr::CryptoRandomBytes(..) => Protocol::ToPrimitive,
                     _ => Protocol::Any,
                 };
+                // The cooked strings of a tagged template are read, not coerced.
+                if let Expr::TaggedTemplateStrings { cooked, .. } = e {
+                    for k in cooked {
+                        let _ = self.expr(fx, k);
+                    }
+                    return self.primbox_kids_none(fx, "primitive container builtin");
+                }
                 self.primbox_kids(fx, e, "primitive container builtin", proto)
+            }
+            // The calls they lower (`builtins` Object.keys, Reflect.ownKeys):
+            // a fresh Array of the operand's own keys, no primitive.
+            Expr::ObjectKeys(..)
+            | Expr::ObjectGetOwnPropertyNames(..)
+            | Expr::ObjectGetOwnPropertySymbols(..)
+            | Expr::ReflectOwnKeys(..) => {
+                let ks = kids(e);
+                let _ = self.prim_op(
+                    fx,
+                    &ks,
+                    prim::UNDEF,
+                    "primitive container builtin",
+                    Protocol::OwnKeys,
+                );
+                let (t, n) = self.bobj(mi, "arraybox");
+                let fa = self.m.field_any(t);
+                self.m.add_prim(fa, prim::STR | prim::SYMBOL);
+                n
             }
             Expr::NamespacePatched(_) => self.prim_node(prim::BOOL),
             Expr::GlobalThisExpr => {
@@ -366,10 +404,6 @@ impl<'a> Gen<'a> {
             | Expr::WebAssemblyValidate(..)
             | Expr::Atob(..)
             | Expr::Btoa(..)
-            | Expr::TextDecoderDecode { .. }
-            | Expr::TextDecoderEncoding(..)
-            | Expr::TextDecoderFatal(..)
-            | Expr::TextDecoderIgnoreBom(..)
             | Expr::EncodeURI(..)
             | Expr::DecodeURI(..)
             | Expr::EncodeURIComponent(..)
@@ -408,9 +442,6 @@ impl<'a> Gen<'a> {
             | Expr::PodLayoutOffsetOf { .. }
             | Expr::ChildProcessGetProcessStatus(..)
             | Expr::ChildProcessKillProcess(..)
-            | Expr::ArrayIndexOf { .. }
-            | Expr::ArrayLastIndexOf { .. }
-            | Expr::ArrayIncludes { .. }
             | Expr::StringFromCharCode(..)
             | Expr::StringFromCharCodeSpread(..)
             | Expr::StringFromCodePoint(..)
@@ -421,91 +452,83 @@ impl<'a> Gen<'a> {
             | Expr::MapDelete { .. }
             | Expr::MapSize(..)
             | Expr::MapClear(..)
-            | Expr::SetHas { .. }
-            | Expr::SetDelete { .. }
-            | Expr::SetSize(..)
-            | Expr::SetClear(..)
-            | Expr::DateNow
-            | Expr::DateGetTime(..)
-            | Expr::DateToISOString(..)
-            | Expr::DateGetFullYear(..)
-            | Expr::DateGetMonth(..)
-            | Expr::DateGetDate(..)
-            | Expr::DateGetDay(..)
-            | Expr::DateGetHours(..)
-            | Expr::DateGetMinutes(..)
-            | Expr::DateGetSeconds(..)
-            | Expr::DateGetMilliseconds(..)
-            | Expr::DateParse(..)
-            | Expr::DateUtc(..)
-            | Expr::DateGetUtcDay(..)
-            | Expr::DateGetUtcFullYear(..)
-            | Expr::DateGetUtcMonth(..)
-            | Expr::DateGetUtcDate(..)
-            | Expr::DateGetUtcHours(..)
-            | Expr::DateGetUtcMinutes(..)
-            | Expr::DateGetUtcSeconds(..)
-            | Expr::DateGetUtcMilliseconds(..)
-            | Expr::DateSetUtcFullYear { .. }
-            | Expr::DateSetUtcMonth { .. }
-            | Expr::DateSetUtcDate { .. }
-            | Expr::DateSetUtcHours { .. }
-            | Expr::DateSetUtcMinutes { .. }
-            | Expr::DateSetUtcSeconds { .. }
-            | Expr::DateSetUtcMilliseconds { .. }
-            | Expr::DateSetFullYear { .. }
-            | Expr::DateSetMonth { .. }
-            | Expr::DateSetDate { .. }
-            | Expr::DateSetHours { .. }
-            | Expr::DateSetMinutes { .. }
-            | Expr::DateSetSeconds { .. }
-            | Expr::DateSetMilliseconds { .. }
-            | Expr::DateSetTime { .. }
-            | Expr::DateValueOf(..)
-            | Expr::DateToString(..)
-            | Expr::DateToDateString(..)
-            | Expr::DateToTimeString(..)
-            | Expr::DateToUTCString(..)
-            | Expr::DateToLocaleDateString(..)
-            | Expr::DateToLocaleTimeString(..)
-            | Expr::DateToLocaleString(..)
-            | Expr::DateGetTimezoneOffset(..)
-            | Expr::DateToJSON(..)
-            | Expr::UrlGetHref(..)
-            | Expr::UrlGetPathname(..)
-            | Expr::UrlGetProtocol(..)
-            | Expr::UrlGetHost(..)
-            | Expr::UrlGetHostname(..)
-            | Expr::UrlGetPort(..)
-            | Expr::UrlGetSearch(..)
-            | Expr::UrlGetHash(..)
-            | Expr::UrlGetOrigin(..)
-            | Expr::UrlCanParse(..)
-            | Expr::UrlCanParseWithBase { .. }
-            | Expr::UrlInstanceToString(..)
-            | Expr::UrlInstanceToJSON(..)
-            | Expr::UrlSetPathname { .. }
-            | Expr::UrlSetSearch { .. }
-            | Expr::UrlSetHash { .. }
-            | Expr::UrlSetProtocol { .. }
-            | Expr::UrlSetHostname { .. }
-            | Expr::UrlSetPort { .. }
-            | Expr::UrlSetUsername { .. }
-            | Expr::UrlSetPassword { .. }
-            | Expr::UrlSetHref { .. }
-            | Expr::UrlSearchParamsMissingArgs { .. }
-            | Expr::UrlSearchParamsGet { .. }
-            | Expr::UrlSearchParamsHas { .. }
-            | Expr::UrlSearchParamsSet { .. }
-            | Expr::UrlSearchParamsAppend { .. }
-            | Expr::UrlSearchParamsDelete { .. }
-            | Expr::UrlSearchParamsToString(..)
-            | Expr::UrlSearchParamsSort(..)
             | Expr::ArrayIterationPatched
             | Expr::ImportMetaUrl(..)
             | Expr::ProxyRevoke(..) => {
                 // Mixed: element reads, `raw` / `toISOString` lookups, spreads.
                 self.prim_kids(fx, e, prim::ALL, "primitive builtin operand", Protocol::Any)
+            }
+            Expr::DateGetTime(..) => self.receiver_method(fx, e, "getTime"),
+            Expr::DateGetFullYear(..) => self.receiver_method(fx, e, "getFullYear"),
+            Expr::DateGetMonth(..) => self.receiver_method(fx, e, "getMonth"),
+            Expr::DateGetDate(..) => self.receiver_method(fx, e, "getDate"),
+            Expr::DateGetDay(..) => self.receiver_method(fx, e, "getDay"),
+            Expr::DateGetHours(..) => self.receiver_method(fx, e, "getHours"),
+            Expr::DateGetMinutes(..) => self.receiver_method(fx, e, "getMinutes"),
+            Expr::DateGetSeconds(..) => self.receiver_method(fx, e, "getSeconds"),
+            Expr::DateGetMilliseconds(..) => self.receiver_method(fx, e, "getMilliseconds"),
+            Expr::DateGetUtcDay(..) => self.receiver_method(fx, e, "getUTCDay"),
+            Expr::DateGetUtcFullYear(..) => self.receiver_method(fx, e, "getUTCFullYear"),
+            Expr::DateGetUtcMonth(..) => self.receiver_method(fx, e, "getUTCMonth"),
+            Expr::DateGetUtcDate(..) => self.receiver_method(fx, e, "getUTCDate"),
+            Expr::DateGetUtcHours(..) => self.receiver_method(fx, e, "getUTCHours"),
+            Expr::DateGetUtcMinutes(..) => self.receiver_method(fx, e, "getUTCMinutes"),
+            Expr::DateGetUtcSeconds(..) => self.receiver_method(fx, e, "getUTCSeconds"),
+            Expr::DateGetUtcMilliseconds(..) => self.receiver_method(fx, e, "getUTCMilliseconds"),
+            Expr::DateValueOf(..) => self.receiver_method(fx, e, "valueOf"),
+            Expr::DateGetTimezoneOffset(..) => self.receiver_method(fx, e, "getTimezoneOffset"),
+            Expr::DateToISOString(..) => self.receiver_method(fx, e, "toISOString"),
+            Expr::DateToString(..) => self.receiver_method(fx, e, "toString"),
+            Expr::DateToDateString(..) => self.receiver_method(fx, e, "toDateString"),
+            Expr::DateToTimeString(..) => self.receiver_method(fx, e, "toTimeString"),
+            Expr::DateToUTCString(..) => self.receiver_method(fx, e, "toUTCString"),
+            Expr::DateToLocaleDateString(..) => self.receiver_method(fx, e, "toLocaleDateString"),
+            Expr::DateToLocaleTimeString(..) => self.receiver_method(fx, e, "toLocaleTimeString"),
+            Expr::DateToLocaleString(..) => self.receiver_method(fx, e, "toLocaleString"),
+            Expr::DateToJSON(..) => self.receiver_method(fx, e, "toJSON"),
+            Expr::DateSetUtcFullYear { .. } => self.receiver_method(fx, e, "setUTCFullYear"),
+            Expr::DateSetUtcMonth { .. } => self.receiver_method(fx, e, "setUTCMonth"),
+            Expr::DateSetUtcDate { .. } => self.receiver_method(fx, e, "setUTCDate"),
+            Expr::DateSetUtcHours { .. } => self.receiver_method(fx, e, "setUTCHours"),
+            Expr::DateSetUtcMinutes { .. } => self.receiver_method(fx, e, "setUTCMinutes"),
+            Expr::DateSetUtcSeconds { .. } => self.receiver_method(fx, e, "setUTCSeconds"),
+            Expr::DateSetUtcMilliseconds { .. } => {
+                self.receiver_method(fx, e, "setUTCMilliseconds")
+            }
+            Expr::DateSetFullYear { .. } => self.receiver_method(fx, e, "setFullYear"),
+            Expr::DateSetMonth { .. } => self.receiver_method(fx, e, "setMonth"),
+            Expr::DateSetDate { .. } => self.receiver_method(fx, e, "setDate"),
+            Expr::DateSetHours { .. } => self.receiver_method(fx, e, "setHours"),
+            Expr::DateSetMinutes { .. } => self.receiver_method(fx, e, "setMinutes"),
+            Expr::DateSetSeconds { .. } => self.receiver_method(fx, e, "setSeconds"),
+            Expr::DateSetMilliseconds { .. } => self.receiver_method(fx, e, "setMilliseconds"),
+            Expr::DateSetTime { .. } => self.receiver_method(fx, e, "setTime"),
+            // Static Date conversions do not read a receiver. parse
+            // ToString's one operand; UTC ToNumber's at most 7 components.
+            Expr::DateNow => self.prim_node(prim::NUM),
+            Expr::DateParse(x) => self.prim_op(
+                fx,
+                &[x],
+                prim::NUM,
+                "ToString of Date.parse text",
+                Protocol::ToPrimitive,
+            ),
+            Expr::DateUtc(xs) => self.prim_op(
+                fx,
+                &xs.iter().take(7).collect::<Vec<_>>(),
+                prim::NUM,
+                "ToNumber of Date.UTC component",
+                Protocol::ToPrimitive,
+            ),
+            // Set queries compare keys by SameValueZero; size reads an
+            // internal slot and clear retains/calls no operand.
+            Expr::SetHas { .. } => self.receiver_method(fx, e, "has"),
+            Expr::SetDelete { .. } => self.receiver_method(fx, e, "delete"),
+            Expr::SetClear(..) => self.receiver_method(fx, e, "clear"),
+            Expr::SetSize(x) => {
+                let recv = self.expr(fx, x);
+                let a = self.m.atom("size");
+                self.load(recv, Key::Named(a))
             }
             // Every Math function returns a Number (ECMA-262 Math).
             Expr::MathFloor(..)
@@ -561,8 +584,56 @@ impl<'a> Gen<'a> {
                     Protocol::ToPrimitive,
                 ),
             // The spread is iterated, then each element is ToNumber'd.
-            Expr::MathMinSpread(..) | Expr::MathMaxSpread(..) => {
-                self.prim_kids(fx, e, prim::NUM, "spread Math operand", Protocol::Any)
+            Expr::MathMinSpread(s) | Expr::MathMaxSpread(s) => {
+                let s = self.expr(fx, s);
+                let it = self.iterate(s);
+                let r = self.m.reason("ToNumber of a spread Math operand");
+                self.m.cons(
+                    it,
+                    Cons::Implicit {
+                        reason: r,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
+                self.prim_node(prim::NUM)
+            }
+            // ECMA-262 23.1.3.16 / .17 / .20: the receiver's `length` and
+            // elements are read (an index accessor runs), the search value
+            // is compared (IsStrictlyEqual, SameValueZero: no lookup on it),
+            // and `fromIndex` is ToIntegerOrInfinity'd (ToPrimitive).
+            Expr::ArrayIndexOf {
+                array,
+                value,
+                from_index,
+            }
+            | Expr::ArrayLastIndexOf {
+                array,
+                value,
+                from_index,
+            }
+            | Expr::ArrayIncludes {
+                array,
+                value,
+                from_index,
+            } => {
+                let a = self.expr(fx, array);
+                let _ = self.expr(fx, value);
+                let _ = self.elem_load(a);
+                if let Some(fi) = from_index {
+                    let _ = self.prim_op(
+                        fx,
+                        &[fi.as_ref()],
+                        prim::NUM,
+                        "fromIndex",
+                        Protocol::ToPrimitive,
+                    );
+                }
+                let p = if matches!(e, Expr::ArrayIncludes { .. }) {
+                    prim::BOOL
+                } else {
+                    prim::NUM
+                };
+                self.prim_node(p)
             }
             Expr::BigIntCoerce(..) => self.prim_kids(
                 fx,
@@ -579,8 +650,29 @@ impl<'a> Gen<'a> {
                 Protocol::ToPrimitive,
             ),
             // The elements are read and each is ToString'd.
-            Expr::ArrayJoin { .. } => {
-                self.prim_kids(fx, e, prim::STR, "array join operand", Protocol::Any)
+            // ECMA-262 23.1.3.18: ToString(separator), then `length` and each
+            // element, ToString'd unless undefined or null.
+            Expr::ArrayJoin { array, separator } => {
+                let a = self.expr(fx, array);
+                if let Some(sep) = separator {
+                    let _ = self.prim_op(
+                        fx,
+                        &[sep.as_ref()],
+                        prim::STR,
+                        "array join operand",
+                        Protocol::ToPrimitive,
+                    );
+                }
+                let el = self.elem_load(a);
+                let r = self.m.reason("array join operand");
+                self.m.cons(
+                    el,
+                    Cons::Implicit {
+                        reason: r,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
+                self.prim_node(prim::STR)
             }
             Expr::ObjectIs(..)
             | Expr::ObjectHasOwn(..)
@@ -755,6 +847,7 @@ impl<'a> Gen<'a> {
                     birth_keys: vec![],
                     definite: vec![],
                     declared: Vec::new(),
+                    reserved: Vec::new(),
                     parent: None,
                     ctor: None,
                     native_parent: None,
@@ -765,6 +858,7 @@ impl<'a> Gen<'a> {
                     parent_value: None,
                     parent_links: Vec::new(),
                     null_proto: false,
+                    species: None,
                 });
                 let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
                 let pn = self.m.proto_node(t);
@@ -884,17 +978,59 @@ impl<'a> Gen<'a> {
             | Expr::WebAssemblyModuleCustomSections { .. }
             | Expr::WebAssemblyInstantiate { .. }
             | Expr::WebAssemblyCallExport { .. } => self.fail_closed(fx, e, "WebAssembly"),
-            Expr::TextEncoderNew | Expr::TextDecoderNew { .. } => {
-                let _ = kids(e).into_iter().map(|k| self.expr(fx, k)).count();
-                self.bobj(mi, "TextCodec").1
-            }
-            Expr::TextEncoderEncode(..)
-            | Expr::BufferFrom { .. }
+            // Web helper algorithms live beside this exhaustive routing match.
+            Expr::TextEncoderNew
+            | Expr::TextDecoderNew { .. }
+            | Expr::TextEncoderEncode(..)
+            | Expr::TextEncoderEncodeInto { .. }
+            | Expr::TextDecoderDecode { .. }
+            | Expr::TextDecoderEncoding(..)
+            | Expr::TextDecoderFatal(..)
+            | Expr::TextDecoderIgnoreBom(..)
+            | Expr::UrlInstanceToString(..)
+            | Expr::UrlInstanceToJSON(..)
+            | Expr::UrlSearchParamsGet { .. }
+            | Expr::UrlSearchParamsGetAll { .. }
+            | Expr::UrlSearchParamsHas { .. }
+            | Expr::UrlSearchParamsSet { .. }
+            | Expr::UrlSearchParamsAppend { .. }
+            | Expr::UrlSearchParamsDelete { .. }
+            | Expr::UrlSearchParamsToString(..)
+            | Expr::UrlSearchParamsSort(..)
+            | Expr::UrlSearchParamsEntries(..)
+            | Expr::UrlSearchParamsKeys(..)
+            | Expr::UrlSearchParamsValues(..)
+            | Expr::UrlSearchParamsForEach { .. }
+            | Expr::UrlSearchParamsMissingArgs { .. }
+            | Expr::UrlGetHref(..)
+            | Expr::UrlGetPathname(..)
+            | Expr::UrlGetProtocol(..)
+            | Expr::UrlGetHost(..)
+            | Expr::UrlGetHostname(..)
+            | Expr::UrlGetPort(..)
+            | Expr::UrlGetSearch(..)
+            | Expr::UrlGetHash(..)
+            | Expr::UrlGetOrigin(..)
+            | Expr::UrlGetSearchParams(..)
+            | Expr::UrlSetPathname { .. }
+            | Expr::UrlSetSearch { .. }
+            | Expr::UrlSetHash { .. }
+            | Expr::UrlSetProtocol { .. }
+            | Expr::UrlSetHostname { .. }
+            | Expr::UrlSetPort { .. }
+            | Expr::UrlSetUsername { .. }
+            | Expr::UrlSetPassword { .. }
+            | Expr::UrlSetHref { .. }
+            | Expr::UrlNew { .. }
+            | Expr::UrlSearchParamsNew(..)
+            | Expr::UrlPatternNew { .. }
+            | Expr::UrlParse(..)
+            | Expr::UrlParseWithBase { .. }
+            | Expr::UrlCanParse(..)
+            | Expr::UrlCanParseWithBase { .. } => self.web_expr(fx, e),
+            Expr::BufferFrom { .. }
             | Expr::BufferAlloc { .. }
             | Expr::BufferAllocUnsafe(..)
-            | Expr::Uint8ArrayNew(..)
-            | Expr::Uint8ArrayFrom(..)
-            | Expr::TypedArrayNew { .. }
             | Expr::FsReadFileBinary(..) => {
                 // Typed arrays / buffers hold numbers; an array argument is
                 // read, a buffer/view argument is shared (B1, flow only).
@@ -921,6 +1057,9 @@ impl<'a> Gen<'a> {
                 let fa = self.m.field_any(t);
                 self.m.add_prim(fa, prim::NUM);
                 n
+            }
+            Expr::Uint8ArrayNew(..) | Expr::Uint8ArrayFrom(..) | Expr::TypedArrayNew { .. } => {
+                self.typed_array_new(fx, e)
             }
             Expr::BufferFromArrayBuffer { .. }
             | Expr::BufferSlice { .. }
@@ -964,6 +1103,7 @@ impl<'a> Gen<'a> {
             }
             Expr::LinkGeneratorPrototype {
                 obj,
+                is_async,
                 i32_controls,
                 i1_controls,
                 ..
@@ -973,6 +1113,7 @@ impl<'a> Gen<'a> {
                 for t in self.m.nodes[o as usize].pts.to_sorted() {
                     if let TokKind::Func(f, _) = self.m.toks[t as usize] {
                         self.m.funcs[f as usize].gen_step = true;
+                        self.m.funcs[f as usize].gen_async = *is_async;
                     }
                 }
                 for id in i32_controls.iter().chain(i1_controls.iter()) {
@@ -1084,7 +1225,6 @@ impl<'a> Gen<'a> {
             | Expr::NetCreateServer { .. }
             | Expr::NetCreateConnection { .. }
             | Expr::NetConnect { .. }
-            | Expr::UrlSearchParamsForEach { .. }
             | Expr::StaticPluginResolve(..)
             | Expr::JsLoadModule { .. }
             | Expr::JsGetExport { .. }
@@ -1114,16 +1254,6 @@ impl<'a> Gen<'a> {
                 let name = variant_name(e);
                 self.fail_closed(fx, e, &name)
             }
-            Expr::UrlNew { .. } | Expr::UrlPatternNew { .. } | Expr::UrlSearchParamsNew(..) => {
-                let _ = self.prim_kids(
-                    fx,
-                    e,
-                    prim::ALL,
-                    "URL constructor operand",
-                    Protocol::ToPrimitive,
-                );
-                self.bobj(mi, "URL").1
-            }
             Expr::BoxedPrimitiveNew { .. } => {
                 let _ = self.prim_kids(fx, e, prim::ALL, "boxed primitive", Protocol::ToPrimitive);
                 self.bobj(mi, "BoxedPrimitive").1
@@ -1132,16 +1262,43 @@ impl<'a> Gen<'a> {
                 let _ = self.prim_kids(fx, e, prim::ALL, "Date operand", Protocol::ToPrimitive);
                 self.bobj(mi, "Date").1
             }
-            Expr::RegExp { .. } | Expr::RegExpDynamic { .. } => {
-                let _ = self.prim_kids(fx, e, prim::ALL, "RegExp operand", Protocol::Any);
-                self.bobj(mi, "RegExp").1
+            Expr::RegExp { .. } => self.bobj(mi, "RegExp").1,
+            // ECMA-262 22.2.4.1: IsRegExp(pattern) reads `@@match`; for a
+            // regexp-like pattern `source` and `flags` are read (and in the
+            // call form `constructor`, returning the pattern itself); then
+            // ToString(pattern) and ToString(flags).
+            Expr::RegExpDynamic {
+                pattern,
+                flags,
+                is_call,
+            } => {
+                use crate::builtins::string_methods::{read_only, read_prim, to_prim};
+                let p = self.expr(fx, pattern);
+                let wk = format!("{}match", crate::builtins::WK_PREFIX);
+                read_only(&mut self.m, p, &wk);
+                if *is_call {
+                    read_only(&mut self.m, p, "constructor");
+                }
+                read_prim(&mut self.m, p, "source", "RegExp pattern source ToString");
+                read_prim(&mut self.m, p, "flags", "RegExp pattern flags ToString");
+                to_prim(&mut self.m, p, "RegExp pattern ToString");
+                if let Some(f) = flags {
+                    let f = self.expr(fx, f);
+                    to_prim(&mut self.m, f, "RegExp flags ToString");
+                }
+                let out = self.bobj(mi, "RegExp").1;
+                if *is_call {
+                    self.m.edge(p, out);
+                }
+                out
             }
             Expr::ErrorNew(..)
             | Expr::TypeErrorNew(..)
             | Expr::RangeErrorNew(..)
             | Expr::ReferenceErrorNew(..)
             | Expr::SyntaxErrorNew(..) => {
-                let _ = self.prim_kids(fx, e, prim::ALL, "Error message", Protocol::Any);
+                // ECMA-262 20.5.1.1 step 3: ToString(message), nothing else.
+                let _ = self.prim_kids(fx, e, prim::ALL, "Error message", Protocol::ToPrimitive);
                 self.error_obj(mi, None)
             }
             Expr::ErrorNewWithCause { message, cause } => {
@@ -1210,38 +1367,20 @@ impl<'a> Gen<'a> {
                 self.m.add_prim(out, prim::STR);
                 out
             }
+            // The string methods dispatch on their pattern operand by the
+            // spec's algorithm (`builtins::string_methods`): the receiver is
+            // ToString'd, and the method runs on a string.
             Expr::StringReplace {
                 string,
                 pattern,
                 replacement,
-            } => {
-                let _ = self.prim_op(
-                    fx,
-                    &[string, pattern],
-                    prim::STR,
-                    "String.replace",
-                    Protocol::Any,
-                );
-                let r = self.expr(fx, replacement);
-                let s = self.prim_node(prim::STR);
-                let ret = self.callback(r, vec![s; 4]);
-                let why = self.m.reason("replace callback result ToString");
-                self.m.cons(
-                    ret,
-                    Cons::Implicit {
-                        reason: why,
-                        proto: Protocol::ToPrimitive,
-                    },
-                );
-                let rc = self.m.reason("replacement ToString");
-                self.m.cons(
-                    r,
-                    Cons::Implicit {
-                        reason: rc,
-                        proto: Protocol::ToPrimitive,
-                    },
-                );
-                self.prim_node(prim::STR)
+            } => self.string_method(fx, string, "replace", &[pattern, replacement]),
+            Expr::StringSplit(string, sep) => self.string_method(fx, string, "split", &[sep]),
+            Expr::StringMatch { string, regex } => {
+                self.string_method(fx, string, "match", &[regex])
+            }
+            Expr::StringMatchAll { string, regex } => {
+                self.string_method(fx, string, "matchAll", &[regex])
             }
 
             // ------------------------------------------------------ arrays
@@ -1282,7 +1421,7 @@ impl<'a> Gen<'a> {
                     let _ = self.prim_op(fx, &[x], prim::NUM, "slice index", Protocol::ToPrimitive);
                 }
                 let el = self.elem_load(a);
-                self.new_arr_from(mi, "slice", &[el])
+                self.new_species_arr(mi, "slice", &[el], a)
             }
             Expr::ArraySplice {
                 array_id,
@@ -1307,24 +1446,24 @@ impl<'a> Gen<'a> {
                     self.elem_store(fx, a, v, "splice");
                 }
                 let el = self.elem_load(a);
-                self.new_arr_from(mi, "splice", &[el])
+                self.new_species_arr(mi, "splice", &[el], a)
             }
             Expr::ArrayForEach { array, callback } => {
                 let _ = self.array_cb(fx, array, callback);
                 self.prim_node(prim::UNDEF)
             }
             Expr::ArrayMap { array, callback } => {
-                let (_, _, ret) = self.array_cb(fx, array, callback);
-                self.new_arr_from(mi, "map", &[ret])
+                let (a, _, ret) = self.array_cb(fx, array, callback);
+                self.new_species_arr(mi, "map", &[ret], a)
             }
             Expr::ArrayFlatMap { array, callback } => {
-                let (_, _, ret) = self.array_cb(fx, array, callback);
+                let (a, _, ret) = self.array_cb(fx, array, callback);
                 let inner = self.elem_load(ret);
-                self.new_arr_from(mi, "flatMap", &[ret, inner])
+                self.new_species_arr(mi, "flatMap", &[ret, inner], a)
             }
             Expr::ArrayFilter { array, callback } => {
-                let (_, el, _) = self.array_cb(fx, array, callback);
-                self.new_arr_from(mi, "filter", &[el])
+                let (a, el, _) = self.array_cb(fx, array, callback);
+                self.new_species_arr(mi, "filter", &[el], a)
             }
             Expr::ArrayFind { array, callback } | Expr::ArrayFindLast { array, callback } => {
                 let (_, el, _) = self.array_cb(fx, array, callback);
@@ -1396,7 +1535,7 @@ impl<'a> Gen<'a> {
                 let a = self.expr(fx, array);
                 let el = self.elem_load(a);
                 let inner = self.elem_load(el);
-                self.new_arr_from(mi, "flat", &[el, inner])
+                self.new_species_arr(mi, "flat", &[el, inner], a)
             }
             Expr::ArrayToReversed { array } => {
                 let a = self.expr(fx, array);
@@ -1528,14 +1667,15 @@ impl<'a> Gen<'a> {
             }
 
             // ---------------------------------------------- maps and sets
-            Expr::MapNew | Expr::SetNew => self.bobj(mi, "Collection").1,
+            Expr::MapNew => self.bobj(mi, "Map").1,
+            Expr::SetNew => self.bobj(mi, "Set").1,
             Expr::MapNewFromArray(x) => {
                 // Entries `[key, value]`: the map holds their contents.
                 let v = self.expr(fx, x);
                 let it = self.iterate(v);
                 let ek = self.m.elem_key();
                 let inner = self.load(it, ek);
-                let (t, n) = self.bobj(mi, "Collection");
+                let (t, n) = self.bobj(mi, "Map");
                 let fa = self.m.field_any(t);
                 self.m.edge(inner, fa);
                 n
@@ -1543,7 +1683,7 @@ impl<'a> Gen<'a> {
             Expr::SetNewFromArray(x) => {
                 let v = self.expr(fx, x);
                 let it = self.iterate(v);
-                let (t, n) = self.bobj(mi, "Collection");
+                let (t, n) = self.bobj(mi, "Set");
                 let fa = self.m.field_any(t);
                 self.m.edge(it, fa);
                 n
@@ -1804,6 +1944,9 @@ impl<'a> Gen<'a> {
                 let nt = self.expr(fx, new_target);
                 let r = self.m.reason("E11 Reflect.construct newTarget");
                 self.m.cons(nt, Cons::NewTargetHard { reason: r });
+                // A new target picks the prototype of whatever the target
+                // constructs, an Array exotic object included (#13645).
+                self.m.array_member_write.get_or_insert(r);
                 let (call, ret) = self.new_call(ThisArg::Undef, vec![], vec![a]);
                 self.m.cons(t, Cons::New { call });
                 ret
@@ -1831,14 +1974,22 @@ impl<'a> Gen<'a> {
                 // codegen's dispatch resolves it. A target outside this view
                 // (native, another unit) is the fallback's ⊤.
                 let out = self.tmp("dynimport");
+                for p in paths {
+                    self.dynimport_seen.insert((mi, p.clone()));
+                }
                 let imports = self.imports_of(mi as usize);
                 for p in paths {
-                    let target = imports
+                    let loads = imports
                         .iter()
-                        .filter(|_| !self.dynimport_sabotage)
                         .find(|i| &i.source == p && (i.is_dynamic || i.is_dynamic_target))
                         .and_then(|i| i.resolved_path.as_ref())
                         .and_then(|r| self.path_index.get(r).copied());
+                    // The site loads its target: its body runs.
+                    if let Some(t) = loads.filter(|t| self.dynamic_only.contains(t)) {
+                        let f = self.init_fn_of[&t];
+                        self.m.activate(f, "import");
+                    }
+                    let target = loads.filter(|_| !self.dynimport_sabotage);
                     if let Some(t) = target {
                         let ns = self.mods[t as usize].ns_tok;
                         self.m.add_tok(out, ns);

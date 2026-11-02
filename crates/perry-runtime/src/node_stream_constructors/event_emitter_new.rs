@@ -10,7 +10,6 @@
 //! object.
 use super::*;
 use crate::codegen_abi::LayoutWord;
-use crate::object::ObjectHeader;
 use crate::value::JSValue;
 
 /// The export declaration owns its constructor and prototype decoration.

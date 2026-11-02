@@ -20,6 +20,7 @@ use perry_hir::{Expr, Module, ModuleInitKind, Stmt};
 
 fn base_opts() -> CompileOptions {
     CompileOptions {
+        namespace_self_import: false,
         static_shape_ids: Vec::new(),
         program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),

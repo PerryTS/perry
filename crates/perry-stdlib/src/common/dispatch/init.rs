@@ -57,8 +57,9 @@ pub unsafe extern "C" fn js_handle_property_set_dispatch(
     // Native HANDLE values are ordinary, extensible objects in Node; this gives
     // them the same string-keyed own-property storage closures get from
     // `CLOSURE_PROPS`. The read half (`js_handle_property_dispatch`) consults
-    // every typed property FIRST and only falls back to this expando table, so a
-    // typed property name can never be shadowed by an expando copy. This is what
+    // this bag FIRST: an own property shadows the typed prototype members
+    // (`res.writeHead = hook` reads back `hook`), while names a typed setter
+    // claimed above never reach the bag. This is what
     // makes `debug`'s `createDebug.colors = [...]` persist and read back (the
     // wall: a Blob/Response-tagged `_` whose `.colors` write was silently
     // dropped, so `selectColor` read `undefined`).
@@ -209,6 +210,9 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     js_register_worker_threads_messaging_constructors(
         crate::worker_threads::js_worker_threads_message_channel_new,
         crate::worker_threads::js_worker_threads_broadcast_channel_new,
+    );
+    perry_runtime::messaging::js_register_worker_threads_message_port_dispatch(
+        crate::worker_threads::dispatch_message_port_core_operation,
     );
     perry_runtime::js_set_native_querystring_dispatch(
         crate::querystring::js_querystring_native_dispatch,

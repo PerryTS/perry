@@ -17,6 +17,7 @@ use std::path::PathBuf;
 mod detect_tests;
 mod flat_export_collision;
 mod hoist_scanner;
+mod namespace_exports;
 mod source_graph;
 
 // #5247: the wrapped output must report where the ORIGINAL body begins, and
@@ -940,7 +941,9 @@ fn wrap_emits_direct_default_export_for_class_module_exports() {
         "should bypass _cjs for single-class module.exports, got:\n{}",
         wrapped
     );
-    assert!(wrapped.contains("export { Child };"));
+    // `module.exports = Child` exports no key named `Child` (node's
+    // namespace is `default` + `module.exports`): no named export.
+    assert!(!wrapped.contains("export { Child };"), "{wrapped}");
 }
 
 #[test]
@@ -964,8 +967,8 @@ fn wrap_flat_emits_class_module_exports_that_closes_over_top_level_const() {
         wrapped
     );
     assert!(
-        wrapped.contains("export { StackUtils };"),
-        "expected named export of StackUtils, got:\n{}",
+        !wrapped.contains("export { StackUtils };"),
+        "`module.exports = StackUtils` exports no `StackUtils` key, got:\n{}",
         wrapped
     );
     assert!(
@@ -1221,8 +1224,8 @@ fn wrap_rewrites_module_exports_class_expression_named() {
         wrapped
     );
     assert!(
-        wrapped.contains("export { Abstract };"),
-        "expected named re-export of Abstract for class identity, got:\n{}",
+        !wrapped.contains("export { Abstract };"),
+        "`module.exports = class Abstract` exports no `Abstract` key, got:\n{}",
         wrapped
     );
     assert!(
@@ -1251,8 +1254,8 @@ fn wrap_rewrites_module_exports_class_expression_with_extends() {
         wrapped
     );
     assert!(
-        wrapped.contains("export { Child };"),
-        "expected named re-export of Child, got:\n{}",
+        !wrapped.contains("export { Child };"),
+        "`module.exports = class Child` exports no `Child` key, got:\n{}",
         wrapped
     );
 }

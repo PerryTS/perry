@@ -4171,18 +4171,57 @@ pub(crate) fn set_safepoint_pending(pending: bool) {
 /// either the word was armed or the module came from a path that emits the
 /// bare call. Both must still work, which is why the check is repeated here
 /// rather than delegated to the compiler.
+#[cfg(not(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu")))]
 #[no_mangle]
 pub extern "C" fn js_gc_loop_safepoint() {
     if !super::poll_armed() {
         return;
     }
-    js_gc_loop_safepoint_armed();
+    js_gc_loop_safepoint_armed(0, 0, 0);
+}
+
+/// x86-64 Linux: the same unarmed path written out (load the word through the
+/// GOT, compare, return: one instruction fewer than rustc's load, test,
+/// branch), so the armed path can hand the body its caller's frame
+/// (`roots::walk_origin`) in the argument registers and tail-jump to it. A
+/// collection the poll runs then walks from the JS frame that polled instead
+/// of stepping the collector's own frames. The shim never owns a frame: both
+/// paths leave through `ret` or `jmp` with the stack as the caller made it.
+#[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+#[unsafe(naked)]
+#[no_mangle]
+pub extern "C" fn js_gc_loop_safepoint() {
+    core::arch::naked_asm!(
+        "mov rax, qword ptr [rip + {armed}@GOTPCREL]",
+        "cmp dword ptr [rax], 0",
+        "jne 2f",
+        "ret",
+        "2:",
+        "mov rdi, qword ptr [rsp]",
+        "lea rsi, [rsp + 8]",
+        "mov rdx, rbp",
+        "jmp {body}",
+        armed = sym super::PERRY_GC_POLL_ARMED,
+        body = sym js_gc_loop_safepoint_armed,
+    );
+}
+
+/// The moving minor of an armed poll, walking from the poll's caller when the
+/// shim passed one (`pc != 0`). Offered only here, where a collection can
+/// start: most armed polls return before it.
+#[inline(always)]
+fn gc_safepoint_moving_minor_from(pc: usize, sp: usize, fp: usize) -> bool {
+    let origin = super::WalkOrigin { pc, sp, fp };
+    let _origin = (pc != 0).then(|| super::EntryWalkOrigin::enter(&origin));
+    gc_safepoint_moving_minor()
 }
 
 /// Out of line so the hot entry point above stays a load, a compare and a
-/// return — no frame, no spills.
+/// return — no frame, no spills. `(pc, sp, fp)` is the poll's caller frame
+/// on x86-64 Linux, where the shim tail-jumps here with it in the argument
+/// registers, and `(0, 0, 0)` elsewhere.
 #[inline(never)]
-fn js_gc_loop_safepoint_armed() {
+extern "C" fn js_gc_loop_safepoint_armed(pc: usize, sp: usize, fp: usize) {
     // Releases the startup seed unless a resolved seed wants the poll kept
     // reachable. Must run before the opt-in check below: a build with the polls
     // killed still has to get the word back to zero, or every back-edge keeps
@@ -4233,14 +4272,14 @@ fn js_gc_loop_safepoint_armed() {
         // candidate costs a full stride of new allocation on top of whatever
         // survived — see `gc/schedule.rs` for why this is a high-water mark and
         // not a delta.
-        if gc_safepoint_moving_minor() {
+        if gc_safepoint_moving_minor_from(pc, sp, fp) {
             super::schedule::note_schedule_poll_collection(
                 crate::arena::copying_from_space_in_use_bytes(),
             );
         }
         return;
     }
-    gc_safepoint_moving_minor();
+    gc_safepoint_moving_minor_from(pc, sp, fp);
 }
 
 struct BudgetedGcStepGuard;
@@ -5108,8 +5147,29 @@ pub(super) static GC_UNSAFE_WARNED: std::sync::atomic::AtomicBool =
 
 /// Manual GC trigger (callable from TypeScript as `gc()`). Skipped when
 /// worker threads are active (see GC_UNSAFE_ZONES).
+#[cfg(not(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu")))]
 #[no_mangle]
 pub extern "C" fn js_gc_collect() {
+    js_gc_collect_body();
+}
+
+/// x86-64 Linux: `gc()` hands its caller's frame to the collections it runs,
+/// exactly as the back-edge poll does (see `js_gc_loop_safepoint`).
+#[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+#[unsafe(naked)]
+#[no_mangle]
+pub extern "C" fn js_gc_collect() {
+    super::offering_entry_asm!(0, js_gc_collect_from)
+}
+
+#[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+extern "C" fn js_gc_collect_from(pc: usize, sp: usize, fp: usize) {
+    let origin = super::WalkOrigin { pc, sp, fp };
+    let _origin = super::EntryWalkOrigin::enter(&origin);
+    js_gc_collect_body();
+}
+
+fn js_gc_collect_body() {
     if crate::snap_census::explicit_gc() {
         return;
     }
@@ -5429,12 +5489,33 @@ fn leaf_memory_due_at_cap(cap: usize, small_bytes: usize) -> (bool, usize) {
     if leaf_bytes == 0 {
         return (false, usize::MAX);
     }
-    let window = super::tenuring::eden_allocation_window_bytes(
+    leaf_window_due(
         cap,
+        small_bytes,
         crate::arena::copying_active_survivor_in_use_bytes(),
-    );
+        leaf_bytes,
+    )
+}
+
+/// The leaf arm of the young trigger: Eden plus the young leaves against
+/// Eden's allocation window, and the from-space bound under which that stays
+/// false. `small_bytes` is the from-space occupancy (Eden plus the active
+/// survivor space); the window already credits the survivor space against the
+/// cap (`eden_allocation_window_bytes`, the budget the copying minor reads),
+/// so the survivor bytes come out of the reading before the comparison.
+/// Counting them on both sides made the arm due up to one survivor credit
+/// before the copying cap with no leaf to retire, and every young leaf born
+/// in that band ran a leaf service that could not make the arm false.
+pub(super) fn leaf_window_due(
+    cap: usize,
+    small_bytes: usize,
+    survivor_bytes: usize,
+    leaf_bytes: usize,
+) -> (bool, usize) {
+    let window = super::tenuring::eden_allocation_window_bytes(cap, survivor_bytes);
+    let eden = small_bytes.saturating_sub(survivor_bytes);
     (
-        small_bytes.saturating_add(leaf_bytes) >= window,
-        window.saturating_sub(leaf_bytes),
+        eden.saturating_add(leaf_bytes) >= window,
+        window.saturating_add(survivor_bytes).saturating_sub(leaf_bytes),
     )
 }

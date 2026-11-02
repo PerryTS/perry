@@ -1,27 +1,12 @@
 # Multi-Threading
 
-Perry gives you real OS threads with a one-line API. No worker setup, no message ports, no structured clone overhead. Just `parallelMap`, `parallelFilter`, and `spawn`.
+Use `parallelMap`, `parallelFilter` and `spawn` to run native work on OS threads.
 
 ```typescript
 {{#include ../../examples/runtime/thread_snippets.ts:overview-header}}
 ```
 
-This is something **no JavaScript runtime can do**. V8, Bun, and Deno are all locked to one thread per isolate. Perry compiles to native code — there are no isolates, no GIL, no structural limitations. Your code runs on real OS threads with the full power of every CPU core.
-
-## Why This Matters
-
-JavaScript's single-threaded model is its biggest performance bottleneck. Here's how runtimes try to work around it:
-
-| Runtime | "Multi-threading" | Reality |
-|---------|-------------------|---------|
-| **Node.js** | `worker_threads` | Separate V8 isolates. Data copied via structured clone. ~2MB RAM per worker. Complex API. |
-| **Deno** | `Worker` | Same as Node — isolated heaps, message passing only. |
-| **Bun** | `Worker` | Same architecture. Faster structured clone, still isolated. |
-| **Perry** | `parallelMap` / `spawn` | Real OS threads. Lightweight (8MB stack). One-line API. Compile-time safety. |
-
-The fundamental problem: V8 uses a garbage-collected heap that **cannot be shared** between threads. Every "worker" is an entirely separate JavaScript engine instance with its own heap, its own GC, and its own copy of your data.
-
-Perry doesn't have this limitation. It compiles TypeScript to native machine code. Values are transferred between threads using zero-cost copies for numbers and efficient serialization for objects — no separate engine instances, no multi-megabyte overhead per thread.
+Perry workers run native code on OS threads, each with its own arena and collector. Ordinary captures and results are serialized between heaps; this has a cost proportional to the transferred data. SharedArrayBuffer and supported ownership transfers are explicit exceptions, not permission to share arbitrary heap pointers.
 
 ## Three Primitives
 
@@ -100,7 +85,7 @@ Numbers and booleans are zero-cost copies (just 64-bit values). Strings, arrays,
 
 ## Safety
 
-Perry enforces thread safety **at compile time**. You don't need to think about race conditions, mutexes, or data corruption.
+Compile-time admission checks restrict worker closures and module-global access. Shared memory still requires synchronization, and native integrations must respect thread ownership.
 
 ### No Shared Mutable State
 
@@ -158,7 +143,7 @@ is their purpose.
 
 ### Independent Thread Arenas
 
-Each worker thread has its own memory arena. Objects created on one thread can never be accessed from another thread. Values cross thread boundaries only through deep-copy serialization, which Perry handles automatically and invisibly.
+Perry workers run native code on OS threads, each with its own arena and collector. Ordinary captures and results are serialized between heaps; this has a cost proportional to the transferred data. SharedArrayBuffer and supported ownership transfers are explicit exceptions, not permission to share arbitrary heap pointers.
 
 File-system descriptors are also thread-affine. Numeric fds from `fs.openSync`
 are just copied numbers in another thread, where the fd registry does not know
@@ -170,13 +155,13 @@ thread boundaries as detached handles with `fd === -1`. Pass file paths to
 
 Perry's threading model is built on three pillars:
 
-**1. Native Code, Not Interpreted**
+**1. Native Code**
 
-Perry compiles TypeScript to native machine code via LLVM. There's no interpreter, no VM, no isolate. A function pointer is just a function pointer — it's valid on any thread.
+Perry compiles TypeScript to native machine code via LLVM. Native worker execution still requires the ownership and transfer rules described above.
 
 **2. Thread-Local Memory**
 
-Each thread gets its own memory arena (bump allocator) and garbage collector. No synchronization overhead during computation. When a thread finishes, its arena is freed automatically.
+Each worker has its own arena and collector. This avoids a shared JavaScript heap; explicit shared memory and runtime coordination still require synchronization.
 
 **3. Serialized Transfer**
 
@@ -238,6 +223,16 @@ Main-thread `postMessageToThread` rejects missing or stopped destinations before
 cloning the payload or detaching transfer buffers. Worker-origin messages retain
 Node's forwarding order: cloning precedes destination rejection. Admission does
 not guarantee rollback if a destination exits concurrently after it was admitted.
+Core-module messaging constructor exports retain the original thread-realm
+MessageChannel, MessagePort and BroadcastChannel objects even after global
+reassignment. Explicit CommonJS export overrides and named-export synchronization
+remain separate; vm/eval global population does not replace these thread-core values.
+MessagePort core methods (`postMessage`, `start`, `close`, `ref`, `unref`,
+`hasRef`) operate on their actual receiver, including calls borrowed from another
+port or its prototype. A private ID supplies the brand without observable getters
+or proxy traps; closing a port preserves its brand without retaining a closed
+runtime port in the delivery table. Listener methods and realm movement remain
+separate parity work.
 Other worker API parity gaps remain.
 
 ## Next Steps

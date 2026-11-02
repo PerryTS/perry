@@ -453,6 +453,7 @@ pub(super) fn cycle(component: f64) -> bool {
     let first = scope.root_nanbox_f64(undefined());
     let mut failed = false;
     let mut delivered_failure = false;
+    let mut delivered_exception = false;
     let mut collected_writer_retirement = false;
     let background_before_poll = unsafe {
         (*state(component.get_nanbox_f64()))
@@ -566,6 +567,9 @@ pub(super) fn cycle(component: f64) -> bool {
                 event = Value::Null;
                 continue;
             }
+            // A JavaScript exception recorded before delivery (an import that
+            // threw or rejected) caused the failure; a trap gets its error here.
+            let raised = first_error(component.get_nanbox_f64(), id).is_some();
             if let Err(error) = complete(component.get_nanbox_f64(), id, &event, &primary) {
                 if !failed {
                     first.set_nanbox_f64(error);
@@ -574,6 +578,7 @@ pub(super) fn cycle(component: f64) -> bool {
             }
             delivered_failure |= observed
                 && (native_failure || first_error(component.get_nanbox_f64(), id).is_some());
+            delivered_exception |= observed && raised;
             event = Value::Null;
         }
         if unsafe { (*state(component.get_nanbox_f64())).retired } {
@@ -645,7 +650,12 @@ pub(super) fn cycle(component: f64) -> bool {
         {
             fail(report["error"].as_str().unwrap());
         }
-        if delivered_failure {
+        // A delivered failure covers a root failure, except after a trap: the
+        // retirement destructors threw before the trap had an error, so their
+        // first exception is not the call's, and the next dispose() throws it.
+        if delivered_failure
+            && (delivered_exception || unsafe { !(*state(component.get_nanbox_f64())).retired })
+        {
             unsafe {
                 (*state(component.get_nanbox_f64())).root_failed = false;
             }

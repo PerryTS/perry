@@ -686,7 +686,7 @@ fn function_dictionary_adds_reuse_the_named_bag_transition() {
 }
 
 #[test]
-fn function_dictionary_asks_its_actual_prototype_own_attributes() {
+fn a_linked_function_asks_its_actual_prototype_own_attributes() {
     let _lock = crate::gc::global_side_table_test_lock();
     let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let a = fresh_test_function();
@@ -715,10 +715,10 @@ fn function_dictionary_asks_its_actual_prototype_own_attributes() {
             (*((v.to_bits() & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader))
                 .shape_id
         };
-        assert_eq!(
+        assert_ne!(
             id(a),
             id(b),
-            "FunctionDictionary is shared across these distinct prototype chains"
+            "each function's shape names its own prototype identity"
         );
     }
     assert_eq!(
@@ -730,7 +730,7 @@ fn function_dictionary_asks_its_actual_prototype_own_attributes() {
     assert_eq!(
         unsafe { try_store(b, key_value, 2.0) },
         Some(2.0),
-        "the same FunctionDictionary id with a different prototype must remain writable"
+        "a different prototype's chain must remain writable"
     );
 }
 

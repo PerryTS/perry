@@ -320,13 +320,16 @@ pub(super) unsafe fn register_bound(
         }
     }
     // Case 2c: a class family's instances have the class's prototype, and
-    // its id is its descriptor record's.
+    // its id is its descriptor record's, unless the descriptor names the
+    // instances' prototype itself: `%Object.prototype%` (3, `exports`) or
+    // null (1, `require.cache`). The shape's identity is the one record of
+    // that link.
     let class_family = d.class_id != 0;
     let proto_id = match d.proto.addr() {
         3 => super::super::shapes::PROTO_ID_DEFAULT,
+        1 => super::super::shapes::PROTO_ID_NULL,
         _ if class_family => super::super::shapes::class_proto_id(d.class_id),
         0 => super::super::shapes::PROTO_ID_DEFAULT,
-        1 => super::super::shapes::PROTO_ID_NULL,
         2 if d.variant == crate::codegen_abi::LAYOUT_VARIANT_FUNCTION_CONSTRUCTOR => {
             match function_proto {
                 Some(id) if id != 0 => id,
@@ -457,7 +460,12 @@ pub(super) unsafe fn register_bound(
     } else if function {
         super::super::shapes::allocate_declared_layout_id(proto_id).0
     } else if proto_id == super::super::shapes::PROTO_ID_DEFAULT
-        || class_family
+        // A class family keeps its section-ordered identity: a class
+        // identity is implied, which a plain id carries. A family linked to
+        // null (`require.cache`) names the null identity, which only a
+        // null-kind id carries: it takes an allocated one, beside the
+        // null-kind word the codegen gave its descriptor.
+        || (class_family && proto_id != super::super::shapes::PROTO_ID_NULL)
         || d.variant == crate::codegen_abi::LAYOUT_VARIANT_FUNCTION_CONSTRUCTOR
     {
         requested

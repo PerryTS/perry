@@ -228,6 +228,19 @@ pub(super) fn dispose(component: f64) -> f64 {
     let scope = RuntimeHandleScope::new();
     let component = scope.root_nanbox_f64(component);
     if unsafe { (*state(component.get_nanbox_f64())).retired } {
+        // A Store retired by a trap ran its destructors at retirement. As
+        // legacy disposal does, the first of their exceptions is thrown here,
+        // once; later ones were suppressed when it was recorded. A call that
+        // failed with its own JavaScript exception already delivered the first.
+        let failed = unsafe {
+            std::mem::replace(&mut (*state(component.get_nanbox_f64())).root_failed, false)
+        };
+        if failed {
+            crate::exception::js_throw(records::get(
+                origin_row(component.get_nanbox_f64(), 0),
+                records::ERROR,
+            ));
+        }
         return undefined();
     }
     if unsafe { (*state(component.get_nanbox_f64())).polling } {

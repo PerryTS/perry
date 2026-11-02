@@ -299,6 +299,88 @@ entry:
     assert_eq!(roundtrip_ir(ir, "freeze_text"), 3);
 }
 
+/// Every function `text` defines, built by the reader over the skeleton and
+/// verified; returns the reader module's print. Lets emitter tests outside
+/// this module hold a LIVE emission to the reader (#8228).
+pub(crate) fn reader_module_print(text: &str) -> String {
+    let (skeleton, fns) = split_corpus(text);
+    let ctx = Context::create();
+    let module =
+        crate::inprocess::parse_ir_text(&ctx, &skeleton, "reader_print").expect("skeleton parses");
+    for f in &fns {
+        predeclare_function_from_text(&ctx, &module, f)
+            .unwrap_or_else(|e| panic!("predeclare: {e:#}"));
+    }
+    for f in &fns {
+        add_function_from_text(&ctx, &module, f).unwrap_or_else(|e| panic!("{e:#}"));
+    }
+    module
+        .verify()
+        .unwrap_or_else(|e| panic!("verifier rejected native module:\n{}", e.to_string()));
+    module.print_to_string().to_string()
+}
+
+/// `stmt/indexed_owner_loop.rs` declares one noalias scope per typed-array
+/// owner (`llvm.experimental.noalias.scope.decl`, an inline `metadata`
+/// operand) and tags the region's loads and stores with inline
+/// `!alias.scope`/`!noalias` tuples. The reader accepted only
+/// `llvm.read_register`'s `!{!"NAME"}` operand, so a split module holding
+/// such a region failed native construction ("unsupported metadata
+/// operand", @aws-sdk/core protocols in opencode, 0.5.1663), and it dropped
+/// the attachments silently. The scope domain embeds the function name, so
+/// the strings here carry escapes and structural characters. The reader's
+/// build must print exactly as LLVM's own parse of the same text.
+#[test]
+fn noalias_scope_declarations_and_inline_scope_tuples_match_llvms_parse() {
+    let domain = r#"!{!"indexed.owner.f\5C\22,(x){y}.3"}"#;
+    let a = format!(r#"!{{!"owner.1", {domain}}}"#);
+    let b = format!(r#"!{{!"owner.2", {domain}}}"#);
+    let ir = format!(
+        r#"declare void @llvm.experimental.noalias.scope.decl(metadata)
+declare i64 @llvm.read_register.i64(metadata)
+
+define double @owner_region(ptr %a, ptr %b) {{
+entry:
+  call void @llvm.experimental.noalias.scope.decl(metadata !{{{a}}})
+  call void @llvm.experimental.noalias.scope.decl(metadata !{{{b}}})
+  %sp = call i64 @llvm.read_register.i64(metadata !{{!"rsp"}})
+  %x = load double, ptr %a, align 8, !alias.scope !{{{a}}}, !noalias !{{{b}}}
+  store double %x, ptr %b, align 8, !alias.scope !{{{b}}}, !noalias !{{{a}}}
+  ret double %x
+}}
+"#
+    );
+    let llvm_ctx = Context::create();
+    let llvm_module = crate::inprocess::parse_ir_text(&llvm_ctx, &ir, "scopes_llvm")
+        .expect("LLVM parses the fixture");
+    let llvm = print_function(&llvm_module, "owner_region");
+    assert_eq!(
+        llvm.matches("!alias.scope !").count() + llvm.matches("!noalias !").count(),
+        4,
+        "fixture lost its scope attachments:\n{llvm}"
+    );
+    let (skeleton, fns) = split_corpus(&ir);
+    let ctx = Context::create();
+    let module =
+        crate::inprocess::parse_ir_text(&ctx, &skeleton, "scopes_reader").expect("skeleton parses");
+    for f in &fns {
+        predeclare_function_from_text(&ctx, &module, f).expect("predeclare");
+        add_function_from_text(&ctx, &module, f).unwrap_or_else(|e| panic!("{e:#}"));
+    }
+    module
+        .verify()
+        .unwrap_or_else(|e| panic!("verifier rejected native module:\n{}", e.to_string()));
+    let reader = print_function(&module, "owner_region");
+    assert_same_function_print("noalias scope region", &llvm, &reader);
+    // Function prints show attachment slots only; the scope trees behind
+    // them must be the same nodes too.
+    let tail = |m: &inkwell::module::Module<'_>| {
+        let text = m.print_to_string().to_string();
+        text.lines().filter(|l| l.starts_with('!')).map(str::to_string).collect::<Vec<_>>()
+    };
+    assert_eq!(tail(&llvm_module), tail(&module), "scope metadata trees differ");
+}
+
 /// The `format!` templates `expr/channel.rs` emits for its `<4 x i32>` SIMD
 /// byte-channel reduction, in emission order. The fixture below is BUILT from
 /// these strings rather than duplicating them, and each is asserted to still

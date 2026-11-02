@@ -212,7 +212,11 @@ pub(crate) fn get_field_by_name_object_tail(
                 if val.to_bits() != crate::value::TAG_UNDEFINED {
                     return JSValue::from_bits(val.to_bits());
                 }
-                if name_str == "constructor" {
+                // Only a function on its intrinsic [[Prototype]] inherits this:
+                // a linked one's read above already answered from its chain.
+                if name_str == "constructor"
+                    && crate::closure::closure_static_prototype(obj as usize).is_none()
+                {
                     if let Some(ctor) =
                         crate::object::generator_function_constructor_of(obj as usize)
                     {
@@ -676,7 +680,10 @@ pub(crate) fn get_field_by_name_object_tail(
                     // to `%GeneratorFunction%` / `%AsyncGeneratorFunction%`.
                     // Other functions have no `constructor` own-prop in Perry's
                     // model (they fall through to `undefined`, as before).
-                    if name_str == "constructor" {
+                    // A linked function's read above answered from its chain.
+                    if name_str == "constructor"
+                        && crate::closure::closure_static_prototype(obj as usize).is_none()
+                    {
                         if let Some(ctor) =
                             crate::object::generator_function_constructor_of(obj as usize)
                         {

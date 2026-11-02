@@ -236,7 +236,12 @@ pub const LAYOUT_DESC_ID_OFFSET_ILP32: usize = 56;
 pub const LAYOUT_DESC_SIZE_LP64: usize = 80;
 pub const LAYOUT_DESC_SIZE_ILP32: usize = 64;
 /// `PerryLayoutKey.off`: the key's absolute slot offset from the object (u16).
-pub const LAYOUT_KEY_OFF_OFFSET: usize = 14;
+/// It follows `atom` (a pointer), `slot` (u32), `attrs` and `_pad` (u8 each).
+pub const LAYOUT_KEY_OFF_OFFSET_LP64: usize = 14;
+pub const LAYOUT_KEY_OFF_OFFSET_ILP32: usize = 10;
+/// `PerryLayoutKey` is 16 bytes on LP64 (12 on ILP32).
+pub const LAYOUT_KEY_SIZE_LP64: usize = 16;
+pub const LAYOUT_KEY_SIZE_ILP32: usize = 12;
 /// Offsets of the A1 precomputes (`gc_header_word`) appended after `image_keys`
 /// (`i64` aligned to 8 on every target).
 pub const LAYOUT_DESC_GC_HEADER_WORD_OFFSET_LP64: usize = 88;

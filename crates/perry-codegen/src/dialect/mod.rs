@@ -42,13 +42,13 @@ pub(crate) const LLVM_CC_PRESERVE_NONE: u32 = 21;
 pub(crate) const LLVM_CC_PRESERVE_MOST: u32 = 14;
 
 use text::{
-    add_enum_attr, apply_flags, be, float_pred, inline_metadata, int_pred, rauw, rmatch_paren,
-    set_alignment_if_any, set_inline_attachment, set_invariant_load, split_top_level, take_quoted,
-    unquote,
+    add_enum_attr, apply_flags, attach_trailing_metadata, be, float_pred, inline_metadata,
+    int_pred, rauw, rmatch_paren, set_alignment_if_any, set_invariant_load, split_top_level,
+    take_quoted, unquote,
 };
 use types::{basic_type, constant, fn_type_of, indirect_fn_type, strip_label, ty_and_val};
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 /// Create (only) the function declaration for `fn_text`'s define header, so
 /// later-defined functions are callable while earlier bodies are read. The
@@ -665,8 +665,7 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
                     let _ = inst.set_volatile(true);
                 }
                 set_alignment_if_any(Some(inst), rest);
-                set_inline_attachment(self.ctx, inst, rest, "alias.scope")?;
-                set_inline_attachment(self.ctx, inst, rest, "noalias")?;
+                attach_trailing_metadata(self.ctx, Some(inst), &parts[2..])?;
                 Ok(())
             }
             "br" => {
@@ -738,15 +737,7 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
         if volatile {
             let _ = v.as_instruction_value().map(|i| i.set_volatile(true));
         }
-        if rest.contains("!invariant.load") {
-            if let Some(i) = v.as_instruction_value() {
-                set_invariant_load(self.ctx, i);
-            }
-        }
-        if let Some(i) = v.as_instruction_value() {
-            set_inline_attachment(self.ctx, i, rest, "alias.scope")?;
-            set_inline_attachment(self.ctx, i, rest, "noalias")?;
-        }
+        attach_trailing_metadata(self.ctx, v.as_instruction_value(), &parts[2..])?;
         if atomic {
             let ord = match ordering {
                 Some("seq_cst") => {
@@ -864,6 +855,22 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
 
     /// Calls: direct `@f(...)`, indirect `%fp(...)` (with or without a
     /// pre-opaque `(sig)*` type), and Perry-emitted inline asm.
+    /// One call argument. A `metadata` operand is an inline metadata tree
+    /// (`llvm.read_register`'s register name, a noalias scope declaration);
+    /// every other operand is a basic value of its type.
+    fn call_arg(
+        &mut self,
+        ty: &str,
+        tok: &str,
+    ) -> Result<(BasicMetadataValueEnum<'ctx>, inkwell::types::BasicMetadataTypeEnum<'ctx>)> {
+        if ty == "metadata" {
+            let node = inline_metadata(self.ctx, tok)?;
+            return Ok((node.into(), self.ctx.metadata_type().into()));
+        }
+        let bt = basic_type(self.ctx, ty)?;
+        Ok((self.val(bt, tok)?.into(), bt.into()))
+    }
+
     fn call(&mut self, dst: Option<&str>, rest: &str) -> Result<Option<BasicValueEnum<'ctx>>> {
         // Optional fast-math prefix tokens on float-returning calls.
         let rest = rest
@@ -913,22 +920,9 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
         let mut arg_types: Vec<inkwell::types::BasicMetadataTypeEnum> = Vec::new();
         for a in split_top_level(args_str) {
             let (aty, atok) = ty_and_val(&a)?;
-            if aty == "metadata" {
-                // Inline metadata operands: `llvm.read_register`'s register
-                // name (`!{!"NAME"}`, `expr/stack_guard.rs`) and an
-                // indexed-owner loop's alias scope list
-                // (`llvm.experimental.noalias.scope.decl`).
-                let (node, used) = inline_metadata(self.ctx, atok)?;
-                if !atok[used..].trim().is_empty() {
-                    bail!("trailing text after metadata operand `{atok}`");
-                }
-                args.push(node.into());
-                arg_types.push(self.ctx.metadata_type().into());
-                continue;
-            }
-            let ty = basic_type(self.ctx, aty)?;
-            args.push(self.val(ty, atok)?.into());
-            arg_types.push(ty.into());
+            let (value, ty) = self.call_arg(aty, atok)?;
+            args.push(value);
+            arg_types.push(ty);
         }
 
         let name = dst.map(|d| d.trim_start_matches('%')).unwrap_or("");
@@ -1775,9 +1769,9 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
                 let mut argtys: Vec<inkwell::types::BasicMetadataTypeEnum> =
                     Vec::with_capacity(args.len());
                 for (t, v) in args {
-                    let bt = basic_type(self.ctx, t)?;
-                    argv.push(self.val(bt, v)?.into());
-                    argtys.push(bt.into());
+                    let (value, ty) = self.call_arg(t, v)?;
+                    argv.push(value);
+                    argtys.push(ty);
                 }
                 let fn_ty = fn_type_of(self.ctx, ret, &argtys)?;
                 let f = match self.module.get_function(callee) {
@@ -1840,9 +1834,9 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
                 let mut argtys: Vec<inkwell::types::BasicMetadataTypeEnum> =
                     Vec::with_capacity(args.len());
                 for (t, v) in args {
-                    let bt = basic_type(self.ctx, t)?;
-                    argv.push(self.val(bt, v)?.into());
-                    argtys.push(bt.into());
+                    let (value, ty) = self.call_arg(t, v)?;
+                    argv.push(value);
+                    argtys.push(ty);
                 }
                 let fn_ty = fn_type_of(self.ctx, ret, &argtys)?;
                 let fp = self

@@ -167,7 +167,7 @@ fn index_for(frame: Frame, return_address: usize, offset: i32) -> StackMapIndex 
     // Leaked on purpose: the index holds `&'static` section slices because the
     // real sections are parts of loaded images, which outlive every collection.
     super::build_index_from_sections(
-        vec![Box::leak(blob.into_boxed_slice())],
+        vec![blob],
         &[origin],
         super::IndexMode::Lazy,
     )

@@ -32,6 +32,10 @@ impl<'a> Gen<'a> {
         r: u32,
         accessor: bool,
     ) {
+        // The key `o` gains (`STAR_KEY`: a computed one), for the chain keys
+        // a given prototype holds (`settle_native_given`).
+        let dk = self.m.atom(key.as_deref().unwrap_or(crate::STAR_KEY));
+        self.m.define_on.insert((o, dk, !accessor));
         match &key {
             Some(k) => {
                 let ka = self.m.atom(k);

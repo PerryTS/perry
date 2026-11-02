@@ -483,9 +483,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // user classes (local `hir.classes` + cross-module imported
             // user classes); plain built-in names never appear in it, so
             // unshadowed built-ins keep their reserved ids.
-            let user_cid = ctx.class_ids.get(ty).copied();
+            if let Some(cid) = ctx.class_ids.get(ty).copied() {
+                // The declaration's function object owns computed static
+                // members, including @@hasInstance. A class id alone loses that
+                // observable GetMethod (even for a primitive LHS).
+                // `js_class_value` is non-collecting and returns a pinned value.
+                let rhs = super::emit_class_value(ctx.block(), cid);
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_instanceof_dynamic",
+                    &[(DOUBLE, &v), (DOUBLE, &rhs)],
+                ));
+            }
             let cid = match ty.as_str() {
-                _ if user_cid.is_some() => user_cid.unwrap(),
                 "Error" => 0xFFFF0001u32,
                 "TypeError" => 0xFFFF0010u32,
                 "RangeError" => 0xFFFF0011u32,

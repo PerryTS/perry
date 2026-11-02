@@ -108,10 +108,7 @@ pub(crate) fn describe_received_js(value: f64) -> *mut StringHeader {
         }
         let addr = crate::value::addr_class::object_ref_addr(value.get_nanbox_f64());
         let header = unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) };
-        let null_proto = header.is_some_and(|h| unsafe {
-            (*h.as_ptr())._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0
-        });
-        if null_proto
+        if received_has_null_prototype(addr)
             || crate::object::prototype_chain::object_static_prototype(addr)
                 == Some(crate::value::TAG_NULL)
         {
@@ -277,9 +274,7 @@ pub(crate) fn received_native_brand(value: f64) -> Option<&'static str> {
 }
 
 pub(crate) fn received_has_null_prototype(addr: usize) -> bool {
-    unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }.is_some_and(
-        |header| unsafe { (*header.as_ptr())._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 },
-    )
+    unsafe { crate::object::shapes::cell_prototype_is_null(addr) }
 }
 
 /// Inspect link authority, not properties: no constructor Get, descriptor

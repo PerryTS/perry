@@ -798,18 +798,25 @@ pub(crate) unsafe fn build_create_data_descriptor(value: f64) -> f64 {
 /// receiver's `[[DefineOwnProperty]]`. This is the operation used by public
 /// class fields: it bypasses inherited setters on ordinary objects and still
 /// drives a Proxy's `defineProperty` trap.
+///
+/// The descriptor is a Property Descriptor record, not a JS object: no
+/// descriptor object is allocated, and nothing is read back through
+/// `%Object.prototype%` (an inherited `get` cannot turn it into an accessor).
 pub(crate) fn create_data_property(receiver: f64, key: f64, value: f64) -> bool {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let receiver = scope.root_nanbox_f64(receiver);
-    let key = scope.root_nanbox_f64(key);
-    let value = scope.root_nanbox_f64(value);
-    let descriptor = unsafe { build_create_data_descriptor(value.get_nanbox_f64()) };
-    let descriptor = scope.root_nanbox_f64(descriptor);
-    crate::value::js_is_truthy(js_reflect_define_property(
-        receiver.get_nanbox_f64(),
-        key.get_nanbox_f64(),
-        descriptor.get_nanbox_f64(),
-    )) != 0
+    unsafe {
+        if !crate::object::object_ops::definition_target_is_object(receiver) {
+            reflect_non_object_typeerror("defineProperty");
+        }
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let receiver = scope.root_nanbox_f64(
+            crate::object::object_ops::normalize_descriptor_operand(receiver),
+        );
+        let value = scope.root_nanbox_f64(value);
+        let key = scope.root_nanbox_f64(crate::object::js_to_property_key(key));
+        let descriptor =
+            crate::object::object_ops::DescView::create_data(&scope, value.get_nanbox_f64());
+        crate::object::object_ops::define_own_property_decoded(&scope, &receiver, &key, &descriptor)
+    }
 }
 
 /// #5129: build a `{ value }`-only property descriptor — the `valueDesc` of
@@ -1036,13 +1043,11 @@ pub(crate) fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, rece
                             // builds O(n²)). #10287: a RECORDED prototype (a
                             // function-constructed receiver, `Object.create`,
                             // `setPrototypeOf`) is walked per key rather than rejected.
-                            // A born-null receiver whose shape proves it ordinary
-                            // with no chain has nothing to intercept the key.
+                            // A receiver whose shape proves it ordinary with
+                            // no chain has nothing to intercept the key.
                             use crate::object::shapes::store_kind;
                             let obj = cur_addr() as *const crate::ObjectHeader;
-                            if header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0
-                                && store_kind::born_null_shape_proven(obj, header._reserved)
-                            {
+                            if store_kind::null_shape_proven(obj, header._reserved) {
                                 true
                             } else {
                                 match crate::object::prototype_chain::object_static_prototype(
@@ -1051,6 +1056,8 @@ pub(crate) fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, rece
                                     None => {
                                         !crate::object::object_proto_may_intercept_key(cur_key())
                                     }
+                                    // A null chain: nothing intercepts.
+                                    Some(crate::value::TAG_NULL) => true,
                                     Some(_) => {
                                         !crate::object::plain_custom_prototype_may_intercept(
                                             cur_addr(),
@@ -1131,12 +1138,6 @@ pub(crate) fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, rece
                                 // "is an ObjectHeader" test.
                                 && crate::object::object_is_regular(
                                     addr as *const crate::ObjectHeader,
-                                )
-                                // A born-null receiver's plan is keyed on a
-                                // shape that proves it ordinary with no chain.
-                                && crate::object::shapes::store_kind::born_null_admits_lane(
-                                    addr as *const crate::ObjectHeader,
-                                    header._reserved,
                                 )
                                 && interned != 0;
                             let verdict = if plan_eligible

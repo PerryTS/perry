@@ -191,6 +191,9 @@ tempfile.workspace = true
 # object cache keys on a hash of this binary, so a linked runtime would make
 # every runtime edit miss every cached object.
 perry-runtime.workspace = true
+# The native ESM namespace test reads the runtime's submodule export
+# declarations (the same file perry-codegen links exports through).
+perry-dispatch.workspace = true
 
 [build-dependencies]
 winresource = "0.1.31"

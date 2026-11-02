@@ -30,7 +30,9 @@ pub const BORN: CallId = NO_CTX - 1;
 /// The layout of no object receiver (a primitive, `undefined`, a function
 /// without a `this` term).
 pub const LAY_NONE: u32 = 0;
-/// The lexical context of a kind-0 instance: its program site.
+/// The lexical context of a per-site run: a kind-0 instance's program site,
+/// a kind-7 instance's call site (rule C). What the run births is per
+/// (birth site, that site) (`made_ctx`).
 const LAY_SITE: u32 = 5 << 28;
 /// The lexical context of a kind-5 instance: the object it constructs.
 const LAY_BIRTH: u32 = 6 << 28;
@@ -38,6 +40,15 @@ const LAY_BIRTH: u32 = 6 << 28;
 /// token (`recv_lay`), the kind `layout_of` gives one-value tokens.
 const LAY_TOK: u32 = 4 << 28;
 const LAY_MASK: u32 = (1 << 28) - 1;
+
+/// What made a maker-context birth (`SumState::made`): an object (its
+/// construction, or with `true` a method of it), or a per-site run, the
+/// program or call site whose instance births it (`LAY_SITE`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Maker {
+    Obj(Tok, bool),
+    Site(CallId),
+}
 /// A closure context key for a closure whose captured cells are its
 /// creator's context's (`CAP_OUTER`): the creator's context id with this
 /// bit. Lexical contexts never set it (kinds stop at 7 << 28).
@@ -110,6 +121,10 @@ pub struct Summary {
     /// call result or seed puts a value into it), so it holds only what
     /// the calls pass (DECISIONS 44 (b), `relative_params`).
     pub rel: Vec<bool>,
+    /// The result is a closure this body creates over its own frame
+    /// (`return (arg) => ... map ...`, through copies): a closure maker
+    /// (rule C, `Model::closure_maker`).
+    pub maker: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -141,7 +156,9 @@ pub struct SumState {
     /// key, else its layout, `recv_lay`; without one `LAY_NONE`), 2 unknown-code
     /// entry, 3 setter group, 4 getter group, 5 a birth run (the
     /// constructor chain or field initializer of the object token being
-    /// born), 6 a for-in body's run for one key (the key's atom, FVA 4.3b).
+    /// born), 6 a for-in body's run for one key (the key's atom, FVA 4.3b),
+    /// 7 a closure maker's run for one call site (rule C, `closure_maker`:
+    /// the call's template, so one run per site of the program text).
     /// Nothing in a key is another instance: the count is (sites +
     /// object tokens + layouts) x functions, and the object tokens are the
     /// program's birth sites under their maker contexts (`made_of`).
@@ -205,10 +222,11 @@ pub struct SumState {
     /// calls started from (`maker_key`), so results of results never form
     /// a chain. A site already on the maker chain folds onto the object
     /// born there.
-    pub made_of: FxHashMap<(CallId, Tok), CallId>,
-    /// Maker context `BORN - 1 - i` -> (its birth site, its maker object,
-    /// made by a method of the maker rather than its construction).
-    pub made: Vec<(CallId, Tok, bool)>,
+    /// A per-site run's births are per (birth site, site) the same way
+    /// (`Maker::Site`): each run of a closure maker has its own `new Map()`.
+    pub made_of: FxHashMap<(CallId, Maker), CallId>,
+    /// Maker context `BORN - 1 - i` -> (its birth site, its maker).
+    pub made: Vec<(CallId, Maker)>,
 }
 
 fn is_slot(x: NodeId) -> bool {
@@ -293,6 +311,12 @@ pub fn map_cons(
             this,
         },
         OverrideThis { tmpl, key, reason } => OverrideThis { tmpl, key, reason },
+        Guard { test, from, dst } => Guard {
+            test,
+            from: n(from),
+            dst: n(dst),
+        },
+        Defined { dst } => Defined { dst: n(dst) },
         TopIfAny { dst, from, reason } => TopIfAny {
             dst: n(dst),
             from: n(from),
@@ -328,12 +352,19 @@ pub fn map_cons(
         },
         Implicit { reason, proto } => Implicit { reason, proto },
         CreateProto { reason } => CreateProto { reason },
-        ChainUnion { key, dst, of } => ChainUnion {
+        ChainUnion {
+            key,
+            dst,
+            of,
+            builtin,
+        } => ChainUnion {
             key,
             dst: n(dst),
             of,
+            builtin,
         },
         ProtoGiven { protos } => ProtoGiven { protos: n(protos) },
+        ParentGiven { of } => ParentGiven { of },
         ProtoClosure { dst } => ProtoClosure { dst: n(dst) },
         ProtoMethods { origin, key, call } => ProtoMethods {
             origin,
@@ -416,6 +447,11 @@ pub fn map_cons(
             accessor,
         },
         StoreKeyed { o, src, site } => StoreKeyed {
+            o: n(o),
+            src: n(src),
+            site,
+        },
+        StoreIndexed { o, src, site } => StoreIndexed {
             o: n(o),
             src: n(src),
             site,
@@ -522,6 +558,7 @@ fn gen_kind(c: &Cons) -> bool {
             | ContractThis { .. }
             | OverrideThis { .. }
             | TopIfAny { .. }
+            | Guard { .. }
             | Hard { .. }
             | DeleteKey { .. }
             | DefineKey { .. }
@@ -535,6 +572,7 @@ fn gen_kind(c: &Cons) -> bool {
             | ForInBody { .. }
             | DefineKeyed { .. }
             | StoreKeyed { .. }
+            | StoreIndexed { .. }
             | AccessorKeyed { .. }
             | Arith { .. }
             | ArrayLenArg { .. }
@@ -578,7 +616,9 @@ impl Model {
         }
         if self.nodes[n as usize].obs {
             let dst = match *c {
-                Cons::TopIfAny { dst, .. } => Some(dst),
+                Cons::TopIfAny { dst, .. } | Cons::Guard { dst, .. } | Cons::Defined { dst } => {
+                    Some(dst)
+                }
                 _ => read_dst(c),
             };
             return !dst.is_some_and(|d| self.nodes[d as usize].obs);
@@ -632,7 +672,7 @@ impl Model {
     /// The program site behind `call`: itself for a call of the program,
     /// the template a call an instance made renames, or the site a call the
     /// solver made was made for.
-    fn origin_of(&self, call: CallId) -> Option<CallId> {
+    pub(crate) fn origin_of(&self, call: CallId) -> Option<CallId> {
         if (call as usize) < self.sum.n_prog {
             return Some(call);
         }
@@ -695,7 +735,12 @@ impl Model {
     /// If that object, or an object on its maker chain, was itself born at
     /// `site`, the birth is that object's context again (a recursive maker
     /// folds onto its ancestor).
+    /// A per-site run (`LAY_SITE`) births per (birth site, site): sites are
+    /// the program's call sites, so there are at most births x sites.
     pub(crate) fn made_ctx(&mut self, site: CallId, lay: u32) -> CallId {
+        if lay & !LAY_MASK == LAY_SITE {
+            return self.made_at(site, Maker::Site(lay & LAY_MASK));
+        }
         let Some((o, by_method)) = self.lay_object(lay) else {
             return site;
         };
@@ -704,18 +749,26 @@ impl Model {
             // The walk is solve work: the bound covers a chain that grows.
             self.work += 1;
             match self.made_entry(c) {
-                Some((s, _, _)) if s == site => return c,
-                Some((_, m, _)) => x = m,
+                Some((s, _)) if s == site => return c,
+                Some((_, Maker::Obj(m, _))) => x = m,
+                // A per-site run made `x`: no maker object behind it.
+                Some((_, Maker::Site(_))) => break,
                 None if c == site => return c,
                 None => break,
             }
         }
-        let key = (site, self.maker_key(o, by_method));
+        let k = self.maker_key(o, by_method);
+        self.made_at(site, Maker::Obj(k, by_method))
+    }
+
+    /// The maker context of (birth site, maker), made on first use.
+    fn made_at(&mut self, site: CallId, maker: Maker) -> CallId {
+        let key = (site, maker);
         if let Some(&c) = self.sum.made_of.get(&key) {
             return c;
         }
         let c = BORN - 1 - self.sum.made.len() as CallId;
-        self.sum.made.push((site, o, by_method));
+        self.sum.made.push(key);
         self.sum.made_of.insert(key, c);
         c
     }
@@ -728,7 +781,7 @@ impl Model {
         if by_method {
             while let TokKind::Obj(_, c) = self.toks[o as usize] {
                 match self.made_entry(c) {
-                    Some((_, m, true)) => o = m,
+                    Some((_, Maker::Obj(m, true))) => o = m,
                     _ => break,
                 }
             }
@@ -736,8 +789,8 @@ impl Model {
         o
     }
 
-    /// The (site, maker, by a method) of maker context `c`, if it is one.
-    fn made_entry(&self, c: CallId) -> Option<(CallId, Tok, bool)> {
+    /// The (birth site, maker) of maker context `c`, if it is one.
+    fn made_entry(&self, c: CallId) -> Option<(CallId, Maker)> {
         if c >= BORN {
             return None;
         }
@@ -884,7 +937,7 @@ impl Model {
             }
         }
         let lay = match key.0 {
-            0 => LAY_SITE | key.1,
+            0 | 7 => LAY_SITE | key.1,
             5 => LAY_BIRTH | key.1,
             1 if this != NO_NODE => key.1,
             2 if this != NO_NODE => self.layout_of(TOP),
@@ -925,6 +978,11 @@ impl Model {
             _ => LAY_NONE,
         };
         let key = match x {
+            // Rule C: a closure maker's runs are per call site.
+            _ if call != NO_NODE && self.closure_maker(f, x) => {
+                let site = self.sum.tmpl_of.get(&call).copied().unwrap_or(call);
+                (7, site, ft)
+            }
             _ if self.sum.site_calls.contains(&call) => (0, call, ft),
             Some(t) if self.constructs(f, t) => (5, t, ft),
             _ => (1, lay, ft),
@@ -942,6 +1000,19 @@ impl Model {
         if call != NO_NODE && self.sum.bound.insert((call, inst)) {
             self.wire_args(call, inst);
         }
+    }
+
+    /// Rule C: `f` has no `this` term (or no receiver) and returns a closure
+    /// over its own frame: each run has its own environment (the cells the
+    /// closure captures, and what the run births into them), so the runs of
+    /// distinct call sites are distinct instances (key kind 7). The runs of
+    /// one site share one (a loop making memos merges them); a site inside
+    /// an instance is its template, so instances never multiply instances.
+    fn closure_maker(&self, f: FnIdx, x: Option<Tok>) -> bool {
+        let Some(s) = self.sum.of.get(&f) else {
+            return false;
+        };
+        (x.is_none() || s.this == NO_NODE) && s.maker
     }
 
     /// The `this` term of summarized `f`'s instances, if it has one.
@@ -1087,7 +1158,20 @@ impl Model {
         }
         let f = self.tok_fn(ft);
         let why = |m: &Self| format!("this of escaped function: {}", m.reasons[reason as usize]);
-        let dsts = self.this_nodes(ft);
+        let mut dsts = self.this_nodes(ft);
+        // A constructor's field initializers run on every object it runs on
+        // (before its body, as `run_ctor_chain` runs them for a `new`):
+        // another unit's `super()` reaches them through the constructor's
+        // contract, so their stores into the receiver are the contract's
+        // (`this_stores`, DECISIONS 179), not only the body's.
+        if let Some(fi) = self.funcs[f as usize]
+            .ctor_of
+            .filter(|&tm| self.tmpls[tm as usize].ctor == Some(f))
+            .and_then(|tm| self.tmpls[tm as usize].field_init)
+        {
+            let fit = self.funcs[fi as usize].token;
+            dsts.extend(self.this_nodes(fit));
+        }
         let insts = self.published_this.get(&f).cloned().unwrap_or_default();
         // DECISIONS 116: a method of sealed classes only, published through
         // its contract, runs on the instances this unit gave out (and the
@@ -1153,6 +1237,12 @@ impl Model {
                         self.add_tok(d, t);
                     }
                 }
+                // DECISIONS 231(a): a constructor runs on its receiver
+                // marker (another unit's `super()`) and on the instances
+                // `new` makes (the contract's construction, DECISIONS 125),
+                // never on the receiver token: no unit calls a constructor
+                // as a method of an instance it holds.
+                _ if self.funcs[f as usize].ctor_of.is_some() => {}
                 _ => {
                     for &i in &insts {
                         self.add_tok(d, i);
@@ -1497,10 +1587,11 @@ impl Model {
         for j in 0..self.calls[c].spread.len() {
             let s = self.calls[c].spread[j];
             let elems = self.node_l("spread-elems");
+            let ek = self.elem_key();
             self.cons(
                 s,
                 Cons::Load {
-                    key: Key::Any,
+                    key: ek,
                     dst: elems,
                 },
             );
@@ -1832,10 +1923,26 @@ impl Model {
 
     /// Accessor group binding of summarized `f`: the group's setter value
     /// into the first parameter, or the getter result into the group's.
-    pub(crate) fn group_summarized(&mut self, ft: Tok, sp: NodeId, ar: NodeId, setter: bool) {
+    /// The group's receivers (`this`) are the instance's `this`: what the
+    /// accessor reads or writes on its receiver flows through this
+    /// instance, as its result and its parameter do.
+    pub(crate) fn group_summarized(
+        &mut self,
+        ft: Tok,
+        this: Option<NodeId>,
+        sp: NodeId,
+        ar: NodeId,
+        setter: bool,
+    ) {
         let f = self.tok_fn(ft);
+        let inst = self.instance(if setter { (3, sp, ft) } else { (4, ar, ft) });
+        let it = self.sum.insts[inst as usize].this;
+        if let Some(this) = this {
+            if it != NO_NODE {
+                self.edge(this, it);
+            }
+        }
         if setter {
-            let inst = self.instance((3, sp, ft));
             if let Some(&p0) = self.funcs[f as usize].params.first() {
                 let t = self.sum.insts[inst as usize].params[0];
                 if t != NO_NODE {
@@ -1846,7 +1953,6 @@ impl Model {
                 }
             }
         } else {
-            let inst = self.instance((4, ar, ft));
             let r = self.sum.insts[inst as usize].ret;
             if r != NO_NODE {
                 self.edge(r, ar);

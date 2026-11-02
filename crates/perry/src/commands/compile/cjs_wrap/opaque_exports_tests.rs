@@ -3,11 +3,12 @@ use std::collections::BTreeSet;
 
 #[test]
 fn module_exports_opacity_follows_the_assigned_value() {
-    // UMD, call results, identifiers and re-export wrappers hide the names.
+    // UMD, call results and re-export wrappers hide the names.
     assert!(module_exports_is_opaque(
         "(function (g, f) {\n  if (typeof module === 'object' && module.exports)\n    module.exports = f(require('x'));\n})(this, function () {});"
     ));
-    assert!(module_exports_is_opaque(
+    // A bare binding keeps Node's rule (#10433): its scanned names are the list.
+    assert!(!module_exports_is_opaque(
         "function pino() {}\nmodule.exports = pino;"
     ));
     assert!(module_exports_is_opaque(

@@ -30,6 +30,9 @@ mod entry_table;
 mod environment_data;
 mod inbox;
 mod message_port;
+#[cfg(test)]
+mod message_port_receiver_tests;
+pub(crate) use message_port::dispatch_core_operation as dispatch_message_port_core_operation;
 mod parent_port;
 #[cfg(test)]
 mod parent_port_tests;
@@ -1282,9 +1285,9 @@ pub extern "C" fn js_worker_threads_receive_message_on_port(port: f64) -> f64 {
     }
 }
 
-/// Recover a port id from a MessagePort JS object (the hidden `__perryPortId`).
+/// Recover the intrinsic private ID without observable property access.
 fn port_id_from_object(port: f64) -> Option<u64> {
-    object_u64_field(port, "__perryPortId")
+    perry_runtime::messaging::message_port_id(port).filter(|id| *id != 0)
 }
 
 fn broadcast_channel_id_from_object(channel: f64) -> Option<u64> {

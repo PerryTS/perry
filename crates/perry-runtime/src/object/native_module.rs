@@ -262,6 +262,42 @@ pub extern "C" fn js_vm_create_script_branded(code: f64, options: f64) -> f64 {
     )
 }
 
+pub(crate) fn is_worker_messaging_constructor(property: &str) -> bool {
+    matches!(
+        property,
+        "MessageChannel" | "MessagePort" | "BroadcastChannel"
+    )
+}
+
+pub(crate) fn publish_worker_messaging_constructor(
+    global: *mut ObjectHeader,
+    property: &str,
+    value: f64,
+) {
+    if !is_worker_messaging_constructor(property)
+        || !super::global_this::fetch_globals::is_thread_realm_global(global)
+    {
+        return;
+    }
+    crate::gc::ensure_gc_initialized();
+    let key = format!("worker_threads\0{property}");
+    NATIVE_CALLABLE_EXPORTS.with(|cache| {
+        cache.borrow_mut().insert(key, value.to_bits());
+    });
+    crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
+}
+
+pub(super) fn worker_messaging_constructor_value(module: &str, property: &str) -> Option<f64> {
+    if module != "worker_threads" || !is_worker_messaging_constructor(property) {
+        return None;
+    }
+    // Birth publishes the original value; reading a mutable global here would
+    // let reassignment or an accessor redefine a core-module export.
+    crate::object::js_get_global_this();
+    let key = format!("worker_threads\0{property}");
+    NATIVE_CALLABLE_EXPORTS.with(|cache| cache.borrow().get(&key).copied().map(f64::from_bits))
+}
+
 pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     NATIVE_CALLABLE_EXPORTS.with(|cache| {
         let mut cache = cache.borrow_mut();

@@ -1,6 +1,144 @@
 use super::*;
 
 impl Model {
+    /// May `t` be an array, or a prototype on an array's chain other than
+    /// the builtin prototypes (an Array subclass's)?
+    pub fn tok_on_array_chain(&self, t: Tok) -> bool {
+        match self.toks[t as usize] {
+            TokKind::Top => true,
+            TokKind::Obj(tm, _) | TokKind::Proto(tm) => self.tmpl_may_be_array(tm),
+            _ => false,
+        }
+    }
+
+    /// May an instance of `tm` be an Array exotic object: an array site, or
+    /// a class whose heritage may reach `Array` (an unknown parent value
+    /// included)?
+    pub fn tmpl_may_be_array(&self, mut tm: TmplId) -> bool {
+        for _ in 0..=self.tmpls.len() {
+            let tpl = &self.tmpls[tm as usize];
+            match &tpl.kind {
+                TmplKind::Arr { .. } => return true,
+                TmplKind::Class { .. } => {}
+                _ => return false,
+            }
+            if tpl.parent_value.is_some() {
+                return true;
+            }
+            if let Some((_, n)) = &tpl.native_parent {
+                return n == "Array";
+            }
+            match tpl.parent {
+                Some(p) => tm = p,
+                None => return false,
+            }
+        }
+        true
+    }
+
+    /// Record a write under `key` (`None`: a definition or prototype change
+    /// whose key the model does not keep) onto `t` that may change which
+    /// `@@iterator` an array finds ([`Model::array_member_write`]). The
+    /// builtin prototypes and ⊤ are in `native_writes`
+    /// ([`Model::array_iteration_writes`]).
+    pub fn note_array_member_write(
+        &mut self,
+        t: Tok,
+        key: Option<Key>,
+        site: Option<SiteId>,
+        what: &str,
+    ) {
+        if self.array_member_write.is_some() || t == TOP || !self.tok_on_array_chain(t) {
+            return;
+        }
+        let hits = match key {
+            // A computed store's key is decided when the solve is done (its
+            // site may record the key node only after this store applied).
+            Some(Key::Any) if site.is_some() => {
+                let s = site.unwrap();
+                if !self.array_keyed_stores.iter().any(|&(x, _)| x == s) {
+                    let on = self.tok_name(t);
+                    let r = self.reason(&format!("{what} under a computed key on {on}"));
+                    self.array_keyed_stores.push((s, r));
+                }
+                false
+            }
+            None | Some(Key::Any) => true,
+            Some(Key::Named(a)) => matches!(
+                self.atoms[a as usize].as_str(),
+                crate::builtins::WK_ITERATOR | "__proto__" | crate::STAR_KEY
+            ),
+        };
+        if hits {
+            let on = self.tok_name(t);
+            self.array_member_write = Some(self.reason(&format!("{what} on {on}")));
+        }
+    }
+
+    /// #13645: the program facts array iteration rests on, each `None` when
+    /// compiled code never breaks it. `.0`: an array's `@@iterator` may not
+    /// be the builtin (a write under `Symbol.iterator`, `__proto__` or any
+    /// key on a builtin prototype or ⊤, [`Model::array_member_write`], or an
+    /// Array subclass that defines a computed or `@@iterator` member).
+    /// `.1`: `%ArrayIteratorPrototype%` or a prototype on its chain may gain
+    /// or change `next` or `return` (a write under one of them or under any
+    /// key, or a prototype change, on a builtin prototype (they collapse
+    /// into `ObjectProto`) or ⊤).
+    pub fn array_iteration_writes(&self) -> (Option<String>, Option<String>) {
+        let objproto = self.tok_index.get(&TokKind::ObjectProto).copied();
+        let mut member: Option<u32> = None;
+        let mut close: Option<u32> = None;
+        // The first reason by id, so the answer does not depend on hashing.
+        let first = |slot: &mut Option<u32>, r: u32| *slot = Some(slot.map_or(r, |s| s.min(r)));
+        for (&(t, k), &r) in &self.native_writes {
+            if t != TOP && Some(t) != objproto {
+                continue;
+            }
+            let name = k.map(|a| self.atoms[a as usize].as_str());
+            if matches!(name, None | Some("next" | "return")) {
+                first(&mut close, r);
+            }
+            if matches!(
+                name,
+                None | Some(crate::builtins::WK_ITERATOR | "__proto__")
+            ) {
+                first(&mut member, r);
+            }
+        }
+        let keyed = self.array_keyed_stores.iter().find_map(|&(s, r)| {
+            let Some(k) = self.stores[s as usize].key_value else {
+                return Some(r);
+            };
+            let n = &self.nodes[k as usize];
+            (n.dropped || !n.pts.is_empty() || n.prim & (prim::STR | prim::SYMBOL) != 0)
+                .then_some(r)
+        });
+        let mut member = member
+            .or(self.array_member_write)
+            .or(keyed)
+            .map(|r| self.reasons[r as usize].clone());
+        if member.is_none() {
+            let wk = self.atom_index.get(crate::builtins::WK_ITERATOR).copied();
+            member = (0..self.tmpls.len() as TmplId)
+                .find(|&tm| {
+                    let tpl = &self.tmpls[tm as usize];
+                    matches!(tpl.kind, TmplKind::Class { .. })
+                        && (tpl.has_computed_members
+                            || wk.is_some_and(|a| {
+                                tpl.proto_members.contains(&a) || tpl.accessor_keys.contains(&a)
+                            }))
+                        && self.tmpl_may_be_array(tm)
+                })
+                .map(|tm| {
+                    format!(
+                        "Array subclass {} defines a computed or @@iterator member",
+                        self.tmpls[tm as usize].display
+                    )
+                });
+        }
+        (member, close.map(|r| self.reasons[r as usize].clone()))
+    }
+
     /// Record a write under `key` onto `t` that may reach
     /// `%Function.prototype%`'s `bind`, `name` or `length`
     /// ([`Model::fnproto_write`]). `key` `None`: an operation whose key the
@@ -59,6 +197,26 @@ impl Model {
         self.atoms.push(s.to_string());
         self.atom_index.insert(s.to_string(), a);
         a
+    }
+
+    /// The key of a class private field, by its storage key
+    /// (`perry_hir::private_names`): its own atom, never a public key's.
+    /// The runtime keeps the entry apart from a public property of the same
+    /// spelling (`ENTRY_PRIVATE`), only the class body names it (through
+    /// `Expr::PrivateGuard`), and no reflection lists it.
+    pub fn private_atom(&mut self, storage: &str) -> Atom {
+        if let Some(&a) = self.private_atoms.get(storage) {
+            return a;
+        }
+        let a = self.atoms.len() as Atom;
+        self.atoms.push(storage.to_string());
+        self.private_atoms.insert(storage.to_string(), a);
+        a
+    }
+
+    /// `a` is a class private field's key (`private_atom`).
+    pub fn is_private_atom(&self, a: Atom) -> bool {
+        self.private_atoms.get(&self.atoms[a as usize]) == Some(&a)
     }
 
     /// Record one relation line, tagged with the current phase.
@@ -295,6 +453,7 @@ impl Model {
                 TmplKind::FnInst { func } => format!("fninst {func}"),
                 TmplKind::ObjCreate { .. } => "objcreate -".into(),
                 TmplKind::Arr { .. } => "arr -".into(),
+                TmplKind::Args { .. } => "args -".into(),
                 TmplKind::BObj { what, .. } => format!("bobj {what}"),
             };
             out.push(format!(
@@ -478,15 +637,16 @@ impl Model {
     }
 
     /// DECISIONS 94/184: an array, or a primitive method's container of
-    /// primitives (`primbox`, array-like: split/match results): its
-    /// elements leave through cell `arr:<name>` (`Gen::arr_leaves`).
+    /// primitives (`primbox`, array-like: split/match results; `arraybox`,
+    /// one that is an Array: own-keys results): its elements leave through
+    /// cell `arr:<name>` (`Gen::arr_leaves`).
     pub fn is_cell_arr(&self, t: Tok) -> bool {
         match self.toks[t as usize] {
             TokKind::Obj(tm, _) => matches!(
                 self.tmpls[tm as usize].kind,
                 TmplKind::Arr { .. }
                     | TmplKind::BObj {
-                        what: "primbox",
+                        what: "primbox" | "arraybox",
                         ..
                     }
             ),
@@ -497,7 +657,8 @@ impl Model {
     /// DECISIONS 184: a primitive method's container (`is_cell_arr`).
     pub fn is_box(&self, t: Tok) -> bool {
         matches!(self.toks[t as usize], TokKind::Obj(tm, _)
-            if matches!(self.tmpls[tm as usize].kind, TmplKind::BObj { what: "primbox", .. }))
+            if matches!(self.tmpls[tm as usize].kind,
+                TmplKind::BObj { what: "primbox" | "arraybox", .. }))
     }
 
     pub fn tmpl_of(&self, t: Tok) -> Option<TmplId> {
@@ -576,7 +737,13 @@ impl Model {
             .and_then(|d| d.get(i as usize))
             .is_some_and(|&d| d);
         if new & MARK_ESCAPE != 0 {
-            self.virt_revoke(t, None);
+            if let Some(d) = self.diagnostic.as_mut() {
+                let w = d.esc_ctx.last().cloned().unwrap_or_else(|| "other".into());
+                let n = d.cause_node;
+                d.esc_why.entry(t).or_insert((w, n));
+            }
+            self.virt_escape(t);
+            self.note_inst(t, false);
         }
         if new & MARK_ESCAPE != 0 && !described {
             self.set_marker_top(t);
@@ -1002,18 +1169,24 @@ impl Model {
     /// parameter of a run method (DECISIONS 148). The marker only records
     /// the uses for its contract.
     pub(crate) fn closed_marker(&self, t: Tok) -> bool {
-        self.is_marker(t)
-            && self.marker_members(t).iter().all(|x| {
-                self.param_marker.get(x).is_some_and(|&(f, i)| {
-                    self.closed_params.contains_key(&f)
-                        || (i == u32::MAX && self.this_args.contains_key(&f))
-                        || (i != u32::MAX
-                            && self
-                                .method_described(f)
-                                .and_then(|d| d.get(i as usize))
-                                .is_some_and(|&d| d))
-                })
-            })
+        self.is_marker(t) && self.marker_members(t).iter().all(|&x| self.closed_param(x))
+    }
+
+    /// A parameter marker (or its reach) standing for a parameter whose
+    /// callers' values are beside it (`closed_marker` for one member). It
+    /// asks only `t`'s own parameter, so it settles no member sets, and it
+    /// can only turn on during a solve (`published_this` grows): unlike an
+    /// argument marker's, whose later members may not be closed.
+    pub(crate) fn closed_param(&self, t: Tok) -> bool {
+        self.param_marker.get(&t).is_some_and(|&(f, i)| {
+            self.closed_params.contains_key(&f)
+                || (i == u32::MAX && self.this_args.contains_key(&f))
+                || (i != u32::MAX
+                    && self
+                        .method_described(f)
+                        .and_then(|d| d.get(i as usize))
+                        .is_some_and(|&d| d))
+        })
     }
 
     /// A parameter marker or an argument marker (DECISIONS 44).
@@ -1222,6 +1395,50 @@ impl Model {
         }
     }
 
+    /// DECISIONS 231(b): an argument marker standing only for receiver
+    /// markers (DECISIONS 59: instances of their classes) is a receiver of
+    /// those classes itself: `this.m()` and `this.k` in a body that runs on
+    /// it resolve through the classes' chains (`virt_load`). Member `m`
+    /// joins `r`: a receiver adds its classes, any other value opens `r`
+    /// (every key may be an own key, `virt_own`), so the loads and calls
+    /// already made on `r` take its own fields too. The first member decides
+    /// whether `r` is a receiver at all; a receiver marker registered after
+    /// it joined adds its classes (`register_virt`).
+    pub(crate) fn virt_member(&mut self, m: Tok, r: Tok) {
+        if self.reach_marker.contains(&r) || self.keyed_parent.contains_key(&r) {
+            return;
+        }
+        self.virt_member_of.entry(m).or_default().push(r);
+        let first = self.arg_members.get(&r).is_some_and(|v| v.len() == 1);
+        match self.virt_protos.get(&m).cloned() {
+            Some(cs) if !self.virt_tok_open.contains(&m) => {
+                if first || self.virt_protos.contains_key(&r) {
+                    self.register_virt(r, &cs);
+                }
+            }
+            _ => self.open_virt_tok(r),
+        }
+    }
+
+    /// `r` stands for a value that is not a receiver of its classes
+    /// (`virt_member`): so do the argument markers above it.
+    pub(crate) fn open_virt_tok(&mut self, r: Tok) {
+        let mut st = vec![r];
+        while let Some(x) = st.pop() {
+            if !self.virt_protos.contains_key(&x) || !self.virt_tok_open.insert(x) {
+                continue;
+            }
+            self.flush_shadowed(Some(x));
+            for a in self.virt_tok_keys.get(&x).cloned().unwrap_or_default() {
+                if let Some(&n) = self.virt_nodes.get(&(x, a)) {
+                    let f = self.field(x, a);
+                    self.edge(f, n);
+                }
+            }
+            st.extend(self.virt_member_of.get(&x).cloned().unwrap_or_default());
+        }
+    }
+
     /// Argument marker `r` stands for marker `m` too: `m` takes every use
     /// of `r`, and what `m` reaches takes every use of what `r` reaches.
     pub(crate) fn link_marker(&mut self, m: Tok, r: Tok) {
@@ -1229,6 +1446,7 @@ impl Model {
             return;
         }
         self.arg_members.get_mut(&r).unwrap().push(m);
+        self.virt_member(m, r);
         // A new link changes the sets settled for `r` and the markers above
         // it (`marker_members`), no others (DECISIONS 200).
         if !self.members_settled.get_mut().is_empty() {
@@ -1410,6 +1628,7 @@ impl Model {
             birth_keys: Vec::new(),
             definite: Vec::new(),
             declared: Vec::new(),
+            reserved: Vec::new(),
             parent: None,
             ctor: None,
             native_parent: None,
@@ -1420,6 +1639,7 @@ impl Model {
             parent_value: None,
             parent_links: Vec::new(),
             null_proto: false,
+            species: None,
         });
         tm
     }
@@ -1445,6 +1665,7 @@ impl Model {
             birth_keys: Vec::new(),
             definite: Vec::new(),
             declared: Vec::new(),
+            reserved: Vec::new(),
             parent: None,
             ctor: None,
             native_parent: None,
@@ -1455,6 +1676,7 @@ impl Model {
             parent_value: None,
             parent_links: Vec::new(),
             null_proto: false,
+            species: None,
         });
         let t = self.tok(TokKind::Obj(tm, NO_CTX));
         // What the argument reaches has its own marker (fields of fields

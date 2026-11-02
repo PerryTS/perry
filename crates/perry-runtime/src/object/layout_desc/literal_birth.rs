@@ -227,9 +227,38 @@ unsafe fn first_birth(desc: *const PerryLayoutDesc, index: u32) -> Option<u32> {
 ///
 /// # Safety
 /// desc points to this program's immutable literal descriptor image.
+#[cfg(not(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu")))]
 #[no_mangle]
 pub unsafe extern "C" fn perry_alloc_literal_layout(
     desc: *const PerryLayoutDesc,
+) -> *mut ObjectHeader {
+    unsafe { perry_alloc_literal_layout_body(desc, None) }
+}
+
+/// x86-64 Linux: as `perry_alloc_layout`, the caller's frame reaches only the
+/// arena slow path (`gc::roots::walk_origin`).
+#[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+#[unsafe(naked)]
+#[no_mangle]
+pub unsafe extern "C" fn perry_alloc_literal_layout(
+    desc: *const PerryLayoutDesc,
+) -> *mut ObjectHeader {
+    crate::gc::offering_entry_asm!(1, perry_alloc_literal_layout_from)
+}
+
+#[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+extern "C" fn perry_alloc_literal_layout_from(
+    desc: *const PerryLayoutDesc,
+    pc: usize,
+    sp: usize,
+    fp: usize,
+) -> *mut ObjectHeader {
+    unsafe { perry_alloc_literal_layout_body(desc, Some(crate::gc::WalkOrigin { pc, sp, fp })) }
+}
+
+unsafe fn perry_alloc_literal_layout_body(
+    desc: *const PerryLayoutDesc,
+    origin: Option<crate::gc::WalkOrigin>,
 ) -> *mut ObjectHeader {
     #[cfg(test)]
     crate::test_support::bootstrap_test_thread();
@@ -239,7 +268,7 @@ pub unsafe extern "C" fn perry_alloc_literal_layout(
         );
         std::process::abort();
     };
-    alloc_layout_object(&*desc, LayoutWord(id))
+    alloc_layout_object_offering(&*desc, LayoutWord(id), origin)
 }
 
 #[cfg(feature = "keepalive-anchors")]

@@ -1,24 +1,36 @@
 //! Unit tests: small programs lowered from source, facts checked directly.
 
 mod accessor_keys;
+mod accessor_receiver;
+mod arguments_object;
 mod array_ctor;
 mod array_elements;
+mod array_index_store;
+mod array_iteration;
 mod array_length;
 mod array_named_keys;
 mod array_numeric;
 mod array_record;
+mod array_search;
 mod binding_write_gap;
 mod birth_site;
 mod body_activation;
 mod body_identity;
+mod bound_in_summary;
 mod builtin_members;
+mod call_shadow;
 mod callable_contract;
 mod callback_origin;
 mod captured;
 mod cjs_require;
 mod class_statics;
+mod closed_marker_load;
 mod closed_world;
 mod closure_context;
+mod const_key_set_store;
+mod ctor_observed;
+mod ctor_return;
+mod dead_dynamic_import;
 mod diagnostics;
 mod dynamic_code;
 mod dynamic_import;
@@ -26,32 +38,48 @@ mod escaped_constructor;
 mod escaped_contract_result;
 mod escaped_method_this;
 mod export_star;
+mod field_array_push;
 mod for_in_keys;
 mod function_values;
+mod global_gc;
 mod hub_tokens;
 mod indexed_owner;
 mod inherited_layout;
+mod interp_from_facts;
 mod layout_key;
 mod ledger;
+mod lit_accessor;
 mod named_accessors;
 mod native_fs;
+mod native_given_proto;
+mod native_member;
 mod native_proto;
+mod own_key_shadow;
+mod own_length;
+mod private_field;
+mod unknown_accessor_key;
 mod parent_value;
 mod prim_result;
 mod proof_receivers;
 mod proto_value;
 mod protocol_calls;
 mod protocol_keys;
+mod reach_accessor;
 mod receiver_slots;
 mod receiver_this;
+mod regexp_exec;
+mod relinked_parent;
 mod rest_element;
 mod run_once_closed;
 mod runtime_helpers;
+mod spread_elements;
 mod summary;
 mod super_heritage;
+mod top_element_key;
+mod typed_array_exact;
+mod unheld_key;
 mod unit_alias;
 mod unit_cjs;
-mod ctor_return;
 mod unit_ctor;
 mod unit_effects;
 mod unit_extends;
@@ -59,6 +87,8 @@ mod unit_mode;
 mod unit_namespace;
 mod unit_shared;
 mod unit_this;
+mod unrun_param_call;
+mod memo_context;
 
 use crate::{compute, FactsConfig, ProgramFacts, Verdict};
 
@@ -1337,6 +1367,8 @@ fn a_parameter_node_holds_its_argument_marker() {
         lexical_this: false,
         no_summary: true,
         gen_step: false,
+        gen_async: false,
+        gen_reyields: false,
         captures: Vec::new(),
         forwards_super: false,
         parent: NO_FN,
@@ -1401,6 +1433,8 @@ fn a_store_into_a_marker_makes_no_field_of_it() {
         lexical_this: false,
         no_summary: true,
         gen_step: false,
+        gen_async: false,
+        gen_reyields: false,
         captures: Vec::new(),
         forwards_super: false,
         parent: NO_FN,
@@ -1454,6 +1488,8 @@ fn an_argument_marker_leaves_beside_when_a_valued_member_links() {
         lexical_this: false,
         no_summary: true,
         gen_step: false,
+        gen_async: false,
+        gen_reyields: false,
         captures: Vec::new(),
         forwards_super: false,
         parent: NO_FN,
@@ -1501,6 +1537,8 @@ fn marker_model() -> crate::model::Model {
         lexical_this: false,
         no_summary: true,
         gen_step: false,
+        gen_async: false,
+        gen_reyields: false,
         forwards_super: false,
         parent: NO_FN,
         captures: Vec::new(),
@@ -1708,4 +1746,32 @@ fn a_protocol_touch_of_an_argument_marker_reads_nothing() {
     let a = m.atom("toJSON");
     let tj = m.marker_load(r, Some(a));
     assert!(m.marker_use.get(&tj).is_some_and(|&u| u & MARK_ESCAPE != 0));
+}
+mod collection_entries;
+mod constructor_values;
+mod date_methods;
+mod delegate_step;
+mod generator_results;
+mod helper_protocols;
+mod host_helpers;
+mod native_push;
+mod proto_own_call;
+mod string_methods;
+mod typed_array_methods;
+mod web_timer_methods;
+
+/// Export the exact facts fixtures for an independent runtime/Node oracle.
+/// Disabled in ordinary tests; the lane runner sets HLC_FIXTURE_DIR.
+fn dump_helper_fixture(src: &str) {
+    if let Ok(dir) = std::env::var("HLC_FIXTURE_DIR") {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        src.hash(&mut h);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            std::path::Path::new(&dir).join(format!("{:016x}.ts", h.finish())),
+            src,
+        )
+        .unwrap();
+    }
 }

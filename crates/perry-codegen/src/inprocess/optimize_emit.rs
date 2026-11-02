@@ -85,6 +85,18 @@ pub(super) fn optimize_and_emit(
             perry_llvm_enable_wasm_eh(tm.as_mut_ptr().cast());
         }
     }
+    // One input section per function and per global (`-ffunction-sections
+    // -fdata-sections`), so the link drops every one nothing references (DCE
+    // layer 0). wasm-ld already links per function and keeps its own data
+    // layout.
+    if !effective_target.starts_with("wasm32") {
+        extern "C" {
+            fn perry_llvm_unique_sections(machine: *mut core::ffi::c_void);
+        }
+        unsafe {
+            perry_llvm_unique_sections(tm.as_mut_ptr().cast());
+        }
+    }
 
     // Same trust order as the subprocess path: `-target` wins over whatever
     // triple the module text states, and the module optimizes under the

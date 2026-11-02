@@ -55,88 +55,71 @@ use std::process::Command;
 
 use anyhow::{anyhow, Context, Result};
 
-/// Magic at the start of every emitted blob.
-const GC_MAP_MAGIC: &[u8; 4] = b"PGCM";
 /// Format version. Bump on any layout change — the runtime rejects others.
 ///
-/// v8: the blob is split in two. The DIRECTORY (header + one 20-byte entry
-/// per function) stays in the map section; the RECORDS (instruction-offset
-/// array + varint stream) move to their own section, named by a link-time
-/// self-relative offset in the directory header. Building the runtime index
-/// reads every directory and nothing else, so a process now keeps only the
-/// directories resident (1.4 MB for claude-code) instead of faulting in most
-/// of a 15 MB section whose function tables were interleaved with records; a
-/// collection reads the records of the frames it walks. Each entry also
-/// carries its first record's index, so no prefix sum over the table is
-/// needed to find a function's instruction offsets.
+/// v9 (DCE layer 0): one directory entry and one records blob PER FUNCTION,
+/// each in its own input section tied to the function's section (ELF
+/// `SHF_LINK_ORDER`, Mach-O `live_support`, COFF associative COMDAT), so the
+/// link keeps a function's map exactly when it keeps the function. Nothing is
+/// retained by itself any more: v8's per-module directory, which named every
+/// function of the module and was `SHF_GNU_RETAIN` / `.no_dead_strip`, rooted
+/// every one of them under `--gc-sections`. The entry carries the version (no
+/// module header exists to carry it), and names its records blob by a
+/// self-relative offset and length; first-record indices and stream offsets
+/// are gone because each blob holds only its own function.
 ///
-/// v6 (#11508): each function's address is a signed 32-bit offset from the
-/// blob's own start (`.long fn-_perry_gc_map`) instead of an absolute
-/// pointer. That is a link-time constant — PC32/PREL32 on ELF, REL32 on COFF, a
-/// SUBTRACTOR pair on Mach-O — so the linked section carries NO dynamic
-/// relocations (v5 cost one `R_*_RELATIVE` or chained fixup per function, all
-/// applied eagerly at load, dirtying every page of the table), and on ELF and
-/// COFF the section can be read-only. The entry is 12 bytes on every target,
-/// so the header's old pointer-width flag is gone and flags must be 0.
+/// v8: the directory (header + one 20-byte entry per function) and the
+/// records (instruction-offset array + varint stream) were split into two
+/// sections, so building the index faults in only the directories.
 ///
-/// v5: a `u32 stream_offset` per function follows the function table, so the
-/// runtime can decode ONE function's records without decoding every function
-/// before it. The record stream and the instruction-offset array are byte for
-/// byte what v4 emitted; this is an added array and nothing else. It costs
-/// +1.3% of the section, and it is what lets a collection read the 74 records
-/// a `claude --help` run needs instead of all 2,078,970.
+/// v6 (#11508): each function's address is a signed 32-bit link-time offset
+/// (`.long fn-anchor`) — PC32/PREL32 on ELF, REL32 on COFF, a SUBTRACTOR pair
+/// on Mach-O — so the linked section carries NO dynamic relocations and on
+/// ELF and COFF can be read-only.
+///
+/// v5: a function's records can be decoded without decoding every function
+/// before it (a collection reads the 74 records a `claude --help` run needs
+/// instead of all 2,078,970). v9 keeps that by construction.
 ///
 /// v4 (#7803): the record header word gained a has-derived bit and records
-/// carry DERIVED (interior) pointer slots tied to their bases. v3 collapsed
-/// every statepoint (base, derived) pair to one slot on the false premise
-/// that Perry emits no interior pointers; the runtime decoder fails closed on
-/// a version mismatch, so both sides bump together.
-const GC_MAP_VERSION: u8 = 8;
-/// Section the compact map is emitted into, and the label it is given.
-const GC_MAP_LABEL: &str = "_perry_gc_map";
-/// Label of this module's records blob (v8), named by the directory header.
-const GC_REC_LABEL: &str = "_perry_gc_rec";
-/// Fixed v8 directory header: magic, version, reserved, flags, function count,
-/// directory length, records offset, records length, record total, reserved.
-const DIRECTORY_HEADER_BYTES: usize = 32;
-/// v8 directory entry: function offset, stack size, record count, first
-/// record index, stream offset.
+/// carry DERIVED (interior) pointer slots tied to their bases.
+const GC_MAP_VERSION: u8 = 9;
+/// v9 directory entry: function offset, stack size, record count with the
+/// version in its top byte, records offset, records length.
 const DIRECTORY_ENTRY_BYTES: usize = 20;
 /// Mach-O keeps its own segment so the runtime's lookup is unchanged. ld64
 /// maps a custom segment `rw-`, but since v6 there is nothing in it to fix up,
 /// so dyld never writes its pages and they stay clean, file-backed memory.
-const MACHO_SECTION: &str = "__PERRY_GCMAP,__perry_gcmap";
-/// v8 records. The runtime never looks this section up: the directory names
-/// its records by a self-relative offset. Kept in the map's segment.
+/// `live_support`: ld64 keeps an entry (its own atom, see the labels in
+/// [`emit_asm`]) exactly when an atom it references, the function, is live.
+const MACHO_SECTION: &str = "__PERRY_GCMAP,__perry_gcmap,regular,live_support";
+/// v9 records: a plain section; a live entry's offset keeps its blob.
 const MACHO_RECORDS_SECTION: &str = "__PERRY_GCMAP,__perry_gcrec";
 /// `a` without `w`: since v6 the section holds no absolute addresses, only
-/// link-time-resolved `fn - anchor` differences, so it needs no dynamic
-/// relocations and can be read-only. (v5 needed SHF_WRITE for its relocated
-/// `.quad`s; without it the linker created a DT_TEXTREL.)
-///
-/// `R` is SHF_GNU_RETAIN, the ELF analogue of Mach-O's `.no_dead_strip`.
-/// Perry links with `-Wl,--gc-sections`, and nothing in the program
-/// references this section — the collector finds it by name at runtime — so
-/// without RETAIN the linker discards it and the binary ships with no GC map
-/// at all. Measured: the section is present in the object (PROGBITS, SHF_ALLOC,
-/// with relocations) and absent from the linked binary.
-const ELF_SECTION: &str = ".perry_gcmap,\"aR\",@progbits";
-/// v8 records: retained like the directory (the only reference to it is the
-/// directory's offset, which `--gc-sections` would otherwise not count).
-const ELF_RECORDS_SECTION: &str = ".perry_gcrec,\"aR\",@progbits";
+/// link-time-resolved differences, so it needs no dynamic relocations. `o`
+/// (`SHF_LINK_ORDER`) ties each entry to its function's section: `--gc-sections`
+/// keeps it exactly when it keeps the function (GNU ld >= 2.36, lld). The
+/// collector finds the section by name at run time.
+const ELF_SECTION: &str = ".perry_gcmap,\"ao\",@progbits";
+/// v9 records, tied to the function the same way.
+const ELF_RECORDS_SECTION: &str = ".perry_gcrec,\"ao\",@progbits";
 /// COFF/PE. The name is SHORT on purpose: a PE image section header has an
-/// 8-byte name field, and long names survive only in object files (as a `/nnn`
-/// string-table offset) — the linker cannot put `.perry_gcmap` in the image, so
-/// the runtime would never find it by name. `dr` is initialised, read-only
-/// data: since v6 the function fields are REL32 differences the linker
-/// resolves, so the image needs no base relocations for them.
-const COFF_SECTION: &str = ".pgcmap,\"dr\"";
-/// v8 records; never looked up by name, so the 8-byte limit is only hygiene.
-const COFF_RECORDS_SECTION: &str = ".pgcrec,\"dr\"";
+/// 8-byte name field, and long names survive only in object files — the
+/// linker cannot put `.perry_gcmap` in the image, so the runtime would never
+/// find it by name. `$m` groups every object's entries into `.pgcmap`; each is
+/// an associative COMDAT of its function's section, so `/OPT:REF` drops it
+/// with the function (and ICF folds two functions only when their maps are
+/// equal too). `dr` is initialised, read-only data.
+const COFF_SECTION: &str = ".pgcmap$m,\"dr\"";
+/// v9 records; never looked up by name, so the 8-byte limit is only hygiene.
+const COFF_RECORDS_SECTION: &str = ".pgcrec$m,\"dr\"";
 /// What the runtime looks for in a PE image. Must match `COFF_SECTION`'s name
 /// and stay within eight bytes.
 #[cfg(test)]
 pub(crate) const COFF_SECTION_NAME: &str = ".pgcmap";
+/// `unique` ids for the ELF entry and records sections, far above the ids
+/// LLVM gives its own sections in the same object.
+const ELF_UNIQUE_BASE: u64 = 1 << 30;
 
 /// LLVM stack-map v3 location kinds. Only these two describe a frame slot;
 /// `Constant`/`ConstIndex` carry the statepoint preamble and `Register` cannot
@@ -1167,48 +1150,30 @@ fn verify_roundtrip(functions: &[FunctionMap], compact: &CompactStream) -> Resul
 
 /// Assemble the emitted directives for one compact map.
 ///
-/// Layout (little-endian), mirrored by the runtime decoder. v8 emits two
-/// blobs per module, the directory in the map section and the records in a
-/// section of their own:
+/// Layout (little-endian), mirrored by the runtime decoder. v9 emits two
+/// blobs per FUNCTION, each in a section tied to the function's:
 ///
 /// ```text
-/// directory (`_perry_gc_map`, map section):
-///   0  "PGCM"
-///   4  u8 version, u8 reserved, u16 flags (0)
-///   8  u32 function_count
-///  12  u32 total_len          -- stride to the next directory in the section
-///  16  i32 records_offset     -- `_perry_gc_rec - _perry_gc_map`
-///  20  u32 records_len
-///  24  u32 record_total
-///  28  u32 reserved (0)
-///  32  function_count x { i32 function_offset, u32 stack_size,
-///                         u32 record_count, u32 first_record,
-///                         u32 stream_offset }
-/// records (`_perry_gc_rec`, records section):
-///      record_total x u32 instruction_offset
-///      varint root stream (see `encode_stream`)
+/// entry (map section, 4-byte aligned, `e` = the entry's own address):
+///   0  i32 function - e
+///   4  u32 stack_size
+///   8  u32 record_count | version << 24
+///  12  i32 records - e
+///  16  u32 records_len
+/// records (records section, byte aligned):
+///      record_count x u32 instruction_offset
+///      varint root stream of this function (see `encode_stream`)
 /// ```
 ///
-/// The v5 `stream_offset` array is where each function's records begin in the
-/// varint stream. Without it the stream is only readable from the front — it
-/// is delta- and repeat-chained — so a collector that wanted one frame's live
-/// set had to decode the whole section. It is placed AFTER the function table
-/// rather than inside it so the function entry keeps its v4 shape.
-///
-/// v6: `function_offset` is `function - blob_start`, where `blob_start` is the
-/// `_perry_gc_map` label at the magic. Every object's blob has its own label,
-/// so concatenated blobs each anchor to themselves, and the runtime recovers
-/// the address as `address_of(blob) + function_offset`. It is signed because
-/// the linker may place text on either side of the map; the ±2 GiB reach is
-/// the same assumption every PC32/PREL32 relocation in the program already
-/// makes. Every field is 4 bytes, so the whole blob is 4-byte aligned.
+/// The linked map section is the entries of the functions the link kept, in
+/// whatever order the link placed them; the runtime sorts by address. Offsets
+/// are signed because the linker may place text on either side of the map;
+/// the ±2 GiB reach is the same assumption every PC32/PREL32 relocation in
+/// the program already makes.
 ///
 /// Instruction offsets are a fixed-width array rather than part of the varint
 /// stream because at `-O3` they are **label differences the assembler
 /// evaluates** (`Ltmp9-_main`), so their values do not exist at rewrite time.
-/// That costs ~4 bytes per record — 18.7x compaction instead of 31.8x — and
-/// buys not having to assemble twice just to learn numbers the assembler is
-/// about to compute anyway.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ObjectFormat {
     MachO,
@@ -1305,82 +1270,81 @@ fn emit_asm(
     entry_labels: &HashMap<String, String>,
 ) -> String {
     let stream = &compact.bytes[..];
-    let record_total: usize = functions.iter().map(|f| f.records.len()).sum();
-    let directory_len = directory_len(functions);
-    let records_len = records_len(functions, stream.len());
-    let (directory_section, records_section) = match format {
-        ObjectFormat::MachO => (MACHO_SECTION, MACHO_RECORDS_SECTION),
-        ObjectFormat::Elf => (ELF_SECTION, ELF_RECORDS_SECTION),
-        ObjectFormat::Coff => (COFF_SECTION, COFF_RECORDS_SECTION),
-    };
     let mut out = String::new();
-    // Records first: the asm that follows the map (re-emitted symbol lines)
-    // keeps landing after the directory, exactly where it landed before v8.
-    out.push_str(&format!("\t.section\t{records_section}\n"));
-    out.push_str("\t.p2align\t2\n");
-    out.push_str(&format!("{GC_REC_LABEL}:\n"));
-    for function in functions {
+    for (index, function) in functions.iter().enumerate() {
+        let begin = compact.function_offsets[index] as usize;
+        let end = compact
+            .function_offsets
+            .get(index + 1)
+            .map_or(stream.len(), |&next| next as usize);
+        let own_stream = &stream[begin..end];
+        // Section directives that tie each blob to the function's section.
+        // Mach-O labels start with `l`: linker-private symbols, each the start
+        // of its own atom (`.subsections_via_symbols`), dropped from the
+        // output; ELF and COFF tie sections, so `.L` temporaries do.
+        let (map_section, rec_section, map_label, rec_label) = match format {
+            ObjectFormat::Elf => (
+                format!(
+                    "{ELF_SECTION},{},unique,{}",
+                    function.symbol,
+                    ELF_UNIQUE_BASE + 2 * index as u64
+                ),
+                format!(
+                    "{ELF_RECORDS_SECTION},{},unique,{}",
+                    function.symbol,
+                    ELF_UNIQUE_BASE + 2 * index as u64 + 1
+                ),
+                format!(".Lperry_gcmap{index}"),
+                format!(".Lperry_gcrec{index}"),
+            ),
+            ObjectFormat::MachO => (
+                MACHO_SECTION.to_string(),
+                MACHO_RECORDS_SECTION.to_string(),
+                format!("lperry_gcmap{index}"),
+                format!("lperry_gcrec{index}"),
+            ),
+            ObjectFormat::Coff => (
+                format!("{COFF_SECTION},associative,{}", function.symbol),
+                format!("{COFF_RECORDS_SECTION},associative,{}", function.symbol),
+                format!(".Lperry_gcmap{index}"),
+                format!(".Lperry_gcrec{index}"),
+            ),
+        };
+        out.push_str(&format!("\t.section\t{rec_section}\n"));
+        out.push_str(&format!("{rec_label}:\n"));
         for record in &function.records {
             out.push_str(&format!("\t.long\t{}\n", record.instruction_offset));
         }
-    }
-    for chunk in stream.chunks(32) {
-        let bytes: Vec<String> = chunk.iter().map(|b| b.to_string()).collect();
-        out.push_str(&format!("\t.byte\t{}\n", bytes.join(",")));
-    }
-
-    out.push_str(&format!("\t.section\t{directory_section}\n"));
-    out.push_str("\t.p2align\t3\n");
-    out.push_str(&format!("{GC_MAP_LABEL}:\n"));
-    out.push_str(&format!(
-        "\t.ascii\t\"{}\"\n",
-        std::str::from_utf8(GC_MAP_MAGIC).expect("magic is ASCII")
-    ));
-    out.push_str(&format!("\t.byte\t{GC_MAP_VERSION}\n"));
-    out.push_str("\t.byte\t0\n");
-    // Header flags: none are defined.
-    out.push_str("\t.short\t0\n");
-    out.push_str(&format!("\t.long\t{}\n", functions.len()));
-    // Stride to the next directory: the directories are all this section holds.
-    out.push_str(&format!("\t.long\t{directory_len}\n"));
-    // A link-time difference, like the function fields: no relocation survives
-    // into the image, on any format.
-    out.push_str(&format!("\t.long\t{GC_REC_LABEL}-{GC_MAP_LABEL}\n"));
-    out.push_str(&format!("\t.long\t{records_len}\n"));
-    out.push_str(&format!("\t.long\t{record_total}\n"));
-    out.push_str("\t.long\t0\n");
-    let mut first_record = 0usize;
-    for (function, stream_offset) in functions.iter().zip(&compact.function_offsets) {
-        // v6: a link-time difference against this blob's own label, never an
-        // absolute address — that is what keeps the section free of dynamic
-        // relocations.
+        for chunk in own_stream.chunks(32) {
+            let bytes: Vec<String> = chunk.iter().map(|b| b.to_string()).collect();
+            out.push_str(&format!("\t.byte\t{}\n", bytes.join(",")));
+        }
+        let records_len = function.records.len() * 4 + own_stream.len();
+        out.push_str(&format!("\t.section\t{map_section}\n"));
+        out.push_str("\t.p2align\t2\n");
+        out.push_str(&format!("{map_label}:\n"));
+        // v6: link-time differences, never absolute addresses — that is what
+        // keeps the section free of dynamic relocations.
         let entry = entry_labels
             .get(&function.symbol)
             .unwrap_or(&function.symbol);
-        out.push_str(&format!("\t.long\t{entry}-{GC_MAP_LABEL}\n"));
+        out.push_str(&format!("\t.long\t{entry}-{map_label}\n"));
         out.push_str(&format!("\t.long\t{}\n", function.stack_size as u32));
-        out.push_str(&format!("\t.long\t{}\n", function.records.len()));
-        out.push_str(&format!("\t.long\t{first_record}\n"));
-        out.push_str(&format!("\t.long\t{stream_offset}\n"));
-        first_record += function.records.len();
+        out.push_str(&format!(
+            "\t.long\t{}\n",
+            function.records.len() as u32 | u32::from(GC_MAP_VERSION) << 24
+        ));
+        out.push_str(&format!("\t.long\t{rec_label}-{map_label}\n"));
+        out.push_str(&format!("\t.long\t{records_len}\n"));
     }
     out
 }
 
-/// Byte length of one v8 directory: header plus one entry per function.
-fn directory_len(functions: &[FunctionMap]) -> usize {
-    DIRECTORY_HEADER_BYTES + functions.len() * DIRECTORY_ENTRY_BYTES
-}
-
-/// Byte length of one v8 records blob: instruction offsets, then the stream.
-fn records_len(functions: &[FunctionMap], stream_len: usize) -> usize {
-    let record_total: usize = functions.iter().map(|f| f.records.len()).sum();
-    record_total * 4 + stream_len
-}
-
-/// Both halves of one module's map.
+/// Byte length of every v9 blob of one module: an entry and a records blob
+/// per function.
 fn compact_len(functions: &[FunctionMap], stream_len: usize) -> usize {
-    directory_len(functions) + records_len(functions, stream_len)
+    let record_total: usize = functions.iter().map(|f| f.records.len()).sum();
+    functions.len() * DIRECTORY_ENTRY_BYTES + record_total * 4 + stream_len
 }
 
 /// Statistics for the caller to log — a compaction that silently did nothing
@@ -1433,13 +1397,11 @@ fn compact_stack_map_asm(asm: &str, target: &str) -> Result<Option<(String, GcMa
     let replacement = emit_asm(&functions, &stream, format, &entry_labels);
     let mut out = String::with_capacity(asm.len());
     for (index, line) in lines[..block.start_line].iter().enumerate() {
-        // `.no_dead_strip` names the block's label from outside it. It is also
-        // the only thing keeping a section nothing references from being
-        // discarded, so retarget it instead of dropping it — without it the
-        // map is stripped and the collector finds no roots at all.
+        // `.no_dead_strip` named LLVM's block from outside it. The compact
+        // map retains nothing by itself (each entry lives with its function),
+        // so it goes with the block.
         if line.contains(".no_dead_strip") && line.contains("__LLVM_StackMaps") {
-            out.push_str(&format!("\t.no_dead_strip\t{GC_MAP_LABEL}\n"));
-            out.push_str(&format!("\t.no_dead_strip\t{GC_REC_LABEL}\n"));
+            continue;
         } else {
             push_line(&mut out, index, line, &label_lines);
         }

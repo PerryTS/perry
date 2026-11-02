@@ -217,6 +217,7 @@ include!("runtime_layouts/ascii_chars.rs");
 /// the receiver's layout: no spelling is built, hashed or looked up per read.
 pub(crate) mod intrinsic_private_atoms {
     use super::*;
+    runtime_atom!(MESSAGE_PORT_ID, "#<perry:private-value:0:@0:[[MessagePortId]]>", "233c70657272793a707269766174652d76616c75653a303a40303a5b5b4d657373616765506f727449645d5d3e");
     runtime_atom!(
         REGEXP_MATCHER,
         "#<perry:private-value:0:@0:[[RegExpMatcher]]>",

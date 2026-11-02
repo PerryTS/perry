@@ -6966,6 +6966,17 @@ pub(crate) fn lower_for(
     if crate::array_record_stack::fused_condition(ctx, condition) {
         return lower_for_after_init(ctx, init, condition, update, body, "for");
     }
+    lower_for_tiers(ctx, init, condition, update, body)
+}
+
+/// `lower_for` after its init: every counted-loop tier, then the plain loop.
+pub(super) fn lower_for_tiers(
+    ctx: &mut FnCtx<'_>,
+    init: Option<&Stmt>,
+    condition: Option<&perry_hir::Expr>,
+    update: Option<&perry_hir::Expr>,
+    body: &[Stmt],
+) -> Result<()> {
 
     // #9160: `sum += strings[maskedIndex].length`. A one-time receiver,
     // window, element-tag, and accumulator check admits a clone whose array

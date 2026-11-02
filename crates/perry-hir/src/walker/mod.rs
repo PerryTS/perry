@@ -39,7 +39,12 @@
 //!    to compile. Add an arm that `f`s every `Expr`-bearing field. If the
 //!    variant carries no `Expr` children (e.g. a new `Math.tau` constant) the
 //!    arm is `=> {}` — group it with the existing leaf arm.
-//! 3. **If the variant carries a `LocalId` field** (a recurring source of
+//!    `Expr::clone` (`expr_clone.rs`) relies on both walkers visiting the
+//!    same fields in the same order: it lists the children with one and fills
+//!    the holes of a node's shallow copy with the other.
+//! 3. Add the variant's arm to `shallow` in `expr_clone.rs` (a compile
+//!    error too): a hole for each field the walkers visit, the rest cloned.
+//! 4. **If the variant carries a `LocalId` field** (a recurring source of
 //!    bug reports — see #167, #169, #212, #214), also add explicit handling
 //!    to:
 //!    - `perry_transform::inline::substitute_locals`
@@ -49,6 +54,7 @@
 
 use crate::ir::*;
 
+mod expr_clone;
 mod expr_mut;
 mod expr_ref;
 

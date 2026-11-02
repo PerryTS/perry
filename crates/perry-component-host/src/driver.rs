@@ -310,6 +310,11 @@ async fn run(
                     })
                     .await;
                     match event {
+                        Event::Request(Some(request)) if state.disposing.get() => {
+                            request
+                                .reply
+                                .send(Err(anyhow::anyhow!("component is disposed")));
+                        }
                         Event::Request(Some(request)) => {
                             if request.cancelled.get() {
                                 request.reply.send(Err(anyhow::anyhow!(
@@ -349,6 +354,12 @@ async fn run(
                                     )));
                                 }
                             }
+                        }
+                        Event::Request(None) if state.disposing.get() => {
+                            // Cancel in-flight commands; their guest tasks stay
+                            // suspended in the Store that Host::dispose drains.
+                            drop(std::mem::take(&mut pending));
+                            return Ok::<_, anyhow::Error>(());
                         }
                         Event::Request(None) => {
                             ensure!(

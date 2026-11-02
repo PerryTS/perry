@@ -9,7 +9,10 @@
 //!
 //! A leak is any use of `this` other than as the receiver of a named
 //! property read/write in this body: passing it, storing it, calling a
-//! method on it, capturing it in a closure. Conservative by construction:
+//! method on it (the callee receives it), capturing it in a closure, a
+//! `super` method call or accessor, and a read of a key not yet assigned
+//! that is no method of the class (it consults the prototype chain, where
+//! an accessor can run with `this`). Conservative by construction:
 //! everything unrecognised closes the phase.
 
 use perry_hir::walker::walk_expr_children;
@@ -26,6 +29,14 @@ pub struct CtorPhase {
     pub assigned_order: Vec<String>,
     /// Keys definitely assigned before any observation.
     pub definite: Vec<String>,
+    /// Keys the constructor body itself stores on every exit path before
+    /// any observation. A declared field (`x: T;`) defines `undefined` at
+    /// field-init time: that makes its key present (`definite`), not its
+    /// `undefined` unobservable; only a store here does.
+    pub stored: Vec<String>,
+    /// Named fields defined after `this` may have been observed (an earlier
+    /// value, or their own, leaked it): an observer can find them absent.
+    pub late_fields: Vec<String>,
     /// Identity (`*const Expr as usize`) of construction-phase store exprs.
     pub phase_stores: BTreeSet<usize>,
 }
@@ -37,6 +48,8 @@ struct St {
 
 struct W {
     ph: CtorPhase,
+    /// The class's own plain methods: reading one runs no code.
+    methods: BTreeSet<String>,
     late: BTreeSet<String>,
     read_before: BTreeSet<String>,
     exits: Vec<BTreeSet<String>>,
@@ -51,29 +64,42 @@ pub fn analyze(c: &Class) -> CtorPhase {
             (&f.init, named)
         })
         .collect();
-    match &c.constructor {
-        Some(ctor) => analyze_body(&fields, &ctor.params, &ctor.body),
-        None => analyze_body(&fields, &[], &[]),
-    }
+    let methods: BTreeSet<String> = c.methods.iter().map(|m| m.name.clone()).collect();
+    let (params, body): (&[perry_hir::Param], &[Stmt]) = match &c.constructor {
+        Some(ctor) => (&ctor.params, &ctor.body),
+        None => (&[], &[]),
+    };
+    let mut ph = analyze_body(&fields, methods.clone(), params, body);
+    // The same walk with only initialized fields holding a value: a key a
+    // path leaves at its declared `undefined` is no `stored` key (a read of
+    // it before the store closes the phase there: fewer keys, never more).
+    let valued: Vec<(&Option<Expr>, Option<&str>)> = fields
+        .iter()
+        .map(|&(init, named)| (init, named.filter(|_| init.is_some())))
+        .collect();
+    ph.stored = analyze_body(&valued, methods, params, body).definite;
+    ph
 }
 
 /// The construction phase of a constructor-function body (`new f()`).
 pub fn analyze_fn(f: &perry_hir::Function) -> CtorPhase {
-    analyze_body(&[], &f.params, &f.body)
+    analyze_body(&[], BTreeSet::new(), &f.params, &f.body)
 }
 
 /// Same for a closure body used as a constructor.
 pub fn analyze_closure(params: &[perry_hir::Param], body: &[Stmt]) -> CtorPhase {
-    analyze_body(&[], params, body)
+    analyze_body(&[], BTreeSet::new(), params, body)
 }
 
 fn analyze_body(
     fields: &[(&Option<Expr>, Option<&str>)],
+    methods: BTreeSet<String>,
     params: &[perry_hir::Param],
     body: &[Stmt],
 ) -> CtorPhase {
     let mut w = W {
         ph: CtorPhase::default(),
+        methods,
         late: BTreeSet::new(),
         read_before: BTreeSet::new(),
         exits: Vec::new(),
@@ -82,12 +108,19 @@ fn analyze_body(
         open: true,
         assigned: BTreeSet::new(),
     };
-    // Field initializers run first (base class) / right after super().
+    // A base constructor defines its fields right after binding `this`,
+    // before the parameter defaults run (node: field, then param). A derived
+    // one evaluates its parameter defaults first, but `this` is unbound
+    // there, so they cannot observe the instance; its fields are defined
+    // right after super().
     for (init, named) in fields {
         if let Some(init) = init {
             w.expr(&mut st, init);
         }
         if let Some(n) = named {
+            if !st.open {
+                w.ph.late_fields.push(n.to_string());
+            }
             st.assigned.insert(n.to_string());
         }
     }
@@ -269,11 +302,32 @@ impl W {
     fn expr(&mut self, st: &mut St, e: &Expr) {
         match e {
             Expr::This => self.leak(st),
+            // `this.m(...)`: the callee runs with `this` as its receiver.
+            Expr::Call { callee, .. } | Expr::CallSpread { callee, .. }
+                if matches!(callee.as_ref(), Expr::PropertyGet { object, .. }
+                    if matches!(object.as_ref(), Expr::This)) =>
+            {
+                self.leak(st);
+                walk_expr_children(e, &mut |c| self.expr(st, c));
+            }
+            // A `super` method or accessor runs with `this`.
+            Expr::SuperMethodCall { .. }
+            | Expr::SuperMethodCallSpread { .. }
+            | Expr::SuperPropertyGet { .. }
+            | Expr::SuperPropertySet { .. } => {
+                self.leak(st);
+                walk_expr_children(e, &mut |c| self.expr(st, c));
+            }
             Expr::PropertyGet {
                 object, property, ..
             } if matches!(object.as_ref(), Expr::This) => {
                 if !st.assigned.contains(property) {
                     self.read_before.insert(property.clone());
+                    // Not own yet: the read walks the prototype chain, where
+                    // an accessor runs with `this`.
+                    if !self.methods.contains(property) {
+                        self.leak(st);
+                    }
                 }
             }
             Expr::PropertySet {
@@ -305,6 +359,9 @@ impl W {
             } if matches!(object.as_ref(), Expr::This) => {
                 if !st.assigned.contains(property) {
                     self.read_before.insert(property.clone());
+                    if !self.methods.contains(property) {
+                        self.leak(st);
+                    }
                 }
                 self.store(st, e, property);
             }

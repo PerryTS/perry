@@ -9,7 +9,9 @@ use std::path::{Path, PathBuf};
 use super::compile_env::{compile_env_value, COMPILE_ENV_VARS};
 
 use super::{
-    optimized_libs::{gc_instruments_requested, gc_trace_requested, hot_diag_requested},
+    optimized_libs::{
+        gc_diagnostics_requested, gc_instruments_requested, gc_trace_requested, hot_diag_requested,
+    },
     BuildCacheStats, CompilationContext, CompileArgs, CompileResult, LinkCacheStats,
 };
 
@@ -47,27 +49,35 @@ mod tests {
         let cases = [
             (
                 &[][..],
-                "gc-instruments=false,hot-diag=false,gc-trace=false",
+                "gc-instruments=false,hot-diag=false,gc-trace=false,gc-diagnostics=false",
             ),
             (
                 &[("PERRY_GC_INSTRUMENTS", "1")][..],
-                "gc-instruments=true,hot-diag=true,gc-trace=false",
+                "gc-instruments=true,hot-diag=true,gc-trace=false,gc-diagnostics=false",
             ),
             (
                 &[("PERRY_GC_SCHEDULE_SEED", "1")][..],
-                "gc-instruments=true,hot-diag=false,gc-trace=false",
+                "gc-instruments=true,hot-diag=false,gc-trace=false,gc-diagnostics=false",
             ),
             (
                 &[("PERRY_GC_SCHEDULE_SEED", "7")][..],
-                "gc-instruments=true,hot-diag=false,gc-trace=false",
+                "gc-instruments=true,hot-diag=false,gc-trace=false,gc-diagnostics=false",
             ),
             (
                 &[("PERRY_IC_DIAG", "1")][..],
-                "gc-instruments=false,hot-diag=true,gc-trace=false",
+                "gc-instruments=false,hot-diag=true,gc-trace=false,gc-diagnostics=false",
             ),
             (
                 &[("PERRY_GC_TRACE", "1")][..],
-                "gc-instruments=false,hot-diag=false,gc-trace=true",
+                "gc-instruments=false,hot-diag=false,gc-trace=true,gc-diagnostics=true",
+            ),
+            (
+                &[("PERRY_GC_LOG", "1")][..],
+                "gc-instruments=false,hot-diag=false,gc-trace=false,gc-diagnostics=true",
+            ),
+            (
+                &[("PERRY_GC_DIAG", "0")][..],
+                "gc-instruments=false,hot-diag=false,gc-trace=false,gc-diagnostics=false",
             ),
         ];
 
@@ -870,6 +880,7 @@ fn current_env() -> Vec<EnvFingerprint> {
         gc_instruments_requested(),
         hot_diag_requested(),
         gc_trace_requested(),
+        gc_diagnostics_requested(),
     ));
     env
 }
@@ -878,11 +889,13 @@ fn runtime_feature_fingerprint(
     gc_instruments: bool,
     hot_diag: bool,
     gc_trace: bool,
-) -> [EnvFingerprint; 3] {
+    gc_diagnostics: bool,
+) -> [EnvFingerprint; 4] {
     [
         ("runtime-feature:gc-instruments", gc_instruments),
         ("runtime-feature:hot-diag", hot_diag),
         ("runtime-feature:gc-trace", gc_trace),
+        ("runtime-feature:gc-diagnostics", gc_diagnostics),
     ]
     .map(|(name, enabled)| EnvFingerprint {
         name: name.to_string(),

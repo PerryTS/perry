@@ -328,8 +328,8 @@ pub const GC_OBJECT_CALLABLE: u16 = 0x0020;
 /// Heap-birth facts shared by runtime allocation and realm-cell emission.
 /// These are existing meanings in GcHeader::_reserved, never image markers.
 pub const OBJ_FLAG_PLAIN_ORDINARY: u16 = 0x0200;
-/// An object has a null [[Prototype]].
-pub const OBJ_FLAG_NULL_PROTO: u16 = 0x40;
+// 0x40 was `OBJ_FLAG_NULL_PROTO`: a null [[Prototype]] is the shape's
+// identity (`PROTO_ID_NULL`), not a header bit. The bit is free.
 /// At least one own property carries non-default descriptor attributes.
 pub const OBJ_FLAG_HAS_DESCRIPTORS: u16 = 0x800;
 /// An array has one front-reserve pointer to its key-attribute array.

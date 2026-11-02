@@ -21,6 +21,19 @@ pub(crate) fn process_cwd_test_lock() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// Serializes tests that `dlopen`/`dlclose` an object against tests that read
+/// every loaded object's tables or assert the eh walker's per-image cache. A
+/// reader that enumerated the images while a writer had an object loaded
+/// would otherwise read its tables after the `dlclose` unmapped them (a
+/// SIGSEGV in `direct_rows_match_gimli_across_every_fde`), or see its cache
+/// dropped by the generation change. Poison-tolerant like the cwd lock.
+pub(crate) fn loaded_objects_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOADED_OBJECTS_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOADED_OBJECTS_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// Run a libtest case in its own process when its fixture needs exclusive
 /// ownership of process-global state (#9197). A lock shared by only a few
 /// tests cannot exclude the runtime's other side-table readers or counters.

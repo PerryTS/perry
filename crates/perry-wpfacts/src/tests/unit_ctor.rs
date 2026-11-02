@@ -93,7 +93,15 @@ fn a_constructor_fed_its_own_instances_keeps_its_class() {
             .collect()
     };
     assert!(held(&pf).len() >= 3, "{:?}", held(&pf));
-    assert_eq!(held(&pf), held(&whole), "{}", pf.dump_text());
+    // DCE: the whole program reads `left`/`right` as the own keys every
+    // Node surely holds (no prototype read, no `undefined`: null or Node);
+    // per unit the readers still see `undefined` beside them, never less
+    // than the whole program.
+    let (u, w) = (held(&pf), held(&whole));
+    assert_eq!(u.len(), w.len(), "{u:?} {w:?}");
+    for (a, b) in u.iter().zip(&w) {
+        assert!(a == b || a.replace("prims=24", "prims=8") == *b, "{a} {b}");
+    }
 }
 
 #[test]
@@ -116,28 +124,29 @@ fn a_read_back_instance_used_beyond_its_contract_breaks_the_class() {
 }
 
 #[test]
-fn a_constructor_argument_no_contract_describes_escapes() {
-    // Soundness of DECISIONS 109: only another unit's stand-in stays in its
-    // contract when handed to the constructor. `leaf`'s unit passes its own
-    // object: it escapes there (the defining unit sees it as a layout it
-    // can write into), and `left` holds more than Node.
+fn a_constructor_argument_of_this_unit_is_handed_by_its_layout() {
+    // Soundness of DECISIONS 109: another unit's stand-in stays in its
+    // contract when handed to the constructor; `leaf`'s unit passes its own
+    // literal: the argument contract describes it (`ctor_args_out`), as one
+    // handed to a closed function, and the defining unit stores its
+    // stand-in: `left` holds more than Node. Per unit proves no site the
+    // whole program does not.
     let src = TREE.replace(
         "console.log(check(bottomUp(4)));",
         "function leaf(): Node { const o: any = { left: null, right: null }; return new Node(o, null); }\n\
          console.log(check(leaf()));",
     );
     let pf = units(&src);
+    assert_merged(&pf, &facts(&src), &[]);
     let o = pf
         .templates
         .iter()
         .find(|t| t.display.contains("__AnonShape") && t.birth_keys == ["left", "right"])
         .unwrap_or_else(|| panic!("the literal in\n{}", pf.dump_text()));
-    assert!(o.escape.is_some(), "{}", pf.dump_text());
-    assert!(
-        !verdicts(&pf, "left").iter().all(|v| v.starts_with("T0")),
-        "{}",
-        pf.dump_text()
-    );
+    assert!(o.escape.is_none(), "{}", pf.dump_text());
+    // `n.left` reads Node or the literal: a set, as whole.
+    assert_eq!(verdicts(&pf, "left"), ["T0Set"], "{}", pf.dump_text());
+    assert_eq!(verdicts(&pf, "left"), verdicts(&facts(&src), "left"));
 }
 
 /// DECISIONS 137: CD's RedBlackTree.put stores `this.root` (what its
@@ -746,7 +755,15 @@ fn a_constructor_argument_the_receiver_reaches_stays_the_callers() {
     }
     // Soundness: Res's unit sees the caller's Val in `v`, as the program.
     let (u, w) = (field(tmpl(&pf, "Res"), "v"), field(tmpl(&wf, "Res"), "v"));
-    assert_eq!(u.kind, w.kind, "{}", pf.dump_text());
+    // DCE: the whole program reads `v` as the own key every Res surely
+    // holds (no `undefined`); per unit it reads `undefined` beside it.
+    assert_eq!(u.kind.objs, w.kind.objs, "{}", pf.dump_text());
+    assert_eq!(
+        u.kind.prims & !crate::model::prim::UNDEF,
+        w.kind.prims,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 const PUB_CTOR: &str = r#"

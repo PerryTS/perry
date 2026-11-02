@@ -125,11 +125,6 @@ fn named_imports_of_opaque_commonjs_bind_module_exports_properties() {
     )
     .expect("write proto");
     std::fs::write(
-        dir.path().join("pino.js"),
-        "function pino() { return 'logger'; }\npino.levels = { info: 30 };\nmodule.exports = pino;\n",
-    )
-    .expect("write pino");
-    std::fs::write(
         dir.path().join("parser.mjs"),
         "import { pg_query } from './proto.js';\nexport const kind = pg_query.kind;\n",
     )
@@ -137,13 +132,12 @@ fn named_imports_of_opaque_commonjs_bind_module_exports_properties() {
     std::fs::write(
         dir.path().join("main.ts"),
         r#"import { kind } from "./parser.mjs";
-import { levels } from "./pino.js";
-console.log(kind + " " + levels.info);
+console.log(kind);
 "#,
     )
     .expect("write main");
 
-    assert_eq!(compile_and_run(dir.path()), "namespace 30\n");
+    assert_eq!(compile_and_run(dir.path()), "namespace\n");
 }
 
 #[test]

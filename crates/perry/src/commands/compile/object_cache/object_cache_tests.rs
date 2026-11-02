@@ -11,6 +11,7 @@ use tempfile::tempdir;
 /// to vary one field mutate the returned value before hashing.
 fn empty_opts() -> CompileOptions {
     CompileOptions {
+        namespace_self_import: false,
         static_shape_ids: Vec::new(),
         program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),

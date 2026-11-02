@@ -638,6 +638,13 @@ fn compute_object_cache_key_with_env(
         );
     }
 
+    // The self-namespace flag moves the populator from the tail of `__init` to
+    // before the body, so it changes the emitted IR and must key the cache.
+    h.field(
+        "self_ns",
+        if opts.namespace_self_import { "1" } else { "0" },
+    );
+
     // The owning namespace module can differ from all member origins (barrels).
     {
         let mut values: Vec<_> = opts.namespace_source_prefixes.iter().collect();

@@ -706,7 +706,9 @@ fn thrown(f: impl FnOnce() -> f64) -> String {
     }
 }
 
-static RETURNS: AtomicUsize = AtomicUsize::new(0);
+per_test_global! {
+    static RETURNS: AtomicUsize = AtomicUsize::new(0);
+}
 
 extern "C" fn endless_next(
     _c: *const crate::closure::ClosureHeader,

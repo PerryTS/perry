@@ -525,6 +525,11 @@ pub fn user_function_symbol(module_name: &str, function_name: &str) -> String {
 pub fn compile_module(hir: &HirModule, mut opts: CompileOptions) -> Result<Vec<u8>> {
     ensure_layout_plan(hir, &mut opts)?;
     crate::facts_consumed::begin_module(&hir.name);
+    crate::verify_facts::begin_module(
+        &hir.name,
+        opts.module_source.as_deref(),
+        opts.debug_source_line_offset,
+    );
     let _fallback = crate::fallback_diag::begin(
         &hir.name,
         opts.module_source.as_deref(),
@@ -542,6 +547,11 @@ pub fn compile_module(hir: &HirModule, mut opts: CompileOptions) -> Result<Vec<u
 pub fn compile_module_owned(hir: HirModule, mut opts: CompileOptions) -> Result<Vec<u8>> {
     ensure_layout_plan(&hir, &mut opts)?;
     crate::facts_consumed::begin_module(&hir.name);
+    crate::verify_facts::begin_module(
+        &hir.name,
+        opts.module_source.as_deref(),
+        opts.debug_source_line_offset,
+    );
     let _fallback = crate::fallback_diag::begin(
         &hir.name,
         opts.module_source.as_deref(),
@@ -3036,6 +3046,7 @@ fn lower_module(
         program_has_thread_agents: thread_agents,
         class_hierarchy: class_hierarchy::ClassHierarchy::default(),
         namespace_imports: opts.namespace_imports.iter().cloned().collect(),
+        namespace_self_import: opts.namespace_self_import,
         namespace_source_prefixes: opts.namespace_source_prefixes,
         namespace_member_nested: opts.namespace_member_nested.iter().cloned().collect(),
         cjs_interop_namespaces: opts.cjs_interop_namespaces.iter().cloned().collect(),

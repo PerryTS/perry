@@ -902,3 +902,49 @@ fn deserializers_install_regex_without_a_regex_literal() {
         .iter()
         .any(|f| f == "perry-runtime/regex-engine"));
 }
+
+/// The GC diagnostics (`PERRY_GC_LOG`'s per-collection line, `PERRY_GC_DIAG`,
+/// the evacuation verifier) run only in a program whose installer calls
+/// `js_runtime_install_diagnostics`. A program selected from its own features
+/// (every auto-optimized native link and every WASI link) installs it only when
+/// asked: by a diagnostics API in the source, or by one of these knobs set
+/// while compiling, as for the instrument knobs. Without the compile-time arm a
+/// WASI program run with `PERRY_GC_LOG=1` printed nothing, and the image
+/// selftest's moving/full-collection gate could not see its collections.
+#[test]
+fn gc_diagnostic_knobs_set_while_compiling_install_the_gc_diagnostics() {
+    let _guard = env_lock();
+    let knobs = [
+        "PERRY_GC_DIAG",
+        "PERRY_GC_LOG",
+        "PERRY_GC_VERIFY_EVACUATION",
+    ];
+    let saved: Vec<_> = knobs
+        .iter()
+        .chain(&["PERRY_GC_TRACE"])
+        .map(|k| (*k, std::env::var(k).ok()))
+        .collect();
+    for (knob, _) in &saved {
+        set_env_var(knob, None);
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ctx = CompilationContext::new(dir.path().to_path_buf());
+    let installs = || {
+        auto_optimized_cross_features(&ctx, &BTreeSet::new(), &[])
+            .contains(&"perry-runtime/diagnostics".to_string())
+    };
+    assert!(!installs(), "no knob, no diagnostics API: nothing installs");
+    for knob in knobs {
+        set_env_var(knob, Some("1"));
+        assert!(
+            installs(),
+            "{knob}=1 while compiling must install the GC diagnostics"
+        );
+        set_env_var(knob, Some("0"));
+        assert!(!installs(), "{knob}=0 is off, as the runtime parses it");
+        set_env_var(knob, None);
+    }
+    for (knob, value) in saved {
+        set_env_var(knob, value.as_deref());
+    }
+}
