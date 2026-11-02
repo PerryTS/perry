@@ -29,6 +29,9 @@ pub struct CtorPhase {
     pub assigned_order: Vec<String>,
     /// Keys definitely assigned before any observation.
     pub definite: Vec<String>,
+    /// Named fields defined after `this` may have been observed (an earlier
+    /// value, or their own, leaked it): an observer can find them absent.
+    pub late_fields: Vec<String>,
     /// Identity (`*const Expr as usize`) of construction-phase store exprs.
     pub phase_stores: BTreeSet<usize>,
 }
@@ -90,12 +93,19 @@ fn analyze_body(
         open: true,
         assigned: BTreeSet::new(),
     };
-    // Field initializers run first (base class) / right after super().
+    // A base constructor defines its fields right after binding `this`,
+    // before the parameter defaults run (node: field, then param). A derived
+    // one evaluates its parameter defaults first, but `this` is unbound
+    // there, so they cannot observe the instance; its fields are defined
+    // right after super().
     for (init, named) in fields {
         if let Some(init) = init {
             w.expr(&mut st, init);
         }
         if let Some(n) = named {
+            if !st.open {
+                w.ph.late_fields.push(n.to_string());
+            }
             st.assigned.insert(n.to_string());
         }
     }
