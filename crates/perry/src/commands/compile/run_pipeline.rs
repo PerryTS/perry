@@ -1511,6 +1511,13 @@ pub fn run_with_parse_cache(
                 perry_hir::fix_imported_enums(hir_module, imported_enums_for_module);
             }
         }
+        // #10421: an `E.Function` read reaches the `Function` constructor
+        // unless `E` is an enum; the pre-scan deferred the imported ones.
+        perry_hir::eval_classifier::resolve_enum_member_receivers(|path, local| {
+            module_enums
+                .get(std::path::Path::new(path))
+                .is_some_and(|enums| enums.contains_key(local))
+        });
     }
 
     // Resolve imported and generic type-alias references in every module's
