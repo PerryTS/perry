@@ -1,4 +1,4 @@
-//! A maintained-C caller tests canonical cancellation after a Perry actor returns.
+//! A maintained-C caller tests native-child lifetime after an inline-returned actor.
 #[path = "support/guest_diagnostics.rs"]
 mod guest_diagnostics;
 use anyhow::{bail, ensure, Context, Result};
@@ -80,6 +80,8 @@ fn exercise(wit: &Path, component: &[u8], cancel: bool, moving: bool) -> Result<
     let aborted = Arc::new(AtomicUsize::new(0));
     let polled = Arc::new(AtomicUsize::new(0));
     let completed = Arc::new(AtomicUsize::new(0));
+    let gate_polls = Arc::new(AtomicUsize::new(0));
+    let gate_aborts = Arc::new(AtomicUsize::new(0));
     let marks: Arc<Mutex<Vec<u32>>> = Arc::default();
     let observed = marks.clone();
     let mark: Import = Arc::new(move |args| {
@@ -117,10 +119,23 @@ fn exercise(wit: &Path, component: &[u8], cancel: bool, moving: bool) -> Result<
         })
     });
     let slot = gate.clone();
+    let entered = gate_polls.clone();
+    let abandoned = gate_aborts.clone();
     let proceed: AsyncImport = Arc::new(move |_| {
         let (send, receive) = oneshot::channel();
         assert!(slot.lock().unwrap().replace(send).is_none());
-        Box::pin(async move { receive.await? })
+        let entered = entered.clone();
+        let mut pending = Pending {
+            aborted: abandoned.clone(),
+            completed: false,
+        };
+        Box::pin(async move {
+            entered.fetch_add(1, Ordering::SeqCst);
+            let reply = receive.await?;
+            pending.completed = true;
+            drop(pending);
+            reply
+        })
     });
     let asynchronous = AsyncImports::from([(
         "".into(),
@@ -174,6 +189,65 @@ fn exercise(wit: &Path, component: &[u8], cancel: bool, moving: bool) -> Result<
         .unwrap()
         .send(Ok(Some(json!(1))))
         .map_err(|_| anyhow::anyhow!("caller gate retired early"))?;
+    if cancel {
+        while gate_polls.load(Ordering::SeqCst) != 2 || gate.lock().unwrap().is_none() {
+            ensure!(
+                Instant::now() < deadline,
+                "caller did not reach its cancellation gate"
+            );
+            tick(&mut driver)?;
+            ensure!(
+                block_on(poll_once(&mut call)).is_none(),
+                "caller returned before cancellation"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        ensure!(*marks.lock().unwrap() == [1, 2, 3]);
+        ensure!(completed.load(Ordering::SeqCst) == 0 && aborted.load(Ordering::SeqCst) == 0);
+        ensure!(
+            driver.is_active(),
+            "pending caller did not keep its driver active"
+        );
+        drop(call);
+        let error = block_on(poll_once(&mut driver))
+            .context("dropping the started caller did not retire its driver")?
+            .err()
+            .context("cancelled caller returned a live Store")?;
+        ensure!(
+            error.to_string() == "component driver call cancelled; Store retired",
+            "wrong retirement: {error:#}"
+        );
+        ensure!(!driver.is_active());
+        ensure!(
+            aborted.load(Ordering::SeqCst) == 1,
+            "native child was not retired exactly once"
+        );
+        ensure!(
+            gate_aborts.load(Ordering::SeqCst) == 1,
+            "second native gate was not retired exactly once"
+        );
+        ensure!(completed.load(Ordering::SeqCst) == 0);
+        ensure!(
+            child
+                .lock()
+                .unwrap()
+                .take()
+                .unwrap()
+                .send(Ok(None))
+                .is_err(),
+            "late native child completion remained deliverable"
+        );
+        ensure!(
+            gate.lock()
+                .unwrap()
+                .take()
+                .unwrap()
+                .send(Ok(Some(json!(1))))
+                .is_err(),
+            "late caller-gate completion remained deliverable"
+        );
+        return Ok(());
+    }
     let outcome = loop {
         ensure!(
             Instant::now() < deadline,
@@ -187,41 +261,12 @@ fn exercise(wit: &Path, component: &[u8], cancel: bool, moving: bool) -> Result<
         }
         std::thread::sleep(Duration::from_millis(1));
     };
-    if cancel {
-        let error = outcome.expect_err("terminal subtask cancellation must trap");
-        ensure!(
-            error.downcast_ref::<wasmtime::Trap>()
-                == Some(&wasmtime::Trap::SubtaskCancelAfterTerminal),
-            "wrong canonical trap: {error:#}"
-        );
-        ensure!(
-            *marks.lock().unwrap() == [1, 2, 3],
-            "cancellation returned to C"
-        );
-        drop(call);
-        drop(client);
-        drop(driver);
-        ensure!(
-            aborted.load(Ordering::SeqCst) == 1,
-            "Store retirement did not drop its native child exactly once"
-        );
-        ensure!(completed.load(Ordering::SeqCst) == 0);
-        ensure!(
-            child
-                .lock()
-                .unwrap()
-                .take()
-                .unwrap()
-                .send(Ok(None))
-                .is_err(),
-            "native child remained live after Store retirement"
-        );
-    } else {
+    {
         ensure!(outcome?.is_none(), "void caller result");
         ensure!(*marks.lock().unwrap() == [1, 2, 3, 4]);
         ensure!(
             aborted.load(Ordering::SeqCst) == 0 && completed.load(Ordering::SeqCst) == 0,
-            "dropping a returned handle cancelled its live child"
+            "returning from the caller cancelled the actor's live child"
         );
         child
             .lock()
@@ -236,6 +281,7 @@ fn exercise(wit: &Path, component: &[u8], cancel: bool, moving: bool) -> Result<
             std::thread::sleep(Duration::from_millis(1));
         }
         ensure!(completed.load(Ordering::SeqCst) == 1 && aborted.load(Ordering::SeqCst) == 0);
+        ensure!(gate_polls.load(Ordering::SeqCst) == 1 && gate_aborts.load(Ordering::SeqCst) == 0);
     }
     Ok(())
 }
@@ -256,6 +302,6 @@ fn main() -> Result<()> {
         exercise(Path::new(&args[0]), &component, false, moving)?;
         exercise(Path::new(&args[0]), &component, true, moving)?;
     }
-    println!("PASS: returned private actor, four positive handle-drop controls, four SubtaskCancelAfterTerminal traps and four exactly-once native child retirements");
+    println!("PASS: inline-returned private actor without a handle, four native child completions, four caller cancellations and exactly-once child/gate retirement");
     Ok(())
 }

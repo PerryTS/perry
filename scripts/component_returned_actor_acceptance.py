@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify terminal actor cancellation and native-child retirement with a real C caller."""
+"""Verify inline-returned actor lifetime and caller cancellation with a real C caller."""
 import argparse
 import hashlib
 import json
@@ -70,7 +70,7 @@ def main():
     run("caller-link", [clang, "--target=wasm32-wasip3", "-mexec-model=reactor", "-O1", "-g",
         "-Wall", "-Werror", "-I", caller, caller / "supervisor.c", guest / "supervisor.c",
         caller / "supervisor_component_type.o", "-Wl,--export=cabi_realloc", "-Wl,--fatal-warnings", "-o", c_component])
-    marker = "PASS: returned private actor, four positive handle-drop controls, four SubtaskCancelAfterTerminal traps and four exactly-once native child retirements"
+    marker = "PASS: inline-returned private actor without a handle, four native child completions, four caller cancellations and exactly-once child/gate retirement"
     artifacts = [c_component]
     for kind, archive in [("plain", args.plain_runtime.resolve()), ("instrumented", args.runtime.resolve())]:
         library = guest / ("libguest-" + kind + ".a")
@@ -104,8 +104,8 @@ def main():
     identities = {str(path): dict(bytes=path.stat().st_size, sha256=hashlib.sha256(path.read_bytes()).hexdigest())
                   for path in paths if path.is_file()}
     (out / "artifact-identities.json").write_text(json.dumps(identities, indent=2) + "\n")
-    (out / "result.json").write_text(json.dumps(dict(exitCode=0, returnedActorCancellationQualified=True,
-        terminalTrap="SubtaskCancelAfterTerminal", positiveControlsPerRun=4,
+    (out / "result.json").write_text(json.dumps(dict(exitCode=0, returnedActorLifecycleQualified=True,
+        inlineReturnHasNoHandle=True, callerCancellationsPerRun=4, positiveControlsPerRun=4,
         exactlyOnceNativeRetirementsPerRun=4, fullWasi030Qualified=False), indent=2) + "\n")
 
 
