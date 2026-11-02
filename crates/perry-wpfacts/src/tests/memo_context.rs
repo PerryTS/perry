@@ -30,10 +30,10 @@ function memoizeOne<A extends string | number, T>(callback: (arg: A) => T): (arg
 
 const MEMO: &str = r#"
 function memoize<T>(callback: () => T): () => T {
-  let value: T;
+  const cell = { done: false, value: undefined as T | undefined };
   return () => {
-    if (callback) { value = callback(); callback = undefined!; }
-    return value;
+    if (!cell.done) { cell.value = callback(); cell.done = true; }
+    return cell.value!;
   };
 }
 "#;
@@ -81,9 +81,11 @@ fn a_memo_at_a_program_site_and_one_in_a_function_have_two_maps() {
     assert_eq!(whole(&src).0, true, "whole: createIdentifier must prove");
 }
 
-/// `memoize`'s captured cell: one cell per call site.
+/// `memoize`'s captured box, a literal born in the maker's frame: one box
+/// per (birth site, call site). A captured parameter or `let` cell is per
+/// call site without rule C; the box is what one birth site merged.
 #[test]
-fn a_memoize_cell_is_per_call_site() {
+fn a_memoize_box_is_per_call_site() {
     let src = format!(
         "{MEMO}
         function mkHost() {{ return memoize(() => (globalThis as any).host ?? ((x: number) => x)); }}
