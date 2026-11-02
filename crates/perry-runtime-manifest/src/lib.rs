@@ -248,4 +248,6 @@ pub mod realm_json;
 pub use perry_abi as abi;
 pub mod realm_layouts;
 pub mod realm_source;
+#[cfg(test)]
+mod realm_owners;
 mod realm_storage;
