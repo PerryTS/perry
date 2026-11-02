@@ -6505,7 +6505,7 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 150
+    timeout-minutes: 180
     defaults:
       run:
         shell: bash
@@ -6515,6 +6515,7 @@ jobs:
       CARGO_TARGET_DIR: target
       PERRY_INSTR_TARGET_DIR: target-instr
       PERRY_CODEGEN_CPU_SLOTS: '4'
+      RAYON_NUM_THREADS: '4'
       RUST_TEST_THREADS: '1'
       PYTHONUTF8: '1'
       EXPECTED_HOST_TARGET: ${{ matrix.target }}
@@ -6534,7 +6535,7 @@ jobs:
         run: |
           set -euo pipefail
           rustup toolchain install nightly-2026-10-04 --profile minimal
-          rustup target add wasm32-unknown-unknown wasm32-wasip2
+          rustup target add wasm32-unknown-unknown wasm32-wasip2 wasm32-wasip3
           rustc -vV
           test "$(rustc -vV | sed -n 's/^host: //p')" = "$EXPECTED_HOST_TARGET"
       - uses: ./.github/actions/setup-llvm22
@@ -6559,6 +6560,7 @@ jobs:
           mkdir -p target/wasi-host-qualification
           cargo build --locked --profile perry-dev -p perry -p perry-runtime-static -p perry-stdlib-static \
             -p perry-wasm-host -p perry-component-host -p perry-wit -p perry-gc-effects \
+            --features perry/target-wasi \
             2>&1 | tee target/wasi-host-qualification/build.log
           cargo build --locked --profile perry-dev -p perry-wit --example componentize \
             2>&1 | tee -a target/wasi-host-qualification/build.log
@@ -6583,13 +6585,13 @@ jobs:
           cargo test --locked --profile perry-dev -p perry-codegen --lib inprocess::coff::tests -- --test-threads=1 \
             2>&1 | tee target/wasi-host-qualification/coff-helper-units.log
           grep -F 'test result: ok. 2 passed; 0 failed;' target/wasi-host-qualification/coff-helper-units.log
-          cargo test --locked --profile perry-dev -p perry-runtime --lib layout_section_tests -- --test-threads=1 \
+          cargo test --locked -p perry-runtime --lib layout_section_tests -- --test-threads=1 \
             2>&1 | tee target/wasi-host-qualification/layout-section-units.log
           grep -F 'test result: ok. 2 passed; 0 failed;' target/wasi-host-qualification/layout-section-units.log
       - name: Execute both native host unit suites
         run: |
           set -euo pipefail
-          cargo test --locked --profile perry-dev -p perry-wasm-host -p perry-component-host --lib -- --test-threads=1 \
+          cargo test --locked -p perry-wasm-host -p perry-component-host --lib -- --test-threads=1 \
             2>&1 | tee target/wasi-host-qualification/native-host-units.log
       - name: Qualify P1 parity and P2 component interoperability
         run: |
@@ -6601,6 +6603,43 @@ jobs:
             --wit "target/perry-dev/perry-wit${suffix}" \
             --componentize "target/perry-dev/examples/componentize${suffix}" \
             --output target/wasi-host-qualification
+      - name: Install the Unix P3 toolchain
+        if: runner.os != 'Windows'
+        run: |
+          set -euo pipefail
+          toolchain_env="$(./scripts/wasi_toolchain.sh "$RUNNER_TEMP/wasi-p3")"
+          eval "$toolchain_env"
+          for key in WASI_SDK_PATH CC_wasm32_wasip3 AR_wasm32_wasip3 CFLAGS_wasm32_wasip3 CC_SHELL_ESCAPED_FLAGS; do
+            printf '%s=%s\n' "$key" "${!key}" >> "$GITHUB_ENV"
+          done
+      - name: Install the Windows P3 toolchain
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          . ./scripts/wasi_toolchain.ps1 "$env:RUNNER_TEMP/wasi-p3"
+          foreach ($key in @('WASI_SDK_PATH', 'CC_wasm32_wasip3', 'AR_wasm32_wasip3', 'CFLAGS_wasm32_wasip3', 'CC_SHELL_ESCAPED_FLAGS')) {
+            "$key=$([Environment]::GetEnvironmentVariable($key))" >> $env:GITHUB_ENV
+          }
+      - name: Build and qualify the installed public P3 package
+        run: |
+          set -euo pipefail
+          suffix=''
+          [[ "$RUNNER_OS" != Windows ]] || suffix='.exe'
+          CARGO_TARGET_DIR=target/p3-runtime python3 scripts/wasi_build_runtime.py wasm32-wasip3 \
+            2>&1 | tee target/wasi-host-qualification/p3-runtime-build.log
+          CARGO_TARGET_DIR=target/p3-contract cargo build --locked \
+            --manifest-path test-wasi/p3-entropy/Cargo.toml --bin p3-contract \
+            2>&1 | tee target/wasi-host-qualification/p3-contract-build.log
+          revision="$(git rev-parse HEAD)"
+          python3 scripts/wasi_release.py package --target wasm32-wasip3 --revision "$revision" \
+            --runtime target/p3-runtime/wasm32-wasip3/release/libperry_runtime.a \
+            --output target/wasi-host-qualification/p3-bundle
+          python3 scripts/wasi_release_check.py --target wasm32-wasip3 --revision "$revision" \
+            --compiler "target/perry-dev/perry${suffix}" --wit "target/perry-dev/perry-wit${suffix}" \
+            --p3-contract "target/p3-contract/debug/p3-contract${suffix}" \
+            --bundle target/wasi-host-qualification/p3-bundle/perry-cross-wasm32-wasip3.tar.gz \
+            --output "$RUNNER_TEMP/perry installed P3" \
+            2>&1 | tee target/wasi-host-qualification/installed-p3.log
       - name: Retain qualification evidence
         if: always()
         uses: ./.github/actions/perry/actions/upload-artifact
@@ -6617,6 +6656,8 @@ jobs:
             target/wasi-host-qualification/command/results.json
             target/wasi-host-qualification/command/**/*.wasm
             target/wasi-host-qualification/p2/**/*.wasm
+            target/wasi-host-qualification/p3-bundle/
+            ${{ runner.temp }}/perry installed P3/
   wasi-hosts:
     name: wasi-hosts / suite result
     needs:
