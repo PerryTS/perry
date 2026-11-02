@@ -152,7 +152,7 @@ fn instanceof_dispatch(
                 // The hook's receiver is C. A static-id caller names C by
                 // its id; its function object is the class value, whose first
                 // read may allocate, so both operands are rooted across it.
-                let target = match constructor {
+                let mut target = match constructor {
                     Some(target) => target,
                     None => {
                         let scope = crate::gc::RuntimeHandleScope::new();
@@ -165,7 +165,8 @@ fn instanceof_dispatch(
                         target
                     }
                 };
-                if let HasInstanceOutcome::Result(r) = dispatch_own_has_instance(cb, target, value)
+                if let HasInstanceOutcome::Result(r) =
+                    dispatch_own_has_instance(OwnHook::Value(cb), &mut target, &mut value)
                 {
                     return r;
                 }
