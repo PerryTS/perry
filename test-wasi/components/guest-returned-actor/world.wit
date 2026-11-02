@@ -1,0 +1,15 @@
+package perry:guest-returned-actor@1.0.0;
+
+world plugin {
+    import empty: async func();
+    export guarded: func() -> u32;
+}
+
+world supervisor {
+    import start: func() -> u32;
+    import kick: async func();
+    import proceed: async func() -> u32;
+    import mark: func(value: u32);
+    import cancel-mode: func() -> bool;
+    export exercise: async func();
+}
