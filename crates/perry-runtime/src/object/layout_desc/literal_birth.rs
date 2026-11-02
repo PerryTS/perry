@@ -33,14 +33,21 @@ static mut SENTINEL: PerryLayoutDesc = PerryLayoutDesc {
     _tail_pad: [0; 32],
 };
 
+// COFF groups `$` sections by their characteristics before sorting the
+// suffix, exactly as for `.perrylay` (`layout_desc.rs`). The descriptors in
+// `.perrylit$m` are writable, so read-only bounds landed in a SEPARATE
+// `.perrylit` output section: the span between them was empty, and the first
+// literal birth of any Windows program aborted with "literal birth requires a
+// valid literal-section descriptor". Mutable bounds share the descriptors'
+// section.
 #[cfg(target_os = "windows")]
 #[used(linker)]
 #[link_section = ".perrylit$a"]
-static START: [u64; 1] = [0];
+static mut START: [u64; 1] = [0];
 #[cfg(target_os = "windows")]
 #[used(linker)]
 #[link_section = ".perrylit$z"]
-static END: [u64; 1] = [0];
+static mut END: [u64; 1] = [0];
 
 #[inline]
 fn bounds() -> (usize, usize) {
@@ -276,3 +283,23 @@ unsafe fn perry_alloc_literal_layout_body(
 static KEEP_PERRY_ALLOC_LITERAL_LAYOUT: unsafe extern "C" fn(
     *const PerryLayoutDesc,
 ) -> *mut ObjectHeader = perry_alloc_literal_layout;
+
+#[cfg(test)]
+mod section_tests {
+    use super::*;
+
+    /// The runtime's own sentinel is placed in the literal section, so the
+    /// linker span must contain it. On Windows the read-only bounds once
+    /// formed their own output section and the span was empty.
+    #[test]
+    fn the_literal_span_contains_the_runtime_sentinel() {
+        let sentinel = std::ptr::addr_of!(SENTINEL);
+        let (start, end) = bounds();
+        assert!(start < end, "empty literal span {start:#x}..{end:#x}");
+        assert!(
+            contains(sentinel),
+            "sentinel {sentinel:p} outside {start:#x}..{end:#x}"
+        );
+        assert!(literal_index(sentinel).is_some());
+    }
+}
