@@ -60,6 +60,9 @@ pub(super) struct Facts {
     /// The native module a bound constructor also serves as the namespace of
     /// (its statics dispatch as that module).
     pub module: Option<String>,
+    /// The owner a native provider's birth stores, when its specifier is an
+    /// alias (`@lydell/node-pty` births `node-pty`).
+    pub native_namespace: Option<String>,
     /// The `perry_abi::native_class_ids` constant a bound native constructor
     /// captures as its class identity.
     pub class_identity: Option<String>,
@@ -131,6 +134,7 @@ pub(super) fn parse(ts: &[Token<'_>]) -> Result<Facts, String> {
         builtin_constructor: false,
         receiver: None,
         module: None,
+        native_namespace: None,
         class_identity: None,
         non_constructable: false,
         alias: None,
@@ -293,6 +297,14 @@ pub(super) fn parse(ts: &[Token<'_>]) -> Result<Facts, String> {
                         .string
                         .clone()
                         .ok_or("module names its native module as a literal")?,
+                )
+            }
+            "native_namespace" if clause.len() == 3 => {
+                facts.native_namespace = Some(
+                    clause[2]
+                        .string
+                        .clone()
+                        .ok_or("a native provider names its owner as a literal")?,
                 )
             }
             "constructable" if clause.len() == 3 && clause[2].text == "false" => {
@@ -497,6 +509,9 @@ pub(super) fn logical(
     if facts.members.is_some() {
         return Err("object members require an owned birth expression".into());
     }
+    if facts.native_namespace.is_some() && !facts.provider {
+        return Err("only a native provider declares its owner".into());
+    }
     if facts.receiver.is_some()
         || facts.module.is_some()
         || facts.class_identity.is_some()
@@ -577,6 +592,10 @@ pub(super) fn logical(
         } else {
             return Err("native provider needs node: or %NativeNamespace: path".into());
         };
+        let namespace = facts
+            .native_namespace
+            .clone()
+            .unwrap_or_else(|| namespace.to_string());
         declaration.insert("native_namespace".into(), string(namespace));
         declaration.insert(
             "exotic_vtable".into(),

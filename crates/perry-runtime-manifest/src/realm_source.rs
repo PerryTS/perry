@@ -1468,12 +1468,15 @@ mod tests {
 
     #[test]
     fn native_namespaces_record_their_vtable_module_and_keep_integrity_behind_it() {
-        let source = r#"fn f() { crate::realm_decl! { birth js_object_alloc(NATIVE_MODULE_CLASS_ID, 1); realm { "node:x.default", native_namespace = "x", module = "x.sub", members = { a = ref("node:x.a"); }; } } }"#;
+        let source = r#"fn f() { crate::realm_decl! { birth js_object_alloc(NATIVE_MODULE_CLASS_ID, 1); realm { "node:x.default", native_namespace = "x", members = { a = ref("node:x.a"); }; } } }"#;
         let d = &inline(source).unwrap()[0];
         assert_eq!(d.get("native_namespace").unwrap().string(), Some("x"));
-        assert_eq!(d.get("module").unwrap().string(), Some("x.sub"));
+        assert!(d.get("module").is_none());
         assert!(d.get("exotic_vtable").is_some());
-        assert!(inline(&source.replace("module = \"x.sub\",", "integrity = frozen,")).is_err());
+        // The owner is declared, never inferred from the name.
+        let unowned = inline(&source.replace("native_namespace = \"x\",", ""));
+        assert!(unowned.unwrap_err().contains("does not declare its native_namespace"));
+        assert!(inline(&source.replace("native_namespace = \"x\",", "native_namespace = \"x\", integrity = frozen,")).is_err());
         let ordinary = source.replace("NATIVE_MODULE_CLASS_ID", "0");
         assert!(inline(&ordinary).is_err());
     }

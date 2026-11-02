@@ -278,5 +278,99 @@ fn realm_native_receiver_facts_match_namespace_births() {{
 }}
 "#
     );
-    std::fs::write(out.join("realm_native_storage_test.rs"), source).map_err(|e| e.to_string())
+    std::fs::write(out.join("realm_native_storage_test.rs"), source).map_err(|e| e.to_string())?;
+    write_native_owner_truth(declarations, out)
+}
+
+/// The owner truth test (A2-DESIGN §6.2): every declared name of a native
+/// namespace birth, reached through its real access path, yields a value
+/// whose slot-0 module is the owner the declaration names.
+fn write_native_owner_truth(declarations: &[Value], out: &Path) -> Result<(), String> {
+    let mut expected = String::new();
+    for declaration in declarations {
+        let Some(name) = declaration.get("name").and_then(Value::string) else {
+            continue;
+        };
+        let Some(owner) = declaration.get("native_namespace").and_then(Value::string) else {
+            continue;
+        };
+        if declaration.get("kind").and_then(Value::string) != Some("namespace") {
+            continue;
+        }
+        // A native provider is born by the namespace call on its whole
+        // specifier (`node:buffer.Buffer` is `buffer.Buffer`, not a member
+        // of `buffer`).
+        let provider = declaration
+            .get("body")
+            .and_then(Value::string)
+            .is_some_and(|body| body.ends_with("::js_create_native_module_namespace"));
+        // One object, one declaration: each of its names is an access path,
+        // and every path yields the declared owner (a `%…%` name has none).
+        let names = declaration
+            .get("names")
+            .and_then(Value::array)
+            .into_iter()
+            .flatten();
+        for name in std::iter::once(name).chain(names.filter_map(Value::string)) {
+            if !name.starts_with('%') {
+                writeln!(expected, "({name:?}, {owner:?}, {provider}),").unwrap();
+            }
+        }
+    }
+    let source = format!(
+        r#"
+#[test]
+fn realm_native_owners_are_the_modules_their_access_paths_yield() {{
+    crate::gc::initialize_runtime_fixture();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let mut wrong = Vec::new();
+    for (name, owner, provider) in [ {expected} ] {{
+        let (path, global) = match name.strip_prefix("node:") {{
+            Some(path) => (path, false),
+            None => (name, true),
+        }};
+        let (root, rest) = if provider {{
+            (path, "")
+        }} else {{
+            path.split_once('.').unwrap_or((path, ""))
+        }};
+        let segments = rest.split('.').filter(|segment| !segment.is_empty());
+        let mut value = scope.root_nanbox_f64(if global {{
+            let global = crate::object::js_get_global_this();
+            unsafe {{ crate::value::js_dynamic_object_get_property(global, root.as_ptr().cast(), root.len()) }}
+        }} else {{
+            super::js_create_native_module_namespace(root.as_ptr(), root.len())
+        }});
+        for (depth, segment) in segments.enumerate() {{
+            // The HIR rule: a first-level `.default` of a module without a
+            // CommonJS default namespace is the namespace itself. The module
+            // is the one the root yields, after the runtime folds an alias
+            // (`sys` is `util`).
+            let root_module = unsafe {{ super::get_module_name_from_namespace(value.get_nanbox_f64()) }};
+            if depth == 0
+                && !global
+                && segment == "default"
+                && !perry_dispatch::has_cjs_default_namespace(&root_module)
+            {{
+                continue;
+            }}
+            let current = value.get_nanbox_f64();
+            let module = unsafe {{ super::get_module_name_from_namespace(current) }};
+            let next = if module.is_empty() {{
+                unsafe {{ crate::value::js_dynamic_object_get_property(current, segment.as_ptr().cast(), segment.len()) }}
+            }} else {{
+                unsafe {{ super::js_native_module_property_by_name(module.as_ptr(), module.len(), segment.as_ptr(), segment.len()) }}
+            }};
+            value = scope.root_nanbox_f64(next);
+        }}
+        let module = unsafe {{ super::get_module_name_from_namespace(value.get_nanbox_f64()) }};
+        if module != owner {{
+            wrong.push(format!("{{name}}: the access path yields {{module:?}}, declared {{owner:?}}"));
+        }}
+    }}
+    assert!(wrong.is_empty(), "access paths yield another owner:\n{{}}", wrong.join("\n"));
+}}
+"#
+    );
+    std::fs::write(out.join("realm_native_owner_truth_test.rs"), source).map_err(|e| e.to_string())
 }
