@@ -760,7 +760,9 @@ pub(super) fn an_escaped_value_beside_top_is_that_top() {
         // which takes no shared set: two entries per literal. Helper protocols
         // (the string/array/Math/Error helper arms read their operands by
         // protocol instead of escaping them): (1080, 2976, 9456) -> the pin.
-        (1061, 2941, 9389),
+        // DECISIONS 241: the published `f`s own properties hold what the units store
+        // there (none), not top from its publication: one entry fewer at every n.
+        (1060, 2940, 9388),
         "entries {e8} {e16} {e32}"
     );
 }

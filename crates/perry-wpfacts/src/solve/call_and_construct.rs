@@ -1594,24 +1594,35 @@ impl Model {
         if self.props_escaped.insert(t, reason).is_some() {
             return;
         }
+        let published = self.unit_mode && self.reasons[reason as usize] == crate::gen::UNDESCRIBED;
         let pa = self.atom("prototype");
         let keys: Vec<Atom> = self.field_keys.get(&t).cloned().unwrap_or_default();
         for a in keys {
             if a != pa {
                 let n = self.fields[&(t, a)];
-                self.escape_prop(t, n, reason);
+                match published {
+                    true => self.cons(n, Cons::TopSink { reason }),
+                    false => self.escape_prop(t, n, reason),
+                }
             }
         }
         let any = self.field_any(t);
         self.cons(any, Cons::TopSink { reason });
-        let all = self.all_fields(t);
-        self.add_top(all, |m| {
-            format!(
-                "property of an escaped function: {}",
-                m.reasons[reason as usize]
-            )
-        });
-        self.add_prim(all, prim::ALL);
+        // DECISIONS 241: published to another unit (`UNDESCRIBED`), its own
+        // properties hold what the units store there, each publishing its
+        // stores (`fn_stored`): every holder reads their join. Only unknown
+        // code makes them unknown (`fn_props_top`).
+        if !published {
+            self.fn_props_top.insert(t);
+            let all = self.all_fields(t);
+            self.add_top(all, |m| {
+                format!(
+                    "property of an escaped function: {}",
+                    m.reasons[reason as usize]
+                )
+            });
+            self.add_prim(all, prim::ALL);
+        }
         let w = self.node_l("escaped-store");
         self.add_top(w, |m| {
             format!(
@@ -1775,6 +1786,10 @@ impl Model {
         }
         self.mark_escaped(t, reason);
         self.rel(|| format!("escaped {t}"));
+        // DECISIONS 241: unknown code may store any key of a function.
+        if matches!(self.toks[t as usize], TokKind::Func(..)) {
+            self.fn_props_top.insert(t);
+        }
         // Unknown code reads every field and can write any key.
         let all = self.all_fields(t);
         self.cons(all, Cons::TopSink { reason });
