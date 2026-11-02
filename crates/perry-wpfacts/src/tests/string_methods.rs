@@ -50,7 +50,6 @@ fn calls_hook(expr: &str, sym: &str) {
 macro_rules! op {
     ($name:ident, $expr:expr, $sym:expr) => {
         mod $name {
-            use super::*;
             #[test]
             fn reads_only() {
                 super::reads_only($expr);

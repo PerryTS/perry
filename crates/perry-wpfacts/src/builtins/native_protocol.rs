@@ -279,7 +279,7 @@ fn chain_keys(m: &mut Model, u: Tok, seen: &mut Vec<Tok>, out: &mut Vec<Atom>) -
     if tpl.has_computed_members && !matches!(tpl.kind, TmplKind::ObjCreate { .. }) {
         return false;
     }
-    let mut add = |a: Atom, out: &mut Vec<Atom>| {
+    let add = |a: Atom, out: &mut Vec<Atom>| {
         if !out.contains(&a) {
             out.push(a);
         }
