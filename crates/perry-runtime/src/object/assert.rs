@@ -490,17 +490,6 @@ pub(crate) extern "C" fn js_assert_assertion_error_to_string(
     string_f64(&format!("{name} [{code}]: {message}"))
 }
 
-/// `new <bound assert export>(...)`: the bucket constructor `js_nm_install_assert`
-/// registers for an export value minted by the dynamic namespace paths.
-pub(crate) unsafe fn nm_ctor_assert(
-    _module: &str,
-    property: &str,
-    args: *const f64,
-    len: usize,
-) -> Option<f64> {
-    assert_export_construct(property, args, len)
-}
-
 /// `new <assert constructor export>(...)` reached through the export's value
 /// (`new ns.AssertionError(o)`, `const { Assert } = require("assert")`).
 /// `None` for an export that is no constructor of this module.
