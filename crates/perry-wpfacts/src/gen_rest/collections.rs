@@ -445,7 +445,7 @@ impl<'a> Gen<'a> {
                 self.m.edge(b, out);
                 out
             }
-            _ => self.expr_rest_reflection(fx, e),
+            _ => unreachable!("internal compiler error: expr_rest: not a collections variant"),
         }
     }
 }

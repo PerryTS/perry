@@ -280,7 +280,7 @@ impl<'a> Gen<'a> {
             | Expr::Closure { .. }
             | Expr::ObjectRest { .. }
             | Expr::PutValueSet { .. } => self.fail_closed(fx, e, "routed"),
-            other => self.fail_closed(fx, other, "unrouted"),
+            _ => unreachable!("internal compiler error: expr_rest: not a reflection variant"),
         }
     }
 }
