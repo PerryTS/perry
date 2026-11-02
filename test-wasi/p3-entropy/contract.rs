@@ -1,6 +1,21 @@
-//! Inspect the binary's external contract, rather than scanning embedded text.
-//! Runtime validation/execution is a separate acceptance step.
-use wasmparser::{ComponentExternalKind, ComponentTypeRef, Encoding, Parser, Payload, TypeBounds};
+//! Validate the WASI 0.3.0 Component Model feature set and external contract.
+//! Core Wasm engine support and execution remain separate acceptance steps.
+use wasmparser::{
+    ComponentExternalKind, ComponentTypeRef, Encoding, Parser, Payload, TypeBounds, Validator,
+    WasmFeatures,
+};
+
+fn features_030() -> WasmFeatures {
+    // Match perry-wit's composition profile, including CM64. Leave core Wasm
+    // features alone: WASI versions govern the Component Model feature gates.
+    let mut features = WasmFeatures::all();
+    for (name, feature) in WasmFeatures::all().iter_names() {
+        if name.starts_with("CM") {
+            features.set(feature, feature == WasmFeatures::CM_ASYNC);
+        }
+    }
+    features
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
@@ -46,6 +61,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("invalid P3 contract profile arguments".into());
     }
     let bytes = std::fs::read(path)?;
+    Validator::new_with_features(features_030())
+        .validate_all(&bytes)
+        .map_err(|error| format!("not a WASI 0.3.0 Component Model feature profile: {error}"))?;
     let mut depth = 0usize;
     let mut imports = 0;
     let mut command = false;

@@ -73,8 +73,22 @@ impl ReencodeComponent for PlainNames {
     }
 }
 
+fn features_030() -> WasmFeatures {
+    // WASI 0.3.0 adopts only the async Component Model gate. Core Wasm
+    // proposals have their own engine requirements; don't restrict them here.
+    // Include CM64 in this namespace, alongside the CM_* flags.
+    // Keep test-wasi/p3-entropy/contract.rs in agreement (a different parser pin).
+    let mut features = WasmFeatures::all();
+    for (name, feature) in WasmFeatures::all().iter_names() {
+        if name.starts_with("CM") {
+            features.set(feature, feature == WasmFeatures::CM_ASYNC);
+        }
+    }
+    features
+}
+
 pub(super) fn wasi_030(bytes: Vec<u8>) -> Result<Vec<u8>> {
-    let features = WasmFeatures::all() - WasmFeatures::CM_IMPLEMENTS;
+    let features = features_030();
     if Validator::new_with_features(features)
         .validate_all(&bytes)
         .is_ok()
@@ -88,13 +102,39 @@ pub(super) fn wasi_030(bytes: Vec<u8>) -> Result<Vec<u8>> {
     let bytes = component.finish();
     Validator::new_with_features(features)
         .validate_all(&bytes)
-        .context("Generated guest still requires a post-0.3.0 extern annotation")?;
+        .context("Generated guest requires a Component Model feature outside WASI 0.3.0")?;
     Ok(bytes)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn maps_are_rejected_even_without_extern_annotations() {
+        let bytes = wat::parse_str("(component (type (map string u32)))").unwrap();
+        Validator::new_with_features(WasmFeatures::all())
+            .validate_all(&bytes)
+            .unwrap();
+        let error = wasi_030(bytes).unwrap_err();
+        assert!(format!("{error:#}").contains("map"));
+    }
+
+    #[test]
+    fn async_types_and_core_proposals_remain_byte_identical() {
+        let bytes = wat::parse_str(
+            r#"(component
+                (type (future u32))
+                (type (stream u32))
+                (import "start" (func async))
+                (core module
+                    (memory i64 1)
+                    (tag (param i32))
+                    (func (try (do) (catch 0 drop)))))"#,
+        )
+        .unwrap();
+        assert_eq!(wasi_030(bytes.clone()).unwrap(), bytes);
+    }
 
     #[test]
     fn annotations_in_nested_components_and_type_declarations_use_plain_names() {
@@ -117,7 +157,7 @@ mod tests {
         Validator::new_with_features(WasmFeatures::all())
             .validate_all(&original)
             .unwrap();
-        let features = WasmFeatures::all() - WasmFeatures::CM_IMPLEMENTS;
+        let features = features_030();
         assert!(Validator::new_with_features(features)
             .validate_all(&original)
             .is_err());
