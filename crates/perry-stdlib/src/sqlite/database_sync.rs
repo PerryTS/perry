@@ -163,6 +163,9 @@ pub(crate) struct NodeDb {
     /// closes. A statement's compiled `sqlite3_stmt` is finalized by its own
     /// drop while this holds, and by the connection's close otherwise.
     pub(crate) live: Rc<Cell<bool>>,
+    /// The authorizer callback is running: node rejects every use of the
+    /// database (and its statements) until it returns.
+    pub(crate) in_authorizer: bool,
 }
 
 extern "C" {
@@ -216,10 +219,15 @@ pub(crate) fn throw_illegal_invocation() -> ! {
 /// the reference across a C call that can call back, an allocation or JS.
 pub(crate) unsafe fn db_payload<'a>(this: f64) -> &'a mut NodeDb {
     match native_payload::payload_mut::<NodeDb>(this, &DB_FAMILY) {
+        Ok(db) if db.in_authorizer => throw_in_authorizer(),
         Ok(db) => db,
         Err(PayloadMiss::Closed) => throw_invalid_state("database is not open"),
         Err(PayloadMiss::Foreign) => throw_illegal_invocation(),
     }
+}
+
+pub(crate) fn throw_in_authorizer() -> ! {
+    throw_invalid_state("database cannot be accessed from an authorizer callback")
 }
 
 pub(crate) fn db_is_open(db: f64) -> bool {
@@ -497,6 +505,7 @@ unsafe fn open_db(this: f64, cfg: DbConfig) {
         serial: native_payload::next_open_serial(),
         cfg,
         live: Rc::new(Cell::new(true)),
+        in_authorizer: false,
     };
     match native_payload::attach(
         this.get_nanbox_f64(),
@@ -671,12 +680,84 @@ fn install_db_prototype(proto: &mut PayloadPrototype) {
     );
     proto.method("loadExtension", builtin!(db_load_extension_thunk, 1), 1);
     proto.method("location", builtin!(db_location_thunk, 1), 0);
+    proto.method("createModule", builtin!(db_create_module_thunk, 2), 0);
     proto.symbol_method(
         "dispose",
         "[Symbol.dispose]",
         builtin!(db_dispose_thunk, 0),
         0,
     );
+}
+
+/// `db.createModule(name, options)`: node registers a virtual-table module
+/// whose `options.rows` generator feeds SQLite's cursor. Perry has no
+/// virtual-table subsystem, so the arguments are validated exactly as node
+/// does and a well-formed call then throws.
+extern "C" fn db_create_module_thunk(
+    _c: *const ClosureHeader,
+    this: JsThis,
+    name_value: f64,
+    options_value: f64,
+) -> f64 {
+    unsafe {
+        let scope = RuntimeHandleScope::new();
+        let this = scope.root_nanbox_f64(this.as_f64());
+        db_payload(this.get_nanbox_f64());
+        if !value_from_f64(name_value).is_any_string() {
+            throw_type("The \"name\" argument must be a string.");
+        }
+        let options = scope.root_nanbox_f64(options_value);
+        if !is_object_like(options_value) {
+            throw_type("The \"options\" argument must be an object.");
+        }
+        let columns = scope.root_nanbox_f64(f64_from_jsvalue(object_field(
+            options.get_nanbox_f64(),
+            "columns",
+        )));
+        if !value_from_f64(perry_runtime::js_array_is_array(columns.get_nanbox_f64())).as_bool() {
+            throw_type("The \"options.columns\" argument must be an array.");
+        }
+        let column_array = raw_addr_from_value(columns.get_nanbox_f64()) as *const ArrayHeader;
+        let count = js_array_length(column_array);
+        if count == 0 {
+            throw_arg_value("The \"options.columns\" array must not be empty.");
+        }
+        let rows = f64_from_jsvalue(object_field(options.get_nanbox_f64(), "rows"));
+        if closure_ptr_from_value(rows).is_none() {
+            throw_type("The \"options.rows\" argument must be a function.");
+        }
+        for index in 0..count {
+            let column = scope.root_nanbox_f64(f64_from_jsvalue(js_array_get(
+                raw_addr_from_value(columns.get_nanbox_f64()) as *const ArrayHeader,
+                index,
+            )));
+            if !is_object_like(column.get_nanbox_f64()) {
+                throw_type("Each column in \"options.columns\" must be an object.");
+            }
+            let name = object_field(column.get_nanbox_f64(), "name");
+            if !name.is_any_string() {
+                throw_type("The column \"name\" property must be a string.");
+            }
+            let ty = object_field(column.get_nanbox_f64(), "type");
+            if !ty.is_any_string() {
+                throw_type("The column \"type\" property must be a string.");
+            }
+            let ty = string_from_jsvalue(ty).unwrap_or_default();
+            if !matches!(ty.as_str(), "INTEGER" | "TEXT" | "REAL" | "BLOB" | "ANY") {
+                throw_arg_value(
+                    "The column \"type\" property must be one of 'INTEGER', 'TEXT', 'REAL', 'BLOB', or 'ANY'.",
+                );
+            }
+            let hidden = object_field(column.get_nanbox_f64(), "hidden");
+            if !hidden.is_undefined() && !hidden.is_bool() {
+                throw_type("The column \"hidden\" property must be a boolean.");
+            }
+        }
+        perry_runtime::fs::validate::throw_error_with_code(
+            "db.createModule() virtual tables are not supported by perry",
+            "ERR_METHOD_NOT_IMPLEMENTED",
+        )
+    }
 }
 
 extern "C" fn db_open_thunk(_c: *const ClosureHeader, this: JsThis) -> f64 {

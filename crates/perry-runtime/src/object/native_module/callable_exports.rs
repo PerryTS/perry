@@ -413,6 +413,14 @@ pub(super) fn native_callable_export_display_name<'a>(module: &str, prop: &'a st
             "Stats" => realm_native_fs_Stats_metadata!(name),
             _ => prop,
         }
+    } else if module == "sqlite" {
+        // node 26: the classes are `Database` / `Statement`; `DatabaseSync`
+        // and `StatementSync` are aliases of them.
+        match prop {
+            "DatabaseSync" => "Database",
+            "StatementSync" => "Statement",
+            _ => prop,
+        }
     } else {
         prop
     }
