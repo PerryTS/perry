@@ -300,6 +300,18 @@ locally. Native artifacts, WIT tools and independent probes retain their
 distinct recorded sources. Installed P3 platforms, providers, required CI and
 landing remain open.
 
+The [feature-profile receipt](validation/wasi-p3-feature-profile-20261102.json)
+then qualifies the stricter 0.3.0 binary boundary. Both the public composer and
+independent contract checker allow the adopted async gate and reject all other
+gated Component Model features, including maps, annotated extern names and
+64-bit component contexts. Core Wasm requirements stay independent. All 48 WIT
+tests pass with assertions enabled, including map rejection and byte-identical
+async/core-memory64 preservation. The actual earlier unprojected component is
+rejected for its `cm-implements` requirement, and the full maintained public
+workflow still passes with 6,412 relocated objects. All 153 indexed evidence
+files were verified locally. This does not qualify installed platform packages
+or the remaining provider and CI rows.
+
 | Requirement | Required evidence | Current state |
 | --- | --- | --- |
 | Canonical async imports and exports | Public generated components compose in both directions; overlapping calls, immediate/delayed completion, errors, post-return work and Store reuse | Recorded scalar/compound and synchronous-started import profiles qualify on Linux. The explicit public P3 CLI now qualifies repeated-label futures and an async-only component through typed native bindings. Broader public-profile and platform qualification remains |

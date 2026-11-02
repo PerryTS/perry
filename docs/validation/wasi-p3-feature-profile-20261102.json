@@ -1,0 +1,43 @@
+{
+  "date": "2026-11-02",
+  "platform": "Linux x86_64",
+  "source": "97f7991a023a8c4ef9c7a4788dd3bedc3712c3c7",
+  "nativeArtifactSource": "3a20cda3b54da93aeeb633a5dda491d226d20c16",
+  "witTestsPassed": 48,
+  "witTestsIgnored": 2,
+  "witDebugAssertions": true,
+  "forbiddenMapRejected": true,
+  "asyncAndCoreMemory64PreservedByteIdentically": true,
+  "actualUnprojectedImplementsComponentRejected": true,
+  "publicP3PipelinePassed": true,
+  "labelMoving": {
+    "guestCopiedObjects": 6412,
+    "guestEvacuationVerified": true
+  },
+  "parserVersions": {
+    "composer": "0.258.3",
+    "binaryContract": "0.254.2"
+  },
+  "componentModelProfile": "Ungated Component Model plus CM_ASYNC; every other CM gate including CM64 disabled",
+  "coreWasmProposalsUnrestrictedByWasiVersion": true,
+  "featureSource": "https://github.com/WebAssembly/WASI/blob/main/docs/ComponentModelFeatures.md",
+  "sourceBaseArchive": "wasi-030-v214-evidence.tar.gz",
+  "sourcePatchAppliesToThatArchiveSource": true,
+  "preservedControl": "v215 test fixture used legacy try syntax unsupported by the WAT encoder; v216 uses memory64 to test independent core proposals",
+  "fullWasi030Qualified": false,
+  "evidence": {
+    "archive": {
+      "archive": "wasi-030-v217-evidence.tar.gz",
+      "indexedFiles": 153,
+      "bytes": 108961676,
+      "sha256": "dceed7dfc6b57f97c98c681df8d82933f616fc95853c4c02c9edb6e1340df4f8"
+    },
+    "exactRegularFileSetVerified": true,
+    "allIndexedSizesAndHashesVerified": true,
+    "archiveExtracted": false
+  },
+  "limitations": [
+    "Point-in-time Linux source-built qualification; installed platforms, providers, required CI and landing remain incomplete",
+    "Native/runtime archives retain 3a20 and the independent label host retains 27928; new WIT tools and binary checker are 97f7991a02"
+  ]
+}
