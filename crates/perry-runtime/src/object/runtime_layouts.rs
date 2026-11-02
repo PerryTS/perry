@@ -235,6 +235,26 @@ macro_rules! runtime_layout {
                     std::ptr::addr_of_mut!(super::$name)
                 }
             }
+            /// The descriptor when the program's realm reaches this layout,
+            /// `None` when it does not. Probing sites use this: the node
+            /// instance layouts are consulted as one list, so a layout the
+            /// program never carries is simply not a candidate. A real birth
+            /// still goes through [`desc`] and aborts.
+            #[cfg(not(any(test, feature = "test-layout-descriptors")))]
+            #[inline(always)]
+            pub fn desc_if_defined() -> Option<*mut PerryLayoutDesc> {
+                // SAFETY: an extern_weak static reads as the symbol's address,
+                // or null when the program does not define it.
+                let desc = unsafe { DEFINITION };
+                (!desc.is_null()).then_some(desc)
+            }
+
+            /// Under the test-only definitions every layout exists.
+            #[cfg(any(test, feature = "test-layout-descriptors"))]
+            #[inline(always)]
+            pub fn desc_if_defined() -> Option<*mut PerryLayoutDesc> {
+                Some(desc())
+            }
         }
         /// Test-only definition of the declared layout (DESIGN §3.2 item 10).
         #[cfg(any(test, feature = "test-layout-descriptors"))]
@@ -692,7 +712,8 @@ runtime_layout!(
         "setTimeout",
         "setInterval",
         "node:timers.setTimeout",
-        "node:timers.setInterval"
+        "node:timers.setInterval",
+        "node:fs.createReadStream"
     ]
 );
 
@@ -702,7 +723,7 @@ runtime_layout!(
     0,
     &raw const IMMEDIATE_PROTO_FAMILY,
     [],
-    realm = ["setImmediate", "node:timers.setImmediate"]
+    realm = ["setImmediate", "node:timers.setImmediate", "node:fs.createReadStream"]
 );
 
 pub(crate) const URL_CLASS_ID: u32 = 0xFFFF0063;

@@ -190,18 +190,21 @@ pub(crate) unsafe fn birth_store(obj: *mut ObjectHeader, slot: u32, value: f64) 
 }
 
 /// Every runtime instance layout of a node constructor.
-fn instance_layouts() -> [*const PerryLayoutDesc; 8] {
+fn instance_layouts() -> impl Iterator<Item = *const PerryLayoutDesc> {
     use crate::object::runtime_layouts as rl;
     [
-        rl::EVENT_EMITTER::desc(),
-        rl::LEGACY_STREAM::desc(),
-        rl::READABLE::desc(),
-        rl::WRITABLE::desc(),
-        rl::DUPLEX::desc(),
-        rl::TRANSFORM::desc(),
-        rl::PASSTHROUGH::desc(),
-        rl::SERVER_RESPONSE::desc(),
+        rl::EVENT_EMITTER::desc_if_defined(),
+        rl::LEGACY_STREAM::desc_if_defined(),
+        rl::READABLE::desc_if_defined(),
+        rl::WRITABLE::desc_if_defined(),
+        rl::DUPLEX::desc_if_defined(),
+        rl::TRANSFORM::desc_if_defined(),
+        rl::PASSTHROUGH::desc_if_defined(),
+        rl::SERVER_RESPONSE::desc_if_defined(),
     ]
+    .into_iter()
+    .flatten()
+    .map(|desc| desc as *const PerryLayoutDesc)
 }
 
 /// The instance layout `obj` is on, when it is one of these: born on it
@@ -214,8 +217,7 @@ fn instance_layouts() -> [*const PerryLayoutDesc; 8] {
 /// `obj` is a live object header.
 pub(crate) unsafe fn instance_layout(obj: *const ObjectHeader) -> Option<*const PerryLayoutDesc> {
     let word = (*obj).parent_class_id;
-    let layouts = instance_layouts();
-    if let Some(desc) = layouts.into_iter().find(|&desc| (*desc).layout_id == word) {
+    if let Some(desc) = instance_layouts().find(|&desc| (*desc).layout_id == word) {
         return Some(desc);
     }
     derived_instance_layout(LayoutWord(word))
@@ -236,7 +238,7 @@ unsafe fn derived_instance_layout(word: LayoutWord) -> Option<*const PerryLayout
     if keys == 0 {
         return None;
     }
-    instance_layouts().into_iter().find(|&desc| {
+    instance_layouts().find(|&desc| {
         (*desc).key_count == count
             && crate::object::shapes::shape_keys_and_proto_for_word(LayoutWord((*desc).layout_id))
                 .is_some_and(|(layout_keys, _, _)| layout_keys == keys)
