@@ -282,6 +282,22 @@ entry:
     assert_eq!(roundtrip_ir(ir, "alias_load"), 2);
 }
 
+/// A Windows x64 executable reads its TLS array through the TEB
+/// (`expr/agent_ptr.rs`): a load from `gs:[0x58]`, an `inttoptr` constant in
+/// address space 256. The reader refused it ("cannot materialize `inttoptr`"),
+/// failing split Windows modules in any unit but the first.
+#[test]
+fn windows_teb_load_round_trips_through_the_reader() {
+    let ir = r#"
+define ptr @tls_array() {
+entry:
+  %r5 = load ptr, ptr addrspace(256) inttoptr (i64 88 to ptr addrspace(256)), align 8
+  ret ptr %r5
+}
+"#;
+    assert_eq!(roundtrip_ir(ir, "teb_load"), 2);
+}
+
 /// `blk.freeze` (typed-array element indices, `expr/typed_element.rs`) is a
 /// typed instruction, but a function body can also reach the reader as
 /// rendered text (Claude Code's `indexPath$generic`). Without a `freeze` arm
@@ -795,6 +811,7 @@ fn emitted_constant_forms() -> Vec<(LlvmType, String)> {
             "getelementptr (i8, ptr @constant_forms_global, i64 8)",
             "getelementptr inbounds (i8, ptr @constant_forms_global, i64 4)",
             "getelementptr (i8, ptr getelementptr (i8, ptr @constant_forms_global, i64 8), i64 20)",
+            "inttoptr (i64 88 to ptr)",
         ],
     );
     push!(
