@@ -365,15 +365,14 @@ fn repeated_interface_labels_keep_exact_resource_dependencies() {
         .validate_all(&producer)
         .unwrap();
     let bytes = compose_experimental_guest(&producer, &facade(false), &plan).unwrap();
+    // Composition resolves annotated identities before emitting 0.3.0 names.
+    Validator::new_with_features(WasmFeatures::all() - WasmFeatures::CM_IMPLEMENTS)
+        .validate_all(&bytes)
+        .unwrap();
     let mut types = Types::default();
     let package = Package::from_bytes("test:shared-result", None, bytes, &mut types).unwrap();
     assert_eq!(types[package.ty()].exports.len(), 1);
     let imports = &types[package.ty()].imports;
-    // Composition uses implements metadata to distinguish the inputs, but
-    // the executable 0.3.0 result must not require the 0.3.1 annotation gate.
-    Validator::new_with_features(WasmFeatures::all() - WasmFeatures::CM_IMPLEMENTS)
-        .validate_all(&bytes)
-        .unwrap();
     assert_eq!(
         imports.keys().map(String::as_str).collect::<BTreeSet<_>>(),
         BTreeSet::from(["left", "right", "api-input", "start"])
