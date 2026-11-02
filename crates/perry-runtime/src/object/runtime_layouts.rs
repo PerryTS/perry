@@ -200,8 +200,13 @@ macro_rules! runtime_layout {
             ));
             // The declaration is the producer's source and is checked here at
             // compile time; a layout only tests birth still has its facts read.
-            const _: (&[LayoutAtom], usize, u32, fn() -> *mut PerryLayoutDesc) =
-                (ATOMS, SLOT_COUNT, WORD, desc);
+            const _: (
+                &[LayoutAtom],
+                usize,
+                u32,
+                fn() -> *mut PerryLayoutDesc,
+                fn() -> Option<*mut PerryLayoutDesc>,
+            ) = (ATOMS, SLOT_COUNT, WORD, desc, reached);
             const _: () = {
                 let _: (u8, u32, u16) = ($kind, $family, $variant);
                 let _ = $proto;
