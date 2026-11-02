@@ -436,7 +436,7 @@ pub(super) fn atoms_of(g: &gen::Gen, ks: &[model::Atom]) -> Vec<String> {
 
 #[path = "contracts/fn_contracts.rs"]
 mod fn_contracts;
-pub use fn_contracts::*;
+pub(crate) use fn_contracts::*;
 /// A reach marker reaches itself under every key (§18.4): what it stands
 /// for in the result is its reach through the keys the body read on it,
 /// repeatedly; a computed-key read (its all-fields node feeds a reader)
@@ -500,7 +500,7 @@ pub(super) fn reach_key_of(
 
 #[path = "contracts/describe.rs"]
 mod describe;
-pub use describe::*;
+pub(crate) use describe::*;
 /// Function `f`'s body may read its receiver: `this` or `super` in it (or
 /// in a nested arrow), or a direct eval may (design §18.2: `ns.f()` passes
 /// the namespace as the receiver of a function that never reads it). A
@@ -587,7 +587,7 @@ pub(crate) fn cut_described_again(cc: &mut units::ClassContract, path: &mut Vec<
 
 #[path = "contracts/values.rs"]
 mod values;
-pub use values::*;
+pub(crate) use values::*;
 /// DECISIONS 210: the layout of constructor function `f`'s instances (its
 /// `new <f>` template `tm`) as the units constructing it hold it: its
 /// facts, the methods on its prototype (contract functions among them with

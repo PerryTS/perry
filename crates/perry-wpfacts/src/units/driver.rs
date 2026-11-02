@@ -1735,8 +1735,8 @@ pub(crate) fn digest<T: std::hash::Hash>(v: &T) -> u64 {
 
 #[path = "driver/merge.rs"]
 mod merge;
-pub use merge::*;
+pub(in crate::units) use merge::*;
 
 #[path = "driver/fixpoint_report.rs"]
 mod fixpoint_report;
-pub use fixpoint_report::*;
+pub(crate) use fixpoint_report::*;
