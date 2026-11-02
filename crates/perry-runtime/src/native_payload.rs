@@ -105,6 +105,13 @@ impl PayloadPrototype {
         crate::object::install_proto_method(self.proto, name, info, arity);
     }
 
+    /// Install a builtin method with `.length` 0 that is enumerable, as node
+    /// installs the `node:sqlite` prototype methods.
+    pub fn method_enumerable(&mut self, name: &str, info: *const crate::closure::JsFunctionInfo) {
+        let value = crate::object::install_proto_method(self.proto, name, info, 0);
+        self.data(name, value, true, true, true);
+    }
+
     /// Install a non-enumerable, configurable builtin getter.
     pub fn getter(&mut self, name: &str, info: *const crate::closure::JsFunctionInfo) {
         let closure = crate::closure::js_closure_alloc(info, 0);
@@ -665,6 +672,7 @@ pub(crate) unsafe fn born_instance(
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn mint_birth_record(
     class_id: u32,
@@ -1498,6 +1506,7 @@ pub unsafe fn call_from_link(link: OwnerLink, callee: f64, args: &[f64]) -> Resu
 /// The owner's first callback: create its pending slot (see
 /// [`ensure_pending_slot`]), then call.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn first_call_from_link(link: OwnerLink, callee: f64, args: &[f64]) -> Result<f64, ()> {
     let cell = link.0 as *mut NativeHandleHeader;

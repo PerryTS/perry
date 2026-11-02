@@ -129,7 +129,9 @@ git diff origin/main train<N> -- Cargo.toml | grep -cE '^\+version'   # want 0
 
 **Changelog.** Every PR needs `changelog.d/<PR>-<slug>.md`. Never append to
 `CHANGELOG.md` (frozen at v0.5.1264). Write the fragment yourself if it is
-missing.
+missing. At release time the maintainer folds the pending queue into
+`changelog/vX.Y.Z/` with `scripts/cut_release_notes.sh --fold`; released
+fragments are archived, never deleted.
 
 ### When to hold rather than land
 

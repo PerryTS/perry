@@ -930,10 +930,8 @@ pub(crate) fn lower_record_index(
     // chain. Only absence depends on this protector; own slots never do.
     let reserved = ctx.block().lshr(I32, &word, "16");
     let reserved = ctx.block().trunc(I32, &reserved, crate::types::I16);
-    let clear = crate::expr::array_proto_guard::emit_array_default_prototype_chain(
-        ctx.block(),
-        &reserved,
-    );
+    let clear =
+        crate::expr::array_proto_guard::emit_array_default_prototype_chain(ctx.block(), &reserved);
     ctx.block().cond_br(&clear, &absent_label, &cl);
     ctx.current_block = absent;
     let undefined = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
@@ -996,10 +994,8 @@ pub(crate) fn lower_record_next(
     // A custom receiver prototype is independent of the global protector.
     let reserved = ctx.block().lshr(I32, &word, "16");
     let reserved = ctx.block().trunc(I32, &reserved, crate::types::I16);
-    let clear = crate::expr::array_proto_guard::emit_array_default_prototype_chain(
-        ctx.block(),
-        &reserved,
-    );
+    let clear =
+        crate::expr::array_proto_guard::emit_array_default_prototype_chain(ctx.block(), &reserved);
     let safe = ctx.block().and(I1, &safe, &clear);
     ctx.block().cond_br(&safe, &bl, &cl);
     ctx.current_block = bounds;

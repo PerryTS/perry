@@ -21,8 +21,10 @@
 //! ```
 //!
 //! Arrows created after `super()` returns read `this` as before. An arrow
-//! that runs before `super()` returns reads `undefined` where the binding
-//! would throw a ReferenceError.
+//! that runs before `super()` returns finds the cell unset (`super()` always
+//! binds an object) and throws the ReferenceError the uninitialized binding
+//! throws: `cell.t` is read as
+//! `cell.t === undefined ? <throw this-before-super> : cell.t`.
 
 use crate::ir::*;
 use crate::lower::LoweringContext;
@@ -60,12 +62,7 @@ pub(super) fn bind_super_argument_arrows(ctx: &mut LoweringContext, stmts: &mut 
 /// binding cell, when any of them reads `this`; true when it did.
 fn bind_before_super(ctx: &mut LoweringContext, stmts: &mut Vec<Stmt>, at: usize) -> bool {
     let cell = ctx.fresh_local();
-    let read = Expr::PropertyGet {
-        object: Box::new(Expr::LocalGet(cell)),
-        property: "t".to_string(),
-        byte_offset: 0,
-        byte_end: 0,
-    };
+    let read = checked_cell_read(cell);
     // Rewrite a copy: only an arrow that reads `this` makes it read the cell,
     // so a constructor without one stays exactly as it was.
     let mut before: Vec<Stmt> = stmts[..at].to_vec();
@@ -103,6 +100,42 @@ fn bind_before_super(ctx: &mut LoweringContext, stmts: &mut Vec<Stmt>, at: usize
     stmts.insert(0, cell_decl(cell));
     true
 }
+
+fn cell_read(cell: LocalId) -> Expr {
+    Expr::PropertyGet {
+        object: Box::new(Expr::LocalGet(cell)),
+        property: "t".to_string(),
+        byte_offset: 0,
+        byte_end: 0,
+    }
+}
+
+/// The binding read: the bound `this`, or the ReferenceError of a `this`
+/// read before `super()` returned (the cell is still unset).
+fn checked_cell_read(cell: LocalId) -> Expr {
+    Expr::Conditional {
+        condition: Box::new(Expr::Compare {
+            op: CompareOp::Eq,
+            left: Box::new(cell_read(cell)),
+            right: Box::new(Expr::Undefined),
+        }),
+        then_expr: Box::new(Expr::Call {
+            callee: Box::new(Expr::ExternFuncRef {
+                name: THIS_BEFORE_SUPER.to_string(),
+                param_types: Vec::new(),
+                return_type: Type::Any,
+            }),
+            args: Vec::new(),
+            type_args: Vec::new(),
+            byte_offset: 0,
+            byte_end: 0,
+        }),
+        else_expr: Box::new(cell_read(cell)),
+    }
+}
+
+/// Throws `ReferenceError: Must call super constructor ...`.
+const THIS_BEFORE_SUPER: &str = "js_throw_reference_error_this_before_super";
 
 fn is_this_arrow(expr: &Expr) -> bool {
     matches!(

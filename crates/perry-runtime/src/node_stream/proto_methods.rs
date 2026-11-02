@@ -42,10 +42,10 @@ pub(crate) enum StreamProto {
 impl StreamProto {
     fn layout(self) -> *const crate::object::layout_desc::PerryLayoutDesc {
         match self {
-            StreamProto::Readable => std::ptr::addr_of!(layouts::READABLE_PROTOTYPE),
-            StreamProto::Writable => std::ptr::addr_of!(layouts::WRITABLE_PROTOTYPE),
-            StreamProto::Duplex => std::ptr::addr_of!(layouts::DUPLEX_PROTOTYPE),
-            StreamProto::Transform => std::ptr::addr_of!(layouts::TRANSFORM_PROTOTYPE),
+            StreamProto::Readable => layouts::READABLE_PROTOTYPE::desc(),
+            StreamProto::Writable => layouts::WRITABLE_PROTOTYPE::desc(),
+            StreamProto::Duplex => layouts::DUPLEX_PROTOTYPE::desc(),
+            StreamProto::Transform => layouts::TRANSFORM_PROTOTYPE::desc(),
         }
     }
 
@@ -382,7 +382,7 @@ pub(crate) fn build_passthrough_prototype(constructor: f64) -> f64 {
         return crate::value::js_nanbox_pointer(proto as i64);
     }
     // SAFETY: a node prototype descriptor of this runtime.
-    let layout = unsafe { layouts::NodePrototype::of(&raw const layouts::PASSTHROUGH_PROTOTYPE) };
+    let layout = unsafe { layouts::NodePrototype::of(layouts::PASSTHROUGH_PROTOTYPE::desc()) };
     let proto = scope.root_raw_mut_ptr(unsafe { layout.birth() });
     let p = || proto.get_raw_mut_ptr::<ObjectHeader>();
     let transform = proto_closure(&scope, &NS_PASSTHROUGH_TRANSFORM_INFO);
@@ -980,8 +980,7 @@ pub(crate) fn build_legacy_stream_prototype(constructor: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let constructor = scope.root_nanbox_f64(constructor);
     // SAFETY: a node prototype descriptor of this runtime.
-    let layout =
-        unsafe { layouts::NodePrototype::of(std::ptr::addr_of!(layouts::STREAM_PROTOTYPE)) };
+    let layout = unsafe { layouts::NodePrototype::of(layouts::STREAM_PROTOTYPE::desc()) };
     let proto = scope.root_raw_mut_ptr(unsafe { layout.birth() });
     let p = || proto.get_raw_mut_ptr::<ObjectHeader>();
     let pipe = proto_closure(&scope, &NS_LEGACY_PIPE_INFO);

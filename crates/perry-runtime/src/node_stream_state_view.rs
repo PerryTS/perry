@@ -263,9 +263,9 @@ fn state_proto(kind: usize) -> f64 {
         WRITABLE_FIELDS
     };
     let proto_desc = if kind == READABLE_KIND {
-        std::ptr::addr_of!(crate::object::runtime_layouts::READABLE_STATE_PROTO)
+        crate::object::runtime_layouts::READABLE_STATE_PROTO::desc()
     } else {
-        std::ptr::addr_of!(crate::object::runtime_layouts::WRITABLE_STATE_PROTO)
+        crate::object::runtime_layouts::WRITABLE_STATE_PROTO::desc()
     };
     let proto_obj = unsafe { crate::object::layout_desc::perry_alloc_layout(proto_desc) };
     let proto_bits = crate::value::js_nanbox_pointer(proto_obj as i64).to_bits();
@@ -342,9 +342,9 @@ pub(super) fn read_birth_data(obj: *const ObjectHeader, data: StateData) -> Opti
         StateData::WritableWriteLen => 4,
     };
     let desc = if data.readable() {
-        std::ptr::addr_of!(crate::object::runtime_layouts::READABLE_STATE)
+        crate::object::runtime_layouts::READABLE_STATE::desc()
     } else {
-        std::ptr::addr_of!(crate::object::runtime_layouts::WRITABLE_STATE)
+        crate::object::runtime_layouts::WRITABLE_STATE::desc()
     };
     let shape = unsafe { crate::object::runtime_layouts::layout_id(desc) };
     // SAFETY: the caller validated this live ordinary state receiver.
@@ -369,9 +369,9 @@ fn install_state_view(stream: f64, kind: usize, property: crate::runtime_state_k
     // Materialize the shared prototype identity before the newborn escapes.
     let _proto = scope.root_nanbox_f64(state_proto(kind));
     let desc = if kind == READABLE_KIND {
-        std::ptr::addr_of!(crate::object::runtime_layouts::READABLE_STATE)
+        crate::object::runtime_layouts::READABLE_STATE::desc()
     } else {
-        std::ptr::addr_of!(crate::object::runtime_layouts::WRITABLE_STATE)
+        crate::object::runtime_layouts::WRITABLE_STATE::desc()
     };
     let view = scope.root_nanbox_f64(box_pointer(unsafe {
         crate::object::layout_desc::perry_alloc_layout(desc).cast()
@@ -494,12 +494,12 @@ mod layout_tests {
         for (kind, desc, fields) in [
             (
                 READABLE_KIND,
-                std::ptr::addr_of!(crate::object::runtime_layouts::READABLE_STATE_PROTO),
+                crate::object::runtime_layouts::READABLE_STATE_PROTO::desc(),
                 READABLE_FIELDS,
             ),
             (
                 WRITABLE_KIND,
-                std::ptr::addr_of!(crate::object::runtime_layouts::WRITABLE_STATE_PROTO),
+                crate::object::runtime_layouts::WRITABLE_STATE_PROTO::desc(),
                 WRITABLE_FIELDS,
             ),
         ] {

@@ -266,6 +266,12 @@ pub(crate) fn build_and_run_link(
             is_cross_ios || is_cross_visionos || is_cross_macos || is_cross_tvos,
             is_watchos || is_visionos,
         )?;
+        super::runtime_layouts::add_link_args(
+            &mut cmd,
+            !(is_linux || is_android || is_harmonyos),
+            is_cross_ios || is_cross_visionos || is_cross_macos || is_cross_tvos,
+            is_watchos || is_visionos,
+        );
         // PERRY_LINK_MAP=<path> — emit a linker map (which archive each symbol
         // resolves from) for diagnosing dup-symbol / shadowing bugs. Honor it on
         // every non-Windows linker, not just native macOS. GNU ld (ELF) spells
@@ -937,14 +943,9 @@ pub(crate) fn build_and_run_link(
             .arg("-lm")
             .arg("-lpthread")
             .arg("-ldl");
-
-        // -lssl/-lcrypto are vestigial — Perry's stdlib is rustls-only (no
-        // system OpenSSL). On glibc they happen to be present so the link
-        // tolerates them, but a static musl sysroot has no libssl.a/libcrypto.a
-        // and the link would fail. Skip them for musl (#4826).
-        if ctx.needs_stdlib && !is_musl {
-            cmd.arg("-lssl").arg("-lcrypto");
-        }
+        // No -lssl/-lcrypto: perry-stdlib bundles its own OpenSSL
+        // (openssl-sys `vendored`) and TLS is rustls, so nothing links the
+        // system libraries and users need no OpenSSL dev package.
     } else if is_windows {
         windows_link::add_system_libs(&mut cmd, target);
         windows_link::embed_app_manifest(&mut cmd, ctx.needs_ui);
@@ -994,11 +995,7 @@ pub(crate) fn build_and_run_link(
 
         // On Linux (native, not cross-compiling to macOS), link against system libraries
         if cfg!(target_os = "linux") && !is_cross_macos {
-            cmd.arg("-lm").arg("-lpthread").arg("-ldl");
-
-            if ctx.needs_stdlib {
-                cmd.arg("-lssl").arg("-lcrypto");
-            }
+            cmd.args(super::linux_dylib_libs::LINUX_DYLIB_SYSTEM_LIBS);
         }
     }
 

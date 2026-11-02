@@ -42,6 +42,7 @@ fn handle_proto_inherited_field(
 /// the call site, so it cannot hoist anything out of it; `is_proxy_cell`
 /// itself stays inline in the caller since it touches no thread-local.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn proxy_receiver_get(raw_addr: u64, key: *const crate::StringHeader) -> Option<JSValue> {
     let boxed = f64::from_bits(crate::value::POINTER_TAG | (raw_addr & 0x0000_FFFF_FFFF_FFFF));

@@ -107,7 +107,7 @@ fn bench_real_sources() {
         .map(|e| e.path())
         .filter(|p| p.extension().map(|x| x == "body").unwrap_or(false))
         .collect();
-    entries.sort();
+    crate::cold_sort::sort_by(&mut entries, |a, b| a.cmp(b));
 
     let mut total_cold = std::time::Duration::ZERO;
     let mut total_warm = std::time::Duration::ZERO;

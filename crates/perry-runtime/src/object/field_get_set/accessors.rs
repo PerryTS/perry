@@ -108,6 +108,7 @@ unsafe fn object_field_past_live(obj: *const ObjectHeader, field_index: u32) -> 
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn null_pointer_field(obj: *const ObjectHeader, field_index: u32, live: u32) -> JSValue {
     eprintln!(

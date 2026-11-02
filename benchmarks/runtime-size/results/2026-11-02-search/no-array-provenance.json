@@ -1,0 +1,18 @@
+{
+  "head": "adb17b606aee0184c175929eea87591a7b4ad7c2",
+  "diff": "diff --git a/crates/perry-runtime/src/array/append.rs b/crates/perry-runtime/src/array/append.rs\nindex 849e292af5..95b75c3ac2 100644\n--- a/crates/perry-runtime/src/array/append.rs\n+++ b/crates/perry-runtime/src/array/append.rs\n@@ -114,7 +114,6 @@ unsafe fn admitted_append(receiver: f64, index: f64) -> Option<*mut ArrayHeader>\n }\n \n #[cold]\n-#[optimize(size)]\n #[inline(never)]\n pub(super) unsafe fn grow(arr: *mut ArrayHeader, length: u32, value: f64) -> *mut ArrayHeader {\n     let scope = crate::gc::RuntimeHandleScope::new();\ndiff --git a/crates/perry-runtime/src/array/indexing_read_cold.rs b/crates/perry-runtime/src/array/indexing_read_cold.rs\nindex a9ce96fb6d..f85d7f0772 100644\n--- a/crates/perry-runtime/src/array/indexing_read_cold.rs\n+++ b/crates/perry-runtime/src/array/indexing_read_cold.rs\n@@ -72,7 +72,6 @@ pub unsafe extern \"C\" fn perry_array_read_cold_shared(\n }\n \n #[cold]\n-#[optimize(size)]\n #[inline(never)]\n unsafe extern \"C\" fn read_cold_entry(receiver: f64, key: f64, control: u64) -> f64 {\n     let (site, control, source) = if control > 15 && control & 3 == 2 {\n@@ -122,7 +121,6 @@ unsafe extern \"C\" fn read_cold_entry(receiver: f64, key: f64, control: u64) -> f\n }\n \n #[cold]\n-#[optimize(size)]\n #[inline(never)]\n unsafe fn read_cold_dispatch(\n     receiver: f64,\n",
+  "archives": {
+    "libperry_stdlib.a": "abc27a62237de3ef4d8919fb2bf20722fc727d6fbb24982d92e12331053d4d00",
+    "libperry_runtime.a": "2e88379edf9d521efecfac24d28a11b4b4671476d88ed8abe78f80f4ece40711"
+  },
+  "binary": {
+    "chess-engine": {
+      "bytes": 6982912,
+      "sha256": "e4e45e40b2da30c715ee4034eb6eb4feed3eeed6878dcbd29f4e5158adb737d0"
+    },
+    "scan": {
+      "bytes": 5602256,
+      "sha256": "27a3e76803082cd2b4e29ca6bd986ebe88f38d83a16b80031d4db2bb1e9664a3"
+    }
+  }
+}

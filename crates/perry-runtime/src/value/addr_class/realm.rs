@@ -184,9 +184,9 @@ pub static perry_realm_fixture_info: crate::closure::JsFunctionInfo =
 pub(crate) fn install_fixture_layout() {
     // SAFETY: a runtime descriptor of this binary.
     let installed = unsafe {
-        crate::object::layout_desc::layout_word_for_birth(std::ptr::addr_of!(
-            crate::object::runtime_layouts::ITERATOR_RESULT
-        ))
+        crate::object::layout_desc::layout_word_for_birth(
+            crate::object::runtime_layouts::ITERATOR_RESULT::desc(),
+        )
     };
     assert!(installed.is_some(), "realm fixture layout not installed");
 }

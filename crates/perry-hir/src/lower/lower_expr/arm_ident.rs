@@ -6,7 +6,11 @@ use crate::types::Type;
 use anyhow::Result;
 use swc_ecma_ast as ast;
 
-fn class_binding_read(ctx: &LoweringContext, source_name: &str) -> Expr {
+/// A read of the class binding `source_name` names. Every reader of a class
+/// name goes through here (the identifier arm and a shorthand property
+/// `{ C }`), so a scope-renamed class (`class_renames`) is the class this
+/// scope declared, never an earlier same-named one.
+pub(crate) fn class_binding_read(ctx: &LoweringContext, source_name: &str) -> Expr {
     let class_name = ctx.resolve_class_name(source_name);
     // Keep the normal, overwhelmingly-common class read as a ClassRef
     // immediate. Besides preserving static class recognition downstream, it

@@ -97,7 +97,9 @@ pub(crate) fn push_compiler_used<'a>(ir: &mut String, lines: impl Iterator<Item 
 /// The body of a record global's IR name (`<body>$fnrec`), for the passes
 /// that see the final LLVM module rather than its text.
 pub(crate) fn body_of_record_name(name: &str) -> Option<&str> {
-    name.strip_prefix("\u{1}l_").unwrap_or(name).strip_suffix("$fnrec")
+    name.strip_prefix("\u{1}l_")
+        .unwrap_or(name)
+        .strip_suffix("$fnrec")
 }
 
 /// Bounds descriptor every registering module's owner names.
@@ -236,11 +238,19 @@ mod tests {
 
     #[test]
     fn a_record_names_its_body_for_the_unit_splitter() {
-        for format in [RecordFormat::Elf, RecordFormat::MachO, RecordFormat::Coff, RecordFormat::Wasm] {
+        for format in [
+            RecordFormat::Elf,
+            RecordFormat::MachO,
+            RecordFormat::Coff,
+            RecordFormat::Wasm,
+        ] {
             let line = record_line(format, "__perry_wrap_m__f");
             assert_eq!(record_body(&line), Some("__perry_wrap_m__f"), "{line}");
         }
-        assert_eq!(record_body("@__perry_wrap_m__f$info = internal constant i32 0"), None);
+        assert_eq!(
+            record_body("@__perry_wrap_m__f$info = internal constant i32 0"),
+            None
+        );
     }
 
     #[test]
@@ -259,22 +269,42 @@ mod tests {
     /// on ELF every line placed in `perry_fnrec` must be tied to something.
     #[test]
     fn every_elf_line_in_the_records_section_is_tied() {
-        let mut lines: Vec<String> =
-            image_lines(RecordFormat::Elf).into_iter().map(|(_, line)| line).collect();
+        let mut lines: Vec<String> = image_lines(RecordFormat::Elf)
+            .into_iter()
+            .map(|(_, line)| line)
+            .collect();
         lines.push(record_line(RecordFormat::Elf, "b"));
-        let in_section: Vec<&String> =
-            lines.iter().filter(|line| line.contains("section \"perry_fnrec\"")).collect();
+        let in_section: Vec<&String> = lines
+            .iter()
+            .filter(|line| line.contains("section \"perry_fnrec\""))
+            .collect();
         assert_eq!(in_section.len(), 2, "{lines:#?}");
         for line in in_section {
-            assert!(line.contains(", !associated !{ptr @"), "untied ELF record-section line: {line}");
+            assert!(
+                line.contains(", !associated !{ptr @"),
+                "untied ELF record-section line: {line}"
+            );
         }
-        let sentinel = lines.iter().position(|line| line.starts_with("@perry_fnrec_sentinel = ")).unwrap();
-        assert!(lines[sentinel].ends_with(&format!("!associated !{{ptr @{BOUNDS_SYMBOL}}}")), "{}", lines[sentinel]);
+        let sentinel = lines
+            .iter()
+            .position(|line| line.starts_with("@perry_fnrec_sentinel = "))
+            .unwrap();
+        assert!(
+            lines[sentinel].ends_with(&format!("!associated !{{ptr @{BOUNDS_SYMBOL}}}")),
+            "{}",
+            lines[sentinel]
+        );
         // Emitted in this order, the descriptor is defined before the
         // sentinel's section directive names it.
-        let bounds = lines.iter().position(|line| line.starts_with(&format!("@{BOUNDS_SYMBOL} = "))).unwrap();
+        let bounds = lines
+            .iter()
+            .position(|line| line.starts_with(&format!("@{BOUNDS_SYMBOL} = ")))
+            .unwrap();
         assert!(bounds < sentinel, "{lines:#?}");
         let wasm = image_lines(RecordFormat::Wasm);
-        assert!(wasm.iter().all(|(_, line)| !line.contains("!associated")), "{wasm:#?}");
+        assert!(
+            wasm.iter().all(|(_, line)| !line.contains("!associated")),
+            "{wasm:#?}"
+        );
     }
 }

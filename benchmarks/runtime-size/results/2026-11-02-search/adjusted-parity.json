@@ -1,0 +1,32 @@
+[
+  {
+    "name": "test_gap_9788_iterator_prototype_overrides",
+    "status": 0,
+    "node_parity": true
+  },
+  {
+    "name": "test_gap_7302_throw_across_helper_frames",
+    "status": 0,
+    "node_parity": true
+  },
+  {
+    "name": "test_gap_7302_gc_throw_across_collection",
+    "status": 0,
+    "node_parity": true
+  },
+  {
+    "name": "test_gap_descriptor_snapshot_moving",
+    "status": 0,
+    "node_parity": true
+  },
+  {
+    "name": "test_gap_typedarr_moving_owner",
+    "status": 0,
+    "node_parity": true
+  },
+  {
+    "name": "test_gap_repsel_gc_stress",
+    "status": 0,
+    "node_parity": true
+  }
+]

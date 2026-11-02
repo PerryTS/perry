@@ -245,9 +245,9 @@ unsafe fn snapshot_object(snapshot: &LayoutSnapshot) -> i64 {
     let _record_roots = perry_ffi::TransientRootScope::enter();
     let object = _record_roots.root_addr(
         (unsafe {
-            perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
-                perry_ffi::runtime_layouts::RECORD_U613
-            ))
+            perry_ffi::runtime_layouts::alloc_runtime_record(
+                perry_ffi::runtime_layouts::RECORD_U613::desc(),
+            )
         }) as i64,
     );
     if (object.get() as *mut perry_ffi::ObjectHeader).is_null() {

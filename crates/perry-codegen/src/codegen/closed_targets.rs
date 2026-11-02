@@ -48,8 +48,12 @@ pub(crate) fn apply(llmod: &mut LlModule) {
         };
         if f.closed_target_preinline && !f.no_inline && closed.contains(&f.name) {
             f.pre_statepoint_inline = true;
+            f.guarded_preinline = true;
         }
     }
+    // Admission is per body; bound copying after every direct caller and
+    // guarded clone is visible, including expansion through other candidates.
+    super::helpers::preinline_growth::apply(llmod);
 }
 
 #[cfg(test)]

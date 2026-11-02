@@ -330,7 +330,11 @@ pub(super) fn a_broken_namespace_field_function_resolves_only_the_units_that_see
     // 1102, 959, 42]. A load from a closed receiver marker adds no absence
     // `undefined` (+2 in each round) and takes what the marker gives through
     // a `Cons::Defined` rule (+4) -> the pin.
-    assert_eq!(pf.round_work, [773, 1108, 965, 42], "{:?}", pf.units);
+    assert_eq!(pf.round_work, [773, 1108, 969, 42], "{:?}", pf.units);
+    // DECISIONS 241: `get` reaches unknown code (`m`s, the broken function in
+    // s units): each publishes an unknown computed-key store on it, and its
+    // holders read that join under its own keys in round 3 (before: top from
+    // the publication itself): +4 -> the pin above.
 }
 
 #[test]

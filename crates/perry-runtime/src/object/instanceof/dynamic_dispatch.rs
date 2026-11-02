@@ -149,33 +149,14 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
             };
             if owns_hook {
                 // An own @@hasInstance getter can collect even when it returns
-                // undefined and ordinary dispatch continues. Refresh both
-                // operands before the callback or any later prototype check.
-                let scope = crate::gc::RuntimeHandleScope::new();
-                let lhs_h = scope.root_nanbox_f64(value);
-                let rhs_h = scope.root_nanbox_f64(type_ref);
-                let cb = unsafe {
-                    crate::symbol::js_object_get_symbol_property(rhs_h.get_nanbox_f64(), hi_f64)
-                };
-                value = lhs_h.get_nanbox_f64();
-                type_ref = rhs_h.get_nanbox_f64();
-                rhs.refresh_after_getter(type_ref);
-                // A linked function whose chain reaches the intrinsic default
-                // takes the ordinary dispatch below (its native brand checks
-                // are that default's answer).
-                let intrinsic = linked && {
-                    let fp = crate::object::builtin_prototype_value("Function");
-                    crate::JSValue::from_bits(fp.to_bits()).is_pointer()
-                        && unsafe { crate::symbol::js_object_get_symbol_property(fp, hi_f64) }
-                            .to_bits()
-                            == cb.to_bits()
-                };
-                if !intrinsic {
-                    if let HasInstanceOutcome::Result(result) = dispatch_own_has_instance(cb, value)
-                    {
-                        return result;
-                    }
+                // undefined and ordinary dispatch continues: the hook read
+                // refreshes both operands.
+                if let HasInstanceOutcome::Result(result) =
+                    dispatch_own_has_instance(OwnHook::Read(hi_f64), &mut type_ref, &mut value)
+                {
+                    return result;
                 }
+                rhs.refresh_after_getter(type_ref);
             }
         }
     }

@@ -68,8 +68,8 @@ pub(crate) fn own_getter(
 pub(crate) static STMT_FAMILY: NativePayloadFamily = NativePayloadFamily {
     class_id: SQLITE_STATEMENT_SYNC,
     links_owner: false,
-    name: "StatementSync",
-    constructor_export: Some(("sqlite", "StatementSync")),
+    name: "Statement",
+    constructor_export: Some(("sqlite", "Statement")),
     constructor_length: 0,
     install_prototype: install_stmt_prototype,
 };
@@ -77,7 +77,7 @@ pub(crate) static STMT_FAMILY: NativePayloadFamily = NativePayloadFamily {
 pub(crate) static ITER_FAMILY: NativePayloadFamily = NativePayloadFamily {
     class_id: SQLITE_STATEMENT_ITERATOR,
     links_owner: false,
-    name: "StatementSyncIterator",
+    name: "StatementIterator",
     constructor_export: None,
     constructor_length: 0,
     install_prototype: install_iter_prototype,
@@ -172,6 +172,7 @@ unsafe fn live_stmt<'a>(this: f64) -> (&'a mut NodeStmt, f64) {
     };
     let db = native_payload::state_get(this, &STMT_FAMILY, b"db");
     match native_payload::payload_mut::<NodeDb>(db, &DB_FAMILY) {
+        Ok(open) if open.serial == stmt.serial && open.in_authorizer => throw_in_authorizer(),
         Ok(open) if open.serial == stmt.serial => (stmt, db),
         _ => throw_invalid_state("statement has been finalized"),
     }
@@ -603,6 +604,77 @@ extern "C" fn stmt_columns_thunk(_c: *const ClosureHeader, this: JsThis) -> f64 
     }
 }
 
+/// `statement.close()`: finalize now. A statement whose database closed or
+/// reopened is already finalized and throws.
+extern "C" fn stmt_close_thunk(_c: *const ClosureHeader, this: JsThis) -> f64 {
+    unsafe {
+        let this = this.as_f64();
+        live_stmt(this);
+        native_payload::close(this, &STMT_FAMILY);
+    }
+    undefined_f64()
+}
+
+/// `statement[Symbol.dispose]()`: `close()` that ignores a finalized statement.
+extern "C" fn stmt_dispose_thunk(_c: *const ClosureHeader, this: JsThis) -> f64 {
+    unsafe {
+        let this = this.as_f64();
+        if !native_payload::is_instance(this, &STMT_FAMILY) {
+            throw_illegal_invocation();
+        }
+        let live = native_payload::payload_mut::<NodeStmt>(this, &STMT_FAMILY).is_ok();
+        if live {
+            native_payload::close(this, &STMT_FAMILY);
+        }
+    }
+    undefined_f64()
+}
+
+/// `sqlite3_stmt_status` counters by the spelling of `statement.stat(name)`.
+const STAT_COUNTERS: [(&str, c_int); 9] = [
+    ("fullscanStep", ffi::SQLITE_STMTSTATUS_FULLSCAN_STEP),
+    ("sort", ffi::SQLITE_STMTSTATUS_SORT),
+    ("autoindex", ffi::SQLITE_STMTSTATUS_AUTOINDEX),
+    ("vmStep", ffi::SQLITE_STMTSTATUS_VM_STEP),
+    ("reprepare", ffi::SQLITE_STMTSTATUS_REPREPARE),
+    ("run", ffi::SQLITE_STMTSTATUS_RUN),
+    ("filterMiss", ffi::SQLITE_STMTSTATUS_FILTER_MISS),
+    ("filterHit", ffi::SQLITE_STMTSTATUS_FILTER_HIT),
+    ("memused", ffi::SQLITE_STMTSTATUS_MEMUSED),
+];
+
+extern "C" fn stmt_stat_thunk(_c: *const ClosureHeader, this: JsThis, counter: f64) -> f64 {
+    unsafe {
+        let (stmt, _) = live_stmt(this.as_f64());
+        let raw = stmt.raw;
+        if !value_from_f64(counter).is_any_string() {
+            throw_type("The \"counter\" argument must be a string.");
+        }
+        let name = string_from_jsvalue(value_from_f64(counter)).unwrap_or_default();
+        let Some(&(_, op)) = STAT_COUNTERS.iter().find(|(n, _)| *n == name) else {
+            throw_arg_value("The \"counter\" argument is not a valid statistic name.");
+        };
+        let value = if raw.is_null() {
+            0
+        } else {
+            ffi::sqlite3_stmt_status(raw, op, 0)
+        };
+        value as f64
+    }
+}
+
+extern "C" fn stmt_reset_stats_thunk(_c: *const ClosureHeader, this: JsThis) -> f64 {
+    unsafe {
+        let (stmt, _) = live_stmt(this.as_f64());
+        if !stmt.raw.is_null() {
+            for (_, op) in STAT_COUNTERS {
+                ffi::sqlite3_stmt_status(stmt.raw, op, 1);
+            }
+        }
+    }
+    undefined_f64()
+}
+
 unsafe fn set_flag(this: f64, value: f64, set: impl FnOnce(&mut StmtFlags, bool)) -> f64 {
     let (stmt, _) = live_stmt(this);
     let js = value_from_f64(value);
@@ -653,30 +725,29 @@ extern "C" fn stmt_expanded_sql_getter(_c: *const ClosureHeader, this: JsThis) -
 }
 
 fn install_stmt_prototype(proto: &mut PayloadPrototype) {
-    proto.method("run", builtin_rest!(stmt_run_thunk), 0);
-    proto.method("get", builtin_rest!(stmt_get_thunk), 0);
-    proto.method("all", builtin_rest!(stmt_all_thunk), 0);
-    proto.method("iterate", builtin_rest!(stmt_iterate_thunk), 0);
-    proto.method("columns", builtin!(stmt_columns_thunk, 0), 0);
-    proto.method(
-        "setReadBigInts",
-        builtin!(stmt_set_read_bigints_thunk, 1),
-        1,
-    );
-    proto.method(
-        "setReturnArrays",
-        builtin!(stmt_set_return_arrays_thunk, 1),
-        1,
-    );
-    proto.method(
+    proto.method_enumerable("iterate", builtin_rest!(stmt_iterate_thunk));
+    proto.method_enumerable("all", builtin_rest!(stmt_all_thunk));
+    proto.method_enumerable("get", builtin_rest!(stmt_get_thunk));
+    proto.method_enumerable("run", builtin_rest!(stmt_run_thunk));
+    proto.method_enumerable("columns", builtin!(stmt_columns_thunk, 0));
+    proto.method_enumerable("stat", builtin!(stmt_stat_thunk, 1));
+    proto.method_enumerable("resetStats", builtin!(stmt_reset_stats_thunk, 0));
+    proto.method_enumerable(
         "setAllowBareNamedParameters",
         builtin!(stmt_set_allow_bare_thunk, 1),
-        1,
     );
-    proto.method(
+    proto.method_enumerable(
         "setAllowUnknownNamedParameters",
         builtin!(stmt_set_allow_unknown_thunk, 1),
-        1,
+    );
+    proto.method_enumerable("setReadBigInts", builtin!(stmt_set_read_bigints_thunk, 1));
+    proto.method_enumerable("setReturnArrays", builtin!(stmt_set_return_arrays_thunk, 1));
+    proto.method_enumerable("close", builtin!(stmt_close_thunk, 0));
+    proto.symbol_method(
+        "dispose",
+        "[Symbol.dispose]",
+        builtin!(stmt_dispose_thunk, 0),
+        0,
     );
 }
 

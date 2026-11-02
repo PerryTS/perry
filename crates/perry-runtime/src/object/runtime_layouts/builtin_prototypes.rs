@@ -259,9 +259,9 @@ pub(crate) const ARRAY_PROTOTYPE_ITERATOR_SLOT: u32 = 0;
 pub(crate) unsafe fn on_declared_prototype_layout(obj: *const crate::object::ObjectHeader) -> bool {
     let id = crate::object::layout_desc::layout_id_of_word((*obj).parent_class_id);
     [
-        std::ptr::addr_of!(OBJECT_PROTOTYPE),
-        std::ptr::addr_of!(FUNCTION_PROTOTYPE),
-        std::ptr::addr_of!(ARRAY_PROTOTYPE_NAMED),
+        OBJECT_PROTOTYPE::desc(),
+        FUNCTION_PROTOTYPE::desc(),
+        ARRAY_PROTOTYPE_NAMED::desc(),
     ]
     .iter()
     .any(|d| (**d).layout_id == id)

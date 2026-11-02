@@ -64,7 +64,10 @@ fn two_cache_dirs_dump_the_same_bytes() {
     );
     if let Some(at) = text.find("cache-first") {
         let from = at.saturating_sub(120);
-        panic!("the cache dir leaked: ...{}", &text[from..(at + 60).min(text.len())]);
+        panic!(
+            "the cache dir leaked: ...{}",
+            &text[from..(at + 60).min(text.len())]
+        );
     }
     assert!(a == b, "the dump depends on the cache dir");
 }

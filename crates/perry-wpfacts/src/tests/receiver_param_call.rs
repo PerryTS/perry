@@ -120,48 +120,60 @@ fn a_parameter_in_a_private_field_called_as_a_method_runs_on_the_described_recei
     );
 }
 
-// The broken-layout variant: b holds a's object as a stand-in of its layout
-// (a result, not a parameter) and calls a field a cannot describe; the
-// stand-in escapes, a's display is broken, and a's own copy must not keep
-// its claims.
-const A_RESULT: &str = r#"
-export function make(f) {
-  return { f, n: 1 };
+// The broken-layout variant through a closed callee (sys.ts
+// `createDynamicPriorityPollingWatchFile({ getModifiedTime, setTimeout })`):
+// a's `ensure` births `host` and passes it to the module's closed `poll`,
+// which hands it to the exported `readTime`; that use is beyond the
+// argument contract, so the census breaks the display and a describes the
+// argument as unknown ("broken-layout") from then on. `poll`'s parameter is
+// then no longer described (`Gen::closed_params`): its marker keeps its own
+// uses in `poll`'s contract, and a applies them to what it passes (an
+// escape sinks the argument, `stand_in_fn_of`). main's function, run on
+// `host` as `this`, stores a string under `n` through ⊤; only an escaped
+// copy is reached by that store, so a's copy must not keep `n` readonly.
+const A_CLOSED: &str = r#"
+export function readTime(host, f) {
+  return host.getTime(f) || 0;
+}
+function poll(host, depth) {
+  if (depth > 0) return poll(host, depth - 1);
+  readTime(host, "x");
+  return 0;
+}
+export function createWatch({ getTime }, depth) {
+  if (depth > 0) return createWatch({ getTime }, depth - 1);
+  function ensure() {
+    const host = { getTime, n: 1 };
+    poll(host, 2);
+    return typeof host.n + ":" + host.n;
+  }
+  return ensure();
 }
 "#;
-const B_RESULT: &str = r#"
-import { make } from "./a";
-export function run(f) {
-  const o = make(f);
-  o.f();
-  return typeof o.n + ":" + (o.n + 1);
-}
-"#;
-const MAIN_RESULT: &str = r#"
-import { run } from "./b";
-console.log(run(function () { this.n = "str"; return 7; }));
+const MAIN_CLOSED: &str = r#"
+import { createWatch, readTime } from "./a";
+console.log(readTime({ getTime: (f) => 1 }, "y"));
+console.log(createWatch({ getTime: function (f) { this.n = "str"; return 7; } }, 2));
 "#;
 
 #[test]
-fn a_broken_layout_breaks_its_owners_copy() {
-    let (u, _w) = assert_not_stronger(&[("a", A_RESULT), ("b", B_RESULT), ("main", MAIN_RESULT)]);
+fn a_broken_argument_of_a_closed_callee_keeps_the_callee_parameter_uses() {
+    let (u, _w) = assert_not_stronger(&[("a", A_CLOSED), ("main", MAIN_CLOSED)]);
+    let host = u
+        .templates
+        .iter()
+        .find(|t| t.display.starts_with("a.ts") && t.fields.iter().any(|f| f.key == "n"))
+        .unwrap_or_else(|| panic!("no a.ts template with field n\n{}", u.dump_text()));
     assert!(
-        u.broken.iter().any(|d| d.starts_with("a.ts")),
+        u.broken.contains(&host.display),
         "a's display is not broken: {:?}\n{}",
         u.broken,
         u.dump_text()
     );
+    assert!(
+        host.escape.is_some(),
+        "a's copy of its broken display did not escape\n{}",
+        u.dump_text()
+    );
     writable(&u, "a.ts", "n");
-    // A class with a broken template is not stable: no consumer may use
-    // its layout facts.
-    for t in u.templates.iter().filter(|t| u.broken.contains(&t.display)) {
-        if let Some(c) = t.class_id {
-            assert!(
-                !u.stable_classes().contains_key(&c),
-                "broken {} is stable\n{}",
-                t.display,
-                u.dump_text()
-            );
-        }
-    }
 }

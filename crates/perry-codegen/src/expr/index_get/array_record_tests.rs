@@ -641,7 +641,10 @@ fn array_stack_record_fuses_only_the_generated_next_value() {
             "fused hole canonicalization needs both prototype proofs: {guard}"
         );
     }
-    assert!(ll.contains("record.indexed.") && ll.contains("record.protocol."), "{ll}");
+    assert!(
+        ll.contains("record.indexed.") && ll.contains("record.protocol."),
+        "{ll}"
+    );
     assert!(ll.contains("record.read.cold"), "the array arm's Get: {ll}");
     assert!(
         !ll.contains("call double @perry_length_cold_"),
@@ -976,6 +979,15 @@ fn proven_array_iterator_close_calls_the_runtime_only_for_the_protocol_arm() {
     let unproven = ir_proven(false, finish());
     let proven = ir_proven(true, finish());
     assert!(!unproven.contains("arec.close"), "{unproven}");
-    assert!(proven.contains("arec.close") && proven.contains("arec.closed"), "{proven}");
-    assert_eq!(proven.matches("call double @js_array_record_finish(").count(), 1, "{proven}");
+    assert!(
+        proven.contains("arec.close") && proven.contains("arec.closed"),
+        "{proven}"
+    );
+    assert_eq!(
+        proven
+            .matches("call double @js_array_record_finish(")
+            .count(),
+        1,
+        "{proven}"
+    );
 }

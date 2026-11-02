@@ -317,20 +317,38 @@ impl Model {
                 }
             }
             Cons::Guard { test, from, dst } => {
+                // A marker beside its values is no value (DECISIONS 74):
+                // the test waits for them, and fires if the marker leaves
+                // (75). A marker with none beside it holds anything.
                 let admits = prim & guard::prims(test) != 0
-                    || toks
-                        .into_iter()
-                        .any(|&t| t == TOP || guard::objects(test) || self.is_marker(t));
+                    || toks.iter().any(|&t| {
+                        t == TOP
+                            || if self.is_marker(t) {
+                                !self.beside_values(t)
+                            } else {
+                                guard::objects(test)
+                            }
+                    });
                 if admits {
                     self.edge(from, dst);
+                } else {
+                    for &t in toks {
+                        if self.beside_markers.contains(&t) {
+                            self.beside_guard.entry(t).or_default().push((from, dst));
+                        }
+                    }
                 }
             }
-            Cons::Defined { dst } => {
+            Cons::Defined { dst } | Cons::NotNullish { dst } => {
+                let strip = match c {
+                    Cons::Defined { .. } => prim::UNDEF,
+                    _ => prim::NULL | prim::UNDEF,
+                };
                 for &t in toks {
                     self.add_tok(dst, t);
                 }
-                if prim & !prim::UNDEF != 0 {
-                    self.add_prim(dst, prim & !prim::UNDEF);
+                if prim & !strip != 0 {
+                    self.add_prim(dst, prim & !strip);
                 }
             }
             Cons::TopIfAny { dst, from, reason } => {
@@ -936,8 +954,15 @@ impl Model {
                         self.add_tok(dst, TOP);
                         continue;
                     }
-                    let all = self.all_fields(t);
-                    self.edge(all, dst);
+                    // An object's own fields: by the key's values (`IdxKey`:
+                    // a number key names only its numeric fields). A
+                    // marker's fields are its reach markers under any key;
+                    // another value (the global object, a namespace) keeps
+                    // every field.
+                    if self.is_marker(t) || !matches!(self.toks[t as usize], TokKind::Obj(..)) {
+                        let all = self.all_fields(t);
+                        self.edge(all, dst);
+                    }
                     self.add_prim(dst, prim::UNDEF);
                     if self.idx_done.insert((idx, t, dst, 0)) {
                         self.plain_key(t, ChainAct::Load(dst));
@@ -949,6 +974,24 @@ impl Model {
                 let named = prim & (prim::STR | prim::SYMBOL) != 0 || !toks.is_empty();
                 if named && self.idx_done.insert((n, obj, dst, 1)) {
                     self.load_from(obj, obj, Key::Any, dst);
+                }
+                // ToPropertyKey of a Number or BigInt is a numeric string: the
+                // own fields a number key may name (DECISIONS 217); the chain
+                // is `plain_key`'s. A marker has no own fields (`Model::field`:
+                // its fields are its reach markers): what a number key reads
+                // from it is its `[]` path step, which `IdxLoad` edged in
+                // under the path's loop collapse (DECISIONS 158). An own-field
+                // node of a marker stands outside that collapse: in
+                // `x = x.next[0]` per unit it made a marker per iteration
+                // (CHB11: 27k markers and 25 GB on tssrc).
+                if !self.is_marker(obj)
+                    && prim & (prim::NUM | prim::BIGINT) != 0
+                    && self
+                        .idx_done
+                        .insert((n, obj, dst, crate::model::IDX_NUM_OWN))
+                {
+                    let f = self.num_fields(obj);
+                    self.edge(f, dst);
                 }
                 // ToPropertyKey of `true`, `null`, `undefined` is a named key.
                 if !named {
@@ -1129,10 +1172,10 @@ impl Model {
                     );
                 }
             }
-            Cons::Arith { dst, add } => {
+            Cons::Arith { dst } => {
                 let mut out = 0u16;
                 // Objects go through ToPrimitive (user valueOf/toString).
-                let objs = prim::NUM | prim::BIGINT | if add { prim::STR } else { 0 };
+                let objs = prim::NUM | prim::BIGINT;
                 // A described parameter's marker is no value (DECISIONS 74);
                 // an argument marker is none while it stands for such
                 // markers alone, and adds the kinds if it leaves (75).
@@ -1148,14 +1191,44 @@ impl Model {
                 if prim & prim::BIGINT != 0 {
                     out |= prim::BIGINT;
                 }
-                if prim & (prim::NUM | prim::BOOL | prim::NULL | prim::UNDEF) != 0 {
+                if prim & (prim::NUM | prim::STR | prim::BOOL | prim::NULL | prim::UNDEF) != 0 {
                     out |= prim::NUM;
-                }
-                if prim & prim::STR != 0 {
-                    out |= if add { prim::STR } else { prim::NUM };
                 }
                 if out != 0 {
                     self.add_prim(dst, out);
+                }
+            }
+            Cons::Plus { str, num } => {
+                let mut s = 0u16;
+                let mut k = 0u16;
+                // Objects go through ToPrimitive (user valueOf/toString): a
+                // String or a numeric value. Markers as in `Arith`.
+                if toks.iter().any(|&t| !self.beside_values(t)) {
+                    s |= prim::STR;
+                    k |= prim::NUM | prim::BIGINT;
+                } else {
+                    for &t in toks {
+                        if self.beside_markers.contains(&t) {
+                            let later = self.beside_arith.entry(t).or_default();
+                            later.push((str, prim::STR));
+                            later.push((num, prim::NUM | prim::BIGINT));
+                        }
+                    }
+                }
+                if prim & prim::STR != 0 {
+                    s |= prim::STR;
+                }
+                if prim & prim::BIGINT != 0 {
+                    k |= prim::BIGINT;
+                }
+                if prim & (prim::NUM | prim::BOOL | prim::NULL | prim::UNDEF) != 0 {
+                    k |= prim::NUM;
+                }
+                if s != 0 {
+                    self.add_prim(str, s);
+                }
+                if k != 0 {
+                    self.add_prim(num, k);
                 }
             }
             Cons::ArrayLenArg { dst } => {

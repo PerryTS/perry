@@ -338,6 +338,12 @@ fn compute_object_cache_key_with_env(
             "worker_entries",
             &format!("{:?}", perry_codegen::worker_entries()),
         );
+        // The entry's `main` carries the descriptors of the runtime layouts
+        // in R, so R is part of its key.
+        h.field(
+            "realm_reach",
+            &format!("{:?}", opts.program_facts.realm_reach),
+        );
     }
     // Both values change objects outside the module containing the launch.
     h.field(

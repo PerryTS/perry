@@ -310,6 +310,7 @@ impl PageGenerationCacheSet {
     /// already covered. Returns false — and changes nothing — if the resulting
     /// span would exceed the cap.
     #[cold]
+    #[optimize(size)]
     #[inline(never)]
     fn rebase_to_cover(&mut self, key: usize) -> bool {
         let old_lo = self.base;

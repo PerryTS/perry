@@ -18,7 +18,7 @@ fn a_full_after_a_full_survives_retired_owned_handles() {
     let _scan = ConservativeScanDisabledGuard::new();
     register_runtime_handle_root_scanner_for_tests();
     crate::test_support::bootstrap_test_thread();
-    let desc = std::ptr::addr_of!(crate::object::runtime_layouts::ITERATOR_RESULT);
+    let desc = crate::object::runtime_layouts::ITERATOR_RESULT::desc();
     let obj = unsafe { crate::object::layout_desc::perry_alloc_layout(desc) };
     let scope = RuntimeHandleScope::new();
     let rooted = scope.root_raw_mut_ptr(obj as *mut u8);

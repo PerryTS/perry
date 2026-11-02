@@ -367,7 +367,11 @@ console.log(String(new C().a));
     };
     let leaking = family_init_count(&module(&src("reg(this);")), "C");
     let sealed = family_init_count(&module(&src("")), "C");
-    assert_eq!(sealed, (3, 3), "a sealed parent keeps the child's definitions");
+    assert_eq!(
+        sealed,
+        (3, 3),
+        "a sealed parent keeps the child's definitions"
+    );
     assert_eq!(leaking.1, 3);
     assert!(
         leaking.0 <= 1,

@@ -92,7 +92,8 @@ unsafe fn image_infos(
         // SAFETY: a record names the complete info emitted with its body.
         unsafe { info.as_ref() }
     })
-}/// The owner's `state` word: null, an `OwnerState` (aligned, low bit clear),
+}
+/// The owner's `state` word: null, an `OwnerState` (aligned, low bit clear),
 /// or, while no payload exists, the owner's registration index plus one
 /// shifted over a set low bit. Registration therefore allocates nothing, and
 /// the index stays on the owner record (CKI S2).
@@ -213,6 +214,7 @@ pub unsafe extern "C" fn js_register_function_metadata(
 /// # Safety
 /// `bounds` names the records section of a loaded image.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn copy_image(bounds: &FunctionRecordBounds) -> &'static [&'static OwnerState] {
     let mut states: Vec<&'static OwnerState> = Vec::new();
@@ -299,7 +301,11 @@ impl<'a> Record<'a> {
         })
     }
     fn copied(self) -> Option<&'static CopiedEntry> {
-        state(self.owner)?.copied.get()?.get(self.ordinal as usize)?.get()
+        state(self.owner)?
+            .copied
+            .get()?
+            .get(self.ordinal as usize)?
+            .get()
     }
     pub(super) fn with_name<R>(
         self,

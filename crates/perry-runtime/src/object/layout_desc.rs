@@ -1868,27 +1868,12 @@ pub(crate) unsafe fn prepare_hole_define(receiver: u64, key: u64) {
     }
 }
 
-// Program records use linker section bounds on every target. On wasm the
-// runtime also keeps its own existing inventory: Rust custom sections cannot
-// carry relocations. No program constructor or address registry is needed.
+// Program records use linker section bounds on every target. Runtime
+// layouts are not among them: each is its own compiler-emitted symbol, named
+// by its births (`runtime_layouts::<NAME>::desc()`), with no position.
 pub(super) fn image_layouts() -> impl Iterator<Item = *mut PerryLayoutDesc> {
-    #[cfg(target_family = "wasm")]
-    {
-        records::<PerryLayoutDesc>(layout_bounds()).chain(
-            inventory::iter::<crate::wasm_image::Layout>
-                .into_iter()
-                .map(|item| item.0),
-        )
-    }
-    #[cfg(not(target_family = "wasm"))]
-    {
-        records::<PerryLayoutDesc>(layout_bounds())
-    }
+    records::<PerryLayoutDesc>(layout_bounds())
 }
-
-#[cfg(any(test, target_family = "wasm"))]
-#[path = "layout_desc/enumeration.rs"]
-mod enumeration;
 
 fn descriptor_index(desc: *const PerryLayoutDesc) -> Option<u32> {
     let (start, end) = layout_bounds();
@@ -1897,15 +1882,7 @@ fn descriptor_index(desc: *const PerryLayoutDesc) -> Option<u32> {
     if at >= start && at < end && (at - start) % size == 0 {
         Some(((at - start) / size) as u32)
     } else {
-        let literal = literal_birth::literal_index(desc);
-        #[cfg(target_family = "wasm")]
-        {
-            literal.or_else(|| literal_birth::runtime_index(desc))
-        }
-        #[cfg(not(target_family = "wasm"))]
-        {
-            literal
-        }
+        literal_birth::literal_index(desc)
     }
 }
 const _: () = assert!(
@@ -1924,7 +1901,7 @@ mod windows_layout_bounds_tests {
     #[test]
     fn image_bounds_include_runtime_layouts() {
         let (start, end) = layout_bounds();
-        let timeout = std::ptr::addr_of!(crate::object::runtime_layouts::TIMEOUT);
+        let timeout = crate::object::runtime_layouts::TIMEOUT::desc();
         let sentinel = std::ptr::addr_of!(LAYOUT_SECTION_SENTINEL);
         assert!(start < end, "COFF layout image must not be empty");
         for record in [timeout, sentinel] {

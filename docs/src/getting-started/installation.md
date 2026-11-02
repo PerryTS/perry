@@ -6,40 +6,52 @@ Perry compiles TypeScript to native binaries by linking with your system's C
 toolchain, so every install path needs a linker:
 
 - **macOS**: Xcode Command Line Tools (`xcode-select --install`)
-- **Linux**: `gcc` or `clang` for linking — see your distro below
+- **Linux**: `gcc` or `clang` for linking, plus `clang` 15+ as the assembler (also on musl/Alpine) — see your distro below
 - **Windows**: LLVM (`winget install LLVM.LLVM`) + `perry setup windows` (lightweight, ~1.5 GB, no Visual Studio needed), or MSVC Build Tools with the "Desktop development with C++" workload — see the [Windows platform guide](../platforms/windows.md) for both options
 
 Perry's shipped compiler uses its in-process LLVM 22 backend for normal
-codegen; it does not shell out to a host `clang -c`. A matching external clang
-is needed only for specialized paths that say so explicitly, such as Windows
-host `--embed`, or when deliberately selecting the external backend for
-bisection (for example `PERRY_LLVM_INPROCESS=0` or a build without the default
-`llvm-inprocess` feature).
+codegen and does not shell out to a host `clang -c` for it. It does need a
+host **clang (version 15 or newer)** on every Linux distribution, musl/Alpine
+included: the GC statepoint rewrite prints the module as assembly, compacts
+the stack map, and then runs clang as the assembler to produce the object. A
+compile without a usable clang fails with "no clang was found". Windows host
+`--embed` and the external backend (`PERRY_LLVM_INPROCESS=0`, or a build
+without the default `llvm-inprocess` feature) also use it.
 
-Linux linker toolchain by distribution:
+Perry looks for clang in this order:
+
+1. `PERRY_LLVM_CLANG`, a path to a clang executable (used as given when the
+   path exists; there is no version check, so point it at clang 15 or newer).
+2. `clang` on `PATH`, then `clang-<N>` on `PATH` (newest first), then the
+   well-known LLVM prefixes (`/usr/lib/llvm-<N>/bin/clang`, Homebrew LLVM on
+   macOS). A `clang` older than 15 (for example Ubuntu 22.04's clang 14) is
+   skipped when a newer versioned clang is installed.
+
+Linux toolchain by distribution (linker plus clang):
 
 ```bash
 # Debian / Ubuntu / Pop!_OS / Mint
-sudo apt install build-essential
+sudo apt install build-essential clang
 
 # Arch / Manjaro / CachyOS / EndeavourOS
-sudo pacman -S base-devel gcc
+sudo pacman -S base-devel gcc clang
 
 # Fedora / RHEL / CentOS Stream
-sudo dnf install gcc gcc-c++ glibc-devel
+sudo dnf install gcc gcc-c++ glibc-devel clang
 
 # openSUSE
 sudo zypper install -t pattern devel_basis
+sudo zypper install clang
 
 # Alpine / musl-based
-sudo apk add build-base
+sudo apk add build-base clang
 
 # Void Linux
-sudo xbps-install -S base-devel
+sudo xbps-install -S base-devel clang
 ```
 
-Run `perry doctor` afterwards to verify the linker and platform tools. It may
-also report an optional external clang used by the specialized paths above.
+Run `perry doctor` afterwards to verify the linker, clang and platform tools;
+it reports a missing or too-old clang as an error.
 
 A source build has additional Rust, LLVM 22, and libclang prerequisites; see
 [Building from Source](../contributing/building.md) before running Cargo.
@@ -89,6 +101,8 @@ On older glibc hosts Perry uses the **fully-static musl build** instead, which h
   ```bash
   npm install --force @perryts/perry-linux-x64-musl
   ```
+
+The musl build still needs clang on the host (`apk add clang` on Alpine): static linking changes the libc of the produced binaries, not the assembler step described under Prerequisites.
 
 The static build is the same compiler and produces the same binaries. The only feature it does not support is `perry/ui` (GTK4 desktop apps), which needs glibc. The glibc package includes the GTK4 archive, built separately on Ubuntu 24.04; linking a UI app still requires the GTK4, WebKitGTK, libshumate and GStreamer development libraries. Tracking issues: [#6298](https://github.com/PerryTS/perry/issues/6298), [#6351](https://github.com/PerryTS/perry/issues/6351).
 

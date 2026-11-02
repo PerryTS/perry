@@ -75,6 +75,61 @@ const fn fixture() -> RealmFixture {
 )]
 static mut FIXTURE: RealmFixture = fixture();
 
+/// The `{value, done}` key list codegen emits into a program's realm for
+/// ITERATOR_RESULT (`emit_image_key_list`: no attributes, key words filled
+/// at bind). perry-runtime's own test definition carries no list (DESIGN
+/// 3.2 item 10), so these tests hand it this one, as they hand-build the
+/// realm cells above.
+#[repr(C, align(8))]
+struct KeyListFixture {
+    gc: GcHeader,
+    array: crate::array::ArrayHeader,
+    slots: [u64; 2],
+}
+
+#[used]
+#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_realm")]
+#[cfg_attr(target_os = "windows", link_section = ".perryrealm$m")]
+#[cfg_attr(
+    not(any(target_vendor = "apple", target_os = "windows")),
+    link_section = "perry_realm"
+)]
+static mut KEY_LIST: KeyListFixture = KeyListFixture {
+    gc: GcHeader {
+        obj_type: GC_TYPE_ARRAY,
+        gc_flags: crate::value::addr_class::realm::IMAGE_CELL_FLAGS | GC_FLAG_SHAPE_SHARED,
+        _reserved: GC_LAYOUT_SIDE_MASK | GC_LAYOUT_ALL_POINTERS,
+        size: (GC_HEADER_SIZE + std::mem::size_of::<crate::array::ArrayHeader>() + 16) as u32,
+    },
+    array: crate::array::ArrayHeader {
+        length: 2,
+        capacity: 2,
+        named: std::ptr::null_mut(),
+        ek_prefix: 0,
+        ek_kind: 0,
+    },
+    slots: [crate::value::TAG_UNDEFINED; 2],
+};
+
+/// Point the fixture layout at [`KEY_LIST`] before its first birth.
+fn link_fixture_key_list() {
+    unsafe {
+        let desc = crate::object::runtime_layouts::ITERATOR_RESULT::desc();
+        if !(*desc).image_keys.is_null() {
+            return;
+        }
+        let keys = std::slice::from_raw_parts((*desc).keys, (*desc).key_count as usize);
+        assert_eq!(keys.len(), 2);
+        let list = std::ptr::addr_of_mut!(KEY_LIST);
+        for (i, key) in keys.iter().enumerate() {
+            assert_eq!((*key.atom).kind, crate::codegen_abi::ATOM_KIND_STRING);
+            (*list).slots[i] =
+                crate::value::JSValue::string_ptr((*key.atom).string.cast_mut()).bits();
+        }
+        (*desc).image_keys = std::ptr::addr_of_mut!((*list).array);
+    }
+}
+
 /// The same bytes in ordinary data: a header bit could not tell them apart.
 #[used]
 static mut COUNTERFEIT: RealmFixture = fixture();
@@ -121,6 +176,7 @@ impl ImageFixture {
         let lock = IMAGE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         crate::test_support::bootstrap_test_thread();
         reset_image();
+        link_fixture_key_list();
         crate::value::addr_class::realm::install_fixture_layout();
         unsafe { (*object_header()).obj_type = GC_TYPE_OBJECT };
         crate::gc::image_cells::hold_image_for_tests(true);
@@ -791,9 +847,9 @@ fn image_birth_facts_match_heap_births_and_integrity_changes_pass_the_audit() {
         let _image = ImageFixture::take();
         let _quiet = quiet();
         unsafe {
-            let heap = crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(
-                crate::object::runtime_layouts::ITERATOR_RESULT
-            ));
+            let heap = crate::object::layout_desc::perry_alloc_layout(
+                crate::object::runtime_layouts::ITERATOR_RESULT::desc(),
+            );
             let heap_header = crate::gc::header_from_trusted_user_ptr(heap.cast());
             assert_eq!((*heap_header)._reserved, (*object_header())._reserved);
             assert_eq!((*heap).meta, (*(object_user() as *const ObjectHeader)).meta);
