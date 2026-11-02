@@ -1394,8 +1394,10 @@ impl Model {
                         // static holds (DECISIONS 173).
                         self.escape(t, reason);
                     }
+                    // Its receiver is the class object, whatever call
+                    // runs it: every instance of a summarized body sees it.
                     if !self.funcs[f as usize].lexical_this {
-                        let this = self.funcs[f as usize].this;
+                        let this = self.this_any(t);
                         self.add_tok(this, cobj);
                     }
                 }

@@ -1430,9 +1430,12 @@ impl<'a> Gen<'a> {
                         continue;
                     }
                     changed |= self.contract_fn(f, ft, r);
-                    // Another unit calls it as a method of this object.
+                    // Another unit calls it as a method of this object:
+                    // no call of this unit is behind that receiver, so it
+                    // goes where every instance of a summarized body sees
+                    // it (`this_any`), not only the shared node.
                     if !self.m.funcs[f as usize].lexical_this {
-                        let this = self.m.funcs[f as usize].this;
+                        let this = self.m.this_any(ft);
                         self.m.add_tok(this, t);
                     }
                 }
