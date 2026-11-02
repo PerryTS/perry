@@ -257,14 +257,14 @@ fn block<'a>(function: &'a str, label: &str) -> &'a str {
         .unwrap_or_else(|| panic!("no {label} block:\n{function}"))
 }
 
-/// The record's update block steps the cursor in its u32 slot: `add i32`,
+/// The record's update block steps the cursor in its u32 slot: `add nuw i32`,
 /// one boxed view by `uitofp` (the expression's own value), no
 /// `fadd double ..., 1.0`.
 #[test]
 fn record_update_steps_a_u32_slot() {
     let walk = walk_ir();
     let update = block(&walk, "record.update");
-    assert!(update.contains("add i32"), "{update}");
+    assert!(update.contains("add nuw i32"), "{update}");
     assert_eq!(update.matches("uitofp i32").count(), 1, "{update}");
     assert!(!update.contains("fadd double"), "{update}");
 }

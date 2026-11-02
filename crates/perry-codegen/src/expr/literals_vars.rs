@@ -1075,7 +1075,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     UpdateOp::Increment => "1",
                     UpdateOp::Decrement => "-1",
                 };
-                let new_i32 = blk.add(I32, &old_i32, delta);
+                // The cursor's `++` is `nuw`: on the indexed head it runs below
+                // the u32 length, and on the protocol head the cursor is never
+                // observed (the record's protocol word makes the runtime ignore
+                // its index word). The flag lets the optimizer widen the
+                // induction variable, so one register carries the cursor and
+                // its zero-extended element offset.
+                let new_i32 = if matches!(rep, crate::expr::SlotRep::U32)
+                    && matches!(op, UpdateOp::Increment)
+                {
+                    blk.add_nuw(I32, &old_i32, delta)
+                } else {
+                    blk.add(I32, &old_i32, delta)
+                };
                 blk.store(I32, &new_i32, &i32_slot);
                 // Only the expression's own value is materialized: the new
                 // view for `++c`, the old one for `c++`.
