@@ -6,7 +6,7 @@
  *   enrollment).
  */
 
-import { readFileSync } from 'node:fs'
+import { readFileSync, realpathSync } from 'node:fs'
 import path from 'node:path'
 
 /** Repo root = parent of scripts/. */
@@ -166,8 +166,11 @@ export const NPM_MIN_VERSION = '11.17.0'
 // One triple per line, for scripts/stage-npm.sh.
 import { fileURLToPath } from 'node:url'
 
+// Compare resolved paths: argv[1] keeps a symlinked prefix (macOS /var ->
+// /private/var, a linked checkout) that import.meta.url has resolved away.
 const isMainModule =
-  process.argv[1] === fileURLToPath(new URL(import.meta.url))
+  process.argv[1] !== undefined &&
+  realpathSync(process.argv[1]) === realpathSync(fileURLToPath(new URL(import.meta.url)))
 
 if (isMainModule) {
   const lists: Record<string, readonly string[]> = {
