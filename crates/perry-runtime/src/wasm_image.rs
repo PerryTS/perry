@@ -37,7 +37,7 @@ mod records {
                 .into_iter()
                 .map(|image| (image.start as usize, image.start as usize + image.len))
                 .collect();
-            ranges.sort_unstable();
+            crate::cold_sort::sort_by(&mut ranges, |a, b| a.cmp(b));
             ranges.dedup();
             ranges.into_boxed_slice()
         });
