@@ -483,6 +483,7 @@ impl Model {
             rooted: false,
             deep: false,
             key_value: None,
+            in_loop: None,
         });
         id
     }
