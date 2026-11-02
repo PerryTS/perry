@@ -29,6 +29,10 @@ in either direction:
     applying it corpus-wide would hide real divergences behind a "duration"
     that was never a duration.
 
+  * `unified` — both rule sets at once, for `scripts/parity.py`, the runner
+    that replaces the two above. The older profiles stay byte-for-byte while
+    their runners still exist.
+
 Merging them is a behaviour change in both lanes and needs measured evidence;
 until then the profiles are declared here, side by side, so the two can never
 drift apart silently. `tests/test_parity_normalize.py` pins both against
@@ -291,6 +295,32 @@ def normalize_node_suite_output(text: str) -> str:
         if stripped.startswith(_NS_DURATION_MS_LINE):
             indent = line[: len(line) - len(stripped)]
             line = indent + _NS_DURATION_MS_LINE + "<test-duration>"
+        out.append(line)
+    return "\n".join(out)
+
+
+# ---------------------------------------------------------------------------
+# Profile: unified (scripts/parity.py)
+# ---------------------------------------------------------------------------
+
+# The `parity` rules plus the `node:test` reporter artefacts the `node_suite`
+# profile masks. The duration mask stays scoped to reporter result lines
+# (`▶` suites here, `✔ ✖ ﹣` cases in the parity rules): a bare `(Nms)` is
+# ordinary program output elsewhere.
+_U_SUITE_DURATION = re.compile(r"^([ \t]*▶ .*) \([0-9]+(\.[0-9]+)?ms\)$")
+_U_ELLIPSIS_FRAMES = re.compile(r"… \d+ more identical frames")
+
+
+def normalize_unified_output(text: str) -> str:
+    out: list[str] = []
+    for line in normalize_parity_output(text).split("\n"):
+        if _U_ELLIPSIS_FRAMES.search(line):
+            continue
+        location = _NS_TEST_LOCATION.match(line)
+        if location:
+            line = "%stest at <location>" % location.group(1)
+        line = _U_SUITE_DURATION.sub(r"\1 (<duration>)", line)
+        line = _NS_DUR_CLOCK.sub(lambda match: "<dur:" + match.group(1) + ">", line)
         out.append(line)
     return "\n".join(out)
 

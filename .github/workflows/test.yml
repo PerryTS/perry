@@ -398,6 +398,9 @@ jobs:
       - name: Parity output normalizer golden fixtures
         run: python3 -m unittest tests.test_parity_normalize
 
+      - name: Parity runner unit tests
+        run: python3 -m unittest tests.test_parity_runner
+
       # The normalizer probe is what stops the harness from comparing empty
       # output against empty output and reporting the whole suite green. It is
       # invisible in any green run, so it gets its own gate.
