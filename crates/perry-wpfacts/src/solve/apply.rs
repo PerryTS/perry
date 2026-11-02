@@ -99,6 +99,17 @@ impl Model {
                     }
                 }
             }
+            Cons::CallerValue { dst, reason } => {
+                self.add_prim(dst, prim);
+                for &t in toks {
+                    if self.is_marker(t) {
+                        self.add_top(dst, |m| m.reasons[reason as usize].clone());
+                        self.add_prim(dst, prim::ALL);
+                    } else {
+                        self.add_tok(dst, t);
+                    }
+                }
+            }
             Cons::HandOver { reason, ctor, arg } => {
                 for &t in toks {
                     if self.is_marker(t) {

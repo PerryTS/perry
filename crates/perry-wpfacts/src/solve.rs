@@ -1925,6 +1925,7 @@ impl Model {
             Cons::TopSink { reason } => format!("top {n} {reason}"),
             Cons::HandOver { reason, ctor, arg } => format!("handover {n} {reason} {ctor} {arg}"),
             Cons::OwnOnly { f, dst } => format!("ownonly {n} {f} {dst}"),
+            Cons::CallerValue { dst, reason } => format!("callervalue {n} {dst} {reason}"),
             Cons::StoreOut {
                 f,
                 dst,
