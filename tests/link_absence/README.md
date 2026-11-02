@@ -16,7 +16,11 @@ its artifacts include compile logs, Node/native output and `report.json`.
 
 `without_math.ts` uses stdout to prove Math absence independently of the
 compiler's conservative `log` property detection. `hello.ts` reads argv to exercise the normal runtime rather than the tiny
-program path. `without_regex.ts` checks literal replacement, callbacks, custom
+program path. It also requires the unused native UI image-result helper to be
+absent: fixed-record ABI anchors preserve compiler emission, not final-link
+liveness. `scripts/check_runtime_symbols.sh` separately requires those ABI
+exports in the runtime archive, so native callers can still link them.
+`without_regex.ts` checks literal replacement, callbacks, custom
 symbol methods and UTF-16 splitting with no regex install. Deserializers that can
 receive a RegExp from another program (V8, IPC and workers) select that install. Every runtime hook in `stdlib_installs.rs::RUNTIME_INSTALLS` must
 have a positive fixture. Each fixture declares its hook and symbol prefixes;

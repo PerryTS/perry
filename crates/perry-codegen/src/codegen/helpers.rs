@@ -391,6 +391,9 @@ pub(super) fn guarded_specialization_admits_preinline(ir_bytes: usize, statement
 #[path = "guarded_preinline_admission_tests.rs"]
 mod guarded_preinline_admission_tests;
 
+#[path = "preinline_growth.rs"]
+pub(super) mod preinline_growth;
+
 /// Maximum total (module-wide) direct call sites a function may have and still
 /// be hinted. This is the anti-bloat backstop: the raised `-inlinehint-threshold`
 /// lifts LLVM's ceiling for a hinted callee at *every* one of its call sites, so

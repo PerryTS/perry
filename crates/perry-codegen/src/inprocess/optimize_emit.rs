@@ -199,6 +199,7 @@ pub(super) fn optimize_and_emit(
     if let Some(stats) = stats.as_deref_mut() {
         stats.optimize_secs = optimize_started.elapsed().as_secs_f64();
     }
+    super::equivalent_shape_bodies::apply(module);
     if native_roots {
         native_homes::publish(module)?;
         module
@@ -218,6 +219,7 @@ pub(super) fn optimize_and_emit(
             );
         }
     }
+    super::loop_alignment::apply(module, &target);
     // Include small units as well as budget offenders, so before/after size
     // audits do not lose their subject when a fix brings it below the cap.
     if std::env::var_os("PERRY_CODEGEN_UNIT_TIMINGS").is_some() {
