@@ -25,8 +25,9 @@ their exact regular-file set were verified locally.
 | WASI 0.3 command component | 6,075,064 |
 | Optional native P3 command host | 33,102,952 |
 
-These are measured release build sizes. Startup, throughput and peak memory
-have not been qualified against the other compilers. The
+These are measured release build sizes. The
+[pinned scriptc comparison](validation/websocket-scriptc-comparison-20261102.json)
+adds directional process measurements for native and P1 output. The
 [earlier functional receipt](validation/websocket-aot-20261101.json) retains its
 original source and build profiles; its separate 45 command regression phases
 and eleven compiled P3 commands were not reexecuted by this release workload.
@@ -39,6 +40,32 @@ qualifies the fix at `5cd1705734`: all 17 resource phases and 20 transport phase
 pass, with 17,789 and 12,898 relocated guest objects respectively. The fresh
 instrumented runtime uses that source; its native compiler and plain reference
 runtime remain sourced at `6ea71cc1a3`. Full WASI 0.3 qualification remains open.
+
+Both Perry and [scriptc 0.4.7](https://github.com/vercel-labs/scriptc/releases/tag/v0.4.7)
+compile the unchanged source and pass all three independent wire cases in
+native and P1 form. Both native executables are stripped. Values below are
+Perry / scriptc; times and memory are medians of five rotated process runs.
+
+| Output | Binary bytes | 20 MiB seconds | Peak RSS, KiB |
+| --- | ---: | ---: | ---: |
+| Native | 7,542,624 / 184,944 | 11.96 / 10.17 | 43,280 / 1,812 |
+| P1 | 5,845,114 / 158,221 | 16.63 / 13.88 | 121,176 / 59,652 |
+
+These runs use a shared Linux host, warm OS caches, cold processes, regular-file
+stdin and discarded stdout. Time includes startup and the launch wrapper;
+RSS includes each engine/host process. Separate regular-file controls verify
+all 20,974,867 expected output bytes for every measured artifact and host
+configuration. P1 uses the same Node 26.12.1 host with a program-name argument:
+with an empty argument list, Node's `args_get` returned `EINVAL` for scriptc's
+C startup. The matching scriptc WASI runtime pack and Zig toolchain are pinned
+in the receipt. Process timings cover this workload; sustained socket
+throughput and the complete jz/js2 comparison remain to measure. Both evidence
+archives were verified locally: all 434 indexed files, sizes and hashes match.
+
+The measured gaps put runtime footprint and memory use ahead of tuning the
+roughly 18–20% process-time difference. Native size differs by about 41 times
+and P1 size by about 37 times. The scriptc P1 artifact provides a concrete
+small-module reference alongside the upstream WasmGC example.
 
 The stripped P1 artifact contains 5,347,131 bytes of code (91.49%) and 478,665
 bytes in its data section. A separate diagnostic build with names identifies
@@ -119,13 +146,11 @@ Separate command regressions cover returning before EOF and consuming EOF.
 This ownership change does not repair arbitrary direct uses of the SDK's
 incorrect stdin destructor.
 
-Functional acceptance is the first comparison milestone. Fair performance
-qualification still requires identical bridge/engine versions, repeated cold
-starts, throughput and peak memory, and stripped raw
-and compressed artifact sizes. Engine/host process costs must be reported
-alongside guest costs. The upstream README's js2wasm size is an upstream claim;
-we have not reproduced competitor artifacts. Smoke timings do not establish
-that Perry is faster or smaller than another compiler.
+The pinned comparison records stripped raw/gzip sizes and whole-host process
+costs. A complete performance comparison still needs the jz/js2 artifacts and
+sustained socket measurements with matching bridge/engine versions. The
+upstream README's js2wasm size remains an upstream claim. The earlier acceptance
+smoke timings retain their functional scope.
 
 The footprint comparison also spans different memory models. The
 [js2wasm project](https://github.com/loopdive/js2) emits WasmGC and requires

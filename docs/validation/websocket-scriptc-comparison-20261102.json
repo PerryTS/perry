@@ -1,0 +1,98 @@
+{
+  "date": "2026-11-02",
+  "platform": "Linux x86_64",
+  "scope": "Unchanged WebSocket state machine: directional native/P1 process comparison",
+  "perrySource": "6ea71cc1a3675506869ea1ea3fe1cdff30d3fa7d",
+  "scriptcRelease": "0.4.7",
+  "scriptcSourceRevision": "6c60b0bcbfc6edd34ce5c1cdb588d42bdb7171ff",
+  "upstreamCommit": "d7f94f5634f733415f1f52547fe45b3794d9d41a",
+  "sourceSha256": "ea9269e655def8f0aa95c09c467a5cb048f71e55994d22d1c90285f513b5de49",
+  "sourceUnmodified": true,
+  "nativeBothStripped": true,
+  "node": "26.12.1",
+  "scriptcWasiRuntimePack": "0.4.7",
+  "zig": "0.16.0",
+  "strictP1Imports": true,
+  "commonP1HostArgv": [
+    "websocket-server"
+  ],
+  "wireCasesPerOutput": 3,
+  "binary20MiBRegularOutputsVerified": true,
+  "regularOutputBytes": 20974867,
+  "regularOutputSha256": "651575bc38ea827a9d1e13916b84891de0bd033d8becddded3dc4706a2583840",
+  "method": {
+    "repetitions": 5,
+    "orderRotated": true,
+    "processCold": true,
+    "osCachesWarm": true,
+    "sharedHost": true,
+    "stdin": "inherited regular file",
+    "stdout": "discarded during timing; separately verified byte for byte",
+    "startupIncluded": true,
+    "wholeHostRssIncluded": true,
+    "wallIncludesLaunchWrapper": true,
+    "p1WallWaitQuantizationUpToSeconds": 0.05,
+    "preciseStartupRankingQualified": false,
+    "sustainedSocketThroughputQualified": false
+  },
+  "results": [
+    {
+      "mode": "native",
+      "perryArtifact": {
+        "path": "/root/codex-components-p2-20261021/wasi-030-v176-release-websocket/websocket-acceptance/websocket-native",
+        "bytes": 7542624,
+        "gzipBytes": 3387991,
+        "sha256": "c3468b43f176c28d37a3bae0b4bc3c452a5d4115f3863446a9ca239eff1b749a"
+      },
+      "scriptcArtifact": {
+        "bytes": 184944,
+        "gzipBytes": 100103,
+        "sha256": "31da483efd9aa9fdf38bcddc9dd80dc00d45565cab6d553c161fd935a06e96e0"
+      },
+      "perryMedianSeconds": 11.96055240399437,
+      "scriptcMedianSeconds": 10.171660626016092,
+      "perryMedianMaxResidentKiB": 43280,
+      "scriptcMedianMaxResidentKiB": 1812
+    },
+    {
+      "mode": "p1",
+      "perryArtifact": {
+        "path": "/root/codex-components-p2-20261021/wasi-030-v176-release-websocket/websocket-acceptance/websocket-p1.wasm",
+        "bytes": 5845114,
+        "gzipBytes": 1905285,
+        "sha256": "f1e9a314946d1c2732a25dd3cf8126d2b125fb6f5437d7a9890261694e3118cd"
+      },
+      "scriptcArtifact": {
+        "bytes": 158221,
+        "gzipBytes": 67963,
+        "sha256": "21332046976bdc2ed91ce285313bc70895968ad4292cdbe24d6ec4537040d98c"
+      },
+      "perryMedianSeconds": 16.628953543986427,
+      "scriptcMedianSeconds": 13.875680983997881,
+      "perryMedianMaxResidentKiB": 121176,
+      "scriptcMedianMaxResidentKiB": 59652
+    }
+  ],
+  "evidence": [
+    {
+      "archive": "websocket-comparison-v024-evidence.tar.gz",
+      "indexedFiles": 350,
+      "bytes": 23339975,
+      "sha256": "4eb5441310ea726e8f9664f810807f7cee2dadeaadbd31fc90098ce6f8ad761a",
+      "exactRegularFileSetVerified": true,
+      "allIndexedSizesAndHashesVerified": true
+    },
+    {
+      "archive": "websocket-controls-v026-evidence.tar.gz",
+      "indexedFiles": 84,
+      "bytes": 34426395,
+      "sha256": "8c4d6a217872055517e54805f32c330b00d2979c595b125023d0e7662522cf6b",
+      "exactRegularFileSetVerified": true,
+      "allIndexedSizesAndHashesVerified": true
+    }
+  ],
+  "fullCompilerMatrixQualified": false,
+  "jzAndJs2ArtifactsReproduced": false,
+  "fullWasi030Qualified": false,
+  "repositoryDefaultsChanged": false
+}
