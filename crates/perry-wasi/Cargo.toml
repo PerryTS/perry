@@ -21,8 +21,8 @@ turnloop-tls = { workspace = true, features = ["turnloop"] }
 futures-channel = "0.3"
 url.workspace = true
 http.workspace = true
-wasmtime = { version = "=48.0.7", default-features = false, features = ["anyhow", "std", "runtime", "component-model", "async"] }
-wasmtime-wasi-io = { version = "=48.0.7", default-features = false, features = ["std"] }
+wasmtime = { version = "=48.0.8", default-features = false, features = ["anyhow", "std", "runtime", "component-model", "async"] }
+wasmtime-wasi-io = { version = "=48.0.8", default-features = false, features = ["std"] }
 async-trait = "0.1.89"
 bytes = "1"
 futures-util = { workspace = true, features = ["io"] }
@@ -42,7 +42,7 @@ winx = { version = "0.36.0" }
 
 [dev-dependencies]
 tempfile = "3.27.0"
-wasmtime = { version = "=48.0.7", default-features = false, features = ["cranelift", "wat"] }
+wasmtime = { version = "=48.0.8", default-features = false, features = ["cranelift", "wat"] }
 
 [target.'cfg(windows)'.dev-dependencies]
 windows-sys = { version = "0.61", features = ["Win32_System_SystemServices"] }

@@ -718,7 +718,7 @@ pub(crate) fn field_views<'c>(c: &'c ClassContract, k: &str) -> Vec<FieldView<'c
     c.facts
         .fields
         .iter()
-        .find(|f| f.key == k)
+        .find(|f| f.is(k, false))
         .map(FieldView::Plain)
         .into_iter()
         .collect()
@@ -1719,7 +1719,7 @@ pub(crate) fn module_exports(sorted: &[(&str, &Module)], es: &crate::ExportSourc
 }
 
 #[path = "units/driver.rs"]
-mod driver;
+pub(crate) mod driver;
 pub(crate) use driver::digest;
 pub(crate) use driver::run;
 #[cfg(test)]

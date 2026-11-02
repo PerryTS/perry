@@ -213,6 +213,118 @@ pub fn note_native_write(m: &mut Model, t: Tok, key: Option<Key>, what: &str) {
     replay_native_missing(m);
 }
 
+/// Once the worklist is empty: a runtime object given prototype `src`
+/// (`Object.setPrototypeOf`, `__proto__`) may now find, past itself, any key
+/// of `src`'s chain. Each such key is written on it (an unknown key set:
+/// every key). True when a write is new.
+pub fn settle_native_given(m: &mut Model) -> bool {
+    if m.native_given.is_empty() {
+        return false;
+    }
+    let mut more = false;
+    for (t, src) in m.native_given.clone() {
+        let mut keys = Vec::new();
+        let mut seen = Vec::new();
+        let known = m.nodes[src as usize]
+            .pts
+            .to_sorted()
+            .into_iter()
+            .all(|u| chain_keys(m, u, &mut seen, &mut keys));
+        let ks: Vec<Option<Atom>> = match known {
+            true => keys.into_iter().map(Some).collect(),
+            false => vec![None],
+        };
+        for k in ks {
+            if m.native_writes.contains_key(&(t, None)) || m.native_writes.contains_key(&(t, k)) {
+                continue;
+            }
+            more = true;
+            note_native_write(m, t, k.map(Key::Named), "E6 prototype given");
+        }
+    }
+    more
+}
+
+/// Collect into `out` every key an object of token `u` or of its chain may
+/// hold. False when that set is unknown. Each key a define (E5) or an
+/// accessor gives it is one of `define_on` / `accessor_keys` (`STAR_KEY`
+/// under a computed key: unknown), so E5 alone keeps the set known. `ObjectProto` adds none: it stands
+/// for every builtin prototype, already on every runtime object's chain. A
+/// write through ⊤ is already a write of its key on every runtime object.
+fn chain_keys(m: &mut Model, u: Tok, seen: &mut Vec<Tok>, out: &mut Vec<Atom>) -> bool {
+    if seen.contains(&u) {
+        return true;
+    }
+    seen.push(u);
+    if u == TOP {
+        return false;
+    }
+    let tm = match m.toks[u as usize] {
+        TokKind::ObjectProto => return true,
+        TokKind::Obj(tm, _) | TokKind::Proto(tm) => tm,
+        _ => return false,
+    };
+    if m.is_marker(u)
+        || m.foreign.contains_key(&tm)
+        || m.any_writers.contains_key(&tm)
+        || m.hard.get(&u).is_some_and(|(k, _)| {
+            !matches!(k, Hard::E5DefineProperty | Hard::E6SetPrototypeOf | Hard::E7Delete)
+        })
+    {
+        return false;
+    }
+    let tpl = &m.tmpls[tm as usize];
+    // `Object.create` is born with no own key (its layout is open: the flag
+    // says so); every key it gains is a store or a define, collected below.
+    if tpl.has_computed_members && !matches!(tpl.kind, TmplKind::ObjCreate { .. }) {
+        return false;
+    }
+    let add = |a: Atom, out: &mut Vec<Atom>| {
+        if !out.contains(&a) {
+            out.push(a);
+        }
+    };
+    let own: Vec<Atom> = match m.toks[u as usize] {
+        TokKind::Proto(_) => tpl.proto_members.clone(),
+        _ => tpl
+            .birth_keys
+            .iter()
+            .chain(&tpl.accessor_keys)
+            .chain(&tpl.proto_members)
+            .copied()
+            .collect(),
+    };
+    for a in own {
+        add(a, out);
+    }
+    let late = match m.toks[u as usize] {
+        TokKind::Proto(_) => &m.proto_writers,
+        _ => &m.writers,
+    };
+    let late: Vec<Atom> = late.keys().filter(|(w, _)| *w == tm).map(|&(_, a)| a).collect();
+    for a in late {
+        add(a, out);
+    }
+    let defined: Vec<Atom> = m
+        .define_on
+        .iter()
+        .filter(|(o, _, _)| m.nodes[*o as usize].pts.contains_tok(u))
+        .map(|&(_, a, _)| a)
+        .collect();
+    let accessors = m.accessor_keys.get(&u).cloned().unwrap_or_default();
+    for a in defined.into_iter().chain(accessors) {
+        add(a, out);
+    }
+    // A key defined, or an accessor installed, under a computed key.
+    let star = m.atom(crate::STAR_KEY);
+    if out.contains(&star) {
+        return false;
+    }
+    let pn = m.proto_node(u);
+    let protos: Vec<Tok> = m.nodes[pn as usize].pts.to_sorted();
+    protos.into_iter().all(|p| chain_keys(m, p, seen, out))
+}
+
 /// The global object may now be ⊤: stores into ⊤ may have written globals.
 pub fn note_global_in_top(m: &mut Model) {
     m.global_written_own |= !m.shared_replay;
