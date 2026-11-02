@@ -83,7 +83,7 @@ fn global_object_is_born_on_its_static_layout_and_population_keeps_it() {
             let global = crate::JSValue::from_bits(crate::object::js_get_global_this().to_bits());
             assert!(global.is_pointer());
             let global = global.as_pointer::<ObjectHeader>();
-            let desc = std::ptr::addr_of!(crate::object::runtime_layouts::GLOBAL_OBJECT);
+            let desc = crate::object::runtime_layouts::GLOBAL_OBJECT::desc();
             let id = crate::object::layout_desc::layout_id_of_word((*global).parent_class_id);
             let record = record_of(test_dir(), perry_abi::LayoutWord((*global).parent_class_id));
             let mut entries = Vec::new();
@@ -148,7 +148,7 @@ fn builtin_global_atoms_are_image_data_and_never_seeded() {
         .stack_size(16 << 20)
         .spawn(|| unsafe {
             crate::gc::initialize_runtime_fixture();
-            let desc = std::ptr::addr_of!(crate::object::runtime_layouts::GLOBAL_OBJECT);
+            let desc = crate::object::runtime_layouts::GLOBAL_OBJECT::desc();
             let keys = std::slice::from_raw_parts((*desc).keys, (*desc).key_count as usize);
             let mut checked = 0usize;
             for k in keys {
