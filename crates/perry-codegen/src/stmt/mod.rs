@@ -740,6 +740,21 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
         // lowered (for/while/do-while) can register itself in
         // `label_targets` under this name.
         Stmt::Labeled { label, body } => {
+            // A label no `break`/`continue` targets only names the loop's
+            // region: lower the loop exactly as unlabelled (every tier
+            // admits it) and let the latch carry the region ID.
+            if let Some(loop_body) = region_only_loop_body(&ctx.pending_labels, label, body) {
+                let previous = ctx
+                    .region_only_label
+                    .replace((label.clone(), loop_body.as_ptr() as usize));
+                let previous_region_id = ctx.active_region_id.clone();
+                ctx.active_region_id = Some(ctx.region_id_for_label(label));
+                let lowered = lower_stmt(ctx, body);
+                ctx.active_region_id = previous_region_id;
+                ctx.region_only_label = previous;
+                ctx.label_targets.remove(label);
+                return lowered;
+            }
             // Stack this label onto any pending ones from an enclosing
             // `Stmt::Labeled` so a chain (`outer: inner: for (...)`) hands the
             // loop *both* labels to register. The loop/switch consumes the
@@ -1091,5 +1106,46 @@ fn is_this_key_store(stmt: &Stmt) -> bool {
                 && matches!(key.as_ref(), perry_hir::Expr::String(_))
         }
         _ => false,
+    }
+}
+
+/// The body of the loop `label` names when the label only names a region:
+/// the labelled statement is a `for`/`while`/`do … while` loop, no enclosing
+/// label chain is pending, and no `break label` / `continue label` anywhere
+/// in the loop (nested loops and switches included; closures cannot target
+/// it) targets it. Such a label has no runtime meaning, so the loop must
+/// lower exactly as without it.
+fn region_only_loop_body<'s>(
+    pending_labels: &[String],
+    label: &str,
+    body: &'s Stmt,
+) -> Option<&'s [Stmt]> {
+    if !pending_labels.is_empty() {
+        return None;
+    }
+    let loop_body = match body {
+        Stmt::For { body, .. } | Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => body,
+        _ => return None,
+    };
+    let mut targeted = false;
+    perry_hir::tdz_check::for_each_stmt_shallow(std::slice::from_ref(body), &mut |stmt| {
+        if let Stmt::LabeledBreak(l) | Stmt::LabeledContinue(l) = stmt {
+            targeted |= l == label;
+        }
+    });
+    (!targeted).then_some(loop_body.as_slice())
+}
+
+/// The labels a generic loop lowering consumes: the pending label chain, or
+/// else the region-only label of exactly this loop (matched by its body
+/// address; read, not taken, so every copy of a versioned loop carries it).
+pub(crate) fn take_loop_labels(ctx: &mut FnCtx<'_>, body: &[Stmt]) -> Vec<String> {
+    let labels = std::mem::take(&mut ctx.pending_labels);
+    if !labels.is_empty() {
+        return labels;
+    }
+    match &ctx.region_only_label {
+        Some((label, addr)) if *addr == body.as_ptr() as usize => vec![label.clone()],
+        _ => Vec::new(),
     }
 }

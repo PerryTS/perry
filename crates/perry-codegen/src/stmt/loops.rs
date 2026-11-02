@@ -7694,7 +7694,7 @@ fn lower_for_after_init_impl(
 
     // If this for-loop has a pending label (from an enclosing Stmt::Labeled),
     // register it so `break label;` / `continue label;` resolve here.
-    let consumed_labels = std::mem::take(&mut ctx.pending_labels);
+    let consumed_labels = super::take_loop_labels(ctx, body);
     let previous_region_id = ctx.active_region_id.clone();
     for lbl in &consumed_labels {
         ctx.label_targets.insert(
@@ -9886,7 +9886,7 @@ fn lower_while_impl(ctx: &mut FnCtx<'_>, condition: &perry_hir::Expr, body: &[St
     let loop_proof_scope_id = ctx.next_loop_proof_scope_id();
 
     // Consume pending label (from enclosing Stmt::Labeled).
-    let consumed_labels = std::mem::take(&mut ctx.pending_labels);
+    let consumed_labels = super::take_loop_labels(ctx, body);
     let previous_region_id = ctx.active_region_id.clone();
     for lbl in &consumed_labels {
         ctx.label_targets.insert(
@@ -9972,7 +9972,7 @@ fn lower_do_while_impl(
         .push((cond_label.clone(), exit_label.clone(), ctx.try_depth));
 
     // Consume pending label (from enclosing Stmt::Labeled).
-    let consumed_labels = std::mem::take(&mut ctx.pending_labels);
+    let consumed_labels = super::take_loop_labels(ctx, body);
     let previous_region_id = ctx.active_region_id.clone();
     for lbl in &consumed_labels {
         ctx.label_targets.insert(

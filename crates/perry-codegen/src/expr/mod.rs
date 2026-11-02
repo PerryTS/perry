@@ -564,6 +564,12 @@ pub(crate) struct FnCtx<'a> {
     /// `continue inner` both resolve to that same loop's blocks. Stored
     /// outermost-first; the innermost label is `.last()`.
     pub pending_labels: Vec<String>,
+    /// A label that only names its loop's region: no `break`/`continue`
+    /// targets it (`Stmt::Labeled` checked). It is NOT a pending label, so
+    /// every loop tier lowers the loop exactly as without the label; the
+    /// generic loop lowerings read it (by the loop's body address) only to
+    /// tag their latch with the region ID. A label never changes codegen.
+    pub region_only_label: Option<(String, usize)>,
     /// Map from class name → HIR Class definition. Built once in
     /// `compile_module` from `hir.classes`. Used by `Expr::New` to look up
     /// the field count, constructor body, and (eventually) method table.

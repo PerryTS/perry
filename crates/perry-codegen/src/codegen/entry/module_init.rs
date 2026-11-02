@@ -309,6 +309,7 @@ pub(super) fn compile_module_init(
         loop_targets: Vec::new(),
         label_targets: HashMap::new(),
         pending_labels: Vec::new(),
+        region_only_label: None,
         classes,
         class_hierarchy: &cross_module.class_hierarchy,
         wpfacts: cross_module.wpfacts.clone(),
