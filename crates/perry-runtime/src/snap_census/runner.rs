@@ -579,7 +579,14 @@ struct State {
     /// The check run (`PERRY_SNAP_SKIP=<D file>`): D's evaluation addresses
     /// (sorted), whose bodies are skipped.
     skip: Vec<usize>,
+    /// The check run's poisoned-binding reads. Pushed in signal context:
+    /// the capacity is reserved up front (a push that grows would allocate
+    /// inside the fault handler).
     check_fail: Vec<(u32, usize, usize, bool)>,
+    /// The check run writes each poisoned read to `<out>.checkfail` as it
+    /// happens (signal-safe), so a run that never reaches the boundary
+    /// still leaves its report.
+    checkfail_fd: i32,
     /// The check run's digest leaves out the words the census pass's D wrote
     /// (`PERRY_SNAP_WD`, by logical name).
     wd_names: std::collections::HashSet<(u64, usize)>,
@@ -741,7 +748,8 @@ unsafe fn start(out: String) {
             v.sort_unstable();
             v
         },
-        check_fail: Vec::new(),
+        check_fail: Vec::with_capacity(CHECK_FAIL_MAX),
+        checkfail_fd: -1,
         wd_names: std::env::var("PERRY_SNAP_WD")
             .ok()
             .and_then(|p| std::fs::read_to_string(p).ok())
@@ -803,6 +811,17 @@ unsafe fn start(out: String) {
         mark_tracked(slot, slot + 8);
     }
     walk_realm_cells(st);
+    // The check run's report file, opened before any page closes: this
+    // allocates, and the handlers are not installed yet.
+    if !st.skip.is_empty() {
+        let path = format!("{}.checkfail\0", st.out);
+        st.checkfail_fd = libc::open(
+            path.as_ptr().cast(),
+            libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC | libc::O_CLOEXEC,
+            0o644,
+        );
+        libc::atexit(check_exit);
+    }
     // The check run: the global slots the census pass's D registered are
     // poisoned (any access is a check failure).
     if let Ok(p) = std::env::var("PERRY_SNAP_POISON") {
@@ -1682,6 +1701,15 @@ unsafe fn diag(words: &[u64]) {
 }
 
 unsafe fn chain(prev: *const libc::sigaction, sig: i32) {
+    // The check run after a poisoned read: the program ran on with a skipped
+    // member's binding, so a later fault is that read's consequence. The
+    // `#checkfail` lines are in `<out>.checkfail` already; end with them.
+    let st_ptr = ANCHOR.state.load(Relaxed);
+    if sig == libc::SIGSEGV && !st_ptr.is_null() && !(*st_ptr).check_fail.is_empty() {
+        let m = b"snap census: check run fault after a poisoned read (see .checkfail)\n";
+        libc::write(2, m.as_ptr().cast(), m.len());
+        libc::_exit(3);
+    }
     // Not ours: restore the previous disposition; the instruction faults
     // again and takes it.
     libc::sigaction(sig, prev, std::ptr::null_mut());
@@ -2658,6 +2686,64 @@ const ENV_BLOCK: u32 = u32::MAX;
 /// `env_words` value of a module-global slot a member of D registered in the
 /// census pass (the check run poisons it).
 const POISON: u32 = u32::MAX - 1;
+/// At most this many poisoned reads are recorded (`check_fail`).
+const CHECK_FAIL_MAX: usize = 4096;
+
+/// `#checkfail\tpoison\t<init>\t<init addr>\t<slot>\t<pc>\t<write>` to
+/// `<out>.checkfail` (signal context: no allocation). The report at the
+/// boundary repeats the line with the slot's logical name.
+fn checkfail_line(st: &State, init: u32, word: usize, pc: usize, write: bool) {
+    if st.checkfail_fd < 0 {
+        return;
+    }
+    let mut buf = [0u8; 160];
+    let mut n = 0;
+    let mut put = |b: &[u8], n: &mut usize| {
+        for &c in b {
+            buf[*n] = c;
+            *n += 1;
+        }
+    };
+    put(b"#checkfail\tpoison\t", &mut n);
+    let mut dec = [0u8; 10];
+    let mut k = dec.len();
+    let mut x = init;
+    loop {
+        k -= 1;
+        dec[k] = b'0' + (x % 10) as u8;
+        x /= 10;
+        if x == 0 {
+            break;
+        }
+    }
+    put(&dec[k..], &mut n);
+    let addr = st.inits.get(init as usize).map_or(0, |i| i.addr);
+    for w in [addr, word, pc] {
+        put(b"\t", &mut n);
+        let mut hex = [0u8; 16];
+        let mut k = hex.len();
+        let mut x = w;
+        loop {
+            k -= 1;
+            hex[k] = b"0123456789abcdef"[x & 15];
+            x >>= 4;
+            if x == 0 {
+                break;
+            }
+        }
+        put(&hex[k..], &mut n);
+    }
+    put(if write { b"\t1\n" } else { b"\t0\n" }, &mut n);
+    unsafe { libc::write(st.checkfail_fd, buf.as_ptr().cast(), n) };
+}
+
+/// The check run ends before the boundary (an exception, `process.exit`):
+/// write the report there, so the run always ends with one.
+extern "C" fn check_exit() {
+    if state().boundary_seq == 0 {
+        boundary("exit");
+    }
+}
 
 struct EnvObs {
     init: u32,
@@ -2797,8 +2883,9 @@ pub(super) fn env_has(name: &str, present: bool) {
 fn env_word_access(st: &mut State, v: u32, word: usize, write: bool, pc: usize) {
     let top = top_init(st);
     if v == POISON {
-        if st.check_fail.len() < 4096 {
+        if st.check_fail.len() < CHECK_FAIL_MAX {
             st.check_fail.push((top, word, pc, write));
+            checkfail_line(st, top, word, pc, write);
         }
         return;
     }
