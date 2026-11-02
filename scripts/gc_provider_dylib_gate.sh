@@ -55,10 +55,17 @@ if [[ ! -x "$perry" ]]; then
 fi
 
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/perry-8075-provider.XXXXXX")
+printf '%s\n' 'Provider GC/Response/ALS qualification artifacts; owned by gc_provider_dylib_gate.sh.' > "$scratch/OWNER"
 provider_source="$scratch/perry-provider-source"
 provider_target_dir="$scratch/provider-target"
 worktree_added=false
 cleanup() {
+  # Qualification and failure investigations may need the exact provider graph,
+  # binaries and stderr after the invoking process has exited.
+  if [[ "${PERRY_PROVIDER_GC_KEEP_ARTIFACTS:-0}" == 1 ]]; then
+    echo "Preserved provider source, target and evidence at $scratch"
+    return
+  fi
   if [[ "$worktree_added" == true ]]; then
     git -C "$repo_root" worktree remove --force "$provider_source" >/dev/null 2>&1 || true
   fi
