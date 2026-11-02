@@ -255,6 +255,19 @@ pub(crate) fn birth(ptr: *mut u8, size: usize) {
     let _ = (ptr, size);
 }
 
+/// A reused slot handed out at `user` (its GcHeader sits just below):
+/// [`birth`] of the allocation. The header address is computed only in
+/// instrumented builds, so a production caller computes nothing new.
+#[inline(always)]
+pub(crate) fn birth_user(user: usize, size: usize) {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    if runner::on() {
+        runner::birth(user - crate::gc::GC_HEADER_SIZE, size);
+    }
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    let _ = (user, size);
+}
+
 /// While the census runs, compiled code must allocate through the runtime
 /// (every birth is logged), so the inline bump bound is closed.
 #[inline(always)]

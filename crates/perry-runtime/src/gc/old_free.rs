@@ -332,7 +332,7 @@ pub(crate) fn old_free_take_exact(
 ) -> Option<usize> {
     let user = old_free_take_exact_class(total_size, excluded_pages, false);
     if let Some(user) = user {
-        crate::snap_census::birth((user - crate::gc::GC_HEADER_SIZE) as *mut u8, total_size);
+        crate::snap_census::birth_user(user, total_size);
     }
     user
 }
@@ -340,7 +340,7 @@ pub(crate) fn old_free_take_exact(
 pub(crate) fn old_free_take_exact_collecting_holder(total_size: usize) -> Option<usize> {
     let user = old_free_take_exact_class(total_size, None, true);
     if let Some(user) = user {
-        crate::snap_census::birth((user - crate::gc::GC_HEADER_SIZE) as *mut u8, total_size);
+        crate::snap_census::birth_user(user, total_size);
     }
     user
 }

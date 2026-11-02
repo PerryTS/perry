@@ -1136,18 +1136,23 @@ fn decl_prototype_class_id(ptr: usize) -> Option<u32> {
 /// builds the SNAP census counts the read as the init's only on a match (it
 /// reads the link again outside the bookkeeping scope); a production build
 /// reads it once.
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
 #[inline(always)]
 fn decl_prototype_link_observed(class_id: u32, ptr: usize) -> usize {
     let link = {
         let _census = crate::snap_census::bookkeeping();
         crate::object::class_value::class_decl_prototype_link(class_id) as usize
     };
-    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
     if link == ptr {
         return crate::object::class_value::class_decl_prototype_link(class_id) as usize;
     }
-    let _ = ptr;
     link
+}
+
+#[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+#[inline(always)]
+fn decl_prototype_link_observed(class_id: u32, _ptr: usize) -> usize {
+    crate::object::class_value::class_decl_prototype_link(class_id) as usize
 }
 
 /// #7757: a monomorphized specialization (`Gen$num`) must present the GENERIC's
