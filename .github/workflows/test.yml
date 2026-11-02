@@ -72,6 +72,11 @@ on:
         type: choice
         options: [pr, sweep, full]
         default: full
+      wasi_host:
+        description: 'Host scope for the wasi-hosts qualification suite.'
+        type: choice
+        options: [all, windows]
+        default: all
       update_gap_snapshot:
         description: >-
           Re-baseline test-parity/gap_snapshot.json: run the whole gap suite as
@@ -6498,13 +6503,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
-          - os: macos-15
-            target: aarch64-apple-darwin
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
+        include: ${{ fromJSON(inputs.wasi_host == 'windows' && '[{"os":"windows-latest","target":"x86_64-pc-windows-msvc"}]' || '[{"os":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu"},{"os":"macos-15","target":"aarch64-apple-darwin"},{"os":"windows-latest","target":"x86_64-pc-windows-msvc"}]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 180
     defaults:
