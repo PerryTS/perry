@@ -86,7 +86,7 @@ pub(crate) fn emit_symbol_cell(
     name: &str,
     description: &str,
     id: u64,
-    registered: bool,
+    registered: u32,
 ) {
     let (pad_ty, pad_init) = if crate::target_layout::target_is_ilp32(&module.target_triple) {
         ("i32, ", "i32 0, ")
@@ -98,7 +98,7 @@ pub(crate) fn emit_symbol_cell(
         "@{name} = global {{ i8, i8, i16, i32, i32, i32, ptr, {pad_ty}i64 }} {{ i8 {}, i8 {IMAGE_CELL_FLAGS}, i16 0, i32 {size}, i32 {}, i32 {}, ptr {}, {pad_init}i64 {} }}, section \"{}\", align 8",
         perry_abi::GC_TYPE_SYMBOL,
         perry_abi::SYMBOL_HEADER_MAGIC,
-        u32::from(registered),
+        registered,
         user_address(description),
         crate::nanbox::i64_literal(id),
         section(&module.target_triple)
@@ -155,7 +155,7 @@ mod tests {
         ] {
             let mut module = LlModule::new(triple);
             module.add_raw_global("@description = external global i8".into());
-            emit_symbol_cell(&mut module, "symbol", "description", 42, false);
+            emit_symbol_cell(&mut module, "symbol", "description", 42, 0);
             let fixups = emit_metadata_cell(
                 &mut module,
                 "meta",
