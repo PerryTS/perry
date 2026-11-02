@@ -2,7 +2,7 @@
 """Package and verify the standalone WASI runtime from a pinned release checkout.
 
 Each bundle contains only the runtime of one WASI target, wasm32-wasip2 (the
-default) or wasm32-wasip1. Native stdlib/UI archives are not part of these
+default), wasm32-wasip1 or wasm32-wasip3. Native stdlib/UI archives are not part of these
 targets. The release's host compiler must enable perry/target-wasi.
 """
 import argparse
@@ -21,7 +21,7 @@ import tomllib
 
 ROOT = Path(__file__).resolve().parent.parent
 # Each bundle target and the `wasi_run.py --flavour` that qualifies it.
-TARGETS = {"wasm32-wasip2": "p2", "wasm32-wasip1": "p1"}
+TARGETS = {"wasm32-wasip2": "p2", "wasm32-wasip1": "p1", "wasm32-wasip3": "p3"}
 TARGET = "wasm32-wasip2"
 LIBRARY = "libperry_runtime.a"
 

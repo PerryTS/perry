@@ -140,5 +140,9 @@ class Wasip1BundleTests(BundleTests, unittest.TestCase):
     TARGET = "wasm32-wasip1"
 
 
+class Wasip3BundleTests(BundleTests, unittest.TestCase):
+    TARGET = "wasm32-wasip3"
+
+
 if __name__ == "__main__":
     unittest.main()

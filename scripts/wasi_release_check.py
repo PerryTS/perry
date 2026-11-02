@@ -19,8 +19,18 @@ def main():
                         help="Rust target triple of the bundle (default: %(default)s)")
     parser.add_argument("--revision", required=True)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--wit", type=Path, help="matching perry-wit tool (required for P3)")
+    parser.add_argument("--p3-contract", type=Path, help="strict binary checker (required for P3)")
     args = parser.parse_args()
     root = wasi_release.ROOT
+    if args.target == "wasm32-wasip3":
+        if not args.wit or not args.p3_contract:
+            parser.error("P3 qualification requires --wit and --p3-contract")
+        subprocess.run([sys.executable, str(root / "scripts/component_p3_release_check.py"),
+            "--compiler", str(args.compiler), "--wit", str(args.wit), "--bundle", str(args.bundle),
+            "--revision", args.revision, "--p3-contract", str(args.p3_contract),
+            "--output", str(args.output)], check=True)
+        return
     flavour = wasi_release.TARGETS[args.target]
     # The `perry compile --target` name of this bundle's flavour: wasi or wasip1.
     perry_target = wasi_run.TARGETS[flavour]
