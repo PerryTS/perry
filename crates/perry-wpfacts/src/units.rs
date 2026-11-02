@@ -201,11 +201,17 @@ impl Described {
 /// the body calls that method of the argument (`p.k(a, b)`, DECISIONS 144).
 /// DECISIONS 236: `param` `u32::MAX` with `path` `Some(f)`: the method of
 /// what the receiver holds under `f` (`this.f.k(a, b)`).
+/// `this`: the body called the argument as a method of a value of its own
+/// (`o.k()` with the argument under `k`): that receiver, described as the
+/// arguments are; the caller's unit runs its function on it, and what the
+/// function does to it is the caller's report to the owner. `None`: called
+/// bare, `this` is undefined.
 #[derive(Clone, Debug, PartialEq, Hash)]
 pub(crate) struct ParamCall {
     pub param: u32,
     pub path: Option<String>,
     pub key: Option<String>,
+    pub this: Option<Described>,
     pub args: Vec<Described>,
 }
 
@@ -213,6 +219,19 @@ impl ParamCall {
     pub(crate) fn join(&mut self, o: &ParamCall) {
         for (x, y) in self.args.iter_mut().zip(&o.args) {
             x.join(y);
+        }
+        match (&mut self.this, &o.this) {
+            (Some(x), Some(y)) => x.join(y),
+            (None, None) => {}
+            // Called bare by one call and on a receiver by another: the
+            // receiver is unknown.
+            (x, _) => {
+                *x = Some(Described {
+                    unknown: true,
+                    prim: crate::model::prim::ALL,
+                    ..Default::default()
+                })
+            }
         }
     }
 }
