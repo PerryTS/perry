@@ -3,52 +3,7 @@
 //! `js_json_get_*` accessors used by legacy callers.
 
 use super::*;
-use crate::{js_string_from_bytes, JSValue, StringHeader};
-
-/// Generic JSON.stringify that handles any JSValue
-/// Takes a f64 (NaN-boxed JSValue) and a type_hint (0=unknown, 1=object, 2=array)
-/// Returns a string pointer
-#[no_mangle]
-/// Issue #179 Step 2 Phase 3: if `value` is a lazy array that's
-/// already been materialized (indexed access forced
-/// `force_materialize_lazy`), return a JSValue pointing at the
-/// materialized `ArrayHeader` tree instead of the `LazyArrayHeader`.
-/// The generic tree-walk stringifier would otherwise read lazy-
-/// header fields (magic, root_idx, blob_str, ...) as if they were
-/// element f64s and crash on the first bogus pointer deref. No-op
-/// for non-lazy values and for lazy values whose `materialized` is
-/// still null (the lazy-stringify fast path handles those).
-pub(crate) unsafe fn redirect_lazy_to_materialized(value: f64) -> f64 {
-    let bits = value.to_bits();
-    let top16 = bits >> 48;
-    let ptr = if top16 == 0x7FFD {
-        (bits & 0x0000_FFFF_FFFF_FFFF) as *const u8
-    } else {
-        return value;
-    };
-    // A synthetic handle-band id (fetch/Blob/socket/… < HANDLE_BAND_MAX) is not
-    // a real heap object; `gc_header = ptr - 8` would deref unmapped memory →
-    // SIGSEGV on e.g. `JSON.stringify(new Blob())` (#6240/#6241). Nor is an
-    // above-the-band payload automatically real — require a GC-tracked
-    // allocation (dereference-free page-map/registry lookups) before the
-    // header read, the same rule `is_object_pointer` uses.
-    if ptr.is_null() || !stringify::ptr_is_tracked_heap_object(ptr) {
-        return value;
-    }
-    let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    if (*gc_header).obj_type != crate::gc::GC_TYPE_LAZY_ARRAY {
-        return value;
-    }
-    let lazy = ptr as *const crate::json_tape::LazyArrayHeader;
-    if (*lazy).magic != crate::json_tape::LAZY_ARRAY_MAGIC {
-        return value;
-    }
-    let materialized = crate::json_tape::resolve_materialized_array(lazy.cast_mut());
-    if materialized.is_null() {
-        return value;
-    }
-    f64::from_bits(JSValue::object_ptr(materialized as *mut u8).bits())
-}
+use crate::{js_string_from_bytes, StringHeader};
 
 /// Return one validated JSON number token and its exclusive end offset.
 /// The tape builder already accepted this input; the checks here keep the
@@ -216,34 +171,17 @@ pub(crate) unsafe fn try_stringify_lazy_array(value: f64) -> Option<*mut StringH
         return None;
     }
     let lazy = maybe_ptr as *const crate::json_tape::LazyArrayHeader;
-    if (*lazy).magic != crate::json_tape::LAZY_ARRAY_MAGIC || !(*lazy).materialized.is_null() {
+    if (*lazy).magic != crate::json_tape::LAZY_ARRAY_MAGIC {
         return None;
     }
-    // Phase 5: if the sparse per-element cache has ANY bit set,
-    // stringify might miss mutations made through a cached element
-    // (e.g. `parsed[0].name = "x"` modifies the materialized object
-    // but leaves the blob bytes untouched). Force-materialize the
-    // full tree (which consults the sparse cache and preserves
-    // cached mutations), then bail out so `redirect_lazy_to_materialized`
-    // forwards to the materialized ArrayHeader on the next stringify
-    // dispatch. No bits set means we haven't handed any pointers to
-    // user code yet, so the blob bytes are authoritative.
-    if !(*lazy).materialized_bitmap.is_null() && (*lazy).cached_length > 0 {
-        let bitmap = (*lazy).materialized_bitmap;
-        let bitmap_words = ((*lazy).cached_length as usize).div_ceil(64);
-        let mut has_bits = false;
-        for w in 0..bitmap_words {
-            if *bitmap.add(w) != 0 {
-                has_bits = true;
-                break;
-            }
-        }
-        if has_bits {
-            crate::json_tape::force_materialize_lazy(
-                lazy as *mut crate::json_tape::LazyArrayHeader,
-            );
-            return None;
-        }
+    // The blob bytes are authoritative only while no element has been
+    // handed out: a cached element may have been mutated (`parsed[0].name =
+    // "x"` changes the object, not the blob). With any slot cached,
+    // materialize (in place: the value becomes the ordinary array, cached
+    // elements kept) and decline, so the tree walk stringifies the array.
+    if (*lazy).cached_count > 0 {
+        crate::json_tape::force_materialize_lazy(lazy as *mut crate::json_tape::LazyArrayHeader);
+        return None;
     }
     let tape = crate::json_tape::LazyArrayHeader::tape_slice(lazy);
     let blob_bytes = crate::json_tape::LazyArrayHeader::blob_bytes(lazy);
@@ -269,13 +207,6 @@ pub unsafe extern "C" fn js_json_stringify(value: f64, type_hint: u32) -> *mut S
     if let Some(ptr) = try_stringify_lazy_array(value) {
         return ptr;
     }
-    // If the value is a lazy array that's already been materialized
-    // (indexed access forced it into a real tree), stringify the
-    // tree directly — the generic walker would otherwise read the
-    // LazyArrayHeader's fields as if they were array elements and
-    // crash on the first deref of a bogus pointer.
-    let value = redirect_lazy_to_materialized(value);
-
     // Non-reentrant fast path (issue #67): skip the shape_cache save/restore
     // round-trip (two RefCell.borrow_mut's + a Vec mem::take/assign) for the
     // common outermost call. A simple Cell-based depth counter identifies
