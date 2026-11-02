@@ -1,10 +1,9 @@
-//! CHB2: a private instance field's initializer is the construction-phase
-//! store of the field's storage key (`#<perry:private-value:{class}:#x>`),
-//! the key every `this.#x` read and write names. Dropping it left the reads
-//! holding only the absent field's `undefined`: calls on the value were
-//! "primitive receiver", what they return never flowed, and a field copied
-//! from the private one missed its object (a wrong kind fact). The private
-//! key is no public layout key: slots and the fixed layout are unchanged.
+//! CHB2: a class private field read is brand-guarded (`PrivateGuard`): a
+//! receiver without the element throws first, so the read never sees the key
+//! absent (no `undefined` for absence), and it consults no prototype. The
+//! guard's value is its receiver's. Before, the read of a private Map field
+//! held `undefined` beside the Map: calls on it were "primitive receiver"
+//! or never NativeMember, and the entries a `get` returns did not flow.
 use super::*;
 
 fn modules(mods: &[(&str, &str)], per_unit: bool) -> ProgramFacts {
@@ -71,22 +70,14 @@ fn a_private_map_field_initializer_reaches_its_reads() {
     // Base: "primitive receiver" (the read held only `undefined`).
     for key in ["set", "get", "clear"] {
         let v = verdicts(&pf, key, true);
-        assert!(
-            all(&v, |v| *v == Verdict::NativeMember),
-            "{key}: {v:?}\n{}",
-            dump()
-        );
+        assert!(all(&v, |v| *v == Verdict::NativeMember), "{key}: {v:?}\n{}", dump());
     }
     let v = verdicts(&pf, "size", false);
     assert!(all(&v, |v| *v == Verdict::NativeMember), "size: {v:?}");
     // What `get` returns is the literal `set` stored (base: dead site).
     for key in ["v", "d"] {
         let v = verdicts(&pf, key, false);
-        assert!(
-            all(&v, |v| matches!(v, Verdict::T0Mono)),
-            "{key}: {v:?}\n{}",
-            dump()
-        );
+        assert!(all(&v, |v| matches!(v, Verdict::T0Mono)), "{key}: {v:?}\n{}", dump());
     }
     // Per unit is never stronger than whole, and in both modes the private
     // key is no public layout key: the public field keeps its slot and the
@@ -131,20 +122,9 @@ fn a_private_field_value_reaches_a_public_copy() {
         "#,
     );
     let p = field(tmpl(&pf, "C"), "pub");
-    assert!(
-        p.kind.desc().contains("obj{"),
-        "{}\n{}",
-        p.kind.desc(),
-        pf.dump_text()
-    );
+    assert!(p.kind.desc().contains("obj{"), "{}\n{}", p.kind.desc(), pf.dump_text());
     let a = verdicts(&pf, "a", false);
-    assert!(
-        all(
-            &a,
-            |v| !matches!(v, Verdict::No(r) if r.starts_with("primitive"))
-        ),
-        "{a:?}"
-    );
+    assert!(all(&a, |v| !matches!(v, Verdict::No(r) if r.starts_with("primitive"))), "{a:?}");
 }
 
 #[test]
@@ -160,17 +140,9 @@ fn a_private_map_handed_to_unknown_code_keeps_its_calls() {
     "#;
     let pf = facts(src);
     let v = verdicts(&pf, "get", true);
-    assert!(
-        all(&v, |v| matches!(v, Verdict::No(_))),
-        "{v:?}\n{}",
-        pf.dump_text()
-    );
+    assert!(all(&v, |v| matches!(v, Verdict::No(_))), "{v:?}\n{}", pf.dump_text());
     // Control: without the leak the same call is the Map's own member.
     let pf = facts(&src.replace("ext(this.#t);", ""));
     let v = verdicts(&pf, "get", true);
-    assert!(
-        all(&v, |v| *v == Verdict::NativeMember),
-        "{v:?}\n{}",
-        pf.dump_text()
-    );
+    assert!(all(&v, |v| *v == Verdict::NativeMember), "{v:?}\n{}", pf.dump_text());
 }

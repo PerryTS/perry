@@ -57,6 +57,7 @@ mod native_proto;
 mod num_key;
 mod own_key_shadow;
 mod own_length;
+mod unknown_accessor_key;
 mod parent_value;
 mod prim_result;
 mod private_field;
@@ -87,8 +88,8 @@ mod unit_mode;
 mod unit_namespace;
 mod unit_shared;
 mod unit_this;
-mod unknown_accessor_key;
 mod unrun_param_call;
+mod memo_context;
 
 use crate::{compute, FactsConfig, ProgramFacts, Verdict};
 
