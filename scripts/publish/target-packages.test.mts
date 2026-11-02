@@ -83,6 +83,10 @@ test('ALL_PACKAGES: hosts, then ext packages, then targets, then the wrapper', (
     'x86_64-apple-darwin',
     'x86_64-unknown-linux-gnu',
     'aarch64-unknown-linux-gnu',
+    'x86_64-unknown-linux-musl',
+    'aarch64-unknown-linux-musl',
+    'x86_64-pc-windows-msvc',
+    'aarch64-pc-windows-msvc',
   ])
   assert.deepEqual(EXT_PACKAGES, EXT_TRIPLES.map(t => `@perryts/perry-ext-${t}`))
   assert.equal(
@@ -259,17 +263,17 @@ test('stageExt: every ext archive of the release archive, hashed into target.jso
 // The script derives its repo root from its own path, so a copy of it with the
 // templates and a Cargo.toml stages into the fixture, never into this tree.
 
-// The kind, and whether the release archive carries ext archives (the
-// release legs build them for macOS and Linux glibc only).
+// The kind, and whether the release archive carries ext archives (every
+// release leg builds them: libperry_ext_*.a on Unix, perry_ext_*.lib on Windows).
 const PLATFORM_ARTIFACTS: Array<[string, 'unix' | 'win', boolean]> = [
   ['perry-macos-aarch64', 'unix', true],
   ['perry-macos-x86_64', 'unix', true],
   ['perry-linux-x86_64', 'unix', true],
   ['perry-linux-aarch64', 'unix', true],
-  ['perry-linux-x86_64-musl', 'unix', false],
-  ['perry-linux-aarch64-musl', 'unix', false],
-  ['perry-windows-x86_64', 'win', false],
-  ['perry-windows-aarch64', 'win', false],
+  ['perry-linux-x86_64-musl', 'unix', true],
+  ['perry-linux-aarch64-musl', 'unix', true],
+  ['perry-windows-x86_64', 'win', true],
+  ['perry-windows-aarch64', 'win', true],
 ]
 
 function fixtureRepo(dir: string): { repo: string; artifacts: string } {
@@ -298,7 +302,9 @@ function fixtureRepo(dir: string): { repo: string; artifacts: string } {
     const files = kind === 'win'
       ? ['perry.exe', 'LLVM-C.dll', 'perry_runtime.lib', 'perry_runtime.lib.gc-effects']
       : ['perry', 'libperry_runtime.a', 'libperry_runtime.a.gc-effects']
-    if (ext) files.push('libperry_ext_http.a', 'libperry_ext_zlib.a')
+    if (ext) {
+      files.push(...(kind === 'win' ? ['perry_ext_http.lib', 'perry_ext_zlib.lib'] : ['libperry_ext_http.a', 'libperry_ext_zlib.a']))
+    }
     for (const f of files) writeFileSync(path.join(out, f), f)
   }
   for (const triple of TARGET_TRIPLES) {
@@ -332,20 +338,21 @@ test('stage-npm.sh: stages every target package from its bundle', () => {
       assert.ok(existsSync(path.join(pkg, 'lib/libperry_runtime.a')))
       assert.equal(JSON.parse(readFileSync(path.join(pkg, 'package.json'), 'utf8')).name, targetPackageName(triple))
     }
-    assert.match(run.output, /4 ext packages and 6 target packages/)
+    assert.match(run.output, /8 ext packages and 6 target packages/)
     for (const triple of EXT_TRIPLES) {
       const pkg = path.join(repo, 'npm', `perry-ext-${triple}`)
       const targetJson = JSON.parse(readFileSync(path.join(pkg, 'target.json'), 'utf8'))
       assert.equal(targetJson.target_triple, triple)
-      assert.deepEqual(targetJson.files.map((f: { path: string }) => f.path), [
-        'lib/libperry_ext_http.a',
-        'lib/libperry_ext_zlib.a',
-      ])
+      assert.deepEqual(
+        targetJson.files.map((f: { path: string }) => f.path),
+        triple.includes('windows')
+          ? ['lib/perry_ext_http.lib', 'lib/perry_ext_zlib.lib']
+          : ['lib/libperry_ext_http.a', 'lib/libperry_ext_zlib.a'],
+      )
       assert.equal(JSON.parse(readFileSync(path.join(pkg, 'package.json'), 'utf8')).name, extPackageName(triple))
     }
-    // The host packages keep no ext archive; musl and Windows get no ext package.
+    // The host packages keep no ext archive.
     assert.ok(!existsSync(path.join(repo, 'npm/perry-linux-x64/lib/libperry_ext_http.a')))
-    assert.ok(!existsSync(path.join(repo, 'npm/perry-ext-x86_64-unknown-linux-musl')))
   })
 })
 

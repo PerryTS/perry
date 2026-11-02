@@ -525,10 +525,13 @@ fn a_triple_without_an_ext_package_is_never_fetched() {
     let release = root.join("release");
     ext_release(&release, ME.version);
     let home = root.join("home");
+    // Every musl and Windows host has an ext package; a cross target (wasm,
+    // android, ios) is not a host and never has one.
     for triple in [
-        "x86_64-unknown-linux-musl",
-        "x86_64-pc-windows-msvc",
         "aarch64-linux-android",
+        "wasm32-wasip1",
+        "wasm32-wasip2",
+        "aarch64-apple-ios",
     ] {
         assert!(
             fetch_with(Some(&release), false, None, Some(&home), triple).is_none(),
