@@ -34,7 +34,7 @@
 //! can run every proof is guarded by the runtime's interpreted-prototype-write
 //! word (`ElisionFacts::interp_guard`).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -50,24 +50,38 @@ pub(crate) fn contracts_requested() -> bool {
         .is_ok_and(|v| matches!(v.trim(), "1" | "true" | "on" | "yes"))
 }
 
-/// Every module's `export … from "src"` sources resolved the way module
-/// collection and init order resolve them, for the targets that are program
-/// modules. The HIR keeps a re-export's source as written; without this the
-/// analysis cannot link `export * as X from "./x"` to `./x`'s namespace.
-/// The modules the program loads whatever imports them (worker entries):
-/// `FactsConfig::roots`.
+/// Modules loaded as independent program entries (`FactsConfig::roots`).
 pub(crate) fn module_roots(ctx: &super::CompilationContext) -> Vec<String> {
-    ctx.worker_url_entries
+    let mut roots: BTreeSet<PathBuf> = ctx
+        .worker_url_entries
         .iter()
-        .flat_map(|(lexical, canonical)| {
-            [
-                lexical.display().to_string(),
-                canonical.display().to_string(),
-            ]
-        })
+        .flat_map(|(lexical, canonical)| [lexical.clone(), canonical.clone()])
+        .collect();
+    for module in ctx.native_modules.values() {
+        let mut worker_paths = HashSet::new();
+        perry_hir::for_each_worker_new(module, &mut |expr| {
+            if let perry_hir::Expr::WorkerNew { paths, .. } = expr {
+                worker_paths.extend(paths.iter().cloned());
+            }
+        });
+        for import in &module.imports {
+            if !worker_paths.contains(&import.source) {
+                continue;
+            }
+            if let Some(target) = import.resolved_path.as_ref().map(PathBuf::from) {
+                if ctx.native_modules.contains_key(&target) {
+                    roots.insert(target);
+                }
+            }
+        }
+    }
+    roots
+        .into_iter()
+        .map(|path| path.display().to_string())
         .collect()
 }
 
+/// Every module's re-export sources resolved to compiled program modules.
 pub(crate) fn export_sources(ctx: &super::CompilationContext) -> perry_wpfacts::ExportSources {
     let mut out = perry_wpfacts::ExportSources::new();
     for (path, module) in &ctx.native_modules {
@@ -366,8 +380,8 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
     // iteration facts for every program (the for-of gap tests that replace
     // an iterator, `next` or `return` must fail).
     let iteration_sabotage = pf.sabotage.as_deref() == Some("array-iteration-unwritten");
-    out.array_iteration_unwritten = iteration_sabotage
-        || (pf.interp_guard.is_none() && pf.array_iteration_written.is_none());
+    out.array_iteration_unwritten =
+        iteration_sabotage || (pf.interp_guard.is_none() && pf.array_iteration_written.is_none());
     out.array_iterator_close_unwritten = iteration_sabotage
         || (pf.interp_guard.is_none() && pf.array_iterator_close_written.is_none());
     let Some(mb) = pf.bindings_for(path) else {
@@ -726,3 +740,7 @@ fn facts_inputs(
         })
         .collect()
 }
+
+#[cfg(test)]
+#[path = "program_facts/worker_roots_tests.rs"]
+mod worker_roots_tests;
