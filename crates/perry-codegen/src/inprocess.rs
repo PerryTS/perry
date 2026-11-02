@@ -20,6 +20,7 @@ mod coff;
 mod dead_statepoint_tests;
 mod equivalent_shape_bodies;
 mod function_layout;
+mod loop_alignment;
 mod loop_interrupt;
 mod nanbox_operands;
 mod native_homes;
