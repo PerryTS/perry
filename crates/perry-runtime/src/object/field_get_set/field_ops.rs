@@ -53,6 +53,7 @@ struct WarnNullPtrState {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn record_warn_null_ptr(obj: *mut ObjectHeader, field_index: u32, class_id: u32) {
     let (total_count, should_abort) = WARN_NULL_PTR_STATE.with(|cell| {

@@ -8,7 +8,7 @@
 //! property of the same spelling is a different entry) and reflection never
 //! lists it.
 
-use crate::Class;
+use crate::{Class, ClassField};
 
 /// The storage key of private field `name` (`#x`, with its `#`) of the
 /// class whose private elements carry `class_id`: the key lowering gives a
@@ -46,18 +46,59 @@ fn local_chain<'c>(
     Some(chain)
 }
 
+/// The entries construction defines on an instance of a chain, in the order
+/// it appends them (#8969): root first, each class's fields with a static key
+/// in declaration order. A private field is one of them: its claim
+/// (`js_private_field_add`, or a family layout's inline element) takes the next
+/// slot at its declaration, exactly like a public field's definition, so the
+/// runtime's key order is `[parent, #ps, child]` for
+/// `class P { parent; #ps } class C extends P { child }`. The one rule codegen
+/// (`type_analysis::class_field_global_index`, the completed private shape)
+/// and the program facts' birth keys (perry-wpfacts `compute_birth_keys`)
+/// take field slots from. A computed-key field is not among them (its key is
+/// not known here).
+pub fn construction_entries<'f>(
+    chain_fields: impl IntoIterator<Item = &'f [ClassField]>,
+) -> impl Iterator<Item = &'f ClassField> {
+    chain_fields
+        .into_iter()
+        .flatten()
+        .filter(|f| f.key_expr.is_none())
+}
+
+/// Does a private field's entry come before `target`'s in the construction
+/// order of `chain_fields` (`construction_entries`)? Then `target`'s slot is
+/// past a claimed private entry: a layout that lists only the chain's public
+/// keys (codegen's packed class keys, its birth rep and birth ShapeId) has no
+/// slot for it that an instance is on.
+pub fn private_entry_precedes<'f>(
+    chain_fields: impl IntoIterator<Item = &'f [ClassField]>,
+    target: &ClassField,
+) -> bool {
+    for f in construction_entries(chain_fields) {
+        if std::ptr::eq(f, target) {
+            return false;
+        }
+        if f.is_private {
+            return true;
+        }
+    }
+    false
+}
+
 /// The chain of `class`, root first, when construction claims every private
 /// field of it at a known inline slot (#11791): each field initializer
-/// appends its entry after the birth keys, root to leaf in declaration
-/// order, into a slot the layout reserves for it, so the `i`th private field
-/// of the chain is at slot `birth keys + i`. `None` when that order is not
-/// decidable here: a chain that is not wholly local and ordinary, no private
-/// instance element on it, a computed-key field (claimed in source order),
-/// a nested or widened class (allocated outside the birth layout), or a
-/// constructor that adds keys of its own (a parent's run before a child's
-/// claims). Codegen's completed private shape
-/// (`codegen::static_private_class::private_final`) and the program facts'
-/// private field slots both follow it.
+/// appends its entry, root to leaf in declaration order, into a slot the
+/// layout reserves for it, and every private entry comes after every public
+/// one in the construction order (`construction_entries`), so the `i`th
+/// private field of the chain is at slot `birth keys + i`. `None` when that
+/// order is not decidable here or is another one: a chain that is not wholly
+/// local and ordinary, no private instance element on it, a computed-key
+/// field (claimed in source order), a nested or widened class (allocated
+/// outside the birth layout), a constructor that adds keys of its own (a
+/// parent's run before a child's claims), or a public field defined after a
+/// private one (#8969: its entry follows the claim). Codegen's completed
+/// private shape (`codegen::static_private_class::private_final`) follows it.
 pub fn claimed_private_chain<'c>(
     class: &'c Class,
     lookup: &dyn Fn(&str) -> Option<&'c Class>,
@@ -73,6 +114,14 @@ pub fn claimed_private_chain<'c>(
     }
     if constructor_added_key_count_in(class, lookup) > 0 {
         return None;
+    }
+    let mut private_seen = false;
+    for f in construction_entries(chain.iter().map(|c| c.fields.as_slice())) {
+        if f.is_private {
+            private_seen = true;
+        } else if private_seen {
+            return None;
+        }
     }
     Some(chain)
 }
@@ -188,3 +237,7 @@ pub fn constructor_added_key_count_in<'c>(
     }
     added.len().min(SLACK_CAP) as u32
 }
+
+#[cfg(test)]
+#[path = "private_names_tests.rs"]
+mod tests;

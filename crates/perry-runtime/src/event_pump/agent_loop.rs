@@ -663,6 +663,7 @@ const _: () = assert!(
 /// so a panic is swallowable exactly where this bug lives. A printed warning
 /// that lets the program continue is the silent degradation with extra output.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn loop_creation_failed(profile: Profile, agent: AgentId, error: turnloop::Error) -> ! {
     eprintln!(

@@ -424,6 +424,7 @@ fn trace_throw_enabled() -> bool {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn trace_throw(value: f64) {
     eprintln!("[trace-throw] thrown value:");

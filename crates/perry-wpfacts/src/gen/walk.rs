@@ -240,7 +240,10 @@ impl<'a> Gen<'a> {
                 push_unique(&mut keys, a);
             }
         }
-        let TmplKind::Class { name, .. } = self.m.tmpls[tm as usize].kind.clone() else {
+        let TmplKind::Class {
+            module: mi, name, ..
+        } = self.m.tmpls[tm as usize].kind.clone()
+        else {
             return;
         };
         let Some(c) = module.classes.iter().find(|c| c.name == name) else {
@@ -254,11 +257,17 @@ impl<'a> Gen<'a> {
         // before the solve, when a parent value not yet settled counts as a
         // leak; `settle_parent_layouts` recomputes these keys once it is.
         let parent_leaks = !self.parent_pending(tm) && self.parent_chain_leaks(tm);
-        for f in &c.fields {
-            if f.is_private || f.key_expr.is_some() {
-                continue;
-            }
-            let a = self.m.atom(&f.name);
+        // The keys in the order construction defines them
+        // (`perry_hir::private_names::construction_entries`): a private
+        // field's entry is claimed at its declaration, so it holds the next
+        // slot like a public field's (#8969).
+        for f in perry_hir::private_names::construction_entries([c.fields.as_slice()]) {
+            let a = if f.is_private {
+                let key = self.private_field_key(mi, c, &f.name);
+                self.m.private_atom(&key)
+            } else {
+                self.m.atom(&f.name)
+            };
             push_unique(&mut keys, a);
             match f.origin {
                 perry_hir::ClassFieldOrigin::Declared => push_unique(&mut declared, a),
