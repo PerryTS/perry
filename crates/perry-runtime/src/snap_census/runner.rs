@@ -218,6 +218,64 @@ impl SizeMap {
     }
 }
 
+/// Open-addressing map from a word to the member of D that recorded it
+/// (`init << 32 | pc`, the pc truncated to 32 bits; pc 0 = a binding the
+/// member initialized). The cascade attribution: which member's access a
+/// later init conflicted with.
+struct CauseMap {
+    keys: *mut u64,
+    vals: *mut u64,
+    mask: usize,
+    len: usize,
+}
+
+impl CauseMap {
+    unsafe fn new(log2: u32) -> Self {
+        let n = 1usize << log2;
+        CauseMap {
+            keys: map_zeroed::<u64>(n),
+            vals: map_zeroed::<u64>(n),
+            mask: n - 1,
+            len: 0,
+        }
+    }
+    fn insert(&mut self, k: u64, init: u32, pc: usize) {
+        assert!(self.len * 2 < self.mask, "snap census: cause map full");
+        let v = (init as u64) << 32 | (pc as u64 & 0xffff_ffff);
+        let mut i = WordSet::hash(k) & self.mask;
+        unsafe {
+            loop {
+                let s = *self.keys.add(i);
+                if s == k || s == 0 {
+                    if s == 0 {
+                        self.len += 1;
+                    }
+                    *self.keys.add(i) = k;
+                    *self.vals.add(i) = v;
+                    return;
+                }
+                i = (i + 1) & self.mask;
+            }
+        }
+    }
+    fn get(&self, k: u64) -> Option<(u32, usize)> {
+        let mut i = WordSet::hash(k) & self.mask;
+        unsafe {
+            loop {
+                let s = *self.keys.add(i);
+                if s == k {
+                    let v = *self.vals.add(i);
+                    return Some(((v >> 32) as u32, (v & 0xffff_ffff) as usize));
+                }
+                if s == 0 {
+                    return None;
+                }
+                i = (i + 1) & self.mask;
+            }
+        }
+    }
+}
+
 /// Append-only log of fixed records.
 struct Log<T: Copy> {
     p: *mut T,
@@ -280,6 +338,10 @@ struct Conflict {
     word: usize,
     pc: usize,
     write: bool,
+    /// The member of D whose recorded access this one conflicts with (its
+    /// last write of the word, or its first read), and that access's pc.
+    cause: u32,
+    cause_pc: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -306,6 +368,9 @@ struct Init {
     conflict: Option<Conflict>,
     in_d: bool,
     faults: u64,
+    /// `new Function` bodies and eval scripts made while this init ran.
+    dyn_fns: u32,
+    evals: u32,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -366,6 +431,8 @@ struct State {
     seeded: Vec<usize>,
     rule4: bool,
     sabotage_env: bool,
+    /// `PERRY_SNAP_DYN=defer`: dynamic code defers the init (design §2.6 (a)).
+    dyn_defer: bool,
     /// `PERRY_SNAP_TRANSPARENT`: evaluation bodies whose objects and
     /// globals are not locations (a what-if: the CJS loader's shared state
     /// split per module). Their objects' overflow and meta cells follow.
@@ -380,6 +447,9 @@ struct State {
     bookkeeping: i32,
     w: WordSet,
     r: WordSet,
+    /// Who recorded each `w` / `r` word (the cascade attribution).
+    wby: CauseMap,
+    rby: CauseMap,
     /// Registered module-global root slots (the handler cannot borrow
     /// `GLOBAL_ROOTS`: the interrupted code may hold it).
     globals: WordSet,
@@ -526,6 +596,7 @@ unsafe fn start(out: String) {
         seeded,
         rule4: std::env::var("PERRY_SNAP_RULE4").is_ok_and(|v| v == "1"),
         sabotage_env: std::env::var("PERRY_SNAP_SABOTAGE").is_ok_and(|v| v == "env"),
+        dyn_defer: std::env::var("PERRY_SNAP_DYN").is_ok_and(|v| v == "defer"),
         transparent: std::env::var("PERRY_SNAP_TRANSPARENT")
             .unwrap_or_default()
             .split(',')
@@ -541,6 +612,8 @@ unsafe fn start(out: String) {
         bookkeeping: 0,
         w: WordSet::new(28),
         r: WordSet::new(28),
+        wby: CauseMap::new(28),
+        rby: CauseMap::new(28),
         globals: WordSet::new(22),
         starts: map_zeroed::<u64>(((res_hi - res_lo) / 8).div_ceil(64).max(1)),
         realm_hosts: Vec::new(),
@@ -696,6 +769,8 @@ fn blank_init(addr: usize, parent: u32, reach: Reach) -> Init {
         host_count: 0,
         host: None,
         conflict: None,
+        dyn_fns: 0,
+        evals: 0,
         in_d: false,
         faults: 0,
     }
@@ -928,6 +1003,42 @@ pub(super) fn entry_body() {
     }
 }
 
+pub(super) fn attached(obj: usize, cells: &[usize]) {
+    let st = state();
+    if st.transparent.is_empty() {
+        return;
+    }
+    let Some(h) = object_start(st, obj) else { return };
+    if !st.transp.contains(h as u64) {
+        return;
+    }
+    for &c in cells {
+        if let Some(ch) = object_start(st, c) {
+            st.transp.insert(ch as u64);
+            st.transp_no.remove(ch as u64);
+            if let Some(s) = st.sizes.get(ch as u64) {
+                st.transp_objs.push((ch, ch + s as usize));
+            }
+        }
+    }
+}
+
+pub(super) fn dyn_code(kind: u8) {
+    let st = state();
+    let top = st.frames.last().map_or(0, |f| f.init) as usize;
+    if top == 0 {
+        return;
+    }
+    if kind == 0 {
+        st.inits[top].dyn_fns += 1;
+    } else {
+        st.inits[top].evals += 1;
+    }
+    if st.dyn_defer {
+        host(Effect::HostWrite, if kind == 0 { "new_function" } else { "eval" });
+    }
+}
+
 pub(super) fn host(class: Effect, what: &'static str) {
     let st = state();
     if st.sabotage_env && what == "env" {
@@ -1064,6 +1175,7 @@ pub(super) fn global_root(slot: usize) {
     let top = st.frames.last().map_or(0, |f| f.init) as usize;
     if top != 0 && st.inits[top].in_d {
         st.w.insert(slot as u64);
+        st.wby.insert(slot as u64, top as u32, 0);
         flag_page(st, slot & !(PAGE - 1), PF_W);
     }
     let page = slot & !(PAGE - 1);
@@ -1616,6 +1728,8 @@ fn note_access(st: &mut State, word: usize, write: bool, pc: usize) {
                 word,
                 pc,
                 write,
+                cause: 0,
+                cause_pc: 0,
             });
         }
         i.in_d = true;
@@ -1625,11 +1739,36 @@ fn note_access(st: &mut State, word: usize, write: bool, pc: usize) {
         return;
     }
     if st.d_mode {
+        // A member (seeded, or joined earlier in this run) still names the
+        // first earlier member it conflicts with: the edge of the cascade
+        // tree for an init the seed put in D from its start.
+        if top != 0 && st.inits[top].conflict.is_none() {
+            let hit = if st.w.contains(w) {
+                st.wby.get(w).map(|c| (if write { 3 } else { 2 }, c))
+            } else if write && st.r.contains(w) {
+                st.rby.get(w).map(|c| (3, c))
+            } else {
+                None
+            };
+            if let Some((rule, (cause, cause_pc))) = hit.filter(|h| h.1 .0 != top as u32) {
+                st.inits[top].conflict = Some(Conflict {
+                    rule,
+                    word,
+                    pc,
+                    write,
+                    cause,
+                    cause_pc,
+                });
+            }
+        }
         if write {
             st.w.insert(w);
+            st.wby.insert(w, top as u32, pc);
             flag_page(st, word & !(PAGE - 1), PF_W);
         } else if !st.w.contains(w) {
-            st.r.insert(w);
+            if st.r.insert(w) {
+                st.rby.insert(w, top as u32, pc);
+            }
             flag_page(st, word & !(PAGE - 1), PF_R);
         }
         return;
@@ -1651,6 +1790,13 @@ fn note_access(st: &mut State, word: usize, write: bool, pc: usize) {
         None
     };
     if let Some(rule) = rule {
+        let (cause, cause_pc) = match rule {
+            2 => st.wby.get(w),
+            3 if st.w.contains(w) => st.wby.get(w),
+            3 => st.rby.get(w),
+            _ => None,
+        }
+        .unwrap_or((0, 0));
         let i = &mut st.inits[top];
         if i.conflict.is_none() {
             i.conflict = Some(Conflict {
@@ -1658,6 +1804,8 @@ fn note_access(st: &mut State, word: usize, write: bool, pc: usize) {
                 word,
                 pc,
                 write,
+                cause,
+                cause_pc,
             });
         }
         i.in_d = true;
@@ -1666,9 +1814,12 @@ fn note_access(st: &mut State, word: usize, write: bool, pc: usize) {
         // This access is the member's first recorded one.
         if write {
             st.w.insert(w);
+            st.wby.insert(w, top as u32, pc);
             flag_page(st, word & !(PAGE - 1), PF_W);
         } else {
-            st.r.insert(w);
+            if st.r.insert(w) {
+                st.rby.insert(w, top as u32, pc);
+            }
             flag_page(st, word & !(PAGE - 1), PF_R);
         }
     }
@@ -1918,7 +2069,7 @@ fn write_report(st: &mut State) {
     );
     let _ = writeln!(
         f,
-        "#id\taddr\tparent\treach\tdynamic\tfrom_entry_body\tenter\texit\topen\tthrew\tseeded\tin_d\tir\tbirths\tbirth_bytes\tfaults\thost_count\thost_class\thost_what\thost_pcs\tconflict_rule\tconflict_word\tconflict_write\tconflict_pc\tconflict_owner"
+        "#id\taddr\tparent\treach\tdynamic\tfrom_entry_body\tenter\texit\topen\tthrew\tseeded\tin_d\tir\tbirths\tbirth_bytes\tfaults\thost_count\thost_class\thost_what\thost_pcs\tconflict_rule\tconflict_word\tconflict_write\tconflict_pc\tconflict_owner\tconflict_cause\tconflict_cause_pc\tdyn_fns\tevals"
     );
     let births = {
         let mut v: Vec<(usize, usize, u32)> = st
@@ -1958,19 +2109,21 @@ fn write_report(st: &mut State) {
             ),
             None => ("".into(), "".into(), "".into()),
         };
-        let (cr, cw, cwr, cpc, co) = match i.conflict {
+        let (cr, cw, cwr, cpc, co, cc, ccpc) = match i.conflict {
             Some(c) => (
                 c.rule.to_string(),
                 format!("{:x}", c.word),
                 (c.write as u8).to_string(),
                 format!("{:x}", c.pc),
                 owner(c.word),
+                c.cause.to_string(),
+                format!("{:x}", c.cause_pc),
             ),
             None => Default::default(),
         };
         let _ = writeln!(
             f,
-            "{id}\t{:x}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{hc}\t{hw}\t{hp}\t{cr}\t{cw}\t{cwr}\t{cpc}\t{co}",
+            "{id}\t{:x}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{hc}\t{hw}\t{hp}\t{cr}\t{cw}\t{cwr}\t{cpc}\t{co}\t{cc}\t{ccpc}\t{}\t{}",
             i.addr,
             i.parent,
             i.reach as u8,
@@ -1987,6 +2140,8 @@ fn write_report(st: &mut State) {
             i.birth_bytes,
             i.faults,
             i.host_count,
+            i.dyn_fns,
+            i.evals,
         );
     }
     // Step 6: a digest of the imaged heap per init. A birth is named by its

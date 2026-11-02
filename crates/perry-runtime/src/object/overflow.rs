@@ -245,6 +245,7 @@ unsafe fn install(obj: *mut ObjectHeader, t: *mut Table) {
     );
     (*obj).parent_class_id |= SHADOW_BIT;
     super::proto_validity::note_object_own_keys_changed(obj as usize);
+    crate::snap_census::attached(obj as usize, &[meta as usize, t as usize]);
 }
 
 /// Establish order authority once, copying keys and recording slot references.

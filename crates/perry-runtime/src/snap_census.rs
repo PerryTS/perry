@@ -85,6 +85,42 @@ pub fn host(class: Effect, what: &'static str) {
     let _ = (class, what);
 }
 
+/// Dynamic code is made: `kind` 0 = a `new Function` body, 1 = an eval
+/// script. Counted per init (design §2.6: these cannot be image cells
+/// until build-time compilation); `PERRY_SNAP_DYN=defer` makes them defer
+/// the init (option (a), host write by kind).
+#[inline(always)]
+pub(crate) fn dyn_code(kind: u8) {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    if runner::on() {
+        runner::dyn_code(kind);
+    }
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    let _ = kind;
+}
+
+/// The census runner is on and has not reached its boundary: collection
+/// stays suppressed (see `gc::gc_unsuppress`).
+#[inline(always)]
+pub(crate) fn holds_collection() -> bool {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    return runner::on();
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    false
+}
+
+/// `cells` (an object's metadata record, its overflow table) now belong to
+/// `obj`: the cells of a transparent object are transparent too.
+#[inline(always)]
+pub(crate) fn attached(obj: usize, cells: &[usize]) {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    if runner::on() {
+        runner::attached(obj, cells);
+    }
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    let _ = (obj, cells);
+}
+
 /// A module evaluation (`run_path_initializer`) starts: `addr` is its
 /// evaluation body (a guarded module's `<prefix>__init_evaluate`, a path
 /// module's initializer).

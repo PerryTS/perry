@@ -1749,6 +1749,12 @@ pub fn gc_suppress() {
 
 /// Resume GC triggers after suppression.
 pub fn gc_unsuppress() {
+    // The SNAP census holds collection off until its boundary (an address
+    // names one object for the whole run); a parse window's unsuppress must
+    // not end that hold.
+    if crate::snap_census::holds_collection() {
+        return;
+    }
     GC_FLAGS.with(|f| f.set(f.get() & !GC_FLAG_SUPPRESSED));
 }
 

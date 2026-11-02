@@ -1127,7 +1127,17 @@ fn decl_prototype_class_id(ptr: usize) -> Option<u32> {
     // SAFETY: the header names an ordinary object at `ptr`; its first word
     // is the class id.
     let class_id = unsafe { (*(ptr as *const ObjectHeader)).class_id };
-    (class_id != 0
+    if class_id == 0 {
+        return None;
+    }
+    // The link of a class that is not `ptr`'s observes nothing: the compare
+    // fails whatever the link holds. Only a match reads it (the SNAP census
+    // counts that read as the init's; the miss is bookkeeping).
+    let link = {
+        let _census = crate::snap_census::bookkeeping();
+        crate::object::class_value::class_decl_prototype_link(class_id) as usize
+    };
+    (link == ptr
         && crate::object::class_value::class_decl_prototype_link(class_id) as usize == ptr)
         .then_some(class_id)
 }
@@ -1710,6 +1720,9 @@ pub(crate) fn class_decl_prototype_value_selected(class_id: u32) -> f64 {
         return crate::value::js_nanbox_pointer(existing as i64);
     }
 
+    // Materializing the declared prototype is a first-use build of static
+    // declaration data: the SNAP census counts it as the runtime's.
+    let _census = crate::snap_census::runtime_scope();
     // The [[Prototype]] it links to, resolved before the object exists (a
     // parent that cannot be one throws before anything is linked).
     let scope = crate::gc::RuntimeHandleScope::new();
