@@ -165,9 +165,33 @@ pub(super) fn record_required_native_member(
     let ast::MemberProp::Ident(key) = &member.prop else {
         return;
     };
-    if require_resolvable_native_specifier(&member.obj).is_some() {
+    if require_resolvable_native_specifier(&member.obj).is_some()
+        || is_native_module_value_import(ctx, &member.obj)
+    {
         ctx.require_destructured_native_locals
             .insert(name.to_string(), key.sym.to_string());
+    }
+}
+
+/// The CJS wrap adopts `require("events")` as `import _req_0 from "events"`
+/// and leaves `const EventEmitter = _req_0.EventEmitter` in the body, so the
+/// member form reaches HIR through the import binding, not the call. That
+/// binding is the module's CommonJS value when it is a namespace import or
+/// the default of a builtin whose default IS that value
+/// (`is_cjs_style_native_default_import`); `.K` is then the export K, as for
+/// `require("<native>").K`.
+fn is_native_module_value_import(ctx: &LoweringContext, obj: &ast::Expr) -> bool {
+    let ast::Expr::Ident(id) = obj else {
+        return false;
+    };
+    let name = id.sym.as_ref();
+    if ctx.lookup_local(name).is_some() {
+        return false;
+    }
+    match ctx.lookup_native_module(name) {
+        Some((_, None)) => true,
+        Some((module, Some("default"))) => crate::lower::is_cjs_style_native_default_import(module),
+        _ => false,
     }
 }
 

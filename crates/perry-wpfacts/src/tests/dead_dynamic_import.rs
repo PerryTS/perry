@@ -621,7 +621,6 @@ fn a_keyed_delete_on_a_native_prototype_writes_its_key() {
     }
 }
 
-
 /// Rule 6: a computed key that is an import of a module's `const` string
 /// binding is that string, through re-exports (an import of a binding is
 /// the binding). effect's `FiberImpl.runLoop` saves and restores
@@ -656,15 +655,15 @@ fn an_imported_const_key_is_its_string() {
     }
     // A module-scope `const` read in a function is TDZ-checked first
     // (`Sequence([check, x])`): its value is still the string.
-    let local = format!("const fk = \"~k\";\n{}", RUN_LOOP.replace("[fiberKey]", "[fk]"));
+    let local = format!(
+        "const fk = \"~k\";\n{}",
+        RUN_LOOP.replace("[fiberKey]", "[fk]")
+    );
     assert!(!imports_formatter_with_mods(&local, &tail, true, &mods));
     // The fixture can fail: a key that is not a constant is an any-key store.
     let loose = RUN_LOOP.replace("[fiberKey]", "[String(fiber)]");
     assert!(imports_formatter_with_mods(&loose, &tail, true, &mods));
 }
-
-
-
 
 /// Rule 7: effect's core.js `Error` is `function () { return class Base
 /// extends YieldableError { .. } }()`: the class's `extends` is evaluated
@@ -703,7 +702,10 @@ fn a_class_expression_parent_evaluated_later_is_its_parent() {
         }
     }
     // The fixture can fail: an unknown parent makes `this` unknown.
-    let unknown = CORE.replace("extends YieldableError", "extends (require(String(args)) as any)");
+    let unknown = CORE.replace(
+        "extends YieldableError",
+        "extends (require(String(args)) as any)",
+    );
     assert!(imports_formatter_with_mods(
         "",
         &format!("{MAKE_CALLED}\nimport {{ Error as E }} from \"./core\";\nconsole.log(new E({{ message: \"m\" }}));"),
@@ -737,10 +739,12 @@ fn a_guarded_object_create_is_a_fresh_object() {
     }
     // The fixture can fail: an unknown object in `children` makes the
     // computed store an any-key write on ⊤ again.
-    let unknown = CREATE.replace("Object.create(null)", "(globalThis as any)[String(process.argv.length)]");
+    let unknown = CREATE.replace(
+        "Object.create(null)",
+        "(globalThis as any)[String(process.argv.length)]",
+    );
     assert!(imports_formatter_with_make(&unknown, &tail, true));
 }
-
 
 /// Rule 7 for a member `extends` (@effect/platform-node's
 /// `NodeHttpIncomingMessage extends Inspectable.Class`): the HIR keeps the
@@ -774,11 +778,17 @@ fn a_member_extends_evaluated_is_its_parent() {
         );
     }
     // The fixture can fail: an unknown parent makes `this` unknown.
-    let unknown = MSG.replace("extends Inspectable.Class", "extends (require(String(process.argv.length)) as any).Class");
-    let mods = [("insp", INSP), ("msg", unknown.as_str()), ("loader", LOADER)];
+    let unknown = MSG.replace(
+        "extends Inspectable.Class",
+        "extends (require(String(process.argv.length)) as any).Class",
+    );
+    let mods = [
+        ("insp", INSP),
+        ("msg", unknown.as_str()),
+        ("loader", LOADER),
+    ];
     assert!(imports_formatter_with_mods("", &tail, false, &mods));
 }
-
 
 /// Rule 9: `const EventEmitter = require("events").EventEmitter` binds the
 /// native module's export as `const { EventEmitter } = require("events")`
@@ -798,20 +808,47 @@ export class Client extends EventEmitter {
 "#;
 #[test]
 fn a_required_native_member_parent_is_the_native_parent() {
-    let m = perry_parser::parse_typescript(PGC, "cl.ts").expect("parses");
+    native_member_parent_is_the_native_parent(PGC);
+}
+/// The CJS wrap's form of the same module (Supabase's real pg): the wrap
+/// adopts `require("events")` as a default import, so the body reads
+/// `const EventEmitter = _req_0.EventEmitter`.
+#[test]
+fn a_wrapped_required_native_member_parent_is_the_native_parent() {
+    let wrapped = PGC.replace(
+        "const EventEmitter = require(\"events\").EventEmitter;",
+        "import _req_0 from \"events\";\nconst EventEmitter = _req_0.EventEmitter;",
+    );
+    assert!(wrapped.contains("_req_0.EventEmitter"));
+    native_member_parent_is_the_native_parent(&wrapped);
+}
+fn native_member_parent_is_the_native_parent(src: &str) {
+    let m = perry_parser::parse_typescript(src, "cl.ts").expect("parses");
     let h = perry_hir::lower_module(&m, "cl", "cl.ts").expect("lowers");
-    let c = h.classes.iter().find(|c| c.name == "Client").expect("class");
-    assert_eq!(c.native_extends, Some(("events".to_string(), "EventEmitter".to_string())));
+    let c = h
+        .classes
+        .iter()
+        .find(|c| c.name == "Client")
+        .expect("class");
+    assert_eq!(
+        c.native_extends,
+        Some(("events".to_string(), "EventEmitter".to_string()))
+    );
     assert!(c.extends_expr.is_none());
     let tail = format!("{MAKE_CALLED}\nimport {{ Client }} from \"./cl\";\nconst c = new Client({{}});\nc.drop(String(process.argv.length));");
     for interp in [false, true] {
         assert!(
-            !imports_formatter_with_mods("", &tail, interp, &[("cl", PGC)]),
+            !imports_formatter_with_mods("", &tail, interp, &[("cl", src)]),
             "interp={interp}: a required native parent keeps the formatter import live"
         );
     }
     // The fixture can fail: a reassignable binding is a user value, the
     // evaluated parent is the module ref (⊤).
-    let mutable = PGC.replace("const EventEmitter", "let EventEmitter");
-    assert!(imports_formatter_with_mods("", &tail, false, &[("cl", &mutable)]));
+    let mutable = src.replace("const EventEmitter", "let EventEmitter");
+    assert!(imports_formatter_with_mods(
+        "",
+        &tail,
+        false,
+        &[("cl", &mutable)]
+    ));
 }

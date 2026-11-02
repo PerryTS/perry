@@ -71,6 +71,7 @@ pub(crate) use stmt_loops::{
     wrap_lazy_for_of_body_close_on_throw,
 };
 mod module_decl;
+pub(crate) use module_decl::native_default_import::is_cjs_style_native_default_import;
 pub(crate) use module_decl::*;
 mod misc;
 pub(crate) use misc::*;
