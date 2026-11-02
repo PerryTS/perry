@@ -112,6 +112,20 @@ fn std_fd_registry() -> StdHashMap<i32, fs::File> {
             map.insert(fd, unsafe { fs::File::from_raw_fd(fd) });
         }
     }
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsHandle;
+        let streams = [
+            std::io::stdin().as_handle().try_clone_to_owned(),
+            std::io::stdout().as_handle().try_clone_to_owned(),
+            std::io::stderr().as_handle().try_clone_to_owned(),
+        ];
+        for (fd, handle) in streams.into_iter().enumerate() {
+            if let Ok(handle) = handle {
+                map.insert(fd as i32, fs::File::from(handle));
+            }
+        }
+    }
     map
 }
 

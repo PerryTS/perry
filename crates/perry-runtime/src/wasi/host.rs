@@ -85,78 +85,20 @@ fn strings(value: f64) -> Vec<String> {
         })
         .collect()
 }
-fn clone_stdio(fd: i32) -> Option<std::fs::File> {
-    // Standard descriptors are OS-owned, whereas openSync returns synthetic
-    // Perry IDs. Clone either owner without taking ownership of its original.
-    #[cfg(unix)]
-    {
-        use std::os::fd::AsFd;
-        match fd {
-            0 => {
-                return std::io::stdin()
-                    .as_fd()
-                    .try_clone_to_owned()
-                    .ok()
-                    .map(Into::into)
-            }
-            1 => {
-                return std::io::stdout()
-                    .as_fd()
-                    .try_clone_to_owned()
-                    .ok()
-                    .map(Into::into)
-            }
-            2 => {
-                return std::io::stderr()
-                    .as_fd()
-                    .try_clone_to_owned()
-                    .ok()
-                    .map(Into::into)
-            }
-            _ => {}
-        }
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::io::AsHandle;
-        match fd {
-            0 => {
-                return std::io::stdin()
-                    .as_handle()
-                    .try_clone_to_owned()
-                    .ok()
-                    .map(Into::into)
-            }
-            1 => {
-                return std::io::stdout()
-                    .as_handle()
-                    .try_clone_to_owned()
-                    .ok()
-                    .map(Into::into)
-            }
-            2 => {
-                return std::io::stderr()
-                    .as_handle()
-                    .try_clone_to_owned()
-                    .ok()
-                    .map(Into::into)
-            }
-            _ => {}
-        }
-    }
-    crate::fs_hook_slots::try_clone_registered_fd(fd)
-}
 pub(super) fn new(options: &ValidatedOptions) -> f64 {
     let config = serde_json::to_vec(&serde_json::json!({
         "args": strings(options.args), "env": strings(options.env), "preopens": options.preopens,
     }))
     .expect("WASI configuration is JSON strings");
     let stdio = options.stdio.map(|fd| {
+        // Initialize the registry even when node:fs was never imported. It
+        // owns the standard-stream duplicates and tracks closeSync as well
+        // as synthetic descriptors; cloning OS handles here bypasses closes.
         fd.map(|fd| {
-            clone_stdio(fd).unwrap_or_else(|| {
+            crate::fs::try_clone_registered_fd(fd).unwrap_or_else(|| {
                 crate::fs::validate::throw_error_with_code(
                     "bad WASI stdio descriptor",
-                    "UVWASI_EINVAL",
+                    "UVWASI_EBADF",
                 )
             })
         })
