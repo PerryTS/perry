@@ -930,7 +930,7 @@ pub extern "C" fn js_assert_strict_equal(actual: f64, expected: f64, message: f6
         return undefined_f64();
     }
     throw_assertion(
-        assertion_message(message, "Expected values to be strictly equal"),
+        assertion_message(message, "Expected values to be strictly equal:"),
         actual,
         expected,
         "strictEqual",

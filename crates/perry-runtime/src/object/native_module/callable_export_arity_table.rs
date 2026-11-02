@@ -2,6 +2,8 @@
 #[cfg(test)]
 fn native_callable_export_arity_reference(module: &str, prop: &str) -> Option<u32> {
     match (module, prop) {
+        // node:assert: AssertionError.length is 1.
+        ("assert", "AssertionError") => Some(1),
         // Bun global/module surface (#9599).
         (
             "bun",
@@ -282,6 +284,7 @@ fn native_callable_export_arity_reference(module: &str, prop: &str) -> Option<u3
 /// Sorted (module → sorted (prop, arity)) table replacing the ~15 KB compiled
 /// arity ladder. Same oracle-test scheme as `CALLABLE_EXPORT_TABLE`.
 #[rustfmt::skip] static CALLABLE_EXPORT_ARITY_TABLE: &[(&str, &[(&str, u32)])] = &[
+    ("assert", &[("AssertionError", 1)]),
     (
         "async_hooks",
         &[

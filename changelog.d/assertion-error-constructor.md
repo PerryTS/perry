@@ -8,4 +8,4 @@ linked to that prototype, so `instanceof Error`, `instanceof AssertionError`
 and `constructor` follow the prototype chain instead of a registered class id.
 `new` reaches the constructor through any value of it (`new ns.AssertionError(o)`,
 `new (require("assert").AssertionError)(o)`, `new Assert()`), and a class can
-extend it. The codegen special case for `new <assert>.AssertionError(...)` is gone.
+extend it. AssertionError.length is 1 and the strictEqual message starts with node's "Expected values to be strictly equal:". The codegen special cases for `new <assert>.AssertionError(...)` and `new <assert>.Assert(...)` are gone.
