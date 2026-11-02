@@ -1446,8 +1446,14 @@ mod tests {
         let source = r#"enum V { Code(f64), Name(&'static str) } const ROWS: &[(&str, V)] = &[("Z", V::Code(-1.0)), ("1", V::Name("one")), ("A", V::Code(2.0))]; fn f() { crate::realm_decl! { birth js_object_alloc_null_proto(0, 3); realm { Example.rows, kind = namespace, members_source = ROWS, integrity = frozen } } }"#;
         let d = &inline(source).unwrap()[0];
         assert_eq!(d.get("own_key_order").unwrap().encode(), r#"["1","Z","A"]"#);
-        // FROZEN|SEALED|NO_EXTEND|NULL_PROTO|HAS_DESCRIPTORS
-        assert_eq!(header_word(d), "2119");
+        // Frozen integrity and the non-default row attributes; the null
+        // [[Prototype]] is the shape's identity (#13666), not a header bit.
+        let frozen = perry_abi::OBJ_FLAG_FROZEN
+            | perry_abi::OBJ_FLAG_SEALED
+            | perry_abi::OBJ_FLAG_NO_EXTEND
+            | perry_abi::OBJ_FLAG_HAS_DESCRIPTORS;
+        assert_eq!(header_word(d), frozen.to_string());
+        assert!(d.get("prototype").is_none());
         assert!(d
             .get("properties")
             .unwrap()
