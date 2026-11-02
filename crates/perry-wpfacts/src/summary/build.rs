@@ -365,6 +365,39 @@ fn disposition(
     Ok(true)
 }
 
+/// Rule C: the result of `s` is a closure it creates over its own frame
+/// (`CAP_OWN`), the closure value itself or a copy of it.
+fn returns_own_closure(s: &Summary) -> bool {
+    if !is_slot(s.ret) {
+        return false;
+    }
+    let mut seen: FxHashSet<NodeId> = s
+        .closures
+        .iter()
+        .filter(|c| c.3 == CAP_OWN)
+        .map(|c| SLOT | c.0)
+        .collect();
+    if seen.is_empty() {
+        return false;
+    }
+    let mut succ: FxHashMap<NodeId, Vec<NodeId>> = FxHashMap::default();
+    for &(a, b) in &s.edges {
+        succ.entry(a).or_default().push(b);
+    }
+    let mut work: Vec<NodeId> = seen.iter().copied().collect();
+    while let Some(x) = work.pop() {
+        if x == s.ret {
+            return true;
+        }
+        for &y in succ.get(&x).map(|v| v.as_slice()).unwrap_or(&[]) {
+            if seen.insert(y) {
+                work.push(y);
+            }
+        }
+    }
+    false
+}
+
 fn plan(
     m: &Model,
     ix: &Index,
@@ -427,23 +460,24 @@ fn plan(
                 roots.extend(b.holders.iter().copied());
             }
         }
-        // RLC mask (measurement only): a call whose result a closure
-        // captures from this frame ( in memoizeOne) is a value of
-        // the slice: each instance makes its own (rule C, design §9).
-        if std::env::var("RLC_MASK").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) & 1 != 0 {
-            for (x, _) in caps {
-                if m.node_fn[*x as usize] != f || pinned.contains(x) {
-                    continue;
-                }
-                for &y in ix.preds.get(x).map(|v| v.as_slice()).unwrap_or(&[]) {
-                    for &k in ix.calls_of.get(&y).map(|v| v.as_slice()).unwrap_or(&[]) {
-                        if m.calls[k as usize].ret != y {
-                            continue;
-                        }
-                        for &(h, _) in ix.call_refs.get(&k).map(|v| v.as_slice()).unwrap_or(&[]) {
-                            if m.node_fn[h as usize] == f {
-                                roots.push(h);
-                            }
+        // What a closure captures from this frame and a call here
+        // initializes (`const map = new Map()` in memoizeOne) is a value of
+        // the slice too: each instance makes its own, as it births its own
+        // literals. The call joins the slice through its callee holder, so
+        // every instance runs its own copy and births under its own lexical
+        // context (rule C, design §10).
+        for (x, _) in caps {
+            if m.node_fn[*x as usize] != f || pinned.contains(x) {
+                continue;
+            }
+            for &y in ix.preds.get(x).map(|v| v.as_slice()).unwrap_or(&[]) {
+                for &k in ix.calls_of.get(&y).map(|v| v.as_slice()).unwrap_or(&[]) {
+                    if m.calls[k as usize].ret != y {
+                        continue;
+                    }
+                    for &(h, _) in ix.call_refs.get(&k).map(|v| v.as_slice()).unwrap_or(&[]) {
+                        if m.node_fn[h as usize] == f {
+                            roots.push(h);
                         }
                     }
                 }
@@ -899,6 +933,7 @@ pub(super) fn build_summaries(m: &mut Model) {
             s.this = NO_NODE;
         }
         compress(&mut s);
+        s.maker = returns_own_closure(&s);
         size += s.edges.len() + s.cons.len() + s.calls.len() + s.seeds.len();
         nsum += 1;
         nouter += s.outer.len();

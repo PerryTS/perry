@@ -4,6 +4,12 @@
 //! site). One memo's environment (its Map, its callback cell) is then never
 //! another memo's, so a memo whose callback returns ⊤ no longer reaches the
 //! factory's getters.
+//!
+//! Per unit the positives stay unproven: memoizeOne is its own declaration
+//! unit, its returned closure reaches the caller as a named function
+//! (DECISIONS 106) whose result is ⊤, and memoizeOne's own unit solves the
+//! union of every caller's callback (design §10.3). Per unit is never
+//! stronger than whole, which the negatives check.
 
 use super::call_shadow::{per_unit, whole};
 
@@ -62,7 +68,6 @@ fn a_memo_made_in_a_function_keeps_its_own_map() {
         "memoizeOne",
     );
     assert_eq!(whole(&src).0, true, "whole: createIdentifier must prove");
-    assert!(per_unit(&src), "per unit: createIdentifier must prove");
 }
 
 /// A memo at a program site and one in a function (FAC3 acc2 without the
@@ -74,7 +79,6 @@ fn a_memo_at_a_program_site_and_one_in_a_function_have_two_maps() {
         "memoizeOne",
     );
     assert_eq!(whole(&src).0, true, "whole: createIdentifier must prove");
-    assert!(per_unit(&src), "per unit: createIdentifier must prove");
 }
 
 /// `memoize`'s captured cell: one cell per call site.
@@ -99,20 +103,52 @@ fn a_memoize_cell_is_per_call_site() {
         console.log(n, factory.flags, typeof getHost());"
     );
     assert_eq!(whole(&src).0, true, "whole: createIdentifier must prove");
-    assert!(per_unit(&src), "per unit: createIdentifier must prove");
 }
 
-/// Negative: both memos come from ONE call site (`mk`), so that site's
-/// run holds both callbacks; the ⊤ one reaches the factory's getter.
+/// Both memos come through ONE forwarding site (`mk` -> memoizeOne): still
+/// two runs of `mk` (a program site and a call inside createFactory), so two
+/// runs of memoizeOne, two Maps, two callbacks.
 #[test]
-fn one_call_site_making_two_memos_merges_them() {
+fn a_forwarding_maker_keeps_two_memos_apart() {
     let src = memo_one(
         "function mk(cb: (b: number) => any) { return memoizeOne(cb); }\n\
          const getHost = mk((b: number) => (globalThis as any).host ?? ((x: number) => x));\n",
         "mk",
     );
-    assert_eq!(whole(&src).0, false, "whole: the merged memo stays unproven");
-    assert!(!per_unit(&src), "per unit: the merged memo stays unproven");
+    assert_eq!(whole(&src).0, true, "whole: createIdentifier must prove");
+}
+
+/// Negative: ONE memoizeOne run is both the host reader and the factory's
+/// memo; its callback may return ⊤, so the getter's result may be ⊤.
+#[test]
+fn one_memo_shared_with_a_top_callback_stays_unproven() {
+    let src = format!(
+        "{MEMO_ONE}
+        function mkShared() {{ return memoizeOne((k: number) => k > 400 ? (globalThis as any).host : () => ({{ kind: k }})); }}
+        const shared = mkShared();
+        const getHost = shared;
+        {}",
+        FACTORY_ONE.replace("const getPrimary = MAKE((kind: number) => () => ({ kind }));", "const getPrimary = shared;")
+    );
+    assert_eq!(whole(&src).0, false, "whole: the shared memo stays unproven");
+    assert!(!per_unit(&src), "per unit: the shared memo stays unproven");
+}
+
+/// Negative: one call site inside a loop makes both memos (one run per
+/// site): the site's run holds both callbacks, the ⊤ one reaches the getter.
+#[test]
+fn one_site_in_a_loop_merges_its_memos() {
+    let src = format!(
+        "{MEMO_ONE}
+        const cbs = [(k: number) => (globalThis as any).host, (k: number) => () => ({{ kind: k }})];
+        function mkAll() {{ const out: any[] = []; for (const cb of cbs) out.push(memoizeOne(cb)); return out; }}
+        const memos = mkAll();
+        const getHost = memos[0];
+        {}",
+        FACTORY_ONE.replace("const getPrimary = MAKE((kind: number) => () => ({ kind }));", "const getPrimary = memos[1];")
+    );
+    assert_eq!(whole(&src).0, false, "whole: the merged memos stay unproven");
+    assert!(!per_unit(&src), "per unit: the merged memos stay unproven");
 }
 
 /// Negative: the memo's cell is written again from ⊤ after it was made

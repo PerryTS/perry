@@ -30,7 +30,9 @@ pub const BORN: CallId = NO_CTX - 1;
 /// The layout of no object receiver (a primitive, `undefined`, a function
 /// without a `this` term).
 pub const LAY_NONE: u32 = 0;
-/// The lexical context of a kind-0 instance: its program site.
+/// The lexical context of a per-site run: a kind-0 instance's program site,
+/// a kind-7 instance's call site (rule C). What the run births is per
+/// (birth site, that site) (`made_ctx`).
 const LAY_SITE: u32 = 5 << 28;
 /// The lexical context of a kind-5 instance: the object it constructs.
 const LAY_BIRTH: u32 = 6 << 28;
@@ -38,14 +40,14 @@ const LAY_BIRTH: u32 = 6 << 28;
 /// token (`recv_lay`), the kind `layout_of` gives one-value tokens.
 const LAY_TOK: u32 = 4 << 28;
 const LAY_MASK: u32 = (1 << 28) - 1;
-/// The lexical context of a kind-7 instance (rule C): a closure maker's run
-/// for one call site (the call's program template).
-const LAY_CALL: u32 = 7 << 28;
 
-/// RLC price mask (measurement only): RLC_MASK bit 1 turns rule C on.
-fn rlc_mask() -> u32 {
-    static M: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-    *M.get_or_init(|| std::env::var("RLC_MASK").ok().and_then(|v| v.parse().ok()).unwrap_or(0))
+/// What made a maker-context birth (`SumState::made`): an object (its
+/// construction, or with `true` a method of it), or a per-site run, the
+/// program or call site whose instance births it (`LAY_SITE`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Maker {
+    Obj(Tok, bool),
+    Site(CallId),
 }
 /// A closure context key for a closure whose captured cells are its
 /// creator's context's (`CAP_OUTER`): the creator's context id with this
@@ -119,6 +121,10 @@ pub struct Summary {
     /// call result or seed puts a value into it), so it holds only what
     /// the calls pass (DECISIONS 44 (b), `relative_params`).
     pub rel: Vec<bool>,
+    /// The result is a closure this body creates over its own frame
+    /// (`return (arg) => ... map ...`, through copies): a closure maker
+    /// (rule C, `Model::closure_maker`).
+    pub maker: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -150,7 +156,9 @@ pub struct SumState {
     /// key, else its layout, `recv_lay`; without one `LAY_NONE`), 2 unknown-code
     /// entry, 3 setter group, 4 getter group, 5 a birth run (the
     /// constructor chain or field initializer of the object token being
-    /// born), 6 a for-in body's run for one key (the key's atom, FVA 4.3b).
+    /// born), 6 a for-in body's run for one key (the key's atom, FVA 4.3b),
+    /// 7 a closure maker's run for one call site (rule C, `closure_maker`:
+    /// the call's template, so one run per site of the program text).
     /// Nothing in a key is another instance: the count is (sites +
     /// object tokens + layouts) x functions, and the object tokens are the
     /// program's birth sites under their maker contexts (`made_of`).
@@ -214,10 +222,11 @@ pub struct SumState {
     /// calls started from (`maker_key`), so results of results never form
     /// a chain. A site already on the maker chain folds onto the object
     /// born there.
-    pub made_of: FxHashMap<(CallId, Tok), CallId>,
-    /// Maker context `BORN - 1 - i` -> (its birth site, its maker object,
-    /// made by a method of the maker rather than its construction).
-    pub made: Vec<(CallId, Tok, bool)>,
+    /// A per-site run's births are per (birth site, site) the same way
+    /// (`Maker::Site`): each run of a closure maker has its own `new Map()`.
+    pub made_of: FxHashMap<(CallId, Maker), CallId>,
+    /// Maker context `BORN - 1 - i` -> (its birth site, its maker).
+    pub made: Vec<(CallId, Maker)>,
 }
 
 fn is_slot(x: NodeId) -> bool {
@@ -726,19 +735,11 @@ impl Model {
     /// If that object, or an object on its maker chain, was itself born at
     /// `site`, the birth is that object's context again (a recursive maker
     /// folds onto its ancestor).
+    /// A per-site run (`LAY_SITE`) births per (birth site, site): sites are
+    /// the program's call sites, so there are at most births x sites.
     pub(crate) fn made_ctx(&mut self, site: CallId, lay: u32) -> CallId {
-        if lay & !LAY_MASK == LAY_CALL {
-            // Rule C: a birth in a closure maker's run for call site `cs` is
-            // per (birth site, call site). The entry has no maker object (TOP
-            // ends every maker walk).
-            let key = (site, CALL | (lay & LAY_MASK));
-            if let Some(&c) = self.sum.made_of.get(&key) {
-                return c;
-            }
-            let c = BORN - 1 - self.sum.made.len() as CallId;
-            self.sum.made.push((site, TOP, false));
-            self.sum.made_of.insert(key, c);
-            return c;
+        if lay & !LAY_MASK == LAY_SITE {
+            return self.made_at(site, Maker::Site(lay & LAY_MASK));
         }
         let Some((o, by_method)) = self.lay_object(lay) else {
             return site;
@@ -748,18 +749,26 @@ impl Model {
             // The walk is solve work: the bound covers a chain that grows.
             self.work += 1;
             match self.made_entry(c) {
-                Some((s, _, _)) if s == site => return c,
-                Some((_, m, _)) => x = m,
+                Some((s, _)) if s == site => return c,
+                Some((_, Maker::Obj(m, _))) => x = m,
+                // A per-site run made `x`: no maker object behind it.
+                Some((_, Maker::Site(_))) => break,
                 None if c == site => return c,
                 None => break,
             }
         }
-        let key = (site, self.maker_key(o, by_method));
+        let k = self.maker_key(o, by_method);
+        self.made_at(site, Maker::Obj(k, by_method))
+    }
+
+    /// The maker context of (birth site, maker), made on first use.
+    fn made_at(&mut self, site: CallId, maker: Maker) -> CallId {
+        let key = (site, maker);
         if let Some(&c) = self.sum.made_of.get(&key) {
             return c;
         }
         let c = BORN - 1 - self.sum.made.len() as CallId;
-        self.sum.made.push((site, o, by_method));
+        self.sum.made.push(key);
         self.sum.made_of.insert(key, c);
         c
     }
@@ -772,7 +781,7 @@ impl Model {
         if by_method {
             while let TokKind::Obj(_, c) = self.toks[o as usize] {
                 match self.made_entry(c) {
-                    Some((_, m, true)) => o = m,
+                    Some((_, Maker::Obj(m, true))) => o = m,
                     _ => break,
                 }
             }
@@ -780,8 +789,8 @@ impl Model {
         o
     }
 
-    /// The (site, maker, by a method) of maker context `c`, if it is one.
-    fn made_entry(&self, c: CallId) -> Option<(CallId, Tok, bool)> {
+    /// The (birth site, maker) of maker context `c`, if it is one.
+    fn made_entry(&self, c: CallId) -> Option<(CallId, Maker)> {
         if c >= BORN {
             return None;
         }
@@ -928,9 +937,8 @@ impl Model {
             }
         }
         let lay = match key.0 {
-            0 => LAY_SITE | key.1,
+            0 | 7 => LAY_SITE | key.1,
             5 => LAY_BIRTH | key.1,
-            7 => LAY_CALL | key.1,
             1 if this != NO_NODE => key.1,
             2 if this != NO_NODE => self.layout_of(TOP),
             _ if ctx == NO_CTX => LAY_NONE,
@@ -970,7 +978,8 @@ impl Model {
             _ => LAY_NONE,
         };
         let key = match x {
-            _ if rlc_mask() & 1 != 0 && call != NO_NODE && self.closure_maker(f, x) => {
+            // Rule C: a closure maker's runs are per call site.
+            _ if call != NO_NODE && self.closure_maker(f, x) => {
                 let site = self.sum.tmpl_of.get(&call).copied().unwrap_or(call);
                 (7, site, ft)
             }
@@ -993,13 +1002,17 @@ impl Model {
         }
     }
 
-    /// Rule C: `f` has no `this` term (or no receiver) and creates a closure
-    /// over its own frame: each call site's run has its own environment.
+    /// Rule C: `f` has no `this` term (or no receiver) and returns a closure
+    /// over its own frame: each run has its own environment (the cells the
+    /// closure captures, and what the run births into them), so the runs of
+    /// distinct call sites are distinct instances (key kind 7). The runs of
+    /// one site share one (a loop making memos merges them); a site inside
+    /// an instance is its template, so instances never multiply instances.
     fn closure_maker(&self, f: FnIdx, x: Option<Tok>) -> bool {
         let Some(s) = self.sum.of.get(&f) else {
             return false;
         };
-        (x.is_none() || s.this == NO_NODE) && s.closures.iter().any(|c| c.3 == CAP_OWN)
+        (x.is_none() || s.this == NO_NODE) && s.maker
     }
 
     /// The `this` term of summarized `f`'s instances, if it has one.

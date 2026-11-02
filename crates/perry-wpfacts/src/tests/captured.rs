@@ -63,18 +63,19 @@ fn lacks(pf: &ProgramFacts, key: &str, class: &str) {
 
 #[test]
 fn closure_over_a_parameter_keeps_callers_apart() {
-    // Births per site (owner, CWL S3): the `map` result is one array per
-    // birth site, so both callers' arrows land in it and each read sees both
-    // classes, as in the context-insensitive floor (b2). The arrows' own
-    // contexts stay per caller; only the shared container merges.
+    // A program site's run births per (birth site, program site) (rule C,
+    // `Maker::Site`; owner 10-25: maker contexts, reversing CWL S3): each
+    // caller's `map` result is its own array, holding only its own arrow,
+    // so each read sees its own class. (Was 2 and 2: one array per birth
+    // site merged both callers.)
     let pf = facts(&format!(
         "{CLASSES}
         function f(x: any) {{ return [1].map(() => x); }}
         const a = f(new A()); const b = f(new B());
         console.log(a[0].x, b[0].y);"
     ));
-    exact(&pf, "x", 2);
-    exact(&pf, "y", 2);
+    exact(&pf, "x", 1);
+    exact(&pf, "y", 1);
 }
 
 // CWL (layout as the unit of propagation): `run` has one instance per
