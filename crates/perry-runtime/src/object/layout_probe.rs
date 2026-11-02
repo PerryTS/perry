@@ -559,18 +559,6 @@ unsafe fn inline_slot(
     (slot != pos && slot < rec.live_inline_slot_count && slot != NO_LOAD).then_some(slot)
 }
 
-/// May a TEXT entry of `rec`'s list prove absence (see `derive_word`)?
-unsafe fn text_proves_absence(rec: &ShapeRecord) -> bool {
-    if rec.object_kind() == super::ShapeObjectKind::Ordinary {
-        return true;
-    }
-    let dir = super::ordinary_dir_addr();
-    match object_prototype(dir) {
-        Some(p) => std::ptr::eq(record_of(dir, LayoutWord((*p).parent_class_id)), rec),
-        None => false,
-    }
-}
-
 /// A TEXT entry's word (a short or plain string no program atom named when
 /// the index was derived) against a site key: equal texts are one key.
 #[cold]
@@ -2066,3 +2054,7 @@ mod overflow_tests;
 #[cfg(test)]
 #[path = "layout_probe_accessor_tests.rs"]
 mod accessor_tests;
+
+#[cfg(test)]
+#[path = "layout_probe_global_tests.rs"]
+mod global_tests;

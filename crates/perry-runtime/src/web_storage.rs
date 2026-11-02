@@ -375,7 +375,7 @@ fn install_storage_length_accessor(proto: *mut ObjectHeader) {
 fn set_global_storage_property(global: *mut ObjectHeader, name: &str, value: *mut ObjectHeader) {
     crate::object::define_builtin_data_property(
         global,
-        string(name),
+        crate::object::global_this::global_name_key(name),
         crate::value::js_nanbox_pointer(value as i64),
         name.to_string(),
         PropertyAttrs::new(true, true, true),
@@ -399,7 +399,8 @@ fn set_global_storage_property(global: *mut ObjectHeader, name: &str, value: *mu
                 get: crate::value::js_nanbox_pointer(getter as i64).to_bits(),
                 set: crate::value::js_nanbox_pointer(setter as i64).to_bits(),
             },
-            PropertyAttrs::new(false, true, true),
+            // node: `localStorage` is not enumerable, `sessionStorage` is.
+            PropertyAttrs::new(false, name != "localStorage", true),
         );
     }
 }

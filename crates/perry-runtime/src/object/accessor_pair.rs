@@ -289,7 +289,13 @@ pub(crate) unsafe fn store_own_accessor_bytes(obj: usize, key: &[u8], acc: Optio
         Some(acc) => crate::value::js_nanbox_pointer(pair_new(acc) as i64),
         None => f64::from_bits(crate::value::TAG_UNDEFINED),
     };
-    let key_str = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+    // The agent atom of the name when one exists (a builtin global name is an
+    // image atom), so an atom-keyed list stays one; no atom is minted here.
+    let hash = crate::object::key_bytes_hash(key.as_ptr(), key.len());
+    let key_str = match crate::string::atom_lookup(key, hash) {
+        Some(atom) if crate::string::is_property_atom(atom) => atom as *mut crate::StringHeader,
+        _ => crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32),
+    };
     crate::object::object_ops::define_property_force_store_value(
         obj as *mut crate::object::ObjectHeader,
         key_str,

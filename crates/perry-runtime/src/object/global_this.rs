@@ -190,3 +190,13 @@ pub(crate) use array_error::{
 };
 #[cfg(test)]
 pub(crate) use typed_array::array_buffer_is_view_thunk;
+
+/// The key of the global object named `name`: the agent atom of that text
+/// (DEC 243(5)). A builtin global name is an image atom seeded with the
+/// program atoms, so this allocates nothing for it; every key of the global
+/// object is an atom, and a miss on it proves absence.
+pub(crate) fn global_name_key(name: impl AsRef<[u8]>) -> *mut crate::StringHeader {
+    let name = name.as_ref();
+    let hash = crate::object::key_bytes_hash(name.as_ptr(), name.len());
+    crate::string::js_string_pool_atom(name.as_ptr(), name.len() as u32, hash, 0)
+}

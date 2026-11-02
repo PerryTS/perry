@@ -504,9 +504,9 @@ mod tests;
 //
 // `Pristine(Array)` alone is not the receiver's proof: an array may own a
 // property of the method's name, or carry its own `[[Prototype]]`. Both are
-// recorded on the cell (`GC_ARRAY_KEY_ATTRS`, the descriptor flag,
-// `GC_ARRAY_CUSTOM_PROTO`) — the same bits the emitted own-override guard
-// reads — and every other receiver kind answers from the own-override
+// recorded on the cell (its named layout `ArrayHeader.named`, the
+// descriptor flag `GC_ARRAY_KEY_ATTRS`, `GC_ARRAY_CUSTOM_PROTO`) — the same
+// words the emitted own-override guard reads — and every other receiver kind answers from the own-override
 // predicate's global gate. A miss takes the real `Get`; a builtin found
 // there runs the body below on the re-read operands.
 
@@ -570,7 +570,7 @@ unsafe fn array_admits(recv: &mut f64, name: &[u8], args: &mut [f64]) -> bool {
                 crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY
             ) =>
         {
-            h._reserved & ARRAY_NOT_DEFAULT == 0
+            (h._reserved & ARRAY_NOT_DEFAULT == 0 && !array_has_named_layout(addr, h))
                 || (h._reserved & crate::gc::GC_ARRAY_CUSTOM_PROTO == 0
                     && !may_own_named(recv, name, args))
         }
@@ -593,9 +593,10 @@ fn ptr_boxed(p: i64) -> f64 {
     f64::from_bits(POINTER_TAG | p as u64)
 }
 
-/// The inline half of [`array_admits`]: `Pristine(Array)` and a plain array
-/// cell whose header records no named property, descriptor or own
-/// `[[Prototype]]` — one byte load and one header word. Anything else asks
+/// The inline half of [`array_admits`]: `Pristine(Array)` and a plain,
+/// unforwarded array cell whose header records no descriptor or own
+/// `[[Prototype]]` and which has no named layout (`ArrayHeader.named`, where
+/// an own `indexOf` lives) — the header word and the `named` word. Anything else asks
 /// [`array_slow`].
 #[inline(always)]
 unsafe fn array_fast_admits(recv: f64) -> bool {
@@ -609,7 +610,22 @@ unsafe fn array_fast_admits(recv: f64) -> bool {
     let Some(header) = crate::value::addr_class::pointer_value_header(bits) else {
         return false;
     };
-    header.obj_type == crate::gc::GC_TYPE_ARRAY && header._reserved & ARRAY_NOT_DEFAULT == 0
+    header.obj_type == crate::gc::GC_TYPE_ARRAY
+        && header._reserved & ARRAY_NOT_DEFAULT == 0
+        && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+        && (*((bits & POINTER_MASK) as *const crate::array::ArrayHeader)).named.is_null()
+}
+
+/// Does the array at `addr` (header `h`) own a named layout, where its named
+/// properties live? A lazy array has none. A forwarded alias answers from the
+/// head it forwards to.
+#[inline]
+unsafe fn array_has_named_layout(addr: usize, h: &crate::gc::GcHeader) -> bool {
+    if h.obj_type != crate::gc::GC_TYPE_ARRAY {
+        return false;
+    }
+    let live = crate::array::clean_arr_ptr(addr as *const crate::array::ArrayHeader);
+    live.is_null() || !(*live).named.is_null()
 }
 
 /// The out-of-line half: the exact admission, and on a miss the real `Get`

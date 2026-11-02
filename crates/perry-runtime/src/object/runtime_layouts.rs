@@ -659,6 +659,7 @@ runtime_layout!(
 
 pub(crate) const URL_CLASS_ID: u32 = 0xFFFF0063;
 
+mod global_atoms;
 mod stream_prototypes;
 pub(crate) use stream_prototypes::*;
 mod stream_instances;
