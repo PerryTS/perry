@@ -1027,9 +1027,20 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             if what == "RegExp" && regexp_species(n) {
                 regexp_species_constructor(m, t);
             }
-            ret_prim(m, call, prim::ALL);
             let pb = site_tmpl(m, call, "primbox");
-            ret_tok(m, call, pb);
+            if what == "RegExp" && n == "@@__perry_wk_split" {
+                // 22.2.6.14: A = ArrayCreate(0), whatever the species
+                // constructor made the splitter: an Array of the substrings
+                // and captures (the primitive container's contents).
+                let a = site_tmpl(m, call, "Array");
+                let fa = m.field_any(a);
+                m.add_prim(fa, prim::ALL);
+                m.add_tok(fa, pb);
+                ret_tok(m, call, a);
+            } else {
+                ret_prim(m, call, prim::ALL);
+                ret_tok(m, call, pb);
+            }
             if matches!(n, "unref" | "ref" | "refresh") {
                 ret_tok(m, call, t);
             }
