@@ -702,16 +702,17 @@ impl Model {
     /// under a computed key) are no value of a named non-index key, which
     /// reads `named_any` instead. A marker's fields are its reach markers.
     ///
-    /// A Map or Set (`Collection`) likewise: its entries (`field_any`) sit
-    /// in internal slots and are no property at all, so a named key
-    /// (`map.get`) never reads them; a store under a computed key is a
-    /// property and reaches both.
+    /// A Map, Set, WeakMap or WeakSet (`builtins::is_collection`) likewise:
+    /// its entries (`field_any`) sit in internal slots and are no property
+    /// at all, so a named key (`map.get`) never reads them; a store under a
+    /// computed key is a property and reaches both.
     pub fn is_elem_array(&self, t: Tok) -> bool {
         matches!(self.toks[t as usize], TokKind::Obj(tm, _)
-            if matches!(self.tmpls[tm as usize].kind,
-                TmplKind::Arr { .. } | TmplKind::Args { .. }
-                | TmplKind::BObj { what: "Collection" | "Map" | "Set" | "WeakMap" | "WeakSet", .. }))
-            && !self.is_marker(t)
+        if match self.tmpls[tm as usize].kind {
+            TmplKind::Arr { .. } | TmplKind::Args { .. } => true,
+            TmplKind::BObj { what, .. } => builtins::is_collection(what),
+            _ => false,
+        }) && !self.is_marker(t)
     }
 
     /// The values of `t` under a key no store named: for an Array the ones
@@ -1111,7 +1112,8 @@ impl Model {
             if self.virt_protos.contains_key(&r) {
                 self.register_virt(r, classes);
             } else if self.arg_members.get(&r).is_some_and(|ms| {
-                ms.iter().all(|m| self.virt_protos.contains_key(m) && !self.virt_tok_open.contains(m))
+                ms.iter()
+                    .all(|m| self.virt_protos.contains_key(m) && !self.virt_tok_open.contains(m))
             }) {
                 let mut cs: Vec<TmplId> = Vec::new();
                 for m in self.arg_members[&r].clone() {
@@ -1180,11 +1182,12 @@ impl Model {
     /// hard operation on one or lets one escape, or an accessor on the
     /// chain may answer it.
     fn virt_own(&self, t: Tok, classes: &[TmplId], a: Atom) -> bool {
-        self.virt_tok_open.contains(&t) || classes.iter().any(|&p| {
-            self.virt_open.contains(&p)
-                || self.virt_revoked.contains(&(p, a))
-                || self.chain_accessor_key(p, a)
-        })
+        self.virt_tok_open.contains(&t)
+            || classes.iter().any(|&p| {
+                self.virt_open.contains(&p)
+                    || self.virt_revoked.contains(&(p, a))
+                    || self.chain_accessor_key(p, a)
+            })
     }
 
     /// The classes of receiver token / marker `t` that another unit's
@@ -1998,7 +2001,10 @@ impl Model {
                 of,
                 builtin,
             } => {
-                format!("chainunion {n} {} {dst} {of} {builtin}", self.key_name(*key))
+                format!(
+                    "chainunion {n} {} {dst} {of} {builtin}",
+                    self.key_name(*key)
+                )
             }
             Cons::ProtoGiven { protos } => format!("protogiven {n} {protos}"),
             Cons::ParentGiven { of } => format!("parentgiven {n} {of}"),

@@ -317,7 +317,13 @@ impl Model {
             // yields elements, never a method a computed key could name.
             let elems = self.node_l("spread-elems");
             let ek = self.elem_key();
-            self.cons(s, Cons::Load { key: ek, dst: elems });
+            self.cons(
+                s,
+                Cons::Load {
+                    key: ek,
+                    dst: elems,
+                },
+            );
             for i in 0..nparams {
                 if caps[i].is_none() {
                     let p = self.funcs[f].params[i];

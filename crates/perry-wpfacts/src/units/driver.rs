@@ -304,7 +304,10 @@ pub(super) fn dependency_order(solves: &[Solve]) -> Vec<usize> {
                 continue;
             }
             // `v` is the root of a component: its members, the stack above it.
-            let at = comp_stack.iter().rposition(|&x| x == v).expect("root on stack");
+            let at = comp_stack
+                .iter()
+                .rposition(|&x| x == v)
+                .expect("root on stack");
             let mut members: Vec<usize> = comp_stack.split_off(at);
             for &m in &members {
                 on_stack[m] = false;
@@ -1557,7 +1560,10 @@ fn synthetic_dirs(sorted: &[(&str, &Module)]) -> Vec<Vec<u8>> {
     const NAME: &str = "/synthetic-modules/";
     let mut dirs: Vec<Vec<u8>> = sorted
         .iter()
-        .filter_map(|(p, _)| p.find(NAME).map(|at| p.as_bytes()[..at + NAME.len() - 1].to_vec()))
+        .filter_map(|(p, _)| {
+            p.find(NAME)
+                .map(|at| p.as_bytes()[..at + NAME.len() - 1].to_vec())
+        })
         .collect();
     dirs.sort();
     dirs.dedup();
@@ -1801,7 +1807,10 @@ pub(super) fn merge_unit(
     pf.super_unrelinked.extend(u.super_unrelinked);
     pf.interp_guard = pf.interp_guard.take().or(u.interp_guard);
     pf.fnproto_bind_written = pf.fnproto_bind_written.take().or(u.fnproto_bind_written);
-    pf.array_iteration_written = pf.array_iteration_written.take().or(u.array_iteration_written);
+    pf.array_iteration_written = pf
+        .array_iteration_written
+        .take()
+        .or(u.array_iteration_written);
     pf.array_iterator_close_written = pf
         .array_iterator_close_written
         .take()
@@ -1834,7 +1843,8 @@ pub(super) fn merge_unit(
 /// adds nothing to that union: the other units' records decide the site.
 /// A site only dead records name stays one dead fact.
 pub(super) fn join_site_records(pf: &mut ProgramFacts) {
-    let dead = |s: &SiteFacts| matches!(&s.verdict, crate::Verdict::No(r) if r.starts_with("dead site"));
+    let dead =
+        |s: &SiteFacts| matches!(&s.verdict, crate::Verdict::No(r) if r.starts_with("dead site"));
     let key = |s: &SiteFacts| (s.module, s.byte_offset, s.key.clone(), s.is_call);
     let live: FxHashSet<(u32, u32, String, bool)> =
         pf.sites.iter().filter(|s| !dead(s)).map(key).collect();
@@ -1940,7 +1950,9 @@ fn output_changes(u: &ProgramFacts, old: &ProgramFacts) -> Vec<String> {
         v.own_fns_out.iter().map(|c| (c.name.clone(), c)).collect()
     }
     fn named<C>(v: &[((String, String), C)]) -> Vec<(String, &C)> {
-        v.iter().map(|(k, c)| (format!("{}:{}", k.0, k.1), c)).collect()
+        v.iter()
+            .map(|(k, c)| (format!("{}:{}", k.0, k.1), c))
+            .collect()
     }
     // A cell keeps the unit's last write joined with its latest
     // (DECISIONS 197): what it holds after this solve is that join.
@@ -1966,9 +1978,24 @@ fn output_changes(u: &ProgramFacts, old: &ProgramFacts) -> Vec<String> {
     }
     let mut out = Vec::new();
     keyed(&mut out, "own_fn", &own(u), &own(old));
-    keyed(&mut out, "fn", &named(&u.fn_contracts_out), &named(&old.fn_contracts_out));
-    keyed(&mut out, "class", &named(&u.contracts_out), &named(&old.contracts_out));
-    keyed(&mut out, "value", &named(&u.values_out), &named(&old.values_out));
+    keyed(
+        &mut out,
+        "fn",
+        &named(&u.fn_contracts_out),
+        &named(&old.fn_contracts_out),
+    );
+    keyed(
+        &mut out,
+        "class",
+        &named(&u.contracts_out),
+        &named(&old.contracts_out),
+    );
+    keyed(
+        &mut out,
+        "value",
+        &named(&u.values_out),
+        &named(&old.values_out),
+    );
     keyed(&mut out, "cell", &cells(&joined), &cells(&old.cells_out));
     // Every other output the driver publishes or feeds back to the units:
     // a change in any of them re-seeds a reader, so each is compared (a
@@ -1982,14 +2009,49 @@ fn output_changes(u: &ProgramFacts, old: &ProgramFacts) -> Vec<String> {
     fn stores(v: &[(String, String, ValueContract)]) -> Vec<(String, &ValueContract)> {
         v.iter().map(|(d, k, c)| (format!("{d}.{k}"), c)).collect()
     }
-    keyed(&mut out, "layout", &by_display(&u.layouts_out), &by_display(&old.layouts_out));
+    keyed(
+        &mut out,
+        "layout",
+        &by_display(&u.layouts_out),
+        &by_display(&old.layouts_out),
+    );
     keyed(&mut out, "args", &plain(&u.args_out), &plain(&old.args_out));
-    keyed(&mut out, "ctor_args", &named(&u.ctor_args_out), &named(&old.ctor_args_out));
-    keyed(&mut out, "store", &stores(&u.stores_out), &stores(&old.stores_out));
-    keyed(&mut out, "write", &named(&u.writes_out), &named(&old.writes_out));
-    keyed(&mut out, "this_args", &plain(&u.this_args_out), &plain(&old.this_args_out));
-    keyed(&mut out, "method_args", &plain(&u.method_args_out), &plain(&old.method_args_out));
-    keyed(&mut out, "ctor_runs", &plain(&u.ctor_runs_out), &plain(&old.ctor_runs_out));
+    keyed(
+        &mut out,
+        "ctor_args",
+        &named(&u.ctor_args_out),
+        &named(&old.ctor_args_out),
+    );
+    keyed(
+        &mut out,
+        "store",
+        &stores(&u.stores_out),
+        &stores(&old.stores_out),
+    );
+    keyed(
+        &mut out,
+        "write",
+        &named(&u.writes_out),
+        &named(&old.writes_out),
+    );
+    keyed(
+        &mut out,
+        "this_args",
+        &plain(&u.this_args_out),
+        &plain(&old.this_args_out),
+    );
+    keyed(
+        &mut out,
+        "method_args",
+        &plain(&u.method_args_out),
+        &plain(&old.method_args_out),
+    );
+    keyed(
+        &mut out,
+        "ctor_runs",
+        &plain(&u.ctor_runs_out),
+        &plain(&old.ctor_runs_out),
+    );
     for (what, new, was) in [
         ("fn defined", &u.fns_defined, &old.fns_defined),
         ("method run", &u.method_runs_out, &old.method_runs_out),
@@ -2003,8 +2065,16 @@ fn output_changes(u: &ProgramFacts, old: &ProgramFacts) -> Vec<String> {
             out.push(format!("-{what} {n}"));
         }
     }
-    let added = u.shared_out.iter().filter(|w| !old.shared_out.contains(w)).count();
-    let gone = old.shared_out.iter().filter(|w| !u.shared_out.contains(w)).count();
+    let added = u
+        .shared_out
+        .iter()
+        .filter(|w| !old.shared_out.contains(w))
+        .count();
+    let gone = old
+        .shared_out
+        .iter()
+        .filter(|w| !u.shared_out.contains(w))
+        .count();
     if added + gone != 0 {
         out.push(format!("shared writes +{added} -{gone}"));
     }
@@ -2036,7 +2106,11 @@ pub(crate) fn changed_fields<T: std::fmt::Debug>(a: &T, b: &T) -> Vec<String> {
         .filter(|(n, x)| fb.iter().find(|(m, _)| m == n).is_none_or(|(_, y)| x != y))
         .map(|(n, _)| n.clone())
         .collect();
-    out.extend(fb.iter().filter(|(n, _)| !fa.iter().any(|(m, _)| m == n)).map(|(n, _)| n.clone()));
+    out.extend(
+        fb.iter()
+            .filter(|(n, _)| !fa.iter().any(|(m, _)| m == n))
+            .map(|(n, _)| n.clone()),
+    );
     out
 }
 
@@ -2058,7 +2132,11 @@ fn no_fixpoint_report(
             "perry: wpfacts:   {} changed {}: {}{}",
             solves[*si].key,
             cs.len(),
-            if shown.is_empty() { "nothing".to_string() } else { shown.join("; ") },
+            if shown.is_empty() {
+                "nothing".to_string()
+            } else {
+                shown.join("; ")
+            },
             if cs.len() > 8 { "; ..." } else { "" }
         );
     }

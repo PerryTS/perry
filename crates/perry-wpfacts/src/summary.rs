@@ -1588,7 +1588,13 @@ impl Model {
             let s = self.calls[c].spread[j];
             let elems = self.node_l("spread-elems");
             let ek = self.elem_key();
-            self.cons(s, Cons::Load { key: ek, dst: elems });
+            self.cons(
+                s,
+                Cons::Load {
+                    key: ek,
+                    dst: elems,
+                },
+            );
             for i in 0..terms.len() {
                 if caps[i].is_some() {
                     continue;

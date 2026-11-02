@@ -90,13 +90,16 @@ fn bind_before_super(ctx: &mut LoweringContext, stmts: &mut Vec<Stmt>, at: usize
     }
     stmts.splice(..at, before);
     stmts[at] = Stmt::Expr(Expr::SuperCall(args));
-    stmts.insert(at + 1, Stmt::Expr(Expr::PropertySet {
-        object: Box::new(Expr::LocalGet(cell)),
-        property: "t".to_string(),
-        value: Box::new(Expr::This),
-        byte_offset: 0,
-        byte_end: 0,
-    }));
+    stmts.insert(
+        at + 1,
+        Stmt::Expr(Expr::PropertySet {
+            object: Box::new(Expr::LocalGet(cell)),
+            property: "t".to_string(),
+            value: Box::new(Expr::This),
+            byte_offset: 0,
+            byte_end: 0,
+        }),
+    );
     stmts.insert(0, cell_decl(cell));
     true
 }

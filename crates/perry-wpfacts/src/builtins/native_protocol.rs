@@ -278,7 +278,10 @@ fn chain_keys(m: &mut Model, u: Tok, seen: &mut Vec<Tok>, out: &mut Vec<Atom>) -
         || m.foreign.contains_key(&tm)
         || m.any_writers.contains_key(&tm)
         || m.hard.get(&u).is_some_and(|(k, _)| {
-            !matches!(k, Hard::E5DefineProperty | Hard::E6SetPrototypeOf | Hard::E7Delete)
+            !matches!(
+                k,
+                Hard::E5DefineProperty | Hard::E6SetPrototypeOf | Hard::E7Delete
+            )
         })
     {
         return false;
@@ -311,7 +314,11 @@ fn chain_keys(m: &mut Model, u: Tok, seen: &mut Vec<Tok>, out: &mut Vec<Atom>) -
         TokKind::Proto(_) => &m.proto_writers,
         _ => &m.writers,
     };
-    let late: Vec<Atom> = late.keys().filter(|(w, _)| *w == tm).map(|&(_, a)| a).collect();
+    let late: Vec<Atom> = late
+        .keys()
+        .filter(|(w, _)| *w == tm)
+        .map(|&(_, a)| a)
+        .collect();
     for a in late {
         add(a, out);
     }

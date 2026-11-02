@@ -250,14 +250,9 @@ impl<'a> Gen<'a> {
         match key {
             Key::Named(_) => self.m.cons(recv, Cons::Store { key, src, site }),
             // The key's values decide: an index or any key (`StoreIndexed`).
-            Key::Any => self.m.cons(
-                key_value,
-                Cons::StoreIndexed {
-                    o: recv,
-                    src,
-                    site,
-                },
-            ),
+            Key::Any => self
+                .m
+                .cons(key_value, Cons::StoreIndexed { o: recv, src, site }),
         }
     }
 
@@ -862,7 +857,17 @@ impl<'a> Gen<'a> {
                     for s in ks {
                         let key = Key::Named(self.m.atom(&s));
                         for (o, what) in [(t, "putvalue"), (rv, "putvalue-receiver")] {
-                            self.store_phased(fx, e, target, o, key, v, what.into(), owner, Some(k));
+                            self.store_phased(
+                                fx,
+                                e,
+                                target,
+                                o,
+                                key,
+                                v,
+                                what.into(),
+                                owner,
+                                Some(k),
+                            );
                         }
                     }
                 } else {
@@ -1230,9 +1235,7 @@ impl<'a> Gen<'a> {
                 args,
                 byte_offset,
                 ..
-            } => {
-                self.call_expr(fx, callee, args, &[], *byte_offset)
-            }
+            } => self.call_expr(fx, callee, args, &[], *byte_offset),
             Expr::CallSpread { callee, args, .. } => {
                 let (a, s) = self.call_args(fx, args);
                 let _ = (&a, &s);

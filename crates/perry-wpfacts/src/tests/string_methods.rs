@@ -33,7 +33,9 @@ fn proven(v: &Verdict) -> bool {
 
 /// `expr` on a string with `new Svc()` as the operand: node prints `3`.
 fn reads_only(expr: &str) {
-    let v = verdict(&format!("const o: any = new Svc(); {expr}; console.log(g(o));"));
+    let v = verdict(&format!(
+        "const o: any = new Svc(); {expr}; console.log(g(o));"
+    ));
     assert!(proven(&v), "{expr}: {v:?}");
 }
 
