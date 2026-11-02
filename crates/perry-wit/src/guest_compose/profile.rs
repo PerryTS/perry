@@ -127,10 +127,7 @@ mod tests {
                 (type (future u32))
                 (type (stream u32))
                 (import "start" (func async))
-                (core module
-                    (memory i64 1)
-                    (tag (param i32))
-                    (func (try (do) (catch 0 drop)))))"#,
+                (core module (memory i64 1)))"#,
         )
         .unwrap();
         assert_eq!(wasi_030(bytes.clone()).unwrap(), bytes);
