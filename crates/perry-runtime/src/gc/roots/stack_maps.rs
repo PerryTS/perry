@@ -998,7 +998,7 @@ fn index_records(
         .iter()
         .map(|record| record.function_address)
         .collect();
-    function_starts.sort_unstable();
+    crate::cold_sort::sort_by(&mut function_starts, |a, b| a.cmp(b));
     function_starts.dedup();
     EagerIndex {
         records,
