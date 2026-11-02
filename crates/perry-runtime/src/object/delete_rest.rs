@@ -159,6 +159,26 @@ pub extern "C" fn js_object_delete_field(
         if (obj as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
             let gc_header =
                 (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            if (*gc_header).obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
+                // A delete on a lazy JSON array is an own-property write, so it
+                // takes the array funnel, which materializes the value in place
+                // (the same object, now an Array) and the Array arm below runs.
+                // Before, the lazy header fell through to the ordinary-object
+                // path and panicked reading a shape it does not have. The
+                // materialization allocates, so the key is rooted across it.
+                let scope = crate::gc::RuntimeHandleScope::new();
+                let key_h = scope.root_string_ptr(key);
+                let arr = crate::array::clean_arr_ptr_mut(obj as *mut crate::array::ArrayHeader);
+                let key = key_h.get_raw_const_ptr::<crate::StringHeader>();
+                if arr.is_null()
+                    || crate::json_tape::is_lazy_array(
+                        arr as *const crate::json_tape::LazyArrayHeader,
+                    )
+                {
+                    return 1;
+                }
+                return js_object_delete_field(arr as *mut ObjectHeader, key);
+            }
             if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
                 let obj = super::array_object_ops::array_header(obj) as *mut ObjectHeader;
                 if let Some(name) = super::has_own_helpers::str_from_string_header(key) {

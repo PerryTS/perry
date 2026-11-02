@@ -1376,11 +1376,6 @@ pub unsafe extern "C" fn js_json_stringify_full(
             return JSValue::string_ptr(ptr).bits() as i64;
         }
     }
-    // Lazy-but-materialized: the fast path's `materialized.is_null()`
-    // check above returns None; fall back to the tree walk, but
-    // point it at the materialized tree (not the lazy header
-    // whose fields aren't element f64s).
-    let value = redirect_lazy_to_materialized(value);
     let _value_bits = value.to_bits();
 
     // Determine spacer/indent. A `Number`/`String` wrapper object spacer

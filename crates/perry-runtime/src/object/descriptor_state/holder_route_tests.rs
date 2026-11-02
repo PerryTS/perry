@@ -190,20 +190,24 @@ fn lazy_array_descriptor_holder_is_the_materialized_arrays_bag() {
     unsafe {
         let before = descriptor_route(lazy as usize).bag;
         assert!(before.is_null());
-        assert!((*lazy).materialized.is_null(), "reads must not materialize");
+        assert!(
+            crate::json_tape::is_lazy_array(lazy),
+            "reads must not materialize"
+        );
         set_property_attrs(
             lazy as usize,
             "tag".into(),
             PropertyAttrs::new(false, true, true),
         );
         assert!(
-            !(*lazy).materialized.is_null(),
+            !crate::json_tape::is_lazy_array(lazy),
             "installs normalize to an ordinary array"
         );
         let bag = descriptor_route(lazy as usize).bag;
         assert_eq!(
             bag,
-            crate::array::array_property_bag((*lazy).materialized) as *const ObjectHeader
+            crate::array::array_property_bag(lazy as *mut crate::array::ArrayHeader)
+                as *const ObjectHeader
         );
         assert!(!get_property_attrs(lazy as usize, "tag").unwrap().writable());
         assert!(super::super::handle_expando::handle_property_bag(lazy as i64).is_null());

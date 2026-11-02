@@ -1238,6 +1238,13 @@ pub struct LoweringContext {
     /// ECMAScript module syntax. Function lowering consults this before
     /// deciding whether its `arguments` object should be mapped.
     pub(crate) module_strict: bool,
+    /// #13558: this module's source has the ES-module goal (ESM format or
+    /// `import`/`export` syntax — `module_strict::module_has_module_goal`).
+    /// Module top-level `this` is `undefined` when this holds, and the CommonJS
+    /// `module.exports` stand-in (`Expr::ModuleTopThis`) otherwise. Kept
+    /// separate from `module_strict` because a `"use strict"` CommonJS file is
+    /// strict yet still has CommonJS top-level `this`.
+    pub(crate) module_goal_is_module: bool,
     /// Stack of strict-mode state for currently lowered function/arrow bodies.
     /// Nested ordinary functions inherit strictness from strict parents, while
     /// a body-level `"use strict"` directive pushes strictness for children.

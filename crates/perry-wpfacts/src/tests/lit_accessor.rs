@@ -75,12 +75,13 @@ fn a_getter_result_swapping_the_method_for_a_sibling_stays_unproven() {
 }
 
 #[test]
-fn a_getter_that_returns_a_fresh_arrow_costs_the_stub() {
-    // The cost of the stub: the arrow does not touch `this`, but the stub's
-    // result is unknown, so the call escapes the receiver (precise form: a
-    // later PR).
+fn a_getter_that_returns_a_fresh_arrow_is_proven_as_whole() {
+    // The getter is a contract function of its owner (`note_own_getters`):
+    // its result is the arrow, which does not touch `this`, so the call
+    // keeps the receiver, as whole sees it.
     let src = factory("", "return () => ({ kind: 312 });", "");
-    assert!(!per_unit(&src));
+    assert!(whole(&src).0);
+    assert!(per_unit(&src));
 }
 
 #[test]

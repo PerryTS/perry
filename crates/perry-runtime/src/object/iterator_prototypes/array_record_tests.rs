@@ -207,13 +207,17 @@ fn array_record_rejects_other_brands_and_custom_prototype() {
             crate::json_tape::alloc_lazy_array(tape, 0, 1, text)
         })
         .unwrap();
-        assert!((*lazy).materialized.is_null());
+        assert!(crate::json_tape::is_lazy_array(lazy));
+        // No array re-parenting recorded: the lazy array's iteration member is
+        // the intrinsic one, so the counted record admits it unforced.
+        crate::object::prototype_chain::test_swap_array_static_proto_recorded(false);
         assert_eq!(
             crate::array::js_array_record_needs_iterator(js_nanbox_pointer(lazy as i64)),
-            1
+            0,
+            "a lazy array takes the counted record; its read policy materializes"
         );
         assert!(
-            (*lazy).materialized.is_null(),
+            crate::json_tape::is_lazy_array(lazy),
             "eligibility must not materialize another representation"
         );
         let obj = js_nanbox_pointer(js_object_alloc(0, 0) as i64);

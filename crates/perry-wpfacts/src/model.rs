@@ -995,6 +995,12 @@ pub struct Model {
     /// reached that holder (the receiver itself or a prototype in its
     /// closure), so installing an accessor replays only those.
     pub any_walk_holders: FxHashMap<Tok, Vec<(Tok, ChainAct)>>,
+    /// Published literals whose own accessors leave to other units
+    /// (`leave_walk`): the node what they return loads into.
+    pub leave_loads: FxHashMap<Tok, NodeId>,
+    /// This unit's literals whose own getters became contract functions
+    /// (`Gen::note_own_getters`): only theirs are contract getters.
+    pub getter_owners: crate::pts::FxHashSet<Tok>,
     /// Source token of a spread -> its targets (and the spread site): a key
     /// the source gains later is copied too (`Model::field`).
     pub spread_to: FxHashMap<Tok, Vec<(Tok, SiteId)>>,

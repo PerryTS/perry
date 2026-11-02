@@ -131,10 +131,13 @@ pub struct Module {
     /// `for (frozenArray[0] of ...)` silently no-opped. Both entry sites and
     /// every outlined chunk now read this field.
     ///
-    /// Module top-level `this` is NOT governed by this flag: that is
-    /// `Expr::ModuleTopThis`, a module-goal decision made in `lower_expr`'s
-    /// `This` arm (switched only by `PERRY_GLOBAL_SCRIPT_THIS`), which never
-    /// consults strictness -- it still diverges from node (#9423 notes it).
+    /// Module top-level `this` is NOT governed by this flag: that is a
+    /// module-goal decision made in `lower_expr`'s `This` arm. An ES module
+    /// lowers it to `Expr::Undefined` (#13558); otherwise it is
+    /// `Expr::ModuleTopThis` (the CJS `module.exports` stand-in), or
+    /// `Expr::GlobalThisExpr` under the `PERRY_GLOBAL_SCRIPT_THIS` opt-in. A
+    /// `"use strict"` CommonJS file is strict and still has CommonJS
+    /// top-level `this`.
     pub init_is_strict: bool,
     /// Top-level statements to execute
     pub init: Vec<Stmt>,

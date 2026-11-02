@@ -620,7 +620,13 @@ impl<'a> Gen<'a> {
         // "the return"); anything else and it escapes as before.
         let rets = self.m.contract_rets.clone();
         for (f, ret) in rets {
+            // A result named by no contract: each of its result nodes
+            // escapes (a body instance may add one after the first).
             if self.ret_top.contains(&f) {
+                if !self.m.sunk_nodes.contains(&ret) {
+                    self.m.sink_node(ret, r);
+                    changed = true;
+                }
                 continue;
             }
             match self.publish_result(f, ret, r) {
@@ -1092,6 +1098,7 @@ impl<'a> Gen<'a> {
             .m
             .reason("a field function of a literal given to another unit");
         self.m.field_fn_reason = Some(r);
+        changed |= self.note_own_getters(t, r);
         let mut fields: Vec<(Atom, NodeId)> = self
             .m
             .field_keys
@@ -1125,25 +1132,7 @@ impl<'a> Gen<'a> {
                     if self.m.funcs[f as usize].func_id == u32::MAX {
                         continue;
                     }
-                    // Other units call it with what they have: it escapes
-                    // as a contract function (⊤ parameters that carry
-                    // markers, its result checked). One that escaped
-                    // already, as no contract function (a closed callee's
-                    // contract lets what its argument reaches escape, or
-                    // another closure context of it escaped), gets its
-                    // markers now; a result that escaped then is named by
-                    // no contract (`ret_top`).
-                    let new = self.m.contract_fns.insert(f);
-                    changed |= new;
-                    if new {
-                        match self.m.escaped.get(&ft).copied() {
-                            Some(r0) => self.m.escape_fn_params(ft, r0),
-                            None => self.m.escape(ft, r),
-                        }
-                        if self.m.sunk_nodes.contains(&self.m.funcs[f as usize].ret) {
-                            self.ret_top.insert(f);
-                        }
-                    }
+                    changed |= self.contract_fn(f, ft, r);
                     // Another unit calls it as a method of this object:
                     // no call of this unit is behind that receiver, so it
                     // goes where every instance of a summarized body sees
@@ -1155,6 +1144,82 @@ impl<'a> Gen<'a> {
                 }
                 self.field_fns
                     .insert((t, a), fs.into_iter().map(|(f, _)| f).collect());
+            }
+        }
+        changed
+    }
+
+    /// Function `f` (token `ft`) of this unit becomes a contract function:
+    /// other units call it with what they have, so it escapes as one (⊤
+    /// parameters that carry markers, its result checked). One that
+    /// escaped already, as no contract function (a closed callee's
+    /// contract lets what its argument reaches escape, or another closure
+    /// context of it escaped), gets its markers now; a result that escaped
+    /// then is named by no contract (`ret_top`). True when it is new.
+    fn contract_fn(&mut self, f: FnIdx, ft: Tok, r: u32) -> bool {
+        let new = self.m.contract_fns.insert(f);
+        if new {
+            match self.m.escaped.get(&ft).copied() {
+                Some(r0) => self.m.escape_fn_params(ft, r0),
+                None => self.m.escape(ft, r),
+            }
+            if self.m.sunk_nodes.contains(&self.m.funcs[f as usize].ret) {
+                self.ret_top.insert(f);
+            }
+        }
+        new
+    }
+
+    /// Before a published literal's accessors leave: an own key whose
+    /// getters are one function of this unit, with no setter, makes it a
+    /// contract function run with the literal as `this`, as a field
+    /// function is (`note_field_fns`). Its contract is published by name
+    /// (`ClassContract::own_getters`, `OwnAccessor::Getter`); the reader
+    /// runs it on its stand-in of the literal, and its result leaves
+    /// through its contract instead of the literal's leave walk
+    /// (`Model::leave_walk`). True when it made a new contract function.
+    fn note_own_getters(&mut self, t: Tok, r: u32) -> bool {
+        let TokKind::Obj(tm, _) = self.m.toks[t as usize] else {
+            return false;
+        };
+        if !matches!(self.m.tmpls[tm as usize].kind, TmplKind::Lit { .. }) {
+            return false;
+        }
+        self.m.getter_owners.insert(t);
+        let mut keys: Vec<Atom> = self.m.accessor_keys.get(&t).cloned().unwrap_or_default();
+        keys.sort_unstable();
+        let mut changed = false;
+        for a in keys {
+            let Some((gs, ss)) = self.m.accessors.get(&(t, a)) else {
+                continue;
+            };
+            if !ss.is_empty() || gs.is_empty() {
+                continue;
+            }
+            let fs: Vec<(FnIdx, Tok)> = gs.iter().map(|&g| (self.m.tok_fn(g), g)).collect();
+            let f = fs[0].0;
+            // A getter whose contract a census broke is no contract getter:
+            // its readers run the stub, so its result leaves with the
+            // literal's accessors (`Model::leave_walk`).
+            if fs.iter().any(|&(g, _)| g != f)
+                || f == NO_FN
+                || self.m.funcs[f as usize].func_id == u32::MAX
+                || self
+                    .m
+                    .broken_fns
+                    .contains(&format!("fn:{}", self.m.funcs[f as usize].name))
+            {
+                continue;
+            }
+            // Another unit reads the key on this object: no call of this
+            // unit is behind that receiver, so it goes where every instance
+            // of a summarized body sees it (`this_any`).
+            for (_, ft) in fs {
+                changed |= self.contract_fn(f, ft, r);
+                if !self.m.funcs[f as usize].lexical_this {
+                    let this = self.m.this_any(ft);
+                    self.m.add_tok(this, t);
+                }
             }
         }
         changed

@@ -1204,6 +1204,91 @@ impl Model {
         }
     }
 
+    /// The one getter under own accessor key `a` of `h` that is a contract
+    /// function of this unit (`Gen::note_own_getters`): no setter, every
+    /// getter token one function of this unit, in `contract_fns`. Other
+    /// units run it through its contract, which checks its result; the
+    /// literal's leave walk does not load it (`leave_walk`).
+    pub(crate) fn contract_getter(&self, h: Tok, a: Atom) -> Option<FnIdx> {
+        if !self.getter_owners.contains(&h) {
+            return None;
+        }
+        let (gs, ss) = self.accessors.get(&(h, a))?;
+        if !ss.is_empty() {
+            return None;
+        }
+        let mut one = None;
+        for &g in gs {
+            let f = self.tok_fn(g);
+            if f == NO_FN
+                || self.funcs[f as usize].func_id == u32::MAX
+                || !self.contract_fns.contains(&f)
+                || one.is_some_and(|o| o != f)
+            {
+                return None;
+            }
+            one = Some(f);
+        }
+        // Its readers run the stub once a census broke its contract.
+        one.filter(|&f| {
+            !self
+                .broken_fns
+                .contains(&format!("fn:{}", self.funcs[f as usize].name))
+        })
+    }
+
+    /// What other units read from published literal `t` through its
+    /// accessors loads into `dst` (`Gen::fields_leave`): every accessor on
+    /// its prototypes, as a computed-key walk finds them, and its own
+    /// accessors except its contract getters (`contract_getter`), whose
+    /// results leave through their contracts. An accessor installed on `t`
+    /// later joins (`accessor_installed`).
+    pub(crate) fn leave_walk(&mut self, t: Tok, dst: NodeId) {
+        if !self.needs_accessor_walk(Key::Any) {
+            return;
+        }
+        let act = ChainAct::Load(dst);
+        let cp = self.cp(t);
+        if self.any_walk_done.insert((cp, t, act)) {
+            self.any_walks.push((cp, t, t, act));
+            self.cons(cp, Cons::AnyAccessors { origin: t, act });
+        }
+        if self.leave_loads.insert(t, dst).is_some() {
+            return;
+        }
+        let keys = self.accessor_keys.get(&t).cloned().unwrap_or_default();
+        for a in keys {
+            self.leave_key(t, a);
+        }
+    }
+
+    /// Own accessor key `a` of a leaving literal `t` (`leave_walk`): unless
+    /// it holds a contract getter, what it returns loads into the leave
+    /// node. A computed-key accessor (`*`) stays out, as in a computed-key
+    /// walk.
+    fn leave_key(&mut self, t: Tok, a: Atom) {
+        let Some(&dst) = self.leave_loads.get(&t) else {
+            return;
+        };
+        let star = self.atom(crate::STAR_KEY);
+        if a == star || !self.accessors.contains_key(&(t, a)) {
+            return;
+        }
+        // Other units run a contract getter on the literal: so does its
+        // contract function here (as `note_field_fns` for a method).
+        if let Some(f) = self.contract_getter(t, a) {
+            if !self.funcs[f as usize].lexical_this {
+                for g in self.accessors[&(t, a)].0.clone() {
+                    let this = self.this_any(g);
+                    self.add_tok(this, t);
+                }
+            }
+            return;
+        }
+        self.acc_group(t, Key::Named(a));
+        self.group_hit(t, t, Key::Named(a), ChainAct::Load(dst));
+    }
+
     /// Accessor `f` was installed on (holder, key) while solving. With
     /// `replay`, lookups that reached the holder before it had a group for
     /// this key run it now; later ones find it through the group.
@@ -1236,6 +1321,7 @@ impl Model {
                 }
             }
         }
+        self.leave_key(holder, key);
         if replay && !self.acc_groups.contains_key(&(holder, Key::Any)) {
             let walks = self
                 .any_walk_holders

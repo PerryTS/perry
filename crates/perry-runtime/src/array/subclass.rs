@@ -27,7 +27,7 @@ pub(super) mod loop_guard;
 #[path = "subclass_packed_index.rs"]
 pub(super) mod packed_index;
 #[cfg(test)]
-pub(super) use packed_index::js_packed_arraylike_index_get;
+pub(crate) use packed_index::js_packed_arraylike_index_get;
 // The loop-guard entry points are exported C symbols; only the unit tests
 // reach them through Rust paths.
 use crate::codegen_abi::LayoutWord;

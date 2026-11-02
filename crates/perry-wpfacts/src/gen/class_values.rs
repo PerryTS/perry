@@ -614,11 +614,11 @@ impl<'a> Gen<'a> {
                 e.2.push(t);
             }
         }
-        for (key, fname) in &joined.own_getters {
-            if old.own_getters.iter().any(|(k, f)| k == key && f == fname) {
+        for (key, acc) in &joined.own_getters {
+            if old.own_getters.iter().any(|(k, f)| k == key && f == acc) {
                 continue;
             }
-            let Some(t) = self.stand_in_own_accessor(mi, tm, inst, key, fname, c, r) else {
+            let Some(t) = self.stand_in_own_accessor(mi, tm, inst, key, acc, c, r) else {
                 continue;
             };
             if let Some(e) = self.stand_ins.get_mut(&joined.display) {
@@ -650,10 +650,12 @@ impl<'a> Gen<'a> {
     /// An own accessor of another unit's literal (`ClassContract::own_getters`)
     /// on its stand-in instance `inst`: the template names the key (an
     /// accessor key, so a read finds the walk and the key shadows the
-    /// chain). A getter is a stub whose result is unknown, so a call of it
-    /// escapes the receiver in the reader, which reports it and breaks the
-    /// layout: never a silent drop. A setter-only key (empty name) has no
-    /// getter to stub; a read finds `undefined` as in the owner.
+    /// chain). A contract getter runs as its owner's contract function on
+    /// the stand-in (`stand_in_contract_getter`). Any other getter is a
+    /// stub whose result is unknown, so a call of it escapes the receiver
+    /// in the reader, which reports it and breaks the layout: never a
+    /// silent drop. A setter-only key has no getter to stub; a read finds
+    /// `undefined` as in the owner.
     #[allow(clippy::too_many_arguments)]
     fn stand_in_own_accessor(
         &mut self,
@@ -661,16 +663,61 @@ impl<'a> Gen<'a> {
         tm: TmplId,
         inst: Tok,
         key: &str,
-        fname: &str,
+        acc: &crate::units::OwnAccessor,
         c: &crate::units::ClassContract,
         r: u32,
     ) -> Option<Tok> {
+        use crate::units::OwnAccessor;
         let a = self.m.atom(key);
         crate::gen::push_unique(&mut self.m.tmpls[tm as usize].accessor_keys, a);
-        if fname.is_empty() {
+        match acc {
+            OwnAccessor::SetterOnly => None,
+            OwnAccessor::Getter(n) => {
+                Some(match self.stand_in_contract_getter(mi, tm, inst, a, n) {
+                    Some(t) => t,
+                    None => self.stand_in_getter(mi, tm, inst, key, n, c, r),
+                })
+            }
+            OwnAccessor::Unknown => {
+                Some(self.stand_in_getter(mi, tm, inst, key, &format!("get {key}"), c, r))
+            }
+        }
+    }
+
+    /// Contract getter `n` of another unit's literal `tm` under key `a` of
+    /// its stand-in instance `inst`: its owner's contract function, built
+    /// as a field function is (`stand_in_fn_of`, holder `tm`), so it runs
+    /// on the stand-in instance (any other receiver escapes and reports the
+    /// contract) and returns what its contract describes. `None` while its
+    /// owner published no contract for it or a census broke it: the stub.
+    /// Read like a cell (`owner_fn`): a changed contract solves this unit
+    /// again.
+    fn stand_in_contract_getter(
+        &mut self,
+        mi: u32,
+        tm: TmplId,
+        inst: Tok,
+        a: Atom,
+        n: &str,
+    ) -> Option<Tok> {
+        let u = self.unit_in?;
+        if !self.fns_read.iter().any(|(x, _)| x == n) {
+            self.fns_read.push((n.to_string(), u.own_fn_seen(n)));
+        }
+        if u.broken(&format!("fn:{n}")) {
             return None;
         }
-        Some(self.stand_in_getter(mi, tm, inst, key, fname, c, r))
+        let fc = u.own_fn(n)?;
+        let holder = Some((tm, false));
+        self.stand_in_fn_of(mi, fc, holder);
+        let &(_, t) = self.stand_in_fns.get(&(fc.name.clone(), holder))?;
+        self.m.add_accessor_atom(a);
+        self.m.accessors.entry((inst, a)).or_default().0.push(t);
+        let ks = self.m.accessor_keys.entry(inst).or_default();
+        if !ks.contains(&a) {
+            ks.push(a);
+        }
+        Some(t)
     }
 
     /// A getter of another unit's class (`ClassContract::getters`) on its
@@ -1043,8 +1090,8 @@ impl<'a> Gen<'a> {
         }
         // A literal's own accessors sit on the instance, as its birth
         // defines them in the owner (`ClassContract::own_getters`).
-        for (key, fname) in &c.own_getters {
-            if let Some(t) = self.stand_in_own_accessor(mi, tm, inst, key, fname, c, r) {
+        for (key, acc) in &c.own_getters {
+            if let Some(t) = self.stand_in_own_accessor(mi, tm, inst, key, acc, c, r) {
                 toks.push(t);
             }
         }
