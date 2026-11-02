@@ -314,12 +314,16 @@ impl Model {
                     self.edge(from, dst);
                 }
             }
-            Cons::Defined { dst } => {
+            Cons::Defined { dst } | Cons::NotNullish { dst } => {
+                let strip = match c {
+                    Cons::Defined { .. } => prim::UNDEF,
+                    _ => prim::NULL | prim::UNDEF,
+                };
                 for &t in toks {
                     self.add_tok(dst, t);
                 }
-                if prim & !prim::UNDEF != 0 {
-                    self.add_prim(dst, prim & !prim::UNDEF);
+                if prim & !strip != 0 {
+                    self.add_prim(dst, prim & !strip);
                 }
             }
             Cons::TopIfAny { dst, from, reason } => {
@@ -925,8 +929,15 @@ impl Model {
                         self.add_tok(dst, TOP);
                         continue;
                     }
-                    let all = self.all_fields(t);
-                    self.edge(all, dst);
+                    // An object's own fields: by the key's values (`IdxKey`:
+                    // a number key names only its numeric fields). A
+                    // marker's fields are its reach markers under any key;
+                    // another value (the global object, a namespace) keeps
+                    // every field.
+                    if self.is_marker(t) || !matches!(self.toks[t as usize], TokKind::Obj(..)) {
+                        let all = self.all_fields(t);
+                        self.edge(all, dst);
+                    }
                     self.add_prim(dst, prim::UNDEF);
                     if self.idx_done.insert((idx, t, dst, 0)) {
                         self.plain_key(t, ChainAct::Load(dst));
@@ -938,6 +949,17 @@ impl Model {
                 let named = prim & (prim::STR | prim::SYMBOL) != 0 || !toks.is_empty();
                 if named && self.idx_done.insert((n, obj, dst, 1)) {
                     self.load_from(obj, obj, Key::Any, dst);
+                }
+                // ToPropertyKey of a Number or BigInt is a numeric string: the
+                // own fields a number key may name (DECISIONS 217); the chain
+                // is `plain_key`'s.
+                if prim & (prim::NUM | prim::BIGINT) != 0
+                    && self
+                        .idx_done
+                        .insert((n, obj, dst, crate::model::IDX_NUM_OWN))
+                {
+                    let f = self.num_fields(obj);
+                    self.edge(f, dst);
                 }
                 // ToPropertyKey of `true`, `null`, `undefined` is a named key.
                 if !named {

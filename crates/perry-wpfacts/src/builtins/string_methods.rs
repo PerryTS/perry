@@ -283,15 +283,21 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
 pub(super) fn regexp_described(name: &str) -> bool {
     matches!(
         name,
-        "exec" | "test" | "@@__perry_wk_replace" | "@@__perry_wk_match" | "@@__perry_wk_search"
+        "exec"
+            | "test"
+            | "@@__perry_wk_replace"
+            | "@@__perry_wk_match"
+            | "@@__perry_wk_search"
+            | "@@__perry_wk_split"
     )
 }
 
 /// `RegExp.prototype` methods (22.2.6). Each runs the object's `exec`
 /// through a property lookup (RegExpExec), so a replaced or overridden
 /// `exec` is called; the builtin `exec` reads `lastIndex` and ToString's
-/// its argument. `@@split` and `@@matchAll` construct through the species
-/// constructor and keep the generic summary.
+/// its argument. `@@split` constructs its splitter through the species
+/// constructor and runs that splitter's `exec`; `@@matchAll` keeps the
+/// generic summary.
 pub(super) fn regexp_method(m: &mut Model, t: Tok, name: &str, call: CallId) {
     let c = m.calls[call as usize].clone();
     let recv = m.node_l("regexp");
@@ -303,11 +309,18 @@ pub(super) fn regexp_method(m: &mut Model, t: Tok, name: &str, call: CallId) {
         "exec" => {
             read_prim(m, recv, "lastIndex", "RegExp lastIndex ToLength");
         }
+        "@@__perry_wk_split" => {
+            split(m, call, recv);
+            return;
+        }
         _ => {
             if let Some(s) = c.args.first().copied() {
                 read_prim(m, recv, "flags", "RegExp flags ToString");
                 let r = method_call(m, call, recv, "exec", vec![s]);
                 read_match(m, r);
+                if name == "@@__perry_wk_match" {
+                    m.edge(r, c.ret);
+                }
             }
             if name == "@@__perry_wk_replace" {
                 if let Some(&rv) = c.args.get(1) {
@@ -317,14 +330,137 @@ pub(super) fn regexp_method(m: &mut Model, t: Tok, name: &str, call: CallId) {
         }
     }
     // 22.2.6.16 test: a Boolean; 22.2.6.11 @@replace: the accumulated
-    // String; 22.2.6.12 @@search: the match index. exec and @@match return
-    // null or a match record (the generic container).
+    // String; 22.2.6.12 @@search: the match index.
     match name {
         "test" => ret_prim(m, call, prim::BOOL),
         "@@__perry_wk_replace" => ret_prim(m, call, prim::STR),
         "@@__perry_wk_search" => ret_prim(m, call, prim::NUM),
+        // 22.2.7.2 RegExpBuiltinExec: null, or an Array of the match and
+        // the captures (String or undefined) with `index`, `input` and
+        // `groups` (an object of String or undefined, or undefined).
+        "exec" => {
+            let rec = site_tmpl(m, call, "Array");
+            let fa = m.field_any(rec);
+            m.add_prim(fa, prim::STR | prim::UNDEF);
+            for (key, p) in [
+                ("index", prim::NUM),
+                ("input", prim::STR),
+                ("groups", prim::UNDEF),
+            ] {
+                let a = m.atom(key);
+                let f = m.field(rec, a);
+                m.add_prim(f, p);
+            }
+            let g = site_tmpl(m, call, "groups");
+            let gf = m.field_any(g);
+            m.add_prim(gf, prim::STR | prim::UNDEF);
+            let a = m.atom("groups");
+            let f = m.field(rec, a);
+            m.add_tok(f, g);
+            ret_tok(m, call, rec);
+            ret_prim(m, call, prim::NULL);
+        }
+        // 22.2.6.8 @@match: not global, what RegExpExec returned (an edge
+        // from that call, above); global, null or an Array of the matched
+        // Strings.
+        "@@__perry_wk_match" => {
+            let a = site_tmpl(m, call, "Array");
+            let fa = m.field_any(a);
+            m.add_prim(fa, prim::STR);
+            ret_tok(m, call, a);
+            ret_prim(m, call, prim::NULL);
+        }
         _ => generic_result(m, call),
     }
+}
+
+/// 22.2.6.14 `RegExp.prototype[@@split]`: the splitter is constructed by
+/// the species constructor (the receiver's `constructor` and its
+/// `@@species`, or `%RegExp%`), its `lastIndex` is Set and its `exec` run
+/// through the property lookup; the result is an ArrayCreate'd Array of the
+/// substrings (String) and of the captures `Get(z, i)` of what `exec`
+/// returned. While the constructor is `%RegExp%` and `exec` the intrinsic,
+/// the captures are String or undefined; a program constructor or `exec`
+/// is code the solve runs, and what it returns is a capture.
+fn split(m: &mut Model, call: CallId, recv: NodeId) {
+    let c = m.calls[call as usize].clone();
+    read_prim(m, recv, "flags", "RegExp flags ToString");
+    let k = m.atom("constructor");
+    let cn = m.node_l("species-constructor");
+    m.cons(
+        recv,
+        Cons::Load {
+            key: Key::Named(k),
+            dst: cn,
+        },
+    );
+    // SpeciesConstructor: `constructor` undefined or a species of
+    // undefined/null is `%RegExp%`.
+    let sc = m.node_l("species");
+    let rx = m.tok(TokKind::Builtin(BuiltinNs::RegExp));
+    m.add_tok(sc, rx);
+    let sp = m.atom(&format!("{WK}species"));
+    m.cons(
+        cn,
+        Cons::Load {
+            key: Key::Named(sp),
+            dst: sc,
+        },
+    );
+    let fl = str_node(m);
+    let splitter = construct(m, call, sc, vec![recv, fl]);
+    if let Some(&lim) = c.args.get(1) {
+        to_prim(m, lim, "@@split limit ToUint32");
+    }
+    let Some(&s) = c.args.first() else {
+        let a = site_tmpl(m, call, "Array");
+        ret_tok(m, call, a);
+        return;
+    };
+    // Set(splitter, "lastIndex", q, true), then RegExpExec(splitter, S).
+    let li = m.atom("lastIndex");
+    let q = m.node_l("split-lastIndex");
+    m.add_prim(q, prim::NUM);
+    let site = m.anon_post_site("RegExp.prototype[@@split] lastIndex");
+    m.cons(
+        splitter,
+        Cons::Store {
+            key: Key::Named(li),
+            src: q,
+            site,
+        },
+    );
+    let z = method_call(m, call, splitter, "exec", vec![s]);
+    read_prim(m, splitter, "lastIndex", "@@split lastIndex ToLength");
+    read_prim(m, z, "length", "@@split captures LengthOfArrayLike");
+    let cap = m.node_l("split-capture");
+    let i = m.node_l("split-capture-index");
+    m.add_prim(i, prim::NUM);
+    m.cons(z, Cons::IdxLoad { idx: i, dst: cap });
+    let a = site_tmpl(m, call, "Array");
+    let fa = m.field_any(a);
+    m.add_prim(fa, prim::STR);
+    m.edge(cap, fa);
+    ret_tok(m, call, a);
+}
+
+/// `Construct(ctor, args)` the builtin makes while it runs.
+fn construct(m: &mut Model, by: CallId, ctor: NodeId, args: Vec<NodeId>) -> NodeId {
+    let ret = m.node_l("builtin-new");
+    m.nodes[ret as usize].frame = m.call_run(by);
+    let call = m.calls.len() as CallId;
+    m.solver_call(
+        by,
+        CallSite {
+            this: ThisArg::Undef,
+            args,
+            spread: vec![],
+            ret,
+            site: call,
+        },
+    );
+    m.cons(ctor, Cons::New { call });
+    ret
 }
 
 /// The result shape of a method of a primitive's chain the model does not

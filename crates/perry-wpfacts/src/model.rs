@@ -32,6 +32,7 @@ pub const ITER_ELEM: &str = "#iter";
 pub const IDX_PROTO_VALUE: u8 = 32;
 pub const IDX_PLAIN_LOAD: u8 = 33;
 pub const IDX_PLAIN_CALL: u8 = 34;
+pub const IDX_NUM_OWN: u8 = 35;
 pub const IDX_CALL_ANY: u8 = 36;
 pub const IDX_CALL_NAMED: u8 = 64;
 
@@ -809,6 +810,11 @@ pub enum Cons {
     /// at the object, so the chain's end (a key no link defines reads
     /// `undefined`) is never reached; its values stay, a superset.
     Defined { dst: NodeId },
+    /// The left operand of `l ?? r`: its values but `null` and `undefined`
+    /// flow into `dst` (the result is `l` only when it is neither). A rule
+    /// of the program text, so a summary replays it per call; `Defined` is
+    /// the solver's, decided for the values one solve saw.
+    NotNullish { dst: NodeId },
     /// Every object token reaches a HARD operation.
     Hard { kind: Hard, reason: u32 },
     /// `delete o.key`: E7 HARD on every object token; on ⊤ (which may be a
@@ -1076,6 +1082,7 @@ impl Cons {
             Cons::TopIfAny { .. } => "topifany",
             Cons::Guard { .. } => "guard",
             Cons::Defined { .. } => "defined",
+            Cons::NotNullish { .. } => "notnullish",
             Cons::Hard { .. } => "hard",
             Cons::DeleteKey { .. } => "deletekey",
             Cons::AddsKeys => "addskeys",

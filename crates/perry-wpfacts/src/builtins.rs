@@ -1537,8 +1537,20 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
         }
     }
 
+    // A computed key may name any member, one no rule describes included
+    // (the last arm); on the global object any host global (an unknown
+    // function) and `Function` (E14), as a read under it holds them.
     let Some(name) = name else {
-        return;
+        if ns == BuiltinNs::GlobalThis {
+            call_builtin_ns(m, BuiltinNs::Function, call);
+        }
+        return unknown_method_proto(
+            m,
+            call,
+            &format!("argument of builtin {ns:?}[computed]"),
+            None,
+            true,
+        );
     };
     match (ns, name) {
         (BuiltinNs::Other, n) if CONSOLE_METHODS.contains(&n) => {
