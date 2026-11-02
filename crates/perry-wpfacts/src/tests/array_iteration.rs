@@ -19,16 +19,8 @@ const LOOP: &str = "
 #[test]
 fn numeric_key_writes_leave_both_iteration_facts_proven() {
     let pf = facts(LOOP);
-    assert!(
-        pf.array_iteration_written.is_none(),
-        "{:?}",
-        pf.array_iteration_written
-    );
-    assert!(
-        pf.array_iterator_close_written.is_none(),
-        "{:?}",
-        pf.array_iterator_close_written
-    );
+    assert!(pf.array_iteration_written.is_none(), "{:?}", pf.array_iteration_written);
+    assert!(pf.array_iterator_close_written.is_none(), "{:?}", pf.array_iterator_close_written);
 }
 
 /// A replaced `@@iterator` changes what the loop iterates.

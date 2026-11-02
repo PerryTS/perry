@@ -36,16 +36,10 @@ macro_rules! case {
     };
 }
 
-case!(
-    fill_runs_value_of,
-    true,
-    "const ta = new Uint8Array(4); const o: any = new ValueOf(); ta.fill(o); console.log(g(o));"
-);
-case!(
-    slice_runs_to_primitive,
-    true,
-    "const ta = new Uint8Array(4); const o: any = new ToPrim(); ta.slice(o); console.log(g(o));"
-);
+case!(fill_runs_value_of, true,
+ "const ta = new Uint8Array(4); const o: any = new ValueOf(); ta.fill(o); console.log(g(o));");
+case!(slice_runs_to_primitive, true,
+ "const ta = new Uint8Array(4); const o: any = new ToPrim(); ta.slice(o); console.log(g(o));");
 case!(subarray_runs_value_of, true,
  "const ta = new Uint8Array(4); const o: any = new ValueOf(); ta.subarray(o); console.log(g(o));");
 case!(map_result_is_coerced, true,
@@ -60,18 +54,12 @@ case!(species_constructor_runs, true,
  "const ta: any = new Uint8Array(4); const o: any = new Svc(); ta.constructor = { [Symbol.species]: class C { constructor(n: number) { o.leak(); return new Uint8Array(n); } } }; ta.slice(0); console.log(g(o));");
 case!(to_string_calls_a_replaced_join, true,
  "const ta = new Uint8Array(4); const o: any = new Svc(); (ta as any).join = function () { (globalThis as any).hostTake(o); return ''; }; ta.toString(); console.log(g(o));");
-case!(
-    constructor_array_like_elements_are_coerced,
-    true,
-    "const o: any = new ValueOf(); new Uint8Array({ length: 1, 0: o } as any); console.log(g(o));"
-);
+case!(constructor_array_like_elements_are_coerced, true,
+ "const o: any = new ValueOf(); new Uint8Array({ length: 1, 0: o } as any); console.log(g(o));");
 case!(date_to_json_calls_a_replaced_to_iso_string, true,
  "const d: any = new Date(0); const o: any = new Svc(); d.toISOString = () => { o.leak(); return ''; }; d.toJSON(); console.log(g(o));");
-case!(
-    text_decoder_label_is_stringified,
-    true,
-    "const o: any = new ToStr(); new TextDecoder(o); console.log(g(o));"
-);
+case!(text_decoder_label_is_stringified, true,
+ "const o: any = new ToStr(); new TextDecoder(o); console.log(g(o));");
 
 // The controls: the builtin conversions run nothing user-written.
 case!(filter_result_is_only_tested, false,

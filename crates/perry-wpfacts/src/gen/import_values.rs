@@ -915,9 +915,7 @@ impl<'a> Gen<'a> {
                     let q = match self.reach_touch.iter().find(|&&(b, _)| b == touches) {
                         Some(&(_, q)) => q,
                         None => {
-                            let q = self
-                                .m
-                                .node_named("reach", || format!("reached(touch {touches})"));
+                            let q = self.m.node_named("reach", || format!("reached(touch {touches})"));
                             self.m.nodes[q as usize].sink = true;
                             self.m.cons(
                                 q,

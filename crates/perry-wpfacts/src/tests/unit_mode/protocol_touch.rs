@@ -29,14 +29,8 @@ fn reads_proven(body: &str) {
     let u_src = U.replace("BODY", body);
     let mods = [("d", D), ("u", u_src.as_str()), ("t", T)];
     let (u, w) = (units_of(&mods), whole_of(&mods));
-    let stronger: Vec<_> = proven_set(&u)
-        .difference(&proven_set(&w))
-        .cloned()
-        .collect();
-    assert!(
-        stronger.is_empty(),
-        "per unit stronger than whole: {stronger:?}"
-    );
+    let stronger: Vec<_> = proven_set(&u).difference(&proven_set(&w)).cloned().collect();
+    assert!(stronger.is_empty(), "per unit stronger than whole: {stronger:?}");
     for pf in [&w, &u] {
         let sites: Vec<_> = pf
             .sites

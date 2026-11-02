@@ -337,20 +337,13 @@ fn a_deep_chain_flattens_on_a_test_thread_stack() {
     );
     let h = hirs(&[("a", src.as_str())]);
     let flat = crate::decl_units::run_once_flat(&h[0].1).expect("`run` runs once");
-    assert!(
-        flat.functions.iter().all(|f| f.name != "run"),
-        "`run` is flat"
-    );
+    assert!(flat.functions.iter().all(|f| f.name != "run"), "`run` is flat");
     // `r` is bound to the chain: n - 1 additions down its left spine.
     let r = flat
         .init
         .iter()
         .find_map(|s| match s {
-            Stmt::Let {
-                name,
-                init: Some(e),
-                ..
-            } if name == "r" => Some(e),
+            Stmt::Let { name, init: Some(e), .. } if name == "r" => Some(e),
             _ => None,
         })
         .expect("the `let` of `r`");

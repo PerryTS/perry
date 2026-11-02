@@ -304,10 +304,7 @@ pub(super) fn dependency_order(solves: &[Solve]) -> Vec<usize> {
                 continue;
             }
             // `v` is the root of a component: its members, the stack above it.
-            let at = comp_stack
-                .iter()
-                .rposition(|&x| x == v)
-                .expect("root on stack");
+            let at = comp_stack.iter().rposition(|&x| x == v).expect("root on stack");
             let mut members: Vec<usize> = comp_stack.split_off(at);
             for &m in &members {
                 on_stack[m] = false;
@@ -1560,10 +1557,7 @@ fn synthetic_dirs(sorted: &[(&str, &Module)]) -> Vec<Vec<u8>> {
     const NAME: &str = "/synthetic-modules/";
     let mut dirs: Vec<Vec<u8>> = sorted
         .iter()
-        .filter_map(|(p, _)| {
-            p.find(NAME)
-                .map(|at| p.as_bytes()[..at + NAME.len() - 1].to_vec())
-        })
+        .filter_map(|(p, _)| p.find(NAME).map(|at| p.as_bytes()[..at + NAME.len() - 1].to_vec()))
         .collect();
     dirs.sort();
     dirs.dedup();
@@ -1807,10 +1801,7 @@ pub(super) fn merge_unit(
     pf.super_unrelinked.extend(u.super_unrelinked);
     pf.interp_guard = pf.interp_guard.take().or(u.interp_guard);
     pf.fnproto_bind_written = pf.fnproto_bind_written.take().or(u.fnproto_bind_written);
-    pf.array_iteration_written = pf
-        .array_iteration_written
-        .take()
-        .or(u.array_iteration_written);
+    pf.array_iteration_written = pf.array_iteration_written.take().or(u.array_iteration_written);
     pf.array_iterator_close_written = pf
         .array_iterator_close_written
         .take()
@@ -1843,8 +1834,7 @@ pub(super) fn merge_unit(
 /// adds nothing to that union: the other units' records decide the site.
 /// A site only dead records name stays one dead fact.
 pub(super) fn join_site_records(pf: &mut ProgramFacts) {
-    let dead =
-        |s: &SiteFacts| matches!(&s.verdict, crate::Verdict::No(r) if r.starts_with("dead site"));
+    let dead = |s: &SiteFacts| matches!(&s.verdict, crate::Verdict::No(r) if r.starts_with("dead site"));
     let key = |s: &SiteFacts| (s.module, s.byte_offset, s.key.clone(), s.is_call);
     let live: FxHashSet<(u32, u32, String, bool)> =
         pf.sites.iter().filter(|s| !dead(s)).map(key).collect();

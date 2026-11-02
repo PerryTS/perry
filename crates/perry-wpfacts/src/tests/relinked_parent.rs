@@ -65,7 +65,8 @@ fn slot_store(pf: &ProgramFacts, this: &BindingFacts, key: &str) -> bool {
             pf.templates.iter().any(|t| {
                 t.class_id == Some(c)
                     && t.prefix_stable
-                    && t.fields
+                    && t
+                        .fields
                         .iter()
                         .any(|f| f.key == key && f.slot.is_some() && f.definite)
             })

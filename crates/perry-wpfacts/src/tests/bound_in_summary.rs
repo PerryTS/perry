@@ -18,8 +18,7 @@ fn run(src: &str, units: bool) -> ProgramFacts {
 fn proven(pf: &ProgramFacts, key: &str) -> bool {
     let s: Vec<_> = pf.sites.iter().filter(|s| s.key == key).collect();
     assert!(!s.is_empty(), "no site .{key}");
-    s.iter()
-        .all(|s| matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set))
+    s.iter().all(|s| matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set))
 }
 
 /// `body` makes the bound function in `bindTo(o)`, `call` calls it as `g`.
@@ -46,10 +45,7 @@ fn leaks(body: &str, call: &str) {
     let src = program(body, call);
     let w = run(&src, false);
     assert!(!proven(&w, "m"), "whole program\n{}", w.dump_text());
-    assert!(
-        !proven(&run(&src, true), "m"),
-        "per unit never stronger than whole"
-    );
+    assert!(!proven(&run(&src, true), "m"), "per unit never stronger than whole");
 }
 
 // Node: prints `3`; `globalThis.g` is h.
@@ -75,10 +71,7 @@ fn a_nested_bind_in_a_summary_keeps_the_inner_bound_argument() {
 
 #[test]
 fn a_bind_of_a_bound_function_in_a_summary_keeps_the_outer_bound_argument() {
-    leaks(
-        "const f: any = leak.bind(null); return f.bind(null, o);",
-        "g()",
-    );
+    leaks("const f: any = leak.bind(null); return f.bind(null, o);", "g()");
 }
 
 // Negative: the same shapes with a target that keeps its argument stay
@@ -88,3 +81,4 @@ fn a_bound_argument_made_in_a_summary_that_stays_local_is_proven() {
     let src = program("return same.bind(null, o);", "g()");
     assert!(proven(&run(&src, false), "m"), "whole program");
 }
+

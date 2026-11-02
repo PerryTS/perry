@@ -55,8 +55,7 @@ fn inlined_hirs(mods: &[(&str, &str)]) -> Vec<(String, perry_hir::Module)> {
 
 fn both(mods: &[(&str, &str)]) -> (ProgramFacts, ProgramFacts) {
     let hirs = inlined_hirs(mods);
-    let list: Vec<(String, &perry_hir::Module)> =
-        hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
+    let list: Vec<(String, &perry_hir::Module)> = hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
     (
         crate::compute_units(&list, &FactsConfig::default()),
         crate::compute(&list, &FactsConfig::default()),
@@ -74,29 +73,14 @@ fn a_sites<'a>(pf: &'a ProgramFacts, key: &str) -> Vec<&'a crate::SiteFacts> {
 fn a_dead_record_of_a_site_another_unit_walks_adds_nothing() {
     let mods = [("p", P), ("a", A), ("main", MAIN)];
     let (u, w) = both(&mods);
-    let stronger: Vec<_> = proven_set(&u)
-        .difference(&proven_set(&w))
-        .cloned()
-        .collect();
-    assert!(
-        stronger.is_empty(),
-        "per unit stronger than whole: {stronger:?}\n{}",
-        u.dump_text()
-    );
+    let stronger: Vec<_> = proven_set(&u).difference(&proven_set(&w)).cloned().collect();
+    assert!(stronger.is_empty(), "per unit stronger than whole: {stronger:?}\n{}", u.dump_text());
     for k in ["type", "color"] {
         let (us, ws) = (a_sites(&u, k), a_sites(&w, k));
-        assert!(
-            !ws.is_empty() && ws.iter().all(|s| matches!(s.verdict, Verdict::T0Mono)),
-            "whole {k}\n{}",
-            w.dump_text()
-        );
+        assert!(!ws.is_empty() && ws.iter().all(|s| matches!(s.verdict, Verdict::T0Mono)), "whole {k}\n{}", w.dump_text());
         // One fact per site, as whole: the dead record is gone.
         assert_eq!(us.len(), ws.len(), "{k}\n{}", u.dump_text());
-        assert!(
-            us.iter().all(|s| matches!(s.verdict, Verdict::T0Mono)),
-            "unit {k}\n{}",
-            u.dump_text()
-        );
+        assert!(us.iter().all(|s| matches!(s.verdict, Verdict::T0Mono)), "unit {k}\n{}", u.dump_text());
     }
 }
 
@@ -111,28 +95,13 @@ fn a_dead_record_beside_a_refusing_one_stays_refused() {
     assert_ne!(a, A);
     let mods = [("p", P), ("a", a.as_str()), ("main", MAIN)];
     let (u, w) = both(&mods);
-    let stronger: Vec<_> = proven_set(&u)
-        .difference(&proven_set(&w))
-        .cloned()
-        .collect();
-    assert!(
-        stronger.is_empty(),
-        "per unit stronger than whole: {stronger:?}\n{}",
-        u.dump_text()
-    );
+    let stronger: Vec<_> = proven_set(&u).difference(&proven_set(&w)).cloned().collect();
+    assert!(stronger.is_empty(), "per unit stronger than whole: {stronger:?}\n{}", u.dump_text());
     let us = a_sites(&u, "type");
     assert_eq!(us.len(), a_sites(&w, "type").len(), "{}", u.dump_text());
     assert!(!us.is_empty(), "{}", u.dump_text());
     for s in &us {
-        assert!(
-            !matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set),
-            "{}",
-            u.dump_text()
-        );
-        assert!(
-            !matches!(&s.verdict, Verdict::No(r) if r.starts_with("dead site")),
-            "{}",
-            u.dump_text()
-        );
+        assert!(!matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set), "{}", u.dump_text());
+        assert!(!matches!(&s.verdict, Verdict::No(r) if r.starts_with("dead site")), "{}", u.dump_text());
     }
 }

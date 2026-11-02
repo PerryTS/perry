@@ -1095,14 +1095,7 @@ impl Model {
                 if (prim & !prim::NUM != 0 || !toks.is_empty())
                     && self.index_store_done.insert((n, site, false))
                 {
-                    self.cons(
-                        o,
-                        Cons::Store {
-                            key: Key::Any,
-                            src,
-                            site,
-                        },
-                    );
+                    self.cons(o, Cons::Store { key: Key::Any, src, site });
                 }
             }
             Cons::AccessorKeyed { holder, f, setter } => {

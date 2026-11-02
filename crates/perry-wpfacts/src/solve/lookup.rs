@@ -65,11 +65,7 @@ impl Model {
     /// on a builtin prototype or through ⊤ (`reshaped_keys`), where a setter
     /// or a read-only value would intercept the store that makes the key.
     pub(crate) fn shadows(&self, t: Tok, a: Atom) -> bool {
-        if t == TOP
-            || self.reshaped_any
-            || self.reshaped_keys.contains(&a)
-            || self.objproto_accessor
-        {
+        if t == TOP || self.reshaped_any || self.reshaped_keys.contains(&a) || self.objproto_accessor {
             return false;
         }
         let top = self.top_reshaped_any || self.top_reshaped_keys.contains(&a);
@@ -80,7 +76,9 @@ impl Model {
             // Instances of these classes made in another unit may have
             // escaped there, unseen here: a delete or defineProperty
             // through ⊤ revokes the key on them.
-            return !top && !classes.is_empty() && classes.iter().all(|&p| self.class_holds(p, a));
+            return !top
+                && !classes.is_empty()
+                && classes.iter().all(|&p| self.class_holds(p, a));
         }
         match self.tmpl_of(t) {
             Some(tm) => {
@@ -722,10 +720,7 @@ impl Model {
     pub(crate) fn is_builtin_proto(&self, q: Tok) -> bool {
         matches!(
             self.toks[q as usize],
-            TokKind::ObjectProto
-                | TokKind::NativeProto(_)
-                | TokKind::Builtin(_)
-                | TokKind::BuiltinFn
+            TokKind::ObjectProto | TokKind::NativeProto(_) | TokKind::Builtin(_) | TokKind::BuiltinFn
         )
     }
 

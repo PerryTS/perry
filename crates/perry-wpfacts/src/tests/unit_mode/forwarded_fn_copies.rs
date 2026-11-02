@@ -275,14 +275,7 @@ try { console.log(String(compileFn(s))); } catch (e) { console.log("err", String
 
 #[test]
 fn forwarded_function_copies_stay_bounded() {
-    let mods: &'static [(&'static str, &'static str)] = &[
-        ("doc", DOC),
-        ("stubs", STUBS),
-        ("stubs_re", STUBS_RE),
-        ("stubs_util", STUBS_UTIL),
-        ("compile", COMPILE),
-        ("main", MAIN),
-    ];
+    let mods: &'static [(&'static str, &'static str)] = &[("doc", DOC), ("stubs", STUBS), ("stubs_re", STUBS_RE), ("stubs_util", STUBS_UTIL), ("compile", COMPILE), ("main", MAIN)];
     // Before: the rounds never end, so the bound is a wait.
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {

@@ -693,10 +693,7 @@ fn compute_act<'a>(
         Vec::new()
     };
     let (array_iteration_written, array_iterator_close_written) = if stats.aborted {
-        (
-            Some("solve aborted".to_string()),
-            Some("solve aborted".to_string()),
-        )
+        (Some("solve aborted".to_string()), Some("solve aborted".to_string()))
     } else {
         g.m.array_iteration_writes()
     };

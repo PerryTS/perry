@@ -12,26 +12,12 @@ use super::*;
 /// `class` holds at least the kinds the whole program finds.
 fn never_stronger(mods: &[(&str, &str)], class: &str) -> (ProgramFacts, ProgramFacts) {
     let (u, w) = (units_of(mods), whole_of(mods));
-    let more: Vec<_> = proven_set(&u)
-        .difference(&proven_set(&w))
-        .cloned()
-        .collect();
-    assert!(
-        more.is_empty(),
-        "per unit proves more: {more:?}\n{}",
-        u.dump_text()
-    );
+    let more: Vec<_> = proven_set(&u).difference(&proven_set(&w)).cloned().collect();
+    assert!(more.is_empty(), "per unit proves more: {more:?}\n{}", u.dump_text());
     let (tu, tw) = (tmpl(&u, class), tmpl(&w, class));
     for fw in &tw.fields {
         if let Some(fu) = tu.fields.iter().find(|f| f.key == fw.key) {
-            assert!(
-                kinds_cover(fu, fw),
-                "field {} {:?} vs whole {:?}\n{}",
-                fw.key,
-                fu.kind,
-                fw.kind,
-                u.dump_text()
-            );
+            assert!(kinds_cover(fu, fw), "field {} {:?} vs whole {:?}\n{}", fw.key, fu.kind, fw.kind, u.dump_text());
         }
     }
     (u, w)
@@ -52,8 +38,7 @@ import { P, Svc } from "./p";
 console.log(new Q(new Svc()).total(), new P(new Svc()).total());"#;
 
 fn svc(body: &str, on_create: &str) -> String {
-    SVC.replace("BODY", body)
-        .replace("this.seen = p.n;", on_create)
+    SVC.replace("BODY", body).replace("this.seen = p.n;", on_create)
 }
 
 /// The constructor's `this.init()` and `s.onCreate(this)` with `s` another
@@ -61,17 +46,10 @@ fn svc(body: &str, on_create: &str) -> String {
 /// through ⊤ is opened on it, so the class's own calls stay its methods.
 #[test]
 fn an_escaped_receiver_opens_only_the_keys_written_through_top() {
-    let p = svc(
-        "this.svc = s; this.init(); s.onCreate(this);",
-        "this.seen = p.n;",
-    );
+    let p = svc("this.svc = s; this.init(); s.onCreate(this);", "this.seen = p.n;");
     let mods = [("p", p.as_str()), ("b", SUB), ("m", MAIN)];
     let (u, _) = never_stronger(&mods, "P");
-    assert!(
-        proven_set(&u).iter().any(|s| s.ends_with(".init")),
-        "{}",
-        u.dump_text()
-    );
+    assert!(proven_set(&u).iter().any(|s| s.ends_with(".init")), "{}", u.dump_text());
 }
 
 /// Soundness: the unit that receives the instance writes its keys (`n`,
@@ -101,11 +79,7 @@ fn a_constructor_calls_through_the_field_it_stored() {
     let mods = [("p", p.as_str()), ("b", SUB), ("m", MAIN)];
     let (u, _) = never_stronger(&mods, "P");
     assert!(!u.broken.iter().any(|b| b == "p.ts:P"), "{}", u.dump_text());
-    assert!(
-        proven_set(&u).iter().any(|s| s.ends_with(".svc")),
-        "{}",
-        u.dump_text()
-    );
+    assert!(proven_set(&u).iter().any(|s| s.ends_with(".svc")), "{}", u.dump_text());
 }
 
 const K: &str = r#"function plain(this: any) { this.n = 1; }
@@ -164,20 +138,11 @@ export class P {
 export function use(o: any) { return help(o); }"#;
     let m = r#"import { P, use } from "./p";
 console.log(new P().go(), use({ n: 0, k() { this.n = "j"; } }));"#;
-    let (u, w) = (
-        units_of(&[("p", p), ("m", m)]),
-        whole_of(&[("p", p), ("m", m)]),
-    );
-    let more: Vec<_> = proven_set(&u)
-        .difference(&proven_set(&w))
-        .cloned()
-        .collect();
-    assert!(
-        more.is_empty(),
-        "per unit proves more: {more:?}\n{}",
-        u.dump_text()
-    );
+    let (u, w) = (units_of(&[("p", p), ("m", m)]), whole_of(&[("p", p), ("m", m)]));
+    let more: Vec<_> = proven_set(&u).difference(&proven_set(&w)).cloned().collect();
+    assert!(more.is_empty(), "per unit proves more: {more:?}\n{}", u.dump_text());
 }
+
 
 /// DECISIONS 236: per unit in a thread with a deadline (an oscillating
 /// census never ends), with the round count, never stronger than whole for
@@ -196,27 +161,13 @@ fn bounded(mods: &[(&'static str, &'static str)], classes: &[&str]) -> ProgramFa
     // The receivers and arguments the units publish only grow (fixture
     // (a): 9 rounds); an oscillation never ends (RCV7: 1,250+).
     assert!(u.rounds <= 12, "rounds {}\n{}", u.rounds, u.dump_text());
-    let more: Vec<_> = proven_set(&u)
-        .difference(&proven_set(&w))
-        .cloned()
-        .collect();
-    assert!(
-        more.is_empty(),
-        "per unit proves more: {more:?}\n{}",
-        u.dump_text()
-    );
+    let more: Vec<_> = proven_set(&u).difference(&proven_set(&w)).cloned().collect();
+    assert!(more.is_empty(), "per unit proves more: {more:?}\n{}", u.dump_text());
     for class in classes {
         let (tu, tw) = (tmpl(&u, class), tmpl(&w, class));
         for fw in &tw.fields {
             if let Some(fu) = tu.fields.iter().find(|f| f.key == fw.key) {
-                assert!(
-                    kinds_cover(fu, fw),
-                    "{class}.{} {:?} vs whole {:?}\n{}",
-                    fw.key,
-                    fu.kind,
-                    fw.kind,
-                    u.dump_text()
-                );
+                assert!(kinds_cover(fu, fw), "{class}.{} {:?} vs whole {:?}\n{}", fw.key, fu.kind, fw.kind, u.dump_text());
             }
         }
     }

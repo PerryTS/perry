@@ -66,15 +66,8 @@ fn all_proven(pf: &ProgramFacts, path: &str, key: &str) -> bool {
 
 fn never_stronger(mods: &[(&str, &str)], what: &str) -> (ProgramFacts, ProgramFacts) {
     let (u, w) = (units_of(mods), whole_of(mods));
-    let stronger: Vec<_> = proven_set(&u)
-        .difference(&proven_set(&w))
-        .cloned()
-        .collect();
-    assert!(
-        stronger.is_empty(),
-        "{what}: per unit stronger than whole: {stronger:?}\n{}",
-        u.dump_text()
-    );
+    let stronger: Vec<_> = proven_set(&u).difference(&proven_set(&w)).cloned().collect();
+    assert!(stronger.is_empty(), "{what}: per unit stronger than whole: {stronger:?}\n{}", u.dump_text());
     (u, w)
 }
 
@@ -86,16 +79,8 @@ fn a_literal_handed_to_a_closed_ctor_is_described() {
         let (u, w) = never_stronger(&mods, "plain");
         assert!(u.broken.is_empty(), "{:?}\n{}", u.broken, u.dump_text());
         for k in ["a", "b"] {
-            assert!(
-                all_proven(&w, "a.ts", k),
-                "whole a.ts {k}\n{}",
-                w.dump_text()
-            );
-            assert!(
-                all_proven(&u, "a.ts", k),
-                "unit a.ts {k}\n{}",
-                u.dump_text()
-            );
+            assert!(all_proven(&w, "a.ts", k), "whole a.ts {k}\n{}", w.dump_text());
+            assert!(all_proven(&u, "a.ts", k), "unit a.ts {k}\n{}", u.dump_text());
         }
     }
 }
@@ -128,9 +113,7 @@ fn a_closed_ctor_using_a_handed_literal_stays_sound() {
                 let lit = u
                     .templates
                     .iter()
-                    .find(|t| {
-                        t.display.starts_with("main.ts:__AnonShape") && t.birth_keys == ["a", "b"]
-                    })
+                    .find(|t| t.display.starts_with("main.ts:__AnonShape") && t.birth_keys == ["a", "b"])
                     .unwrap_or_else(|| panic!("{body}: the literal\n{}", u.dump_text()));
                 assert!(lit.escape.is_some(), "{body}\n{}", u.dump_text());
             }
