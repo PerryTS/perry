@@ -886,8 +886,9 @@ mod tests {
         // Naming + emission + the two proven call sites. `string_pool.rs`
         // and `class_declarations.rs` are deliberately ABSENT: a class's
         // declaration must only ever hold the public symbol.
-        let allowed: [&str; 9] = [
+        let allowed: [&str; 10] = [
             "collectors/proven_this.rs",                         // this test
+            "expr/family_guard_tests.rs",                        // tower precondition IR assertions
             "collectors/proven_this_routing_tests.rs",           // routing IR ratchet
             "codegen/guarded_undefined_method_tests.rs",         // wrapper IR assertions
             "codegen/typed_abi.rs",                              // name helper

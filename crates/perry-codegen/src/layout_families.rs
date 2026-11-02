@@ -132,11 +132,14 @@ pub struct FamilyLayout {
     /// (`late`). Every slot holds the hole until its key is written.
     pub own_count: u32,
     /// The constructor keys `keys[..init_count]` are stored before any code
-    /// that could observe the instance or change its prototype chain runs
-    /// after its birth (the inert prologue of every constructor on the chain,
-    /// in evaluation order). Only these take the unchecked initializing store
-    /// (`expr/layout_read.rs`); a later constructor key is an add through the
-    /// store probe, which checks the order and the chain.
+    /// that could observe the instance runs after its birth, in evaluation
+    /// order along the chain: a field definition after values that never
+    /// name the receiver (code they run cannot reach the half-built
+    /// instance, and a definition does not consult the prototype chain), a
+    /// constructor-body store only in the inert prologue (code that ran
+    /// could have put a setter on the chain). Only these take the unchecked
+    /// initializing store (`expr/layout_read.rs`); a later constructor key is
+    /// an add through the store probe, which checks the order and the chain.
     pub init_count: u32,
     /// The creation split (§3.2: family = creation point): a birth whose
     /// constructor argument `discriminant` is one of the variants' constants
@@ -479,6 +482,29 @@ fn receiver_free(s: &Stmt) -> bool {
     matches!(s, Stmt::Expr(e) if !mentions_receiver(e))
 }
 
+/// Is `s` a store `this.k = v` whose key and value never name the receiver:
+/// the receiver is only the object stored into, so it does not escape?
+fn store_names_receiver_only(s: &Stmt) -> bool {
+    match s {
+        Stmt::Expr(Expr::PropertySet { object, value, .. }) => {
+            matches!(object.as_ref(), Expr::This) && !mentions_receiver(value)
+        }
+        Stmt::Expr(Expr::PutValueSet {
+            target,
+            key,
+            value,
+            receiver,
+            ..
+        }) => {
+            matches!(target.as_ref(), Expr::This)
+                && matches!(receiver.as_ref(), Expr::This)
+                && !mentions_receiver(key)
+                && !mentions_receiver(value)
+        }
+        _ => false,
+    }
+}
+
 /// A statement before a derived constructor's `super(...)`: the instance
 /// does not exist yet, so one that never names the receiver (closures
 /// included: an arrow could call `super`) and never returns cannot observe
@@ -589,7 +615,14 @@ fn own_keys(class: &Class, has_parent: bool, fresh: bool) -> Result<OwnKeys, Str
     // else the phase can do (a computed key, a decorator, a reservation that
     // carries an initializer) is not modelled.
     let mut defined: Vec<(FamilyKey, bool)> = Vec::new();
+    // `defined_open`: no code has run since the birth (every value so far is
+    // inert): a constructor-body store after the fields is still an
+    // initialization. `unobserved`: no value so far names the receiver, so
+    // whatever code ran cannot have seen the instance: a field definition is
+    // still an initialization (it defines; the chain is not consulted).
     let mut defined_open = true;
+    let mut unobserved = true;
+    let receiver_free_init = |f: &perry_hir::ClassField| f.init.as_ref().is_none_or(|e| !mentions_receiver(e));
     for f in &class.fields {
         // A class capture (`__perry_cap_*`) is never defined by the
         // field-initialisation phase (`field_init` skips it): the
@@ -616,16 +649,17 @@ fn own_keys(class: &Class, has_parent: bool, fresh: bool) -> Result<OwnKeys, Str
             && class.specialized_from.is_none()
             && !fresh
         {
-            defined_open &= f.init.as_ref().is_none_or(|e| inert(e, &BTreeSet::new()));
+            unobserved &= receiver_free_init(f);
             let key = FamilyKey::Private(
                 crate::codegen::static_private_class::private_storage_key(class.id, &f.name),
             );
             if !defined.iter().any(|(x, _)| *x == key) {
-                defined.push((key, defined_open));
+                defined.push((key, unobserved));
             }
             // The claim is a runtime call: no later key is an unchecked
             // initialization.
             defined_open = false;
+            unobserved = false;
             continue;
         }
         let plain = f.key_expr.is_none()
@@ -641,6 +675,7 @@ fn own_keys(class: &Class, has_parent: bool, fresh: bool) -> Result<OwnKeys, Str
                     return Err("reserved key".into());
                 }
                 defined_open = false;
+                unobserved = false;
                 if !defined.iter().any(|(x, _)| *x == f.name) {
                     defined.push((FamilyKey::Name(f.name.clone()), false));
                 }
@@ -650,10 +685,13 @@ fn own_keys(class: &Class, has_parent: bool, fresh: bool) -> Result<OwnKeys, Str
                     return Err("reserved key".into());
                 }
                 // The value is evaluated before the key is defined: a value
-                // that may run code ends the initialization at this key.
+                // that names the receiver (it may observe the instance) ends
+                // the initialization at this key; one that only runs code
+                // ends it for the constructor-body stores.
                 defined_open &= f.init.as_ref().is_none_or(|e| inert(e, &BTreeSet::new()));
+                unobserved &= receiver_free_init(f);
                 if !defined.iter().any(|(x, _)| *x == f.name) {
-                    defined.push((FamilyKey::Name(f.name.clone()), defined_open));
+                    defined.push((FamilyKey::Name(f.name.clone()), unobserved));
                 }
             }
             _ => {
@@ -672,12 +710,14 @@ fn own_keys(class: &Class, has_parent: bool, fresh: bool) -> Result<OwnKeys, Str
             }
         }
     }
+    let unobserved_all = class.fields.iter().all(receiver_free_init);
     let Some(ctor) = class.constructor.as_ref() else {
         // A base class without a constructor stores only its fields; a
         // derived one forwards to its parent.
         return Ok(OwnKeys {
             keys: defined,
             super_inert: true,
+            leaks: !unobserved_all,
         });
     };
     if ctor.params.iter().any(|p| !p.decorators.is_empty()) {
@@ -715,9 +755,14 @@ fn own_keys(class: &Class, has_parent: bool, fresh: bool) -> Result<OwnKeys, Str
             _ => return Err("derived constructor does not open with super(...)".into()),
         }
     }
+    // A base constructor defines its fields right after the birth, before
+    // its parameter defaults run (node: field, then param): no default can
+    // precede them. A derived one defines them right after super(), whose
+    // prefix `open` covers.
+    let fields_open = !has_parent || open;
     let mut keys: Vec<(FamilyKey, bool)> = defined
         .into_iter()
-        .map(|(k, eligible)| (k, eligible && open))
+        .map(|(k, eligible)| (k, eligible && fields_open))
         .collect();
     open &= defined_open;
     for s in body {
@@ -761,7 +806,15 @@ fn own_keys(class: &Class, has_parent: bool, fresh: bool) -> Result<OwnKeys, Str
             }
         }
     }
-    Ok(OwnKeys { keys, super_inert })
+    let leaks = !unobserved_all
+        || body
+            .iter()
+            .any(|s| !receiver_free(s) && !store_names_receiver_only(s));
+    Ok(OwnKeys {
+        keys,
+        super_inert,
+        leaks,
+    })
 }
 
 /// The `this.k = v` keys statement `s` stores in its own body, in source
@@ -829,6 +882,10 @@ fn nested_this_stores<'a>(s: &'a Stmt, out: &mut Vec<&'a str>) {
 struct OwnKeys {
     keys: Vec<(FamilyKey, bool)>,
     super_inert: bool,
+    /// The constructor (a field value or a body statement) may hand the
+    /// receiver to code: what runs after it, before a later constructor on
+    /// the chain defines its keys, can observe them absent.
+    leaks: bool,
 }
 
 /// The class a binding initialised with a class value names (`var X = class
@@ -1067,6 +1124,7 @@ fn program_families(
                     .map(|k| (FamilyKey::Name(k.to_string()), false))
                     .collect(),
                 super_inert: false,
+                leaks: false,
             });
         }
         for (depth, k) in chain.iter().enumerate().rev() {
@@ -1095,6 +1153,9 @@ fn program_families(
                     }
                 }
             }
+            // An instance a parent constructor handed out can be observed
+            // before any key a child defines or stores.
+            open &= !own.leaks;
         }
         // A class whose chain stores no key of its own may still be filled
         // by the stores that follow its creation sites (late keys); `compute`
