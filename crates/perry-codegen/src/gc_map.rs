@@ -1572,12 +1572,7 @@ pub fn compact_and_assemble(
         // only place the real numbers exist.
         crate::statepoint_report::note_gc_map(stats.functions, stats.records, stats.roots);
     }
-    if matches!(format_for(target), ObjectFormat::Coff) {
-        if let Some(stripped) = strip_v1_epilogue_markers(text.as_deref().unwrap_or(&asm)) {
-            text = Some(stripped);
-        }
-    }
-    if let Some(text) = text {
+    if let Some(text) = &text {
         fs::write(asm_path, text).with_context(|| {
             format!(
                 "Failed to write compacted assembly at {}",
@@ -1586,37 +1581,29 @@ pub fn compact_and_assemble(
         })?;
     }
 
-    assemble(clang, target, asm_path, obj_path, codegen_args)
-}
+    // COFF is assembled by the LLVM that printed it (`inprocess::assemble`):
+    // the host clang can be older and reject what it printed (windows-2022's
+    // clang 20 refuses LLVM 22's `.seh_startepilogue` and `unique` sections).
+    #[cfg(feature = "llvm-inprocess")]
+    if matches!(format_for(target), ObjectFormat::Coff) {
+        let text = text.as_deref().unwrap_or(&asm);
+        let cpu_flags = cpu_selection_flags(codegen_args);
+        let object = crate::inprocess::assemble_text(text, target, &cpu_flags).map_err(|e| {
+            anyhow!(
+                "assembling the compacted stack map failed.\n\
+                 assembly left at: {}\n\
+                 \n\
+                 {e:#}",
+                asm_path.display()
+            )
+        })?;
+        fs::write(obj_path, object)
+            .with_context(|| format!("Failed to write {}", obj_path.display()))?;
+        let _ = fs::remove_file(asm_path);
+        return Ok(());
+    }
 
-/// COFF only: the text without `.seh_startepilogue` / `.seh_endepilogue`,
-/// or `None` when there is nothing to drop.
-///
-/// The text was printed by Perry's own LLVM, but it is assembled by whatever
-/// clang the machine has. LLVM 20+ brackets every Windows x64 epilogue with
-/// these two directives; older assemblers reject them ("unknown directive"),
-/// which failed every Windows compile, `console.log("hello")` included, on a
-/// host whose clang predates the bundled LLVM (GitHub's windows-2022 image
-/// ships clang 20.1.8; Perry bundles LLVM 22).
-///
-/// The markers only feed unwind info version 2, which a function opts into
-/// with `.seh_unwindversion 2`. Without that directive the assembler records
-/// them and writes nothing for them: the object is byte-identical with or
-/// without them. A file that does request v2 is left untouched; it needs an
-/// assembler that understands it.
-fn strip_v1_epilogue_markers(asm: &str) -> Option<String> {
-    const MARKERS: [&str; 2] = [".seh_startepilogue", ".seh_endepilogue"];
-    let is_marker = |line: &str| MARKERS.contains(&line.trim());
-    if asm.contains(".seh_unwindversion") || !asm.lines().any(is_marker) {
-        return None;
-    }
-    let mut out = String::with_capacity(asm.len());
-    for line in asm.split_inclusive('\n') {
-        if !is_marker(line) {
-            out.push_str(line);
-        }
-    }
-    Some(out)
+    assemble(clang, target, asm_path, obj_path, codegen_args)
 }
 
 /// The subset of the codegen's clang argv that selects the target MACHINE.

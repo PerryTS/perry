@@ -1031,36 +1031,6 @@ fn coff_epilogue_asm() -> &'static str {
     )
 }
 
-/// An assembler older than LLVM 20 rejects the epilogue markers, which
-/// refused every Windows compile on a host with such a clang. Without
-/// `.seh_unwindversion 2` they produce no bytes, so they are dropped and
-/// everything else is kept as printed.
-#[test]
-fn coff_v1_epilogue_markers_are_dropped() {
-    let asm = coff_epilogue_asm();
-    let out = strip_v1_epilogue_markers(asm).expect("markers present");
-    assert!(!out.contains(".seh_startepilogue"), "{out}");
-    assert!(!out.contains(".seh_endepilogue"), "{out}");
-    let expected: String = asm
-        .split_inclusive('\n')
-        .filter(|line| !line.contains("epilogue"))
-        .collect();
-    assert_eq!(out, expected);
-    // CRLF text and text without markers.
-    let crlf = asm.replace('\n', "\r\n");
-    let out = strip_v1_epilogue_markers(&crlf).expect("markers present");
-    assert!(!out.contains("epilogue") && out.contains(".seh_endproc\r\n"));
-    assert!(strip_v1_epilogue_markers("\t.text\nf:\n\tretq\n").is_none());
-}
-
-/// Unwind v2 encodes the epilogues, so its markers carry information: the
-/// text is left for an assembler that understands it.
-#[test]
-fn unwind_v2_text_keeps_its_epilogue_markers() {
-    let asm = coff_epilogue_asm().replace(".seh_proc f\n", ".seh_proc f\n\t.seh_unwindversion 2\n");
-    assert!(strip_v1_epilogue_markers(&asm).is_none());
-}
-
 #[test]
 fn unknown_directive_failures_name_the_clang_override() {
     let clang = Path::new("/usr/bin/clang");
@@ -1069,24 +1039,33 @@ fn unknown_directive_failures_name_the_clang_override() {
     assert!(assembler_skew_hint("x.s:1: error: invalid operand\n", clang).is_empty());
 }
 
-/// End to end through the real assembler: a COFF module whose text carries
-/// the epilogue markers assembles with the host's clang. With a clang older
-/// than LLVM 20 (`PERRY_LLVM_CLANG=…/llvm@19/bin/clang`) this failed with
-/// "unknown directive" before the markers were dropped.
+/// COFF text is assembled by the LLVM that printed it, never the host clang:
+/// windows-2022's clang 20 rejected LLVM 22's `.seh_startepilogue` and then
+/// its `.section ...,unique,N`, failing every Windows compile. The clang
+/// passed here does not exist, so only the in-process assembler can succeed.
+#[cfg(feature = "llvm-inprocess")]
 #[test]
-fn coff_epilogue_markers_assemble_with_the_host_clang() {
-    let Some(clang) = crate::linker::find_clang() else {
-        eprintln!("skipping: no clang on this host");
-        return;
-    };
-    let dir = std::env::temp_dir().join(format!("perry_gc_map_seh_{}", std::process::id()));
+fn coff_stack_map_text_is_assembled_in_process() {
+    let dir = std::env::temp_dir().join(format!("perry_gc_map_coff_{}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
     let asm_path = dir.join("module.s");
     let obj_path = dir.join("module.o");
-    fs::write(&asm_path, coff_epilogue_asm()).unwrap();
-    let result = compact_and_assemble(&clang, "x86_64-pc-windows-msvc", &asm_path, &obj_path, &[]);
+    let text = format!(
+        "{}\t.section\t.data,\"dw\",one_only,perry_global_m_ts__0,unique,16\n\
+         \t.globl\tperry_global_m_ts__0\nperry_global_m_ts__0:\n\t.quad\tf\n",
+        coff_epilogue_asm()
+    );
+    fs::write(&asm_path, text).unwrap();
+    let missing = dir.join("no-such-clang");
+    let result = compact_and_assemble(
+        &missing,
+        "x86_64-pc-windows-msvc",
+        &asm_path,
+        &obj_path,
+        &[],
+    );
     let object = fs::read(&obj_path);
     let _ = fs::remove_dir_all(&dir);
-    result.expect("COFF text with epilogue markers must assemble");
-    assert!(!object.expect("object written").is_empty());
+    result.expect("COFF text assembles without an external clang");
+    assert_eq!(&object.expect("object written")[..2], &[0x64, 0x86]);
 }
