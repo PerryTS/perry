@@ -1097,17 +1097,25 @@ runtime_layout!(GLOBAL_OBJECT, 0x5254_0012, 0, crate::object::layout_desc::LAYOU
 ]);
 
 /// The global object's own key named `name` (FNV-1a `hash`), found through
-/// its static layout's index: the builtin name's image atom.
+/// the index of its layout descriptor (the program's definition; `desc()`):
+/// the builtin name's image atom.
 #[inline]
 pub(crate) fn builtin_global_atom(name: &[u8], hash: u64) -> Option<*const StringHeader> {
-    const MASK: usize = GLOBAL_OBJECT::INDEX.len() - 1;
-    let mut at = hash as usize & MASK;
+    // SAFETY: the descriptor is the program's immutable definition of the
+    // layout; its keys and index are image data of that descriptor.
+    let (keys, index, mask) = unsafe {
+        let desc = GLOBAL_OBJECT::desc();
+        ((*desc).keys, (*desc).index, (*desc).index_mask as usize)
+    };
+    let mut at = hash as usize & mask;
     loop {
-        let pos = GLOBAL_OBJECT::INDEX[at];
+        // SAFETY: `at <= mask`, the index capacity - 1.
+        let pos = unsafe { *index.add(at) };
         if pos == u32::MAX {
             return None;
         }
-        let atom = GLOBAL_OBJECT::KEYS[pos as usize].atom;
+        // SAFETY: an index entry is a position in `keys`.
+        let atom = unsafe { (*keys.add(pos as usize)).atom };
         // SAFETY: the layout's atoms are this binary's static image atoms.
         unsafe {
             if (*atom).hash == hash {
@@ -1120,6 +1128,6 @@ pub(crate) fn builtin_global_atom(name: &[u8], hash: u64) -> Option<*const Strin
                 }
             }
         }
-        at = (at + 1) & MASK;
+        at = (at + 1) & mask;
     }
 }
