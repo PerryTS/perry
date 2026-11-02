@@ -2040,8 +2040,10 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
         BuiltinNs::Error | BuiltinNs::AggregateError | BuiltinNs::RegExp => {
             new_builtin_ns(m, ns, call);
             if ns == BuiltinNs::RegExp {
-                // `RegExp(re)` can return the existing regexp object.
+                // `RegExp(re)` can return the existing regexp object, after
+                // comparing `re.constructor` with the active function.
                 if let Some(src) = arg(m, call, 0) {
+                    string_methods::read_only(m, src, "constructor");
                     let ret = m.calls[call as usize].ret;
                     m.edge(src, ret);
                 }

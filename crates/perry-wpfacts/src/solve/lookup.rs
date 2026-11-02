@@ -65,6 +65,9 @@ impl Model {
     /// on a builtin prototype or through ⊤ (`reshaped_keys`), where a setter
     /// or a read-only value would intercept the store that makes the key.
     pub(crate) fn shadows(&self, t: Tok, a: Atom) -> bool {
+        if t != TOP && self.regexp_last_index(t, a) {
+            return true;
+        }
         if t == TOP
             || self.reshaped_any
             || self.reshaped_keys.contains(&a)
