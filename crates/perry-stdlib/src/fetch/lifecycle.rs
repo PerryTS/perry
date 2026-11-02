@@ -579,10 +579,10 @@ fn moving_collection_rewrites_live_method_cache_before_full_reclamation() {
         let headers = js_headers_new();
         let owner = scope.root_nanbox_f64(headers);
         let before = headers_bound_method_value(handle_id(headers), "get");
-        let moved_before = perry_runtime::gc::moved_objects_total();
         perry_runtime::gc::js_gc_collect();
         let after = headers_bound_method_value(handle_id(owner.get_nanbox_f64()), "get");
-        assert!(perry_runtime::gc::moved_objects_total() > moved_before);
+        // The runtime dependency's plain release build intentionally has no
+        // counters. The cached closure itself must relocate in every profile.
         assert_ne!(
             before.to_bits(),
             after.to_bits(),
