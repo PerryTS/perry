@@ -5789,7 +5789,6 @@ jobs:
             --ignore RUSTSEC-2023-0071 \
             --ignore RUSTSEC-2026-0118 \
             --ignore RUSTSEC-2026-0119 \
-            --ignore RUSTSEC-2026-0187 \
             --ignore RUSTSEC-2026-0235 \
             --ignore RUSTSEC-2026-0378 \
             --ignore RUSTSEC-2026-0379
@@ -6016,7 +6015,6 @@ jobs:
             --ignore RUSTSEC-2023-0071 \
             --ignore RUSTSEC-2026-0118 \
             --ignore RUSTSEC-2026-0119 \
-            --ignore RUSTSEC-2026-0187 \
             --ignore RUSTSEC-2026-0235 \
             --ignore RUSTSEC-2026-0378 \
             --ignore RUSTSEC-2026-0379
