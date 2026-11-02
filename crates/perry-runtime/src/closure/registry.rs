@@ -336,13 +336,23 @@ pub unsafe fn dispatch_rest_bundled(
     let all_arguments_double = all_arguments_handle.map(|handle| handle.get_nanbox_f64());
 
     // Read fixed args, padding with undefined when caller under-supplied.
+    let arg_at = |i: usize| {
+        if i < provided {
+            arg_handles[i].get_nanbox_f64()
+        } else {
+            undef
+        }
+    };
+    // Pad once for the exact arms (fixed arity 0..=14): one fixed array
+    // filled with `undefined`, the provided prefix read from the handles,
+    // then every arm indexes it with constants (no bounds checks).
+    let mut slots = [undef; 15];
+    for (slot, handle) in slots.iter_mut().zip(arg_handles.iter()) {
+        *slot = handle.get_nanbox_f64();
+    }
     macro_rules! a {
         ($i:expr) => {
-            if $i < provided {
-                arg_handles[$i].get_nanbox_f64()
-            } else {
-                undef
-            }
+            slots[$i]
         };
     }
 
@@ -387,7 +397,7 @@ pub unsafe fn dispatch_rest_bundled(
             // array, then the `arguments` object when the body has one — and
             // call through the padded ladder.
             let mut slots: Vec<f64> = Vec::with_capacity(k + 2);
-            slots.extend((0..k).map(|i| a!(i)));
+            slots.extend((0..k).map(arg_at));
             slots.push(rest_double);
             if let Some(arguments_double) = all_arguments_double {
                 slots.push(arguments_double);
