@@ -836,9 +836,13 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             for (si, u) in per_unit.iter().enumerate() {
                 let u = u.as_ref().expect("every unit solved");
                 if !u.stats.aborted
-                    && (u.fns_read.iter().any(|(n, _)| fstores_changed.contains(n.as_str()))
+                    && (u
+                        .fns_read
+                        .iter()
+                        .any(|(n, _)| fstores_changed.contains(n.as_str()))
                         || u.fns_defined.iter().any(|d| {
-                            d.strip_prefix("fn:").is_some_and(|n| fstores_changed.contains(n))
+                            d.strip_prefix("fn:")
+                                .is_some_and(|n| fstores_changed.contains(n))
                         }))
                 {
                     seeds.push(si);
