@@ -343,54 +343,50 @@ pub unsafe fn dispatch_rest_bundled(
             undef
         }
     };
-    // Pad once for the exact arms (fixed arity 0..=14): one fixed array
-    // filled with `undefined`, the provided prefix read from the handles,
-    // then every arm indexes it with constants (no bounds checks).
-    let mut slots = [undef; 15];
-    for (slot, handle) in slots.iter_mut().zip(arg_handles.iter()) {
-        *slot = handle.get_nanbox_f64();
-    }
-    macro_rules! a {
-        ($i:expr) => {
-            slots[$i]
-        };
-    }
-
     // Use a macro for higher rest arities so this stays in sync with the
     // documented 0..=15 support and the generated closure-call ceiling.
     // One arm per fixed arity: the body takes `(callee, fixed..., rest
     // [, arguments])`. Every arm goes through the body-call funnel.
+    // Pad per arm: a `[f64; N]` of exactly the arm's arity filled with
+    // `undefined`, the provided prefix read from the rooted handles, then
+    // constant-index loads (no bounds checks). A small arity pays a few scalar
+    // moves, not the widest arm's fill.
     macro_rules! rest_arm {
-        ($($i:tt),* $(,)?) => {{
+        ($n:literal; $($i:tt),* $(,)?) => {{
+            #[allow(unused_mut)]
+            let mut slots = [undef; $n];
+            for (slot, handle) in slots.iter_mut().zip(arg_handles.iter()) {
+                *slot = handle.get_nanbox_f64();
+            }
             if let Some(arguments_double) = all_arguments_double {
                 crate::closure::body_call::js_body_call_unwind!(
-                    func_ptr, closure, this $(, a!($i))*, rest_double, arguments_double
+                    func_ptr, closure, this $(, slots[$i])*, rest_double, arguments_double
                 )
             } else {
                 crate::closure::body_call::js_body_call_unwind!(
-                    func_ptr, closure, this $(, a!($i))*, rest_double
+                    func_ptr, closure, this $(, slots[$i])*, rest_double
                 )
             }
         }};
     }
 
     match k {
-        0 => rest_arm!(),
-        1 => rest_arm!(0),
-        2 => rest_arm!(0, 1),
-        3 => rest_arm!(0, 1, 2),
-        4 => rest_arm!(0, 1, 2, 3),
-        5 => rest_arm!(0, 1, 2, 3, 4),
-        6 => rest_arm!(0, 1, 2, 3, 4, 5),
-        7 => rest_arm!(0, 1, 2, 3, 4, 5, 6),
-        8 => rest_arm!(0, 1, 2, 3, 4, 5, 6, 7),
-        9 => rest_arm!(0, 1, 2, 3, 4, 5, 6, 7, 8),
-        10 => rest_arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9),
-        11 => rest_arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10),
-        12 => rest_arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
-        13 => rest_arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12),
-        14 => rest_arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13),
-        15 => rest_arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14),
+        0 => rest_arm!(0;),
+        1 => rest_arm!(1; 0),
+        2 => rest_arm!(2; 0, 1),
+        3 => rest_arm!(3; 0, 1, 2),
+        4 => rest_arm!(4; 0, 1, 2, 3),
+        5 => rest_arm!(5; 0, 1, 2, 3, 4),
+        6 => rest_arm!(6; 0, 1, 2, 3, 4, 5),
+        7 => rest_arm!(7; 0, 1, 2, 3, 4, 5, 6),
+        8 => rest_arm!(8; 0, 1, 2, 3, 4, 5, 6, 7),
+        9 => rest_arm!(9; 0, 1, 2, 3, 4, 5, 6, 7, 8),
+        10 => rest_arm!(10; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9),
+        11 => rest_arm!(11; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10),
+        12 => rest_arm!(12; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
+        13 => rest_arm!(13; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12),
+        14 => rest_arm!(14; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13),
+        15 => rest_arm!(15; 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14),
         _ => {
             // #10420: 16+ fixed params used to return `undefined` without
             // calling the body. Lay out the full ABI — fixed params, rest
