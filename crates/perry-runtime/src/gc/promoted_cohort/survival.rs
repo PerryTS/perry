@@ -179,7 +179,7 @@ pub(in crate::gc) fn arm_survival_probe(blocks: Vec<(usize, usize, u64)>) {
         pending.insert(data, (extent, bytes));
         ranges.push((data, data.saturating_add(extent)));
     }
-    ranges.sort_unstable();
+    crate::cold_sort::sort_by(&mut ranges, |a, b| a.cmp(b));
     let minor_view = if parents.is_some() {
         MinorView::Unchecked
     } else {

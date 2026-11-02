@@ -44,7 +44,7 @@ impl FreedRanges {
             .copied()
             .filter(|&(start, end)| start < end)
             .collect();
-        sorted.sort_unstable_by_key(|&(start, _)| start);
+        crate::cold_sort::sort_by_u64_key(&mut sorted, |&(start, _)| start as u64);
         Self { sorted }
     }
 

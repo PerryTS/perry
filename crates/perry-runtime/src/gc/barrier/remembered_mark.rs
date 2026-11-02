@@ -239,7 +239,7 @@ pub(in crate::gc) fn dirty_slot_ranges_for(
     if ranges.is_empty() {
         return ranges;
     }
-    ranges.sort_unstable();
+    crate::cold_sort::sort_by(&mut ranges, |a, b| a.cmp(b));
     let mut merged = Vec::<(usize, usize)>::with_capacity(ranges.len());
     for (start, end) in ranges {
         if let Some((_, last_end)) = merged.last_mut() {
