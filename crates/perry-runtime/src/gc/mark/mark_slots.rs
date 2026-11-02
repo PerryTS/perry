@@ -63,7 +63,6 @@ pub(in crate::gc) unsafe fn trace_heap_rewrite_slots_remembering<const DIAGNOSTI
 }
 
 #[cold]
-#[optimize(size)]
 #[inline(never)]
 unsafe fn remember_malloc_mark_slots<const DIAGNOSTICS: bool>(
     header: *mut GcHeader,

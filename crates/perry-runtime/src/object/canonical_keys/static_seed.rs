@@ -12,7 +12,6 @@ use crate::object::layout_desc::PerryLayoutKey;
 /// Descriptors and their atoms are valid, with hashes matching their strings.
 /// GC must remain suppressed through this call, as for layout registration.
 #[cold]
-#[optimize(size)]
 #[inline(never)]
 pub(crate) unsafe fn from_static_layout(
     _proof: &SharedLayout,
@@ -109,7 +108,6 @@ mod tests;
 /// `keys` are this program's atom records and `cell` an image cell of
 /// `keys.len()` slots. GC is suppressed, as for layout registration.
 #[cold]
-#[optimize(size)]
 #[inline(never)]
 pub(crate) unsafe fn link_image_list(
     _proof: &SharedLayout,

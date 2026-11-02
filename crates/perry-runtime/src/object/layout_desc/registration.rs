@@ -124,7 +124,6 @@ pub(crate) unsafe fn layout_word_for_birth(desc: *const PerryLayoutDesc) -> Opti
 }
 
 #[cold]
-#[optimize(size)]
 #[inline(never)]
 unsafe fn install_runtime_layout(desc: *const PerryLayoutDesc) -> Option<()> {
     let requested = layout_id_of_index(descriptor_index(desc)?)?;

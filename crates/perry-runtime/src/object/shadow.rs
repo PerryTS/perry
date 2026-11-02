@@ -106,7 +106,6 @@ fn mask_admits(names: Names, bytes: &[u8], prototype: bool) -> bool {
 /// Full spelling comparison is reached only after the immutable admission
 /// mask matched. Keep its loop/register needs off the common negative path.
 #[cold]
-#[optimize(size)]
 #[inline(never)]
 fn name_matches_index(names: Names, bytes: &[u8], prototype: bool) -> bool {
     let mut h = (bytes.len() as u64) << 48;
@@ -367,7 +366,6 @@ pub(crate) unsafe fn publish_key_add_word(
 }
 
 #[cold]
-#[optimize(size)]
 #[inline(never)]
 unsafe fn key_add_slow(
     obj: *const ObjectHeader,
@@ -407,7 +405,6 @@ unsafe fn key_add_slow(
 }
 
 #[cold]
-#[optimize(size)]
 #[inline(never)]
 unsafe fn publish_word_slow(
     obj: *const ObjectHeader,
@@ -474,7 +471,6 @@ pub(crate) fn note_relink(addr: usize) {
 /// slot sets the bit here.
 /// Called from the slot-store funnels behind their prototype-flag test.
 #[cold]
-#[optimize(size)]
 #[inline(never)]
 pub(crate) unsafe fn note_prototype_slot_store(
     obj: *mut ObjectHeader,

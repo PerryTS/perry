@@ -369,7 +369,6 @@ fn concat_parts_simple<const M: usize, const UNROLL: bool>(
 /// operand, take the collecting allocation, and re-read each from its handle.
 /// Literals, digits and the stack conversions do not move.
 #[cold]
-#[optimize(size)]
 #[inline(never)]
 #[allow(clippy::too_many_arguments)]
 fn concat_parts_rooted_copy<const M: usize>(

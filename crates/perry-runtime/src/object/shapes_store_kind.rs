@@ -416,7 +416,6 @@ pub(crate) unsafe fn retire_proof_before_stamp(obj: *mut ObjectHeader, new_id: L
 }
 
 #[cold]
-#[optimize(size)]
 #[inline(never)]
 unsafe fn retire_proof_before_stamp_slow(obj: *mut ObjectHeader, new_id: LayoutWord) {
     if crate::gc_type_is_not_object!((*gc_header(obj)).obj_type) {

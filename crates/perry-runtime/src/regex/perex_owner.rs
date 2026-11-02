@@ -139,7 +139,6 @@ pub(crate) unsafe fn cell_dfa_first<'a>(
 }
 
 #[cold]
-#[optimize(size)]
 #[inline(never)]
 unsafe fn first_cache<'a>(
     cell: *mut ProgramCell,

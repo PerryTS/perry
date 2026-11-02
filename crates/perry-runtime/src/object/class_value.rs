@@ -375,7 +375,6 @@ pub(crate) fn class_value_is_first_evaluation(class_id: u32) -> bool {
 /// Never collects: callers hold raw receiver pointers across the lookup, so
 /// the old-arena allocation runs under a [`crate::gc::GcSuppressScope`].
 #[cold]
-#[optimize(size)]
 #[inline(never)]
 fn class_value_mint(class_id: u32) -> *mut ClosureHeader {
     // Any class id may own one: a native class whose prototype carries

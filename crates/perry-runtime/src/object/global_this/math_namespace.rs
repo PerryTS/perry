@@ -196,7 +196,6 @@ const MEMBERS: &[Member] = &[
 ];
 crate::realm_decl! { Math, provider = namespace(MEMBERS); }
 #[cold]
-#[optimize(size)]
 #[inline(never)]
 pub(crate) fn create_math_namespace() -> *mut ObjectHeader {
     builtin_namespace::create(MEMBERS)

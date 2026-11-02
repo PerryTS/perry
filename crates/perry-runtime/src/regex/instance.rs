@@ -61,7 +61,6 @@ pub(super) fn new(data: impl FnOnce() -> *const RegExpData) -> *mut RegExpHeader
 }
 
 #[cold]
-#[optimize(size)]
 #[inline(never)]
 fn new_slow(shape: LayoutWord, data: impl FnOnce() -> *const RegExpData) -> *mut RegExpHeader {
     let (mut receiver, born_on_memo) = crate::object::object_alloc_plain_born(2, shape);
@@ -96,7 +95,6 @@ fn new_slow(shape: LayoutWord, data: impl FnOnce() -> *const RegExpData) -> *mut
 }
 
 #[cold]
-#[optimize(size)]
 #[inline(never)]
 fn prepare_shape(receiver: *mut RegExpHeader) -> *mut RegExpHeader {
     let scope = &RuntimeHandleScope::new();
