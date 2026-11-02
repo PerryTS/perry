@@ -746,7 +746,7 @@ runtime_layout!(OUTGOING_MESSAGE_PROTOTYPE, kind = LAYOUT_KIND_UNMARKED, 0x53500
     NP_ATOM_FLUSH_HEADERS,
     NP_ATOM_PIPE,
     NP_SYMBOL_NODEJS_REJECTION,
-], realm = ["node:http.OutgoingMessage.prototype"]);
+], realm = ["node:http.OutgoingMessage.prototype", "node:http2.Http2ServerResponse.prototype"]);
 
 // `ServerResponse.prototype`: node's own keys, in node's order.
 runtime_layout!(SERVER_RESPONSE_PROTOTYPE, kind = LAYOUT_KIND_UNMARKED, 0x53500017, 0,
@@ -763,7 +763,7 @@ runtime_layout!(SERVER_RESPONSE_PROTOTYPE, kind = LAYOUT_KIND_UNMARKED, 0x535000
     NP_ATOM_WRITE_EARLY_HINTS,
     NP_ATOM_U_IMPLICIT_HEADER,
     NP_ATOM_WRITE_HEAD,
-], realm = ["node:http.ServerResponse.prototype"]);
+], realm = ["node:http.ServerResponse.prototype", "node:http2.Http2ServerResponse.prototype"]);
 
 // `IncomingMessage.prototype`: node's own keys, in node's order.
 runtime_layout!(INCOMING_MESSAGE_PROTOTYPE, kind = LAYOUT_KIND_UNMARKED, 0x53500018, 0,

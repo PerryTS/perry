@@ -683,7 +683,15 @@ runtime_layout!(
     0,
     crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
     [ATOM_26, ATOM_25],
-    realm = ["ReadableStream", "node:sqlite", "node:better-sqlite3"]
+    // `fetch`: its response body stream resolves a pending `read()` from the
+    // body bridge (turnloop_bridge::response_chunk), with no ReadableStream
+    // constructor in the program.
+    realm = [
+        "ReadableStream",
+        "fetch",
+        "node:sqlite",
+        "node:better-sqlite3"
+    ]
 );
 
 runtime_layout!(
