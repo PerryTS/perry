@@ -353,11 +353,23 @@ pub unsafe fn dispatch_rest_bundled(
     // moves, not the widest arm's fill.
     macro_rules! rest_arm {
         ($n:literal; $($i:tt),* $(,)?) => {{
+            let provided = provided.min($n);
             #[allow(unused_mut)]
-            let mut slots = [undef; $n];
-            for (slot, handle) in slots.iter_mut().zip(arg_handles.iter()) {
-                *slot = handle.get_nanbox_f64();
-            }
+            let mut slots: [f64; $n] = if $n <= 8 {
+                std::array::from_fn(|i| {
+                    if i < provided {
+                        arg_handles[i].get_nanbox_f64()
+                    } else {
+                        undef
+                    }
+                })
+            } else {
+                let mut filled = [undef; $n];
+                for (slot, handle) in filled.iter_mut().zip(arg_handles.iter()) {
+                    *slot = handle.get_nanbox_f64();
+                }
+                filled
+            };
             if let Some(arguments_double) = all_arguments_double {
                 crate::closure::body_call::js_body_call_unwind!(
                     func_ptr, closure, this $(, slots[$i])*, rest_double, arguments_double
@@ -470,10 +482,18 @@ pub unsafe fn dispatch_with_arity(
     // arm's arity are ignored, as before.
     macro_rules! arm {
         ($n:literal; $($i:tt),* $(,)?) => {{
-            #[allow(unused_mut)]
-            let mut slots = [undef; $n];
             let provided = args.len().min($n);
-            slots[..provided].copy_from_slice(&args[..provided]);
+            // A narrow arm selects each slot (`undefined` past `provided`):
+            // a few scalar moves, no `memcpy` call for a length only known at
+            // run time. A wide arm copies the prefix.
+            #[allow(unused_mut)]
+            let mut slots: [f64; $n] = if $n <= 8 {
+                std::array::from_fn(|i| if i < provided { args[i] } else { undef })
+            } else {
+                let mut filled = [undef; $n];
+                filled[..provided].copy_from_slice(&args[..provided]);
+                filled
+            };
             crate::closure::body_call::js_body_call!(func_ptr, closure, this $(, slots[$i])*)
         }};
     }
