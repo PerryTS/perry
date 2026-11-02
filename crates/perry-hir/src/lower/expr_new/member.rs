@@ -522,8 +522,20 @@ pub(crate) fn lower_new_member_native(
                     ("events", "EventEmitter")
                         | ("events", "EventEmitterAsyncResource")
                         | ("async_hooks", "AsyncLocalStorage" | "AsyncResource")
-                        | ("sqlite", "DatabaseSync" | "Session" | "StatementSync")
+                        | (
+                            "sqlite",
+                            "Database" | "DatabaseSync" | "Session" | "Statement" | "StatementSync"
+                        )
                 ) {
+                    // node 26: Database and Statement are the same values as
+                    // the *Sync exports.
+                    let class_name = match (module_name, class_name) {
+                        ("sqlite", "Database" | "DatabaseSync") => {
+                            "NodeSqliteDatabaseSync".to_string()
+                        }
+                        ("sqlite", "Statement") => "StatementSync".to_string(),
+                        _ => class_name.to_string(),
+                    };
                     let args = new_expr
                         .args
                         .as_ref()
@@ -536,7 +548,7 @@ pub(crate) fn lower_new_member_native(
                         .unwrap_or_default();
                     return Ok(Some(Expr::New {
                         byte_end: 0,
-                        class_name: class_name.to_string(),
+                        class_name,
                         args,
                         type_args: Vec::new(),
                         byte_offset: new_byte_offset,

@@ -1260,7 +1260,7 @@ fn compute_act<'a>(
         type Held = (u16, Vec<model::Tok>);
         let mut by: std::collections::BTreeMap<String, (std::collections::BTreeMap<String, Held>, Option<Held>, bool)> =
             Default::default();
-        let mut add = |h: &mut Held, n: model::NodeId| {
+        let add = |h: &mut Held, n: model::NodeId| {
             let nd = &g.m.nodes[n as usize];
             h.0 |= nd.prim;
             for x in nd.pts.to_sorted() {

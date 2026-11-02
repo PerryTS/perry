@@ -399,6 +399,149 @@ fn chain_tokens(m: &Model, tm: TmplId) -> Vec<Tok> {
     out
 }
 
+/// RPG1b: per key of template `tm` (`keys`, birth keys first): is it a
+/// declared key every add of which runs before any later key can be
+/// present? A declared key is born absent (its birth store writes the hole)
+/// and added by its post writers only. It is then in enumeration order (the
+/// runtime fills its slot in place, `later_late_key_present`) when every
+/// post writer of it runs before every writer of every later key
+/// ([`ordered_writer`], [`evaluated_before`]). A later key that construction
+/// defines or that an unordered writer adds is present at no order this
+/// knows. A private field is a birth key at its declaration (#8969) that
+/// construction defines (its definition is a birth store of a key that is
+/// not declared), so it is such a key: never in order by this rule, and it
+/// ends the pass for every earlier key. The caller has checked that no
+/// computed key is written.
+///
+/// One pass from the last key: the later keys' writers are summarized as
+/// the once bodies that hold them (the first site of each) and their
+/// modules.
+fn ordered_declared_adds(m: &mut Model, tm: TmplId, keys: &[Atom]) -> Vec<bool> {
+    let mut out = vec![false; keys.len()];
+    let tpl = &m.tmpls[tm as usize];
+    let birth_len = tpl.birth_keys.len();
+    let declared: crate::pts::FxHashSet<Atom> = tpl.declared.iter().copied().collect();
+    let cache_stable = cjs_cache_stable(m);
+    let empty = FieldWriters::default();
+    // The later keys' writers: per once body, its module and first site;
+    // the modules holding them, with how many bodies each.
+    let mut later_fns: FxHashMap<FnIdx, (u32, SiteId)> = FxHashMap::default();
+    let mut later_mods: FxHashMap<u32, u32> = FxHashMap::default();
+    let mut firsts: Vec<(FnIdx, u32, SiteId)> = Vec::new();
+    for i in (0..keys.len()).rev() {
+        let a = keys[i];
+        let w = m.writers.get(&(tm, a)).unwrap_or(&empty).clone();
+        firsts.clear();
+        let mut own_ordered = true;
+        for &s in &w.post {
+            match ordered_writer(m, s, cache_stable) {
+                Some((f, md, false)) => firsts.push((f, md, s)),
+                _ => own_ordered = false,
+            }
+        }
+        if i < birth_len && declared.contains(&a) && own_ordered {
+            out[i] = firsts.iter().all(|&(f1, m1, s1)| {
+                let own_body = match later_fns.get(&f1) {
+                    Some(&(_, min)) => min > s1 && later_mods.get(&m1) == Some(&1),
+                    None => !later_mods.contains_key(&m1),
+                };
+                own_body
+                    && later_mods
+                        .keys()
+                        .filter(|&&md| md != m1)
+                        .all(|&md| evaluated_before(m, m1, md))
+            });
+        }
+        // Key `i` joins the later keys: unless construction defines it (a
+        // non-hole birth store, a private field among them), or a
+        // constructor body adds it.
+        let hole_births = w
+            .ctor
+            .iter()
+            .all(|&s| m.stores[s as usize].birth && declared.contains(&a));
+        if !hole_births {
+            break;
+        }
+        for &s in &w.post {
+            let Some((f, md, _)) = ordered_writer(m, s, cache_stable) else {
+                return out;
+            };
+            match later_fns.get_mut(&f) {
+                Some((_, min)) => *min = (*min).min(s),
+                None => {
+                    later_fns.insert(f, (md, s));
+                    *later_mods.entry(md).or_default() += 1;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Where an ordered writer runs: its function, which runs at most once per
+/// evaluation of a module and only while it evaluates (`Model::once_fns`),
+/// that module, and whether it is inside a loop of the function
+/// (`StoreSite::in_loop`). A body the runtime's path registry may run again
+/// is once only while the program's `require.cache` has no deletion: the
+/// registry evaluates a module again only after its entry was deleted.
+fn ordered_writer(m: &Model, s: SiteId, cache_stable: bool) -> Option<(FnIdx, u32, bool)> {
+    let st = m.stores.get(s as usize)?;
+    let in_loop = st.in_loop?;
+    let &(module, reload) = m.once_fns.get(&st.func)?;
+    (!reload || cache_stable).then_some((st.func, module, in_loop))
+}
+
+/// Module `a`'s evaluation completes before module `b`'s starts: `b`
+/// reaches `a` through static evaluation dependencies (`Model::eval_deps`)
+/// and `a` does not reach `b` (in a cycle the order is the walk's). Each
+/// module's reach is computed once, when first asked (`Model::eval_reach`).
+fn evaluated_before(m: &mut Model, a: u32, b: u32) -> bool {
+    a != b && module_reaches(m, b, a) && !module_reaches(m, a, b)
+}
+
+fn module_reaches(m: &mut Model, from: u32, to: u32) -> bool {
+    if !m.eval_reach.contains_key(&from) {
+        let n = m.eval_deps.len();
+        let mut bits = vec![0u64; n.div_ceil(64)];
+        let mut work = vec![from];
+        while let Some(x) = work.pop() {
+            for &d in m
+                .eval_deps
+                .get(x as usize)
+                .map_or(&[][..], |v| v.as_slice())
+            {
+                let (w, b) = (d as usize / 64, 1u64 << (d % 64));
+                if bits[w] & b == 0 {
+                    bits[w] |= b;
+                    work.push(d);
+                }
+            }
+        }
+        m.eval_reach.insert(from, bits);
+    }
+    m.eval_reach[&from]
+        .get(to as usize / 64)
+        .is_some_and(|w| w & (1u64 << (to % 64)) != 0)
+}
+
+/// The program's `require.cache` has no deletion and no unknown holder: no
+/// token of it is ⊤, HARD (a `delete` marks it) or escaped.
+fn cjs_cache_stable(m: &Model) -> bool {
+    m.nodes[m.cjs_cache as usize]
+        .pts
+        .to_sorted()
+        .into_iter()
+        .all(|t| {
+            t != TOP
+                && m.tmpl_of(t).is_none_or(|tm| {
+                    m.tmpl_toks(tm)
+                        .iter()
+                        .chain(std::iter::once(&t))
+                        .all(|x| !m.hard.contains_key(x) && !m.escaped.contains_key(x))
+                })
+        })
+}
+
 fn template_facts(
     m: &mut Model,
     tm: TmplId,
@@ -556,6 +699,14 @@ fn template_facts(
             (post, ever)
         })
         .collect();
+    // RPG1b: a declared key whose every add runs before any later key can be
+    // present (`ordered_declared_adds`): the h4 rule below cannot see write
+    // order.
+    let ordered = if any_key_written || tpl.declared.is_empty() {
+        vec![false; keys.len()]
+    } else {
+        ordered_declared_adds(m, tm, &keys)
+    };
     // A key a birth store defines (a field definition): it is added at its
     // place in the chain's definition order, and a constructor body's
     // stores run after its class's definitions.
@@ -588,7 +739,7 @@ fn template_facts(
         // stays the hole for life. A defined key comes after every later
         // key that only construction writes; any other such key can be
         // added at any time, after any later key that is ever written.
-        let in_order = definite || {
+        let in_order = definite || ordered[i] || {
             let def = defined(a);
             !any_key_written
                 && written[i + 1..]

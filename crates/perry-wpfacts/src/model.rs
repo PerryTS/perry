@@ -1262,6 +1262,12 @@ pub struct StoreSite {
     /// The evaluated key of an indexed source store. Its solved scalar kind
     /// distinguishes element effects from arbitrary named-property writes.
     pub key_value: Option<NodeId>,
+    /// RPG1b: where the store runs in its function, when the walk made it
+    /// at a statement of a function body: `Some(true)` inside a loop
+    /// (body, condition or update), `Some(false)` not. `None`: a site no
+    /// body walk ordered (a birth definition, a replay, a parameter
+    /// default, a synthetic store); it is never an ordered writer.
+    pub in_loop: Option<bool>,
 }
 
 #[derive(Default, Clone, Debug)]
@@ -1367,6 +1373,19 @@ pub struct Model {
     pub class_writers: FxHashMap<(TmplId, Atom), FieldWriters>,
     pub proto_writers: FxHashMap<(TmplId, Atom), FieldWriters>,
     pub any_writers: FxHashMap<TmplId, FieldWriters>,
+    /// RPG1b: the functions whose body runs at most once per evaluation of
+    /// module `.0`, and only while it evaluates (`gen/once.rs`); `.1`: once
+    /// with reload (the runtime's path registry may evaluate the module
+    /// again after its `require.cache` entry was deleted).
+    pub once_fns: FxHashMap<FnIdx, (u32, bool)>,
+    /// RPG1b: each module's static evaluation dependencies (imports that
+    /// are not dynamic, type-only, erased or a deferred require): their
+    /// evaluation completes before the module's starts, unless they reach
+    /// it back (`derive::evaluated_before`).
+    pub eval_deps: Vec<Vec<u32>>,
+    /// The modules each module reaches through `eval_deps`, as a bit set,
+    /// computed when an ordered-writer check first asks (`derive`).
+    pub eval_reach: FxHashMap<u32, Vec<u64>>,
     pub adds_keys: FxHashMap<TmplId, u32>,
     /// The part of `adds_keys` that came from a named store of a key the
     /// template did not list as a birth key when the store was seen
