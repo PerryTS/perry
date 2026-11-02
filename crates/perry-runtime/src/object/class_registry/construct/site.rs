@@ -427,6 +427,75 @@ static KEEP_SUPER_CONSTRUCT_SITE: unsafe extern "C-unwind" fn(
 mod tests {
     use super::*;
 
+    static ZLIB_INIT_NAME: AtomicU64 = AtomicU64::new(0);
+    static ZLIB_INIT_OWNER: AtomicU64 = AtomicU64::new(0);
+    static ZLIB_INIT_OPTS: AtomicU64 = AtomicU64::new(0);
+
+    unsafe extern "C" fn record_zlib_init(
+        module: *const u8,
+        module_len: usize,
+        name: *const u8,
+        len: usize,
+        owner: f64,
+        args: *const f64,
+        args_len: usize,
+    ) -> f64 {
+        let module = std::slice::from_raw_parts(module, module_len);
+        let name = std::slice::from_raw_parts(name, len);
+        ZLIB_INIT_NAME.store(
+            u64::from(module == b"zlib" && name == b"Gzip"),
+            Ordering::SeqCst,
+        );
+        ZLIB_INIT_OWNER.store(owner.to_bits(), Ordering::SeqCst);
+        if args_len == 1 {
+            ZLIB_INIT_OPTS.store((*args).to_bits(), Ordering::SeqCst);
+        }
+        owner
+    }
+
+    /// `class C extends Gzip {}`: the live `super(opts)` runs the codec's
+    /// in-place constructor on the receiver the derived `new` allocated and
+    /// leaves it as `this` (an undefined result keeps the receiver); it must
+    /// not construct a fresh codec that replaces the subclass instance.
+    #[test]
+    fn super_into_zlib_codec_initializes_the_receiver_in_place() {
+        unsafe {
+            let previous = crate::value::JS_NATIVE_SUBCLASS_INIT
+                .swap(record_zlib_init as *mut (), Ordering::SeqCst);
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let parent = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
+                "zlib", "Gzip",
+            ));
+            let receiver = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
+            let this = receiver
+                .with_mut_ptr::<ObjectHeader, _>(|r| crate::value::js_nanbox_pointer(r as i64));
+            let opts = [42.0f64];
+            let site = [const { AtomicU64::new(0) }; 4];
+            let result = js_class_value_super_construct_site(
+                parent.get_nanbox_f64(),
+                this,
+                opts.as_ptr(),
+                opts.len(),
+                site.as_ptr(),
+            );
+            crate::value::JS_NATIVE_SUBCLASS_INIT.store(previous, Ordering::SeqCst);
+            let this = receiver
+                .with_mut_ptr::<ObjectHeader, _>(|r| crate::value::js_nanbox_pointer(r as i64));
+            assert_eq!(
+                ZLIB_INIT_NAME.load(Ordering::SeqCst),
+                1,
+                "codec init not run"
+            );
+            assert_eq!(ZLIB_INIT_OWNER.load(Ordering::SeqCst), this.to_bits());
+            assert_eq!(ZLIB_INIT_OPTS.load(Ordering::SeqCst), 42.0f64.to_bits());
+            assert_eq!(
+                result.to_bits(),
+                crate::value::TAG_UNDEFINED,
+                "receiver replaced"
+            );
+        }
+    }
+
     #[test]
     fn primed_class_entry_checks_identity_shape_and_receiver_header() {
         unsafe {

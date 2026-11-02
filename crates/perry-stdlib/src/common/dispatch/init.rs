@@ -373,9 +373,55 @@ pub(super) unsafe fn install_crypto_registrations() {
     PROTOTYPE_CRYPTO.set(prototype_crypto);
 }
 
+/// `super(...args)` into a bound native module constructor reached at run
+/// time (perry-runtime's `js_fetch_or_value_super`): run the constructor's
+/// in-place form on the subclass receiver. One router for every module whose
+/// instances carry native state; an export without an in-place form answers
+/// undefined and the runtime keeps its other paths.
+#[cfg(any(feature = "compression-gzip", feature = "external-zlib-pump"))]
+unsafe extern "C" fn native_subclass_init(
+    module: *const u8,
+    module_len: usize,
+    name: *const u8,
+    name_len: usize,
+    owner: f64,
+    args: *const f64,
+    args_len: usize,
+) -> f64 {
+    let module = std::slice::from_raw_parts(module, module_len);
+    let options = if args_len != 0 && !args.is_null() {
+        *args
+    } else {
+        TAG_UNDEFINED_F64
+    };
+    match module {
+        b"zlib" => zlib_subclass_init(name, name_len, owner, options),
+        _ => TAG_UNDEFINED_F64,
+    }
+}
+
+#[cfg(feature = "compression-gzip")]
+unsafe fn zlib_subclass_init(name: *const u8, name_len: usize, owner: f64, options: f64) -> f64 {
+    perry_ext_zlib::js_ext_zlib_subclass_init(name, name_len, owner, options)
+}
+
+#[cfg(all(feature = "external-zlib-pump", not(feature = "compression-gzip")))]
+unsafe fn zlib_subclass_init(name: *const u8, name_len: usize, owner: f64, options: f64) -> f64 {
+    extern "C" {
+        fn js_ext_zlib_subclass_init(
+            name: *const u8,
+            name_len: usize,
+            owner: f64,
+            opts: f64,
+        ) -> f64;
+    }
+    js_ext_zlib_subclass_init(name, name_len, owner, options)
+}
+
 #[cfg(feature = "compression-gzip")]
 pub(super) unsafe fn install_zlib_registrations() {
     perry_runtime::js_set_native_zlib_dispatch(perry_ext_zlib::js_ext_zlib_native_dispatch);
+    perry_runtime::js_set_native_subclass_init(native_subclass_init);
 }
 
 #[cfg(feature = "external-zlib-pump")]
@@ -394,6 +440,7 @@ pub(super) unsafe fn install_external_zlib_registrations() {
         }
         perry_runtime::js_set_native_zlib_dispatch(js_ext_zlib_native_dispatch);
     }
+    perry_runtime::js_set_native_subclass_init(native_subclass_init);
 }
 
 #[cfg(all(
