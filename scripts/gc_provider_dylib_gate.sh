@@ -107,6 +107,7 @@ cp "$provider_source/Cargo.lock" "$(dirname "$stdlib_manifest")/Cargo.lock"
 
 env \
   CARGO_TARGET_DIR="$provider_target_dir" \
+  PERRY_RUNTIME_INSTRUMENTS=1 \
   PERRY_ISSUE_8075_RUNTIME_LIBRARY="$runtime_library" \
   PERRY_ISSUE_8075_REAL_CC="$real_cc" \
   "$cargo_linker_env=$stdlib_linker" \
