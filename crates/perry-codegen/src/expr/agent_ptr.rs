@@ -5,15 +5,16 @@
 //! `PERRY_AGENT_PTRS` (a `#[thread_local]` array of [`AGENT_PTR_SLOTS`]
 //! pointers). How emitted code reaches it depends on the target:
 //!
-//! * [`AgentPtrAccess::ExecutableTls`] — ELF executables (Linux, Android;
-//!   x86-64 and aarch64): the block is an `external thread_local` global in
+//! * [`AgentPtrAccess::ExecutableTls`] — ELF executables (Linux; x86-64 and
+//!   aarch64): the block is an `external thread_local` global in
 //!   the static TLS block of the executable the runtime archive is linked
 //!   into, which the module addresses local-exec
 //!   ([`crate::module::LlModule::use_local_exec_tls`]): the access is one
 //!   thread-pointer-relative load (`mov %fs:PERRY_AGENT_PTRS@TPOFF+off` on
 //!   x86-64, which folds into a consuming compare; `mrs tpidr_el0` + a
-//!   `:tprel:` offset on aarch64). Not used for dylib/staticlib outputs: an
-//!   image that can be `dlopen`ed has no fixed offset in the static TLS
+//!   `:tprel:` offset on aarch64). Not used for dylib/staticlib outputs, nor
+//!   for Android and OpenHarmony programs, which are always shared objects:
+//!   an image that can be `dlopen`ed has no fixed offset in the static TLS
 //!   block.
 //! * [`AgentPtrAccess::AppleTsd`] — Apple aarch64: Mach-O has no initial-exec
 //!   model (every thread-local access is a TLV thunk call), so the block's
@@ -28,7 +29,8 @@
 //!   the runtime emits for its own static) inside it. Emitted code and the
 //!   runtime are linked into ONE image, so `_tls_index` is theirs.
 //! * [`AgentPtrAccess::Call`] — everything else (wasm, arm64_32, Windows
-//!   aarch64, x86-64 Darwin, ELF dylib/staticlib outputs): the runtime
+//!   aarch64, x86-64 Darwin, ELF dylib/staticlib outputs, Android and
+//!   OpenHarmony): the runtime
 //!   accessor. x86-64 Darwin has no call-free thread-local model (every
 //!   Mach-O thread-local access is a TLV thunk call) and the runtime's
 //!   pthread-TSD fast path (`HotTls`, the Apple aarch64 route) is built for
@@ -82,18 +84,28 @@ pub(crate) fn set_output_is_executable(executable: bool) {
 /// (`LlModule::use_local_exec_tls`), so the object emitters, which run on
 /// other threads, read the model from the IR rather than from shared state.
 pub(crate) fn program_tls_is_local_exec(triple: &str, output_type: &str) -> bool {
-    elf_triple(triple) && output_type == "executable"
+    elf_executable_target(triple) && output_type == "executable"
 }
 
-fn elf_triple(triple: &str) -> bool {
-    (triple.contains("linux") || triple.contains("android"))
+/// An ELF target whose `executable` output is linked as an executable. An
+/// Android or OpenHarmony program is a shared object the platform's app
+/// process loads (`perry`'s `link/platform_cmd.rs` links it `-shared`)
+/// whatever the output kind, so its thread-locals have no fixed offset from
+/// the thread pointer, and local-exec relocations (`R_X86_64_TPOFF32`,
+/// `R_AARCH64_TLSLE_*`) cannot be linked `-shared`. Their runtime archives
+/// also use emulated TLS (`inprocess::optimize_emit::emulated_tls`), whose
+/// blocks only the runtime's accessors reach.
+fn elf_executable_target(triple: &str) -> bool {
+    triple.contains("linux")
+        && !triple.contains("android")
+        && !triple.contains("ohos")
         && (triple.starts_with("x86_64") || triple.starts_with("aarch64"))
 }
 
 /// The image can address runtime TLS without a resolver call. Shared images
 /// keep the generic accessor; each executable invocation stays on one thread.
 pub(crate) fn executable_tls(triple: &str) -> bool {
-    elf_triple(triple) && OUTPUT_IS_EXECUTABLE.with(|c| c.get())
+    elf_executable_target(triple) && OUTPUT_IS_EXECUTABLE.with(|c| c.get())
 }
 
 /// How this compile reaches the block. `PERRY_AGENT_PTR_ACCESS=call` forces
@@ -103,7 +115,7 @@ pub(crate) fn agent_ptr_access(ctx: &FnCtx<'_>) -> AgentPtrAccess {
         return AgentPtrAccess::Call;
     }
     let triple = ctx.target_triple;
-    if elf_triple(triple) && OUTPUT_IS_EXECUTABLE.with(|c| c.get()) {
+    if elf_executable_target(triple) && OUTPUT_IS_EXECUTABLE.with(|c| c.get()) {
         return AgentPtrAccess::ExecutableTls;
     }
     if triple.starts_with("x86_64") && triple.contains("windows") {
@@ -320,4 +332,54 @@ pub(crate) fn emit_agent_ptr(ctx: &mut FnCtx<'_>, slot: usize, fallback_fn: &str
     ctx.current_block = join_idx;
     ctx.block()
         .phi(PTR, &[(&fast_val, &fast_pred), (&called, &slow_pred)])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Local-exec only where the program is an ELF executable: Linux
+    /// `executable` outputs. Android and OpenHarmony programs are shared
+    /// objects whatever the output kind (`link/platform_cmd.rs` links them
+    /// `-shared`), where a local-exec relocation does not link.
+    #[test]
+    fn local_exec_tls_only_for_elf_executables() {
+        for triple in ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"] {
+            assert!(program_tls_is_local_exec(triple, "executable"), "{triple}");
+            for kind in ["dylib", "staticlib"] {
+                assert!(!program_tls_is_local_exec(triple, kind), "{triple} {kind}");
+            }
+        }
+        for triple in [
+            "aarch64-linux-android",
+            "x86_64-linux-android",
+            "aarch64-unknown-linux-ohos",
+            "x86_64-unknown-linux-ohos",
+            "arm64-apple-macosx",
+            "x86_64-pc-windows-msvc",
+        ] {
+            assert!(!program_tls_is_local_exec(triple, "executable"), "{triple}");
+        }
+    }
+
+    /// The agent block's direct thread-pointer access follows the same image
+    /// kind: an Android or OpenHarmony compile reaches it through the
+    /// accessor even when its output kind says `executable`.
+    #[test]
+    fn shared_object_targets_take_the_accessor() {
+        set_output_is_executable(true);
+        assert!(executable_tls("x86_64-unknown-linux-gnu"));
+        assert!(executable_tls("aarch64-unknown-linux-gnu"));
+        for triple in [
+            "aarch64-linux-android",
+            "x86_64-linux-android",
+            "aarch64-unknown-linux-ohos",
+            "x86_64-unknown-linux-ohos",
+        ] {
+            assert!(!executable_tls(triple), "{triple}");
+        }
+        set_output_is_executable(false);
+        assert!(!executable_tls("x86_64-unknown-linux-gnu"));
+        set_output_is_executable(true);
+    }
 }
