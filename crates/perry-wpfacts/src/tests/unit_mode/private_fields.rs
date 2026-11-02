@@ -348,15 +348,19 @@ console.log(m.child, m.parent, m.pt());"#;
                     // Per unit, the parent is another unit: its private
                     // entry arrives by spelling in the published birth keys.
                     if private {
-                            f.key.ends_with(&format!(":{name}>"))
-                        } else {
-                            f.key == name
-                        }
+                        f.key.ends_with(&format!(":{name}>"))
+                    } else {
+                        f.key == name
+                    }
                 })
                 .and_then(|f| f.slot)
         };
         assert_eq!(
-            (slot(false, "parent"), slot(true, "#ps"), slot(false, "child")),
+            (
+                slot(false, "parent"),
+                slot(true, "#ps"),
+                slot(false, "child")
+            ),
             (Some(0), Some(1), Some(2)),
             "{}",
             pf.dump_text()
