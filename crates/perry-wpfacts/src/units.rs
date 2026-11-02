@@ -21,6 +21,11 @@ pub(crate) struct ClassContract {
     /// owner's code returning an unknown value, and the owner lets what its
     /// getters return leave beyond any contract (`Gen::fields_leave`).
     pub getters: Vec<(String, String)>,
+    /// A literal layout's own accessors (key, getter function name; empty
+    /// for a setter-only key). The reader holds them on its stand-in
+    /// instance, so a read or call under the key runs the accessor walk
+    /// with the receiver as `this` and the key shadows the prototype chain.
+    pub own_getters: Vec<(String, String)>,
     pub native_parent: Option<(String, String)>,
     /// Its parent class when that class is another unit's (DECISIONS 104):
     /// the parent's display, its contract published beside this one. The
@@ -987,6 +992,7 @@ impl ClassContract {
         self.facts.join(&o.facts);
         union_into(&mut self.methods, &o.methods);
         union_into(&mut self.getters, &o.getters);
+        union_into(&mut self.own_getters, &o.own_getters);
         self.field_fns = field_fns;
         self.field_layouts = field_layouts;
         self.open_keys |= o.open_keys;
@@ -1713,7 +1719,7 @@ pub(crate) fn module_exports(sorted: &[(&str, &Module)], es: &crate::ExportSourc
 }
 
 #[path = "units/driver.rs"]
-mod driver;
+pub(crate) mod driver;
 pub(crate) use driver::digest;
 pub(crate) use driver::run;
 #[cfg(test)]

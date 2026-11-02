@@ -96,6 +96,7 @@ pub(crate) fn run(
     modules: &BTreeMap<PathBuf, perry_hir::Module>,
     export_sources: perry_wpfacts::ExportSources,
     dynamic_code: bool,
+    interpreted_sources: bool,
     dynamic_code_reach: &perry_hir::dynamic_code::DynamicCodeReach,
     wrapped: &std::collections::HashMap<PathBuf, super::types::CjsWrapDebugSource>,
     roots: Vec<String>,
@@ -138,6 +139,7 @@ pub(crate) fn run(
         explain: std::env::var("PERRY_FACTS_EXPLAIN").is_ok_and(|v| v == "1")
             || perry_codegen::fallback_diag::enabled(),
         dynamic_code_reach: dynamic_code_reach.clone(),
+        interpreted_sources,
         dynamic_code: dynamic_code.then(|| {
             "E14 the program can run interpreted code (deferred new Function/eval or node:vm)"
                 .into()
@@ -663,6 +665,7 @@ pub(crate) fn live_dynamic_imports(
     modules: &BTreeMap<PathBuf, perry_hir::Module>,
     export_sources: perry_wpfacts::ExportSources,
     dynamic_code: bool,
+    interpreted_sources: bool,
     dynamic_code_reach: &perry_hir::dynamic_code::DynamicCodeReach,
     roots: Vec<String>,
 ) -> Option<std::collections::BTreeSet<(String, String)>> {
@@ -691,6 +694,7 @@ pub(crate) fn live_dynamic_imports(
         ),
         export_sources,
         dynamic_code_reach: dynamic_code_reach.clone(),
+        interpreted_sources,
         dynamic_code: dynamic_code.then(|| {
             "E14 the program can run interpreted code (deferred new Function/eval or node:vm)"
                 .into()

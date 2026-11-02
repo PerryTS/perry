@@ -115,12 +115,58 @@ impl Model {
                 .is_some_and(|v| v.contains(&a) || star.is_some_and(|s| v.contains(&s)))
     }
 
-    /// A read that skipped the builtin members (`shadows`): resumed by
-    /// `flush_shadowed` once the key no longer shadows them.
-    pub(crate) fn note_shadowed(&mut self, t: Tok, a: Atom, dst: NodeId, own_members: bool) {
+    /// The key a lookup of `key` on `t` finds as an own data property of
+    /// every object `t` denotes (`shadows`), where it stops: a read and a
+    /// method call's callee lookup alike (both are a [[Get]]).
+    pub(crate) fn shadow_key(&self, t: Tok, key: Key) -> Option<Atom> {
+        match key {
+            Key::Named(a) if !self.is_proto_key(key) && self.shadows(t, a) => Some(a),
+            _ => None,
+        }
+    }
+
+    /// A lookup (a read or a method call) that skipped the builtin members
+    /// (`shadows`): resumed by `flush_shadowed` once the key no longer
+    /// shadows them.
+    pub(crate) fn note_shadowed(&mut self, t: Tok, a: Atom, act: ChainAct, own_members: bool) {
         let v = self.shadowed.entry(t).or_default();
-        if !v.contains(&(a, dst, own_members)) {
-            v.push((a, dst, own_members));
+        if !v.contains(&(a, act, own_members)) {
+            v.push((a, act, own_members));
+        }
+    }
+
+    /// The builtin members a lookup of `key` on `t` finds unless an own key
+    /// shadows them (`shadow_key`): those of `t`'s own kind (`own_members`)
+    /// and the chain's builtin prototypes; for a method call, each of them
+    /// is a callee.
+    pub(crate) fn builtin_members(&mut self, t: Tok, key: Key, act: ChainAct, own_members: bool) {
+        match act {
+            ChainAct::Load(dst) => {
+                let cv = self.cv(t, key);
+                self.edge(cv, dst);
+                if own_members {
+                    self.with_b(|m| builtins::tok_load(m, t, key, dst));
+                }
+            }
+            ChainAct::Call(call) => {
+                if own_members {
+                    self.with_b(|m| builtins::own_method(m, t, key, call));
+                }
+                // Methods on the chain (shared) and builtin prototype
+                // methods.
+                let cv = self.cv(t, key);
+                self.bind_via(cv, call, t);
+                let cp = self.cp(t);
+                self.cons(
+                    cp,
+                    Cons::ProtoMethods {
+                        origin: t,
+                        key,
+                        call,
+                    },
+                );
+            }
+            ChainAct::Store(_) => {}
         }
     }
 
@@ -139,17 +185,12 @@ impl Model {
         for t in toks {
             let reads = self.shadowed.remove(&t).unwrap_or_default();
             let mut kept = Vec::new();
-            for (a, dst, own_members) in reads {
+            for (a, act, own_members) in reads {
                 if self.shadows(t, a) {
-                    kept.push((a, dst, own_members));
+                    kept.push((a, act, own_members));
                     continue;
                 }
-                let key = Key::Named(a);
-                let cv = self.cv(t, key);
-                self.edge(cv, dst);
-                if own_members {
-                    self.with_b(|m| builtins::tok_load(m, t, key, dst));
-                }
+                self.builtin_members(t, Key::Named(a), act, own_members);
             }
             if !kept.is_empty() {
                 self.shadowed.insert(t, kept);
@@ -276,9 +317,8 @@ impl Model {
                 self.add_prim(dst, prim::UNDEF);
                 return;
             }
-            // DECISIONS 235: an element key is a number, never
-            // `constructor`: ⊤ read under it is ⊤, not the Function
-            // constructor.
+            // An element of ⊤ is ⊤. Its key is an index, never
+            // `constructor`: no Function constructor (DECISIONS 235).
             if t == TOP {
                 self.add_tok(dst, TOP);
                 return;
@@ -378,16 +418,14 @@ impl Model {
         // DECISIONS 234: a key every object `t` denotes holds as an own data
         // property never reaches the builtin prototypes, nor the builtin
         // members of `t`'s own kind.
-        let shadow = match key {
-            Key::Named(a) if !self.is_proto_key(key) => self.shadows(t, a),
-            _ => false,
-        };
+        let shadow_key = self.shadow_key(t, key);
+        let shadow = shadow_key.is_some();
         let own_members = !(self.is_marker(t) && self.beside_values(t));
         if own_members && !shadow {
             self.with_b(|m| builtins::tok_load(m, t, key, chain));
         }
-        if let (true, Key::Named(a)) = (shadow, key) {
-            self.note_shadowed(t, a, dst, own_members);
+        if let Some(a) = shadow_key {
+            self.note_shadowed(t, a, ChainAct::Load(dst), own_members);
         }
         if matches!(self.toks[t as usize], TokKind::ObjectProto) && !self.is_proto_key(key) {
             self.with_b(|m| builtins::intrinsic_proto_own(m, key, dst));

@@ -76,6 +76,13 @@ pub struct FactsConfig {
     /// interpreted code is the ⊤ summary node; see
     /// [`ProgramFacts::interp_guard`].
     pub dynamic_code: Option<String>,
+    /// DECISIONS 235: the program holds a real eval-like source site (a
+    /// deferred eval/Function source, `node:vm`, a dynamic import of a
+    /// computed data URL): interpreted code may run from the start. Without
+    /// one, it runs only once the solve finds a call or construct that may
+    /// be the Function constructor (`builtins::interpreted_code_runs`). The
+    /// link decision (`dynamic_code`) does not feed the facts.
+    pub interpreted_sources: bool,
     pub dynamic_code_reach: perry_hir::dynamic_code::DynamicCodeReach,
     /// Diagnostics: name where ⊤ came from in each ⊤ site verdict.
     pub explain: bool,
@@ -349,12 +356,18 @@ fn generate<'a>(
         && !cfg.dynamic_code_reach.globals
         && cfg.dynamic_code_reach.lexical_modules.is_empty()
         && cfg.dynamic_code_reach.sites.is_empty();
-    if cfg.dynamic_code.is_some() || cfg.dynamic_code_reach.globals {
-        // Interpreted code reads and writes any global (E20); the
-        // prototype-write guard does not cover it.
-        let gt =
-            g.m.tok(model::TokKind::Builtin(model::BuiltinNs::GlobalThis));
-        builtins::note_native_write(&mut g.m, gt, None, "interpreted code may run");
+    // Interpreted code reads and writes any global (E20; the prototype-write
+    // guard does not cover it) and catches what compiled code throws. A real
+    // source site runs it from the start; otherwise only a solved call that
+    // may be the Function constructor does (DECISIONS 235). Per unit another
+    // unit's solve can be that call, so the link decision stands for it.
+    g.m.interp_linked = cfg.dynamic_code.is_some() || cfg.dynamic_code_reach.globals;
+    if cfg.interpreted_sources
+        || cfg.dynamic_code_reach.globals
+        || (cfg.unit && cfg.dynamic_code.is_some())
+    {
+        g.m.interp_linked = true;
+        builtins::interpreted_code_runs(&mut g.m);
     }
     g.register_all();
     g.link_exports();
@@ -385,15 +398,6 @@ fn generate<'a>(
     for s in &g.read_sites {
         let (m0, o, k, r, c) = (s.module, s.byte_offset, s.key, s.recv, s.is_call as u8);
         g.m.rel(|| format!("readsite {m0} {o} {k} {r} {c}"));
-    }
-    if cfg.dynamic_code.is_some() || cfg.dynamic_code_reach.globals {
-        // Interpreted code can catch what compiled code throws (a compiled
-        // function it calls throws into its `try`): thrown values reach the
-        // summary node.
-        let r = g.m.reason("thrown where interpreted code can catch it");
-        let thrown = g.m.thrown;
-        g.m.thrown_reason = Some(r);
-        g.m.sink_node(thrown, r);
     }
     g.m.prof_mark(crate::model::NO_NODE, "generation");
     if !loud {
@@ -598,7 +602,7 @@ fn compute_act<'a>(
     // runtime's guard word (`ProgramFacts::interp_guard`).
     let mut interp_guard = None;
     if let Some(linked) = &cfg.dynamic_code {
-        if g.m.dyn_eval.is_some() || g.m.top_calls > 0 {
+        if g.m.interp_runs || g.m.dyn_eval.is_some() || g.m.top_calls > 0 {
             interp_guard = Some(format!(
                 "E14 interpreter linked ({linked}) and reachable ({})",
                 g.m.dyn_eval.clone().unwrap_or_else(|| format!(
@@ -913,6 +917,7 @@ fn compute_act<'a>(
                         facts,
                         methods,
                         getters: contracts::proto_getters(&g, tm),
+                        own_getters: Vec::new(),
                         native_parent,
                         parent: foreign_parent(&g, tm),
                         field_fns: Vec::new(),

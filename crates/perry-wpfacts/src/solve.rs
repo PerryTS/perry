@@ -432,6 +432,7 @@ impl Model {
                     && !self.settle_bf_written()
                     && !self.settle_for_in()
                     && !self.settle_define()
+                    && !crate::builtins::settle_native_given(self)
                 {
                     break;
                 }
@@ -700,10 +701,15 @@ impl Model {
     /// construction, `push` and the like put at an index, and every store
     /// under a computed key) are no value of a named non-index key, which
     /// reads `named_any` instead. A marker's fields are its reach markers.
+    ///
+    /// A Map or Set (`Collection`) likewise: its entries (`field_any`) sit
+    /// in internal slots and are no property at all, so a named key
+    /// (`map.get`) never reads them; a store under a computed key is a
+    /// property and reaches both.
     pub fn is_elem_array(&self, t: Tok) -> bool {
         matches!(self.toks[t as usize], TokKind::Obj(tm, _)
             if matches!(self.tmpls[tm as usize].kind,
-                TmplKind::Arr { .. } | TmplKind::Args { .. }))
+                TmplKind::Arr { .. } | TmplKind::Args { .. } | TmplKind::BObj { what: "Collection", .. }))
             && !self.is_marker(t)
     }
 
@@ -1136,7 +1142,7 @@ impl Model {
         let cv = self.cv_of(t, Key::Named(a), !shadow);
         self.edge(cv, n);
         if shadow {
-            self.note_shadowed(t, a, n, false);
+            self.note_shadowed(t, a, crate::model::ChainAct::Load(n), false);
         }
         // DECISIONS 231(c): the receiver token's own field is what this
         // unit's code stores under `a` into instances and receivers of the

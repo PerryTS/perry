@@ -144,7 +144,40 @@ pub enum BuiltinNs {
     /// `hasOwnProperty`, `valueOf`, `__defineGetter__` ... A call runs each
     /// one's effect on its receiver (`proto_method`); none is a constructor.
     ObjectProtoMethod,
+    /// `Object.prototype`'s own method under its own key, read as a value
+    /// (`Object.prototype.hasOwnProperty`): one no builtin prototype
+    /// overrides ([`ProtoOwn`]), so every builtin prototype
+    /// reads it there. A call is that method's call on its receiver
+    /// (`object_proto_own_call`); `call`/`apply`/`bind` are
+    /// `Function.prototype`'s. Not a constructor.
+    ///
+    /// The method is named by [`ProtoOwn`], not by an atom: builtin tokens
+    /// are shared between the units' models, whose atom tables differ.
+    ObjectProtoOwn(ProtoOwn),
     Other,
+}
+
+/// The `Object.prototype` methods no builtin prototype overrides
+/// (`BuiltinNs::ObjectProtoOwn`): under their key every builtin prototype
+/// chain reads `Object.prototype`'s own. Each only reads: `hasOwnProperty` /
+/// `propertyIsEnumerable` convert their key (ToPropertyKey) and test an own
+/// property of ToObject(this); `isPrototypeOf` walks its argument's chain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ProtoOwn {
+    HasOwnProperty,
+    PropertyIsEnumerable,
+    IsPrototypeOf,
+}
+
+impl ProtoOwn {
+    pub fn of_name(name: &str) -> Option<ProtoOwn> {
+        Some(match name {
+            "hasOwnProperty" => ProtoOwn::HasOwnProperty,
+            "propertyIsEnumerable" => ProtoOwn::PropertyIsEnumerable,
+            "isPrototypeOf" => ProtoOwn::IsPrototypeOf,
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -1380,11 +1413,13 @@ pub struct Model {
     /// setter, a read-only value), so the own key no longer shadows it.
     pub reshaped_keys: crate::pts::FxHashSet<Atom>,
     pub reshaped_any: bool,
-    /// DECISIONS 234: reads of an own definite data key that skipped the
+    /// DECISIONS 234: lookups of an own definite data key that skipped the
     /// builtin members of the chain (`Model::shadows`), by receiver: (key,
-    /// destination, whether the receiver's own builtin members were
-    /// skipped too). Once the key no longer shadows, the read takes them.
-    pub shadowed: FxHashMap<Tok, Vec<(Atom, NodeId, bool)>>,
+    /// the read (`ChainAct::Load`, its destination) or the method call
+    /// (`ChainAct::Call`) that looked it up, whether the receiver's own
+    /// builtin members were skipped too). Once the key no longer shadows,
+    /// the lookup takes them.
+    pub shadowed: FxHashMap<Tok, Vec<(Atom, ChainAct, bool)>>,
     /// DECISIONS 234: keys a delete or defineProperty through ⊤ may have
     /// removed or redefined (`top_reshaped_any`: every key), in any unit
     /// (`SharedWrite::Hard(Shared::Top, ..)`). ⊤ denotes escaped objects
@@ -1447,6 +1482,13 @@ pub struct Model {
     pub thrown: NodeId,
     /// E14: interpreted code can run (and patch `Object.prototype`).
     pub dyn_eval: Option<String>,
+    /// The dyn-eval interpreter is linked (the driver's link decision): a
+    /// solved call or construct that may be the Function constructor then
+    /// runs interpreted code (DECISIONS 235).
+    pub interp_linked: bool,
+    /// Interpreted code may run: its global writes and its catch of thrown
+    /// values are in the solve (`builtins::interpreted_code_runs`).
+    pub interp_runs: bool,
     /// No interpreted code can run in the program (no dynamic code, no
     /// dynamic code reach, no direct eval scope): what this unit publishes
     /// reaches compiled units only, which use another unit's stand-in
@@ -1556,6 +1598,10 @@ pub struct Model {
     /// site, reason) of the `DefineAll`, checked again once the worklist is
     /// empty (`settle_define`).
     pub define_runs: Vec<(Tok, NodeId, NodeId, NodeId, SiteId, u32)>,
+    /// (runtime object or ⊤, prototype node) of each `setPrototypeOf` that
+    /// may give a runtime object a new prototype: its lookups may now reach
+    /// the keys of that prototype's chain (`settle_native_given`).
+    pub native_given: Vec<(Tok, NodeId)>,
     /// (descs, map) defined under any key; descs whose E5 and store under
     /// any key are attached.
     pub define_any: crate::pts::FxHashSet<(NodeId, Tok)>,
@@ -1565,7 +1611,8 @@ pub struct Model {
     pub desc_runs: Vec<(Tok, NodeId, Atom, SiteId, u32)>,
     /// (o, key, descriptor) defined as data.
     pub desc_data: crate::pts::FxHashSet<(NodeId, Atom, Tok)>,
-    /// (o, key, data) whose `DefineKey` is attached.
+    /// (o, key, data): a key defined on `o` (`STAR_KEY`: under a computed
+    /// key); a named key has its `DefineKey` attached.
     pub define_on: crate::pts::FxHashSet<(NodeId, Atom, bool)>,
     /// The node a `Cons::Store` runs on, while it runs.
     pub store_at: Option<NodeId>,
