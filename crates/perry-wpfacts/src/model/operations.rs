@@ -1501,6 +1501,9 @@ impl Model {
             for (dst, out) in self.beside_arith.remove(&x).unwrap_or_default() {
                 self.add_prim(dst, out);
             }
+            for (from, dst) in self.beside_guard.remove(&x).unwrap_or_default() {
+                self.edge(from, dst);
+            }
             st.extend(self.beside_up.remove(&x).unwrap_or_default());
             st.extend(self.marker_reach.get(&x).copied());
             if let Some(ks) = self.keyed_reach.get(&x) {
