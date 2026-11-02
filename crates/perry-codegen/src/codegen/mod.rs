@@ -2231,6 +2231,10 @@ fn lower_module(
         })
         .collect();
     module_dispatch_facts.install_imported_return_shapes(imported_return_shapes);
+    module_dispatch_facts.install_array_record_protocol_dead(
+        crate::expr::array_iteration_facts(&opts.program_facts.elision) == 0
+            && opts.program_facts.elision.array_iterator_close_unwritten,
+    );
     // Representation-selection Phase 5a: proven-`this` method clones.
     let mut pshape_methods: std::collections::HashMap<
         (String, String),

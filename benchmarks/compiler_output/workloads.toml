@@ -1223,7 +1223,7 @@ name = "raw_field_l2c_receiver"
 section = "llvm_before"
 function_contains = "forceDynamicRead"
 regex_all = [
-  '''stack_guard.ok\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<recv>%[\w.]+) = sub i64 %[\w.]+, 9222527611926740992\n\s*(?P<ok>%[\w.]+) = icmp ult i64 (?P=recv), 281474974613504\n\s*br i1 (?P=ok), label %l2c\.word\.\d+, label %l2c\.miss\.\d+''',
+  '''stack_guard\.ok\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<recv>%[\w.]+) = sub i64 %[\w.]+, 9222527611926740992\n\s*(?P<ok>%[\w.]+) = icmp ult i64 (?P=recv), 281474974613504\n\s*br i1 (?P=ok), label %l2c\.word\.\d+, label %l2c\.miss\.\d+''',
 ]
 detail = "Only an admitted object receiver reaches the shape-word load."
 
@@ -1232,7 +1232,7 @@ name = "raw_field_l2c_shape_bound"
 section = "llvm_before"
 function_contains = "forceDynamicRead"
 regex_all = [
-  '''l2c.word\.\d+:\n(?:(?!\n\n)[\s\S])*?load i32, ptr %[\w.]+(?:(?!\n\n)[\s\S])*?and i32 %[\w.]+, -1275068417(?:(?!\n\n)[\s\S])*?(?P<index>%[\w.]+) = zext i32 %[\w.]+ to i64(?:(?!\n\n)[\s\S])*?(?P<limit>%[\w.]+) = load i64, ptr %[\w.]+\n\s*(?P<ok>%[\w.]+) = icmp ult i64 (?P=index), (?P=limit)\n\s*br i1 (?P=ok), label %l2c\.record\.\d+, label %l2c\.miss\.\d+''',
+  '''l2c\.word\.\d+:\n(?:(?!\n\n)[\s\S])*?load i32, ptr %[\w.]+(?:(?!\n\n)[\s\S])*?and i32 %[\w.]+, -1275068417(?:(?!\n\n)[\s\S])*?(?P<index>%[\w.]+) = zext i32 %[\w.]+ to i64(?:(?!\n\n)[\s\S])*?(?P<limit>%[\w.]+) = load i64, ptr %[\w.]+\n\s*(?P<ok>%[\w.]+) = icmp ult i64 (?P=index), (?P=limit)\n\s*br i1 (?P=ok), label %l2c\.record\.\d+, label %l2c\.miss\.\d+''',
 ]
 detail = "The masked shape index must be below the published record bound."
 
@@ -1241,7 +1241,7 @@ name = "raw_field_l2s_receiver"
 section = "llvm_before"
 function_contains = "forceDynamicWrite"
 regex_all = [
-  '''stack_guard.ok\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<recv>%[\w.]+) = sub i64 %[\w.]+, 9222527611926740992\n\s*(?P<ok>%[\w.]+) = icmp ult i64 (?P=recv), 281474974613504\n\s*br i1 (?P=ok), label %l2s\.word\.\d+, label %l2s\.miss\.\d+''',
+  '''stack_guard\.ok\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<recv>%[\w.]+) = sub i64 %[\w.]+, 9222527611926740992\n\s*(?P<ok>%[\w.]+) = icmp ult i64 (?P=recv), 281474974613504\n\s*br i1 (?P=ok), label %l2s\.word\.\d+, label %l2s\.miss\.\d+''',
 ]
 detail = "Only an admitted object receiver reaches the shape-word load."
 
@@ -1250,7 +1250,7 @@ name = "raw_field_l2s_shape_bound"
 section = "llvm_before"
 function_contains = "forceDynamicWrite"
 regex_all = [
-  '''l2s.word\.\d+:\n(?:(?!\n\n)[\s\S])*?load i32, ptr %[\w.]+(?:(?!\n\n)[\s\S])*?and i32 %[\w.]+, -1275068417(?:(?!\n\n)[\s\S])*?(?P<index>%[\w.]+) = zext i32 %[\w.]+ to i64(?:(?!\n\n)[\s\S])*?(?P<limit>%[\w.]+) = load i64, ptr %[\w.]+\n\s*(?P<ok>%[\w.]+) = icmp ult i64 (?P=index), (?P=limit)\n\s*br i1 (?P=ok), label %l2c\.record\.\d+, label %l2s\.miss\.\d+''',
+  '''l2s\.word\.\d+:\n(?:(?!\n\n)[\s\S])*?load i32, ptr %[\w.]+(?:(?!\n\n)[\s\S])*?and i32 %[\w.]+, -1275068417(?:(?!\n\n)[\s\S])*?(?P<index>%[\w.]+) = zext i32 %[\w.]+ to i64(?:(?!\n\n)[\s\S])*?(?P<limit>%[\w.]+) = load i64, ptr %[\w.]+\n\s*(?P<ok>%[\w.]+) = icmp ult i64 (?P=index), (?P=limit)\n\s*br i1 (?P=ok), label %l2c\.record\.\d+, label %l2s\.miss\.\d+''',
 ]
 detail = "The masked shape index must be below the published record bound."
 
@@ -1259,7 +1259,7 @@ name = "raw_field_read_record"
 section = "llvm_before"
 function_contains = "forceDynamicRead"
 regex_all = [
-  '''l2c.record\.\d+:\n(?:(?!\n\n)[\s\S])*?getelementptr i8, ptr %[\w.]+, i64 88(?:(?!\n\n)[\s\S])*?(?P<bits>%[\w.]+) = and i64 %[\w.]+, 2\n\s*(?P<ok>%[\w.]+) = icmp ne i64 (?P=bits), 0\n\s*br i1 (?P=ok), label %l2c\.load\.\d+, label %l2c\.miss\.\d+''',
+  '''l2c\.record\.\d+:\n(?:(?!\n\n)[\s\S])*?getelementptr i8, ptr %[\w.]+, i64 88(?:(?!\n\n)[\s\S])*?(?P<bits>%[\w.]+) = and i64 %[\w.]+, 2\n\s*(?P<ok>%[\w.]+) = icmp ne i64 (?P=bits), 0\n\s*br i1 (?P=ok), label %l2c\.load\.\d+, label %l2c\.miss\.\d+''',
 ]
 detail = "The shape record admits the requested readable slot before loading it."
 
@@ -1268,7 +1268,7 @@ name = "raw_field_read_slot"
 section = "llvm_before"
 function_contains = "forceDynamicRead"
 regex_all = [
-  '''l2c.load\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<slot>%[\w.]+) = load i64, ptr %[\w.]+\n\s*(?P<absent>%[\w.]+) = icmp eq i64 (?P=slot), 9222246136947933200\n\s*br i1 (?P=absent), label %l2c\.miss\.\d+, label %l2c\.hit\.\d+''',
+  '''l2c\.load\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<slot>%[\w.]+) = load i64, ptr %[\w.]+\n\s*(?P<absent>%[\w.]+) = icmp eq i64 (?P=slot), 9222246136947933200\n\s*br i1 (?P=absent), label %l2c\.miss\.\d+, label %l2c\.hit\.\d+''',
 ]
 detail = "An absent slot takes the refusal path rather than becoming a value."
 
@@ -1277,8 +1277,8 @@ name = "raw_field_read_fallback"
 section = "llvm_before"
 function_contains = "forceDynamicRead"
 regex_all = [
-  '''pget.recv_ok\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<probe>%[\w.]+) = call double @perry_probe_get\([^\n]+\)\n\s*(?P<bits>%[\w.]+) = bitcast double (?P=probe) to i64\n\s*(?P<ok>%[\w.]+) = icmp ne i64 (?P=bits), 9222246136947933200\n\s*br i1 (?P=ok), label %pget\.recv_merge\.\d+, label %pget\.slow\.\d+''',
-  '''pget.slow\.\d+:\n(?:(?!\n\n)[\s\S])*?call double @js_object_get_field_value\(''',
+  '''pget\.recv_ok\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<probe>%[\w.]+) = call double @perry_probe_get\([^\n]+\)\n\s*(?P<bits>%[\w.]+) = bitcast double (?P=probe) to i64\n\s*(?P<ok>%[\w.]+) = icmp ne i64 (?P=bits), 9222246136947933200\n\s*br i1 (?P=ok), label %pget\.recv_merge\.\d+, label %pget\.slow\.\d+''',
+  '''pget\.slow\.\d+:\n(?:(?!\n\n)[\s\S])*?call double @js_object_get_field_value\(''',
 ]
 detail = "A refused property probe reaches the generic getter."
 
@@ -1287,7 +1287,7 @@ name = "raw_field_write_record"
 section = "llvm_before"
 function_contains = "forceDynamicWrite"
 regex_all = [
-  '''l2c.record\.\d+:\n(?:(?!\n\n)[\s\S])*?getelementptr i8, ptr %[\w.]+, i64 104(?:(?!\n\n)[\s\S])*?(?P<bits>%[\w.]+) = and i64 %[\w.]+, 2\n\s*(?P<ok>%[\w.]+) = icmp ne i64 (?P=bits), 0\n\s*br i1 (?P=ok), label %l2s\.lane\.\d+, label %l2s\.miss\.\d+''',
+  '''l2c\.record\.\d+:\n(?:(?!\n\n)[\s\S])*?getelementptr i8, ptr %[\w.]+, i64 104(?:(?!\n\n)[\s\S])*?(?P<bits>%[\w.]+) = and i64 %[\w.]+, 2\n\s*(?P<ok>%[\w.]+) = icmp ne i64 (?P=bits), 0\n\s*br i1 (?P=ok), label %l2s\.lane\.\d+, label %l2s\.miss\.\d+''',
 ]
 detail = "The shape record must admit a writable slot."
 
@@ -1296,8 +1296,8 @@ name = "raw_field_write_representation"
 section = "llvm_before"
 function_contains = "forceDynamicWrite"
 regex_all = [
-  '''l2s.lane\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<bits>%[\w.]+) = and i64 %[\w.]+, 9218868437227405312\n\s*(?P<numeric>%[\w.]+) = icmp ne i64 (?P=bits), 9218868437227405312\n\s*br i1 (?P=numeric), label %l2s\.meta\.\d+, label %l2s\.rep\.\d+''',
-  '''l2s.rep\.\d+:\n(?:(?!\n\n)[\s\S])*?getelementptr i8, ptr %[\w.]+, i64 48(?:(?!\n\n)[\s\S])*?(?P<rep>%[\w.]+) = and i64 %[\w.]+, 3\n\s*(?P<boxed>%[\w.]+) = icmp eq i64 (?P=rep), 0\n\s*br i1 (?P=boxed), label %l2s\.meta\.\d+, label %l2s\.miss\.\d+''',
+  '''l2s\.lane\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<bits>%[\w.]+) = and i64 %[\w.]+, 9218868437227405312\n\s*(?P<numeric>%[\w.]+) = icmp ne i64 (?P=bits), 9218868437227405312\n\s*br i1 (?P=numeric), label %l2s\.meta\.\d+, label %l2s\.rep\.\d+''',
+  '''l2s\.rep\.\d+:\n(?:(?!\n\n)[\s\S])*?getelementptr i8, ptr %[\w.]+, i64 48(?:(?!\n\n)[\s\S])*?(?P<rep>%[\w.]+) = and i64 %[\w.]+, 3\n\s*(?P<boxed>%[\w.]+) = icmp eq i64 (?P=rep), 0\n\s*br i1 (?P=boxed), label %l2s\.meta\.\d+, label %l2s\.miss\.\d+''',
 ]
 detail = "Finite numbers are admitted directly; other bits require the boxed slot representation."
 
@@ -1306,7 +1306,7 @@ name = "raw_field_write_metadata"
 section = "llvm_before"
 function_contains = "forceDynamicWrite"
 regex_all = [
-  '''l2s.meta\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<meta>%[\w.]+) = load i64, ptr %[\w.]+\n\s*(?P<plain>%[\w.]+) = icmp eq i64 (?P=meta), 0\n\s*br i1 (?P=plain), label %l2s\.load\.\d+, label %l2s\.miss\.\d+''',
+  '''l2s\.meta\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<meta>%[\w.]+) = load i64, ptr %[\w.]+\n\s*(?P<plain>%[\w.]+) = icmp eq i64 (?P=meta), 0\n\s*br i1 (?P=plain), label %l2s\.load\.\d+, label %l2s\.miss\.\d+''',
 ]
 detail = "Nonempty object metadata refuses the inline write."
 
@@ -1315,7 +1315,7 @@ name = "raw_field_write_slot"
 section = "llvm_before"
 function_contains = "forceDynamicWrite"
 regex_all = [
-  '''l2s.load\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<slot>%[\w.]+) = load i64, ptr %[\w.]+\n\s*(?P<absent>%[\w.]+) = icmp eq i64 (?P=slot), 9222246136947933200\n\s*br i1 (?P=absent), label %l2s\.miss\.\d+, label %l2s\.hit\.\d+''',
+  '''l2s\.load\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<slot>%[\w.]+) = load i64, ptr %[\w.]+\n\s*(?P<absent>%[\w.]+) = icmp eq i64 (?P=slot), 9222246136947933200\n\s*br i1 (?P=absent), label %l2s\.miss\.\d+, label %l2s\.hit\.\d+''',
 ]
 detail = "The write refuses an absent slot."
 
@@ -1325,7 +1325,7 @@ section = "llvm_before"
 function_contains = "forceDynamicWrite"
 regex_all = [
   '''l2s\.hit\.\d+:\n\s*store double %[\w.]+, ptr %[\w.]+(?:(?!\n\n)[\s\S])*?br i1 %[\w.]+, label %l2s\.classify\.\d+, label %l2s\.gc_bookkeeping\.done\.\d+''',
-  '''l2s.barrier\.\d+:\n(?:(?!\n\n)[\s\S])*?call void @js_write_barrier_slot_validated_parent\(''',
+  '''l2s\.barrier\.\d+:\n(?:(?!\n\n)[\s\S])*?call void @js_write_barrier_slot_validated_parent\(''',
 ]
 detail = "An admitted write stores its value and retains GC barrier bookkeeping."
 
@@ -1334,8 +1334,8 @@ name = "raw_field_write_fallback"
 section = "llvm_before"
 function_contains = "forceDynamicWrite"
 regex_all = [
-  '''l2s.miss\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<probe>%[\w.]+) = call i32 @perry_probe_set\([^\n]+\)\n\s*(?P<ok>%[\w.]+) = icmp ne i32 (?P=probe), 0\n\s*br i1 (?P=ok), label %put\.pic\.merge\.\d+, label %put\.pic\.set\.\d+''',
-  '''put.pic.set\.\d+:\n(?:(?!\n\n)[\s\S])*?call double @js_put_value_set\(''',
+  '''l2s\.miss\.\d+:\n(?:(?!\n\n)[\s\S])*?(?P<probe>%[\w.]+) = call i32 @perry_probe_set\([^\n]+\)\n\s*(?P<ok>%[\w.]+) = icmp ne i32 (?P=probe), 0\n\s*br i1 (?P=ok), label %put\.pic\.merge\.\d+, label %put\.pic\.set\.\d+''',
+  '''put\.pic\.set\.\d+:\n(?:(?!\n\n)[\s\S])*?call double @js_put_value_set\(''',
 ]
 detail = "A refused write probe reaches the generic setter."
 
