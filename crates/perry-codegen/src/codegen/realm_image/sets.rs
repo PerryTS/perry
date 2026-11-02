@@ -200,7 +200,11 @@ mod tests {
             } else {
                 "e-p:64:64-i64:64"
             });
-            for cell in plan.cells.values().filter(|c| c.storage.is_some()) {
+            for cell in plan
+                .cells
+                .values()
+                .filter(|c| matches!(c.storage, Some(RealmStorageFacts::Set { .. })))
+            {
                 let name = crate::realm_plan::cell_symbol(&cell.name);
                 let ty = parsed
                     .get_global(&name)
