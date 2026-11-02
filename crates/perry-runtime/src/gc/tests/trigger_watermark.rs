@@ -258,7 +258,10 @@ fn the_leaf_arm_does_not_count_the_survivor_space_twice() {
     for survivor in [0, 1 << 20, survivor, cap / 2] {
         let small = cap - 2;
         let (due, limit) = leaf_window_due(cap, small, survivor, 1);
-        assert!(!due, "survivor {survivor}: the leaf arm fires below the copying cap");
+        assert!(
+            !due,
+            "survivor {survivor}: the leaf arm fires below the copying cap"
+        );
         assert_eq!(due, small >= limit, "the bound and the answer agree");
     }
     // Leaves that do fill Eden's window still make it due.

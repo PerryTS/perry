@@ -189,9 +189,7 @@ pub extern "C" fn js_array_to_sorted_with_comparator(
         rebuild_array_layout(new_arr);
         // The sort calls back into JS, which can move both the copy and the
         // comparator: re-read the comparator and return the live result.
-        comparator.with_const_ptr(|comparator| {
-            js_array_sort_with_comparator(new_arr, comparator)
-        })
+        comparator.with_const_ptr(|comparator| js_array_sort_with_comparator(new_arr, comparator))
     }
 }
 

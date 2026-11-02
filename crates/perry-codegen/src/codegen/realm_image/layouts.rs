@@ -289,7 +289,8 @@ pub(crate) fn emit_layouts(
             ));
         }
         let symbol = llvm_identifier(&layout.symbol);
-        let (initializer, tags) = descriptor(module, &format!("perry_lazy_layout_{row}"), layout, None)?;
+        let (initializer, tags) =
+            descriptor(module, &format!("perry_lazy_layout_{row}"), layout, None)?;
         fixups.extend(tags);
         descriptors.push(initializer);
         aliases.push(format!(

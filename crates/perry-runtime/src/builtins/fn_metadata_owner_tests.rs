@@ -88,7 +88,11 @@ struct Bound<'a> {
 }
 fn bound(info: &JsFunctionInfo) -> Option<Bound<'_>> {
     let record = Record::for_info(info)?;
-    Some(Bound { record, info, ordinal: record.ordinal })
+    Some(Bound {
+        record,
+        info,
+        ordinal: record.ordinal,
+    })
 }
 impl Bound<'_> {
     fn with_name<R>(self, read: impl FnOnce(&str) -> R) -> Option<R> {
@@ -189,9 +193,7 @@ fn closure_info_name_and_registered_override_keep_distinct_precedence() {
         info,
         props: std::ptr::null_mut(),
     };
-    bound(info)
-        .unwrap()
-        .write_name(b"override", false);
+    bound(info).unwrap().write_name(b"override", false);
     assert_eq!(registered(info).as_deref(), Some("override"));
     assert_eq!(
         unsafe { crate::builtins::registered_name_for_closure(&closure) }.as_deref(),

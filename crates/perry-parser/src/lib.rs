@@ -983,7 +983,12 @@ mod tests {
             assert_eq!(scanned.source, source, "class gate input: {source}");
             assert!(class.is_identity());
         }
-        let no_escape = ["", "var a = 1;", "/re/.test(\"x\"); // \\ u", "x = '\\x41';"];
+        let no_escape = [
+            "",
+            "var a = 1;",
+            "/re/.test(\"x\"); // \\ u",
+            "x = '\\x41';",
+        ];
         for source in no_escape {
             let gated = normalize_unicode_identifier_escapes_with_metadata(source);
             let scanned = scan_unicode_identifier_escapes(source);

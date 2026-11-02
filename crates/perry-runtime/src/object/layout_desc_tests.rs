@@ -370,4 +370,3 @@ fn two_agents_install_a_runtime_layout_under_one_id() {
         "the shape is installed under the drawn id"
     );
 }
-

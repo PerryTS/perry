@@ -34,8 +34,16 @@ fn method_on_another_units_function_reads_its_own_key() {
     let mods = [("b", B), ("main", MAIN)];
     let (w, u) = (whole_of(&mods), units_of(&mods));
     let (ew, eu) = (lit_escape(&w), lit_escape(&u));
-    assert!(ew.is_some(), "whole: the literal reaches a ⊤ callee\n{}", w.dump_text());
-    assert!(eu.is_some(), "per unit stronger than whole: whole {ew:?}\n{}", u.dump_text());
+    assert!(
+        ew.is_some(),
+        "whole: the literal reaches a ⊤ callee\n{}",
+        w.dump_text()
+    );
+    assert!(
+        eu.is_some(),
+        "per unit stronger than whole: whole {ew:?}\n{}",
+        u.dump_text()
+    );
 }
 
 const C: &str = r#"import { marked } from "./b";
@@ -55,8 +63,16 @@ fn a_third_units_store_on_the_function_is_seen() {
     let mods = [("b", B), ("c", C), ("main", MAIN3)];
     let (w, u) = (whole_of(&mods), units_of(&mods));
     let (ew, eu) = (lit_escape(&w), lit_escape(&u));
-    assert!(ew.is_some(), "whole: the literal reaches ext\n{}", w.dump_text());
-    assert!(eu.is_some(), "per unit stronger than whole: whole {ew:?}\n{}", u.dump_text());
+    assert!(
+        ew.is_some(),
+        "whole: the literal reaches ext\n{}",
+        w.dump_text()
+    );
+    assert!(
+        eu.is_some(),
+        "per unit stronger than whole: whole {ew:?}\n{}",
+        u.dump_text()
+    );
 }
 
 const BT: &str = r#"export function f(x: any) { return (f as any).k({ own: x }); }"#;
@@ -91,6 +107,10 @@ fn a_unknown_store_on_another_units_function_is_unknown_to_every_holder() {
     for key in ["own", "held"] {
         let (ew, eu) = (escape_of(&w, key), escape_of(&u, key));
         assert!(ew.is_some(), "whole: `{key}` reaches ⊤\n{}", w.dump_text());
-        assert!(eu.is_some(), "per unit: `{key}` must escape as in whole {ew:?}\n{}", u.dump_text());
+        assert!(
+            eu.is_some(),
+            "per unit: `{key}` must escape as in whole {ew:?}\n{}",
+            u.dump_text()
+        );
     }
 }

@@ -286,12 +286,25 @@ mod tests {
     #[test]
     fn elf_order_keeps_the_js_hot_run_inside_the_js_text_section() {
         let order = FunctionOrder::parse("perry_fn_a\njs_string_concat\n");
-        assert_eq!(order.js_section_for("perry_fn_a").as_deref(), Some("perry_js_text.sorted.00000000"));
-        assert_eq!(order.section_for("js_string_concat").as_deref(), Some(".text.sorted.00000001"));
+        assert_eq!(
+            order.js_section_for("perry_fn_a").as_deref(),
+            Some("perry_js_text.sorted.00000000")
+        );
+        assert_eq!(
+            order.section_for("js_string_concat").as_deref(),
+            Some(".text.sorted.00000001")
+        );
         let script = order.elf_linker_script().unwrap();
-        let js = script.split("perry_js_text : ALIGN(16)").nth(1).expect("JS text output section");
-        let first = js.find("*(SORT(perry_js_text.sorted.*))").expect("ranked first");
-        let rest = js.find("*(perry_js_text perry_js_text.fn.*)").expect("then the rest");
+        let js = script
+            .split("perry_js_text : ALIGN(16)")
+            .nth(1)
+            .expect("JS text output section");
+        let first = js
+            .find("*(SORT(perry_js_text.sorted.*))")
+            .expect("ranked first");
+        let rest = js
+            .find("*(perry_js_text perry_js_text.fn.*)")
+            .expect("then the rest");
         assert!(first < rest);
         assert!(js.contains("__perry_hot_js_text_start"));
         assert!(js.contains("__perry_hot_js_text_limit = __perry_hot_js_text_end"));
