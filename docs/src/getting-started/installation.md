@@ -50,6 +50,34 @@ sudo apk add build-base clang
 sudo xbps-install -S base-devel clang
 ```
 
+### OpenSSL development libraries (programs that use the stdlib)
+
+A program that pulls in `perry-stdlib` (for example `node:http`, `node:https`,
+`node:tls`, `node:net`, `node:crypto`, or `fetch`) is linked with `-lssl
+-lcrypto` on Linux. A plain program that uses none of these does not need them.
+The flags are added by the Linux link step:
+
+| Linux link | `-lssl -lcrypto` | Packages needed on the build host |
+|---|---|---|
+| Native build (no `--target`), glibc host | yes, when the stdlib is used | `libssl-dev` (Debian/Ubuntu), `openssl-devel` (Fedora/RHEL) |
+| Native build (no `--target`), musl host such as Alpine | yes, when the stdlib is used | `openssl-dev openssl-libs-static` |
+| `--target linux` (glibc cross build) | yes, when the stdlib is used | the target sysroot's OpenSSL development files |
+| `--target linux-musl` / `--libc musl` (fully static) | no (skipped, #4826) | none |
+
+```bash
+# Debian / Ubuntu
+sudo apt install libssl-dev
+
+# Fedora / RHEL
+sudo dnf install openssl-devel
+
+# Alpine (native build of a program that uses node:http, tls or https)
+sudo apk add openssl-dev openssl-libs-static
+```
+
+Perry's own TLS stack is rustls, so these flags are historical; today the
+linker still asks for them on the rows marked yes.
+
 Run `perry doctor` afterwards to verify the linker, clang and platform tools;
 it reports a missing or too-old clang as an error.
 
@@ -102,7 +130,11 @@ On older glibc hosts Perry uses the **fully-static musl build** instead, which h
   npm install --force @perryts/perry-linux-x64-musl
   ```
 
-The musl build still needs clang on the host (`apk add clang` on Alpine): static linking changes the libc of the produced binaries, not the assembler step described under Prerequisites.
+The musl build still needs clang on the host (`apk add clang` on Alpine): static linking changes the libc of the produced binaries, not the assembler step described under Prerequisites. A native build on an
+Alpine host (compiling without `--target`) additionally needs
+`apk add openssl-dev openssl-libs-static` when the program uses `node:http`,
+`node:https`, `node:tls` or another stdlib module; the `--libc musl` static
+target does not (see "OpenSSL development libraries" above).
 
 The static build is the same compiler and produces the same binaries. The only feature it does not support is `perry/ui` (GTK4 desktop apps), which needs glibc. The glibc package includes the GTK4 archive, built separately on Ubuntu 24.04; linking a UI app still requires the GTK4, WebKitGTK, libshumate and GStreamer development libraries. Tracking issues: [#6298](https://github.com/PerryTS/perry/issues/6298), [#6351](https://github.com/PerryTS/perry/issues/6351).
 
