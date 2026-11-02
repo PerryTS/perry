@@ -47,7 +47,8 @@ pub const NO_CTX: CallId = u32::MAX;
 /// What a test value must be able to hold for a [`Cons::Guard`] to let its
 /// branch through. ⊤ and parameter or argument markers (another unit's or
 /// an unseen caller's value) can hold anything; every other token is an
-/// object or a function: truthy, neither `undefined` nor `null`.
+/// object or a function: truthy, neither `undefined` nor `null`, and no
+/// String (its ToPrimitive may return one or a number).
 pub mod guard {
     pub const UNDEF: u8 = 0;
     pub const NOT_UNDEF: u8 = 1;
@@ -55,6 +56,9 @@ pub mod guard {
     pub const NOT_NULLISH: u8 = 3;
     pub const TRUTHY: u8 = 4;
     pub const FALSY: u8 = 5;
+    /// A value that is no String after ToPrimitive: an operand of `+` that
+    /// lets the other operand's numeric kinds reach the result.
+    pub const NOT_STR: u8 = 6;
 
     /// The primitive kinds (`prim` bits) a test admits.
     pub fn prims(test: u8) -> u16 {
@@ -66,6 +70,7 @@ pub mod guard {
             NOT_NULLISH => p::ALL & !(p::UNDEF | p::NULL),
             // Every primitive kind but `undefined`/`null` has a truthy value.
             TRUTHY => p::NUM | p::STR | p::BOOL | p::BIGINT | p::SYMBOL,
+            NOT_STR => p::ALL & !p::STR,
             // `0`, `""`, `false`, `0n`, `null`, `undefined`.
             _ => p::NUM | p::STR | p::BOOL | p::BIGINT | p::NULL | p::UNDEF,
         }
@@ -73,7 +78,7 @@ pub mod guard {
 
     /// An object or function token admits the test.
     pub fn objects(test: u8) -> bool {
-        matches!(test, NOT_UNDEF | NOT_NULLISH | TRUTHY)
+        matches!(test, NOT_UNDEF | NOT_NULLISH | TRUTHY | NOT_STR)
     }
 }
 
@@ -993,9 +998,18 @@ pub enum Cons {
         f: NodeId,
         setter: bool,
     },
-    /// The node is an arithmetic operand: dst ⊇ the kinds its values turn
-    /// into (`+` when `add`: strings concatenate).
-    Arith { dst: NodeId, add: bool },
+    /// The node is a ToNumeric operand (`-`, `*`, `++`, unary `-`, ...):
+    /// dst ⊇ the numeric kinds its values turn into (Number; BigInt for a
+    /// BigInt; both for an object, whose ToPrimitive may return either).
+    Arith { dst: NodeId },
+    /// The node is an operand of `+`: `str` ⊇ String when the value may be
+    /// a String (or an object, whose ToPrimitive may return one); `num` ⊇
+    /// the numeric kinds of its other values (Number for a Number, Boolean,
+    /// `null` or `undefined`; BigInt for a BigInt; both for an object).
+    /// ECMA-262 13.15.3: after ToPrimitive a String operand concatenates,
+    /// so the generation rule lets `num` reach the result only through a
+    /// [`Cons::Guard`] with test [`guard::NOT_STR`] on the other operand.
+    Plus { str: NodeId, num: NodeId },
     /// The node is the only argument of `Array(x)` / `new Array(x)`: a Number
     /// is the length (the array has holes, no element), any other value is
     /// the one element (ECMA-262 Array). `dst` ⊇ its tokens and its
@@ -1112,6 +1126,7 @@ impl Cons {
             Cons::IterNext { .. } => "iternext",
             Cons::NewTargetHard { .. } => "newtargethard",
             Cons::Arith { .. } => "arith",
+            Cons::Plus { .. } => "plus",
             Cons::ArrayLenArg { .. } => "arraylenarg",
             Cons::IdxLoad { .. } => "idxload",
             Cons::IdxKey { .. } => "idxkey",
@@ -1883,6 +1898,10 @@ pub struct Model {
     /// Per beside argument marker: the arithmetic results that took no
     /// object kinds for it (DECISIONS 75); they take them if it leaves.
     pub beside_arith: FxHashMap<Tok, Vec<(NodeId, u16)>>,
+    /// Per beside argument marker: the guards (`from`, `dst`) it did not
+    /// admit (a marker beside its values is no value, DECISIONS 74); their
+    /// edges follow if it leaves (75).
+    pub beside_guard: FxHashMap<Tok, Vec<(NodeId, NodeId)>>,
     /// Decision 19: the reason a closed function is published to the
     /// module's other units (`Gen::unit_boundary`). Published that way its
     /// token does not escape: its parameters hold the closed contract's

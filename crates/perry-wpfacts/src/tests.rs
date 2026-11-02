@@ -57,6 +57,7 @@ mod native_proto;
 mod own_key_shadow;
 mod own_length;
 mod parent_value;
+mod plus_string;
 mod prim_result;
 mod private_field;
 mod proof_receivers;
@@ -1502,7 +1503,7 @@ fn an_argument_marker_leaves_beside_when_a_valued_member_links() {
     let r1 = m.arg_marker(n1);
     let r2 = m.arg_marker(n2);
     m.link_marker(r2, r1);
-    m.cons(src, Cons::Arith { dst, add: false });
+    m.cons(src, Cons::Arith { dst });
     m.add_tok(src, r1);
     m.solve();
     assert_eq!(m.nodes[dst as usize].prim, 0, "beside: no kinds of its own");
