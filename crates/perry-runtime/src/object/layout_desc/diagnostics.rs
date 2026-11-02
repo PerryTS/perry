@@ -248,7 +248,9 @@ pub(super) fn family_diag_other_report() {
                 "PERRY_FAMILY_DIAG other_class class={c} name={name} first={f} stores={t} keys={n}"
             );
         }
-        crate::cold_sort::sort_by(&mut rows, |a, b| b.1 .0.cmp(&a.1 .0).then(b.1 .1.cmp(&a.1 .1)));
+        crate::cold_sort::sort_by(&mut rows, |a, b| {
+            b.1 .0.cmp(&a.1 .0).then(b.1 .1.cmp(&a.1 .1))
+        });
         for ((c, k), (f, t)) in rows.into_iter().take(80) {
             eprintln!("PERRY_FAMILY_DIAG other class={c} key={k} first={f} stores={t}");
         }

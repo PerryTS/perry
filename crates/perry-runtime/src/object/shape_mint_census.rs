@@ -771,7 +771,9 @@ pub(crate) fn dump() {
     out.push('\n');
     out.push_str("  top key-name lists by mint count (hash, mints, keys):\n");
     let mut lists: Vec<(&u64, &(u64, u32))> = c.per_list.iter().collect();
-    crate::cold_sort::sort_by(&mut lists, |a, b| b.1 .0.cmp(&a.1 .0).then_with(|| a.0.cmp(b.0)));
+    crate::cold_sort::sort_by(&mut lists, |a, b| {
+        b.1 .0.cmp(&a.1 .0).then_with(|| a.0.cmp(b.0))
+    });
     for (h, (n, k)) in lists.into_iter().take(10) {
         out.push_str(&format!("    {h:#018x}  {n:>10}  {k} keys\n"));
     }

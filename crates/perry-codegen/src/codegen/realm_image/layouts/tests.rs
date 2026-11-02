@@ -260,7 +260,10 @@ fn program_runtime_layouts_are_exactly_r_and_equal_the_declared_facts() {
                     .position(|l| l.starts_with(&format!("@{symbol} = global ")))
                     .unwrap();
                 for cell in [format!("{symbol}_list"), format!("{symbol}_list_attrs")] {
-                    if let Some(at) = ir.lines().position(|l| l.starts_with(&format!("@{cell} = "))) {
+                    if let Some(at) = ir
+                        .lines()
+                        .position(|l| l.starts_with(&format!("@{cell} = ")))
+                    {
                         let line = ir.lines().nth(at).unwrap();
                         // The assembler opens the list's linked-to section
                         // only after the descriptor's own.
@@ -360,8 +363,14 @@ fn program_runtime_layouts_are_exactly_r_and_equal_the_declared_facts() {
         symbol_keyed > 0,
         "the symbol-keyed list path was never checked"
     );
-    assert!(keyless > 0, "the keyless (null list) path was never checked");
-    assert!(associated > 0, "no ELF list was checked for its descriptor association");
+    assert!(
+        keyless > 0,
+        "the keyless (null list) path was never checked"
+    );
+    assert!(
+        associated > 0,
+        "no ELF list was checked for its descriptor association"
+    );
 }
 
 /// On ELF every emitted key-list cell of a runtime descriptor (and its
@@ -383,7 +392,9 @@ fn every_runtime_key_list_section_is_linked_to_its_own_descriptor_on_elf() {
         .lines()
         .filter(|l| {
             l.starts_with("@perry_runtime_layout_")
-                && l.split(" = ").next().is_some_and(|n| n.ends_with("_list") || n.ends_with("_list_attrs"))
+                && l.split(" = ")
+                    .next()
+                    .is_some_and(|n| n.ends_with("_list") || n.ends_with("_list_attrs"))
         })
         .count();
     assert!(cells > 0, "no runtime key list was emitted");
@@ -395,19 +406,32 @@ fn every_runtime_key_list_section_is_linked_to_its_own_descriptor_on_elf() {
             continue;
         };
         let fields = rest.split(',').collect::<Vec<_>>();
-        assert_eq!(fields.first(), Some(&"\"awo\""), "realm section without link order: {line}");
+        assert_eq!(
+            fields.first(),
+            Some(&"\"awo\""),
+            "realm section without link order: {line}"
+        );
         let owner = fields[2];
         let label = lines[at + 1..]
             .iter()
-            .find_map(|l| l.strip_suffix(':').filter(|n| !n.contains(char::is_whitespace)))
+            .find_map(|l| {
+                l.strip_suffix(':')
+                    .filter(|n| !n.contains(char::is_whitespace))
+            })
             .unwrap();
         let cell = label.trim_start_matches(".L");
         assert!(
             cell == format!("{owner}_list") || cell == format!("{owner}_list_attrs"),
             "{cell} is linked to {owner}, not to its own descriptor"
         );
-        let defined = lines.iter().position(|l| *l == format!("{owner}:")).unwrap();
-        assert!(defined < at, "{cell}: its descriptor {owner} is defined after the list's section");
+        let defined = lines
+            .iter()
+            .position(|l| *l == format!("{owner}:"))
+            .unwrap();
+        assert!(
+            defined < at,
+            "{cell}: its descriptor {owner} is defined after the list's section"
+        );
         tied += 1;
     }
     assert_eq!(tied, cells, "every list cell has exactly one tied section");

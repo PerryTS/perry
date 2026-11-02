@@ -1326,7 +1326,8 @@ const TEST_LAYOUT_ROWS: u32 = 0;
 
 /// Rows below this bound are runtime layouts (`runtime_layout!`): the
 /// ABI's native rows, and in perry-runtime's tests the test band.
-pub(crate) const RUNTIME_LAYOUT_ROWS: u32 = crate::codegen_abi::NATIVE_LAYOUT_ROWS + TEST_LAYOUT_ROWS;
+pub(crate) const RUNTIME_LAYOUT_ROWS: u32 =
+    crate::codegen_abi::NATIVE_LAYOUT_ROWS + TEST_LAYOUT_ROWS;
 
 #[cfg(test)]
 #[path = "runtime_layouts/source_equivalence_tests.rs"]

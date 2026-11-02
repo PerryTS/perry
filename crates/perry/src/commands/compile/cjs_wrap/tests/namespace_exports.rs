@@ -21,7 +21,10 @@ exports.Alias = Base;
     assert!(!wrapped.contains("export { Hidden };"), "{wrapped}");
     assert!(!wrapped.contains("export { Base };"), "{wrapped}");
     // `Alias` is the `Base` class read back from the module's exports.
-    assert!(wrapped.contains("export const Alias = _cjs.Alias;"), "{wrapped}");
+    assert!(
+        wrapped.contains("export const Alias = _cjs.Alias;"),
+        "{wrapped}"
+    );
 }
 
 #[test]
@@ -35,8 +38,14 @@ exports.Boxed = box(Boxed);
     assert!(!wrapped.contains("export { Boxed };"), "{wrapped}");
     // The key's value is the module's, under a name that does not redeclare
     // the module-scope class binding.
-    assert!(wrapped.contains("const __cjsexp_Boxed = _cjs.Boxed;"), "{wrapped}");
-    assert!(wrapped.contains("export { __cjsexp_Boxed as Boxed };"), "{wrapped}");
+    assert!(
+        wrapped.contains("const __cjsexp_Boxed = _cjs.Boxed;"),
+        "{wrapped}"
+    );
+    assert!(
+        wrapped.contains("export { __cjsexp_Boxed as Boxed };"),
+        "{wrapped}"
+    );
 }
 
 #[test]

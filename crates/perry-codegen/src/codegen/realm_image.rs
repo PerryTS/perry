@@ -499,7 +499,14 @@ pub(crate) fn emit_image_key_list(
         slots.insert(0, Slot::Cell(attrs_name, POINTER_TAG));
         reserved |= perry_abi::GC_ARRAY_KEY_ATTRS;
     }
-    fixups.extend(emit_array_cell(llmod, name, &slots, keys.len(), reserved, owner));
+    fixups.extend(emit_array_cell(
+        llmod,
+        name,
+        &slots,
+        keys.len(),
+        reserved,
+        owner,
+    ));
     (user_address(name), fixups)
 }
 
@@ -566,8 +573,9 @@ pub(crate) fn emit_array_cell_with_fields(
     let named = cell.named.map_or_else(|| "null".into(), user_address);
     let slots = cell.slots;
     let associated = match cell.owner {
-        Some(owner) if crate::fn_record::RecordFormat::of(&llmod.target_triple)
-            == crate::fn_record::RecordFormat::Elf =>
+        Some(owner)
+            if crate::fn_record::RecordFormat::of(&llmod.target_triple)
+                == crate::fn_record::RecordFormat::Elf =>
         {
             format!(", !associated !{{ptr @{owner}}}")
         }

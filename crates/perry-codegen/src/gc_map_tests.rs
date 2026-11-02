@@ -25,7 +25,10 @@ fn unicode_symbol_names_survive_stack_map_compaction() {
             assert!(out.contains(&format!("{symbol}-.Lperry_gcmap0")), "{out}");
             assert!(out.contains(&format!(",associative,{symbol}\n")), "{out}");
         } else {
-            assert!(out.contains(&format!(",\"ao\",@progbits,{symbol},unique,")), "{out}");
+            assert!(
+                out.contains(&format!(",\"ao\",@progbits,{symbol},unique,")),
+                "{out}"
+            );
         }
     }
 }
@@ -129,7 +132,10 @@ fn every_target_emits_the_same_entry_with_a_relative_function_field() {
         );
         assert_eq!(GC_MAP_VERSION, 9);
         assert!(
-            out.contains(&format!("\t.long\t{}\n", 1 | u32::from(GC_MAP_VERSION) << 24)),
+            out.contains(&format!(
+                "\t.long\t{}\n",
+                1 | u32::from(GC_MAP_VERSION) << 24
+            )),
             "the entry must carry its record count and the version the runtime expects:\n{out}"
         );
         // v9: one 20-byte entry; records: one 4-byte instruction offset + a
@@ -139,10 +145,17 @@ fn every_target_emits_the_same_entry_with_a_relative_function_field() {
             out.contains(&format!("\t.long\t{rec}-{map}\n")),
             "{target}: the entry names its records by a link-time offset:\n{out}"
         );
-        assert!(out.contains("\t.long\t7\n"), "{target}: records length:\n{out}");
+        assert!(
+            out.contains("\t.long\t7\n"),
+            "{target}: records length:\n{out}"
+        );
         // Everything after the entry label is format-independent.
         let blob = &out[out.find(&format!("{map}:")).expect("label")..];
-        entries.push(blob.replace(entry, "ENTRY").replace(map, "MAP").replace(rec, "REC"));
+        entries.push(
+            blob.replace(entry, "ENTRY")
+                .replace(map, "MAP")
+                .replace(rec, "REC"),
+        );
     }
     assert!(
         entries.windows(2).all(|pair| pair[0] == pair[1]),
@@ -211,10 +224,15 @@ fn records_live_in_their_own_section_after_no_entry_bytes() {
         .collect();
     let words = tail[..end]
         .lines()
-        .filter(|l| l.starts_with("\t.long") || l.starts_with("\t.short") || l.starts_with("\t.byte"))
+        .filter(|l| {
+            l.starts_with("\t.long") || l.starts_with("\t.short") || l.starts_with("\t.byte")
+        })
         .count();
     assert_eq!(words, 5, "{}", &tail[..end]);
-    assert_eq!(longs[0], ".Lperry_gcmap_fn0-.Lperry_gcmap0", "function field");
+    assert_eq!(
+        longs[0], ".Lperry_gcmap_fn0-.Lperry_gcmap0",
+        "function field"
+    );
     assert_eq!(
         longs[2].parse::<u32>().unwrap() >> 24,
         u32::from(GC_MAP_VERSION),

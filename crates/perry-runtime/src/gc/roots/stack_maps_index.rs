@@ -31,11 +31,7 @@ impl StackMapIndex {
     /// Under `PERRY_GC_STACK_MAP_CROSSCHECK=1` this also asks the v4 index the
     /// same question and aborts on any difference — see [`Self::cross_check`].
     pub(super) fn match_records(&self, ip: usize) -> Option<lazy::RecordMatch> {
-        let matched = lazy::match_records(
-            &self.functions,
-            ip,
-            MAX_SAFEPOINT_RETURN_DELTA,
-        );
+        let matched = lazy::match_records(&self.functions, ip, MAX_SAFEPOINT_RETURN_DELTA);
         if self.mode == IndexMode::CrossCheck {
             self.cross_check(ip, matched.as_ref());
         }

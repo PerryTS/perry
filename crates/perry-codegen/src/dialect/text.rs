@@ -45,7 +45,10 @@ pub(super) fn inline_metadata<'ctx>(ctx: &'ctx Context, tok: &str) -> Result<Met
     Ok(node)
 }
 
-fn metadata_tuple<'ctx, 's>(ctx: &'ctx Context, s: &'s str) -> Result<(MetadataValue<'ctx>, &'s str)> {
+fn metadata_tuple<'ctx, 's>(
+    ctx: &'ctx Context,
+    s: &'s str,
+) -> Result<(MetadataValue<'ctx>, &'s str)> {
     let mut s = s
         .strip_prefix("!{")
         .ok_or_else(|| anyhow!("unsupported metadata form `{s}`"))?;
