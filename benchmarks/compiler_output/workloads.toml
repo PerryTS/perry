@@ -45,10 +45,9 @@ name = "direct_gep_inbounds"
 contains = "getelementptr inbounds"
 detail = "optimized IR contains direct inbounds GEPs"
 
-[[workloads.image_convolution.ir_checks]]
+[[workloads.image_convolution.loop_length_checks]]
 name = "invariant_loads"
-contains = "!invariant.load"
-detail = "optimized IR includes invariant-load metadata"
+detail = "no loop of the optimized IR re-reads a header length word (the length is loop-invariant: a preheader load, a constant or an SSA value)"
 
 [[workloads.image_convolution.ir_checks]]
 name = "alias_metadata"

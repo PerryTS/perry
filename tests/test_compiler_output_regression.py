@@ -2414,6 +2414,42 @@ idxset.bounded_numeric_merge.5:
             )
         )
 
+    def test_loop_header_length_loads_finds_a_per_iteration_length_reload(self):
+        from compiler_output_harness.analyzers import loop_header_length_loads
+
+        reload = """define double @f(double %a) {
+entry.0:
+  %b = bitcast double %a to i64
+  %h = and i64 %b, 281474976710655
+  %p = inttoptr i64 %h to ptr
+  br label %for.cond.1
+for.cond.1:
+  %i = phi i32 [ 0, %entry.0 ], [ %n, %for.body.2 ]
+  %len = load i32, ptr %p, align 4
+  %c = icmp slt i32 %i, %len
+  br i1 %c, label %for.body.2, label %for.exit.3
+for.body.2:
+  %n = add i32 %i, 1
+  br label %for.cond.1
+for.exit.3:
+  ret double 0.0
+}
+"""
+        self.assertEqual(loop_header_length_loads(reload), {"f": ["for.cond.1"]})
+        # The same load hoisted to the preheader is loop-invariant.
+        hoisted = reload.replace(
+            "  br label %for.cond.1\nfor.cond.1:\n  %i = phi i32 [ 0, %entry.0 ], [ %n, %for.body.2 ]\n  %len = load i32, ptr %p, align 4\n",
+            "  %len = load i32, ptr %p, align 4\n  br label %for.cond.1\nfor.cond.1:\n  %i = phi i32 [ 0, %entry.0 ], [ %n, %for.body.2 ]\n",
+        )
+        self.assertNotEqual(hoisted, reload)
+        self.assertEqual(loop_header_length_loads(hoisted), {})
+        # An element load through a data pointer is not a length word.
+        element = reload.replace("inttoptr i64 %h to ptr", "inttoptr i64 %d to ptr").replace(
+            "  %h = and i64 %b, 281474976710655\n",
+            "  %h = and i64 %b, 281474976710655\n  %d = add i64 %h, 16\n",
+        )
+        self.assertEqual(loop_header_length_loads(element), {})
+
     def test_native_id_region_resolves_from_its_records_not_optimized_labels(self):
         workloads = {
             "native_id_region": {

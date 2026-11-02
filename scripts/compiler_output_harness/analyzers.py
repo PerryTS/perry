@@ -419,6 +419,129 @@ def named_hot_regions(workload_info: dict[str, Any], ir_after: str) -> dict[str,
     }
 
 
+_NANBOX_POINTER_MASK = "281474976710655"
+
+
+def _cycle_blocks(successors: dict[str, list[str]]) -> set[str]:
+    """Blocks on a CFG cycle (members of a non-trivial strongly connected
+    component, or a self loop): every block a loop iteration can run."""
+    index: dict[str, int] = {}
+    low: dict[str, int] = {}
+    on_stack: set[str] = set()
+    stack: list[str] = []
+    cyclic: set[str] = set()
+    counter = 0
+    for root in successors:
+        if root in index:
+            continue
+        index[root] = low[root] = counter
+        counter += 1
+        stack.append(root)
+        on_stack.add(root)
+        work = [(root, iter(successors[root]))]
+        while work:
+            node, children = work[-1]
+            advanced = False
+            for child in children:
+                if child not in successors:
+                    continue
+                if child not in index:
+                    index[child] = low[child] = counter
+                    counter += 1
+                    stack.append(child)
+                    on_stack.add(child)
+                    work.append((child, iter(successors[child])))
+                    advanced = True
+                    break
+                if child in on_stack:
+                    low[node] = min(low[node], index[child])
+            if advanced:
+                continue
+            work.pop()
+            if work:
+                parent = work[-1][0]
+                low[parent] = min(low[parent], low[node])
+            if low[node] == index[node]:
+                component = []
+                while True:
+                    member = stack.pop()
+                    on_stack.discard(member)
+                    component.append(member)
+                    if member == node:
+                        break
+                if len(component) > 1 or node in successors[node]:
+                    cyclic.update(component)
+    return cyclic
+
+
+def loop_header_length_loads(ir: str) -> dict[str, list[str]]:
+    """Per function, the loop blocks (blocks on a CFG cycle) of OPTIMIZED IR
+    that read a header length word: `load i32` straight from a NaN-box
+    payload pointer (`inttoptr (and %v, POINTER_MASK)`, or the null-guarded
+    `select` of it). Array, Buffer, TypedArray and string headers keep their
+    length at offset 0, so such a load inside a loop re-reads the length every
+    iteration. A loop-invariant length is a preheader load, a constant or an
+    SSA value (mem2reg of a hoisted slot), none of which is counted."""
+    found: dict[str, list[str]] = {}
+    define_re = re.compile(r"^define\b.*@(?:\"([^\"]+)\"|([A-Za-z0-9_.$-]+))\(")
+    label_re = re.compile(_LABEL_PATTERN)
+    def_re = re.compile(r"^\s*(%[-\w.$]+) = (.*)$")
+    load_re = re.compile(r"= load i32, ptr (%[-\w.$]+)")
+    target_re = re.compile(r"label %(?:\"([^\"]+)\"|([-\w.$]+))")
+    payload_re = re.compile(r"and i64 %[-\w.$]+, " + _NANBOX_POINTER_MASK + r"\b")
+    cast_re = re.compile(r"inttoptr i64 (%[-\w.$]+) to ptr$")
+    guard_re = re.compile(r"select i1 [^,]+, ptr @\S*null_guard\S*, ptr (%[-\w.$]+)$")
+    functions: list[tuple[str, list[str]]] = []
+    current: tuple[str, list[str]] | None = None
+    for line in ir.splitlines():
+        match = define_re.match(line)
+        if match:
+            current = (match.group(1) or match.group(2), [])
+            functions.append(current)
+        elif current is not None and line.startswith("}"):
+            current = None
+        elif current is not None:
+            current[1].append(line)
+    for function, lines in functions:
+        defs: dict[str, str] = {}
+        blocks: list[tuple[str, list[str]]] = [("", [])]
+        for line in lines:
+            label = label_re.match(line)
+            if label:
+                blocks.append((label.group(1) or label.group(2), []))
+                continue
+            blocks[-1][1].append(line)
+            definition = def_re.match(line)
+            if definition:
+                defs[definition.group(1)] = definition.group(2)
+        successors = {
+            label: [
+                target.group(1) or target.group(2)
+                for line in body
+                for target in target_re.finditer(line)
+            ]
+            for label, body in blocks
+        }
+
+        def header_pointer(pointer: str) -> bool:
+            definition = defs.get(pointer, "")
+            cast = cast_re.match(definition)
+            if cast:
+                return bool(payload_re.match(defs.get(cast.group(1), "")))
+            guarded = guard_re.match(definition)
+            return bool(guarded) and header_pointer(guarded.group(1))
+
+        looped = _cycle_blocks(successors)
+        for label, body in blocks:
+            if label not in looped:
+                continue
+            for line in body:
+                load = load_re.search(line)
+                if load and header_pointer(load.group(1)):
+                    found.setdefault(function, []).append(label)
+    return found
+
+
 def native_record_regions(
     workload_info: dict[str, Any], ir_before: str, records: list[dict[str, Any]]
 ) -> dict[str, Any]:

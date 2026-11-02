@@ -7,6 +7,7 @@ from typing import Any
 
 from .analyzers import (
     hot_loop_blocks,
+    loop_header_length_loads,
     named_hot_regions,
     native_record_regions,
     runtime_call_names,
@@ -1377,6 +1378,17 @@ def verify_artifacts(
         else:
             passed = True
         add(check["name"], passed, f"{check.get('detail', check['name'])}: {observed}")
+
+    # A loop-invariant length is the intent, not a surviving metadata tag:
+    # mem2reg folds a hoisted length slot into SSA, which leaves no
+    # `!invariant.load` and no reload either.
+    for check in workload_info.get("loop_length_checks", []) or []:
+        reloads = loop_header_length_loads(ir_after)
+        add(
+            check["name"],
+            not reloads,
+            f"{check.get('detail', check['name'])}: {json.dumps(reloads, sort_keys=True)}",
+        )
 
     for check in workload_info.get("ir_checks", []) or []:
         section = check.get("section", "llvm_after")
