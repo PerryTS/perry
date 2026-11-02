@@ -313,15 +313,11 @@ impl Model {
         let nspread = self.calls[c].spread.len();
         for j in 0..nspread {
             let s = self.calls[c].spread[j];
-            // Spread arrays: their elements may be any parameter.
+            // Spread arrays: their elements may be any parameter. A spread
+            // yields elements, never a method a computed key could name.
             let elems = self.node_l("spread-elems");
-            self.cons(
-                s,
-                Cons::Load {
-                    key: Key::Any,
-                    dst: elems,
-                },
-            );
+            let ek = self.elem_key();
+            self.cons(s, Cons::Load { key: ek, dst: elems });
             for i in 0..nparams {
                 if caps[i].is_none() {
                     let p = self.funcs[f].params[i];
@@ -898,22 +894,21 @@ impl Model {
         }
         // A receiver token / marker is no builtin object: its methods are
         // its classes' (`virt_protos`).
-        if !self.virt_protos.contains_key(&t) {
-            self.with_b(|m| builtins::own_method(m, t, key, call));
+        let own_members = !self.virt_protos.contains_key(&t);
+        // DECISIONS 234: the callee lookup is a [[Get]]. A key every object
+        // `t` denotes holds as an own data property stops it at the object,
+        // as for a read: the call binds the program prototypes' methods (a
+        // superset), not the builtin members, which it takes once the key
+        // no longer shadows them (`flush_shadowed`).
+        match self.shadow_key(t, key) {
+            Some(a) => {
+                let cv = self.cv_of(t, key, false);
+                self.bind_via(cv, call, t);
+                self.note_shadowed(t, a, ChainAct::Call(call), own_members);
+            }
+            None => self.builtin_members(t, key, ChainAct::Call(call), own_members),
         }
-        // Methods on the chain (shared), builtin prototype methods, and
-        // getters returning functions (per receiver, accessor keys only).
-        let cv = self.cv(t, key);
-        self.bind_via(cv, call, t);
-        let cp = self.cp(t);
-        self.cons(
-            cp,
-            Cons::ProtoMethods {
-                origin: t,
-                key,
-                call,
-            },
-        );
+        // Getters returning functions (per receiver, accessor keys only).
         self.accessor_walk(t, t, key, ChainAct::Call(call));
     }
 
@@ -948,6 +943,14 @@ impl Model {
     fn escape_body(&mut self, t: Tok, reason: u32) {
         if t == TOP {
             return;
+        }
+        // Unknown code given the Function constructor may call it, and ⊤
+        // may then be it (DECISIONS 235). Until then a ⊤ callee is not it:
+        // the program is closed, and no native returns the constructor; the
+        // token enters a value only as the global `Function`, a function's
+        // `constructor` (a computed key that may be it included), or here.
+        if matches!(self.toks[t as usize], TokKind::Builtin(BuiltinNs::Function)) {
+            crate::builtins::interpreted_code_runs(self);
         }
         // Another unit's function the census broke, forwarded where no
         // contract describes it: its owner already lets unknown code call it
@@ -1928,7 +1931,12 @@ impl Model {
                 true => format!("{} ({})", kind.code(), self.reasons[reason as usize]),
                 false => kind.code().to_string(),
             };
-            crate::builtins::note_native_write(self, t, None, &what);
+            // `setPrototypeOf` writes no own key: the runtime object's new
+            // chain is noted by the prototype it is given (`ProtoFrom`,
+            // `settle_native_given`). Another unit's gives one unknown here.
+            if kind != Hard::E6SetPrototypeOf || self.shared_replay {
+                crate::builtins::note_native_write(self, t, None, &what);
+            }
         }
         if t == TOP {
             // Another unit passes the same runtime objects: an E6 on ⊤ is

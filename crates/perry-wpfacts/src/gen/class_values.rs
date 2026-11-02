@@ -613,6 +613,17 @@ impl<'a> Gen<'a> {
                 e.2.push(t);
             }
         }
+        for (key, fname) in &joined.own_getters {
+            if old.own_getters.iter().any(|(k, f)| k == key && f == fname) {
+                continue;
+            }
+            let Some(t) = self.stand_in_own_accessor(mi, tm, inst, key, fname, c, r) else {
+                continue;
+            };
+            if let Some(e) = self.stand_ins.get_mut(&joined.display) {
+                e.2.push(t);
+            }
+        }
         let cobj = self.m.tok(TokKind::ClassObj(tm));
         if joined.statics != old.statics || joined.static_fns != old.static_fns {
             for (key, _) in &joined.statics {
@@ -633,6 +644,32 @@ impl<'a> Gen<'a> {
         for (n, k) in wire {
             self.wire_field(mi, tm, n, c, &k);
         }
+    }
+
+    /// An own accessor of another unit's literal (`ClassContract::own_getters`)
+    /// on its stand-in instance `inst`: the template names the key (an
+    /// accessor key, so a read finds the walk and the key shadows the
+    /// chain). A getter is a stub whose result is unknown, so a call of it
+    /// escapes the receiver in the reader, which reports it and breaks the
+    /// layout: never a silent drop. A setter-only key (empty name) has no
+    /// getter to stub; a read finds `undefined` as in the owner.
+    #[allow(clippy::too_many_arguments)]
+    fn stand_in_own_accessor(
+        &mut self,
+        mi: u32,
+        tm: TmplId,
+        inst: Tok,
+        key: &str,
+        fname: &str,
+        c: &crate::units::ClassContract,
+        r: u32,
+    ) -> Option<Tok> {
+        let a = self.m.atom(key);
+        crate::gen::push_unique(&mut self.m.tmpls[tm as usize].accessor_keys, a);
+        if fname.is_empty() {
+            return None;
+        }
+        Some(self.stand_in_getter(mi, tm, inst, key, fname, c, r))
     }
 
     /// A getter of another unit's class (`ClassContract::getters`) on its
@@ -1001,6 +1038,13 @@ impl<'a> Gen<'a> {
         for (key, fname) in &c.getters {
             let t = self.stand_in_getter(mi, tm, proto, key, fname, c, r);
             toks.push(t);
+        }
+        // A literal's own accessors sit on the instance, as its birth
+        // defines them in the owner (`ClassContract::own_getters`).
+        for (key, fname) in &c.own_getters {
+            if let Some(t) = self.stand_in_own_accessor(mi, tm, inst, key, fname, c, r) {
+                toks.push(t);
+            }
         }
         let mut nested: Vec<(NodeId, &'a (String, Vec<String>, bool))> = Vec::new();
         let mut value_fields: Vec<(NodeId, &'a (String, crate::units::ValueContract))> = Vec::new();

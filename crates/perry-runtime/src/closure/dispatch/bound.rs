@@ -267,6 +267,17 @@ pub unsafe fn dispatch_bound_method(
     ) {
         return result;
     }
+    // The same snapshot rule for a native handle's method value: run the
+    // handle's native method, not an own replacement of the same name.
+    if let Some(result) = crate::object::try_dispatch_handle_method_value(
+        namespace_obj,
+        method_name_ptr,
+        method_name_len,
+        args.as_ptr(),
+        args.len(),
+    ) {
+        return result;
+    }
 
     crate::object::js_native_call_method(
         namespace_obj,

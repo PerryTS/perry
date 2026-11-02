@@ -135,6 +135,15 @@ pub enum Verdict {
     /// (ECMA-262 10.4.2, 10.4.3), so neither a delete, `defineProperty`
     /// nor a prototype makes it an accessor or removes it.
     OwnLength,
+    /// A member read or method call whose receivers are all of one builtin
+    /// family (primitive Strings, Array exotic objects, or collections of
+    /// one kind), whose intrinsic prototype chain defines the key, while no
+    /// receiver holds the key as an own property and the program writes
+    /// the key onto no builtin prototype, neither itself nor through ⊤
+    /// (`native_member`): the read/call names that intrinsic member.
+    /// Interpreted code is the guard word's (`ProgramFacts::interp_guard`),
+    /// as for T0.
+    NativeMember,
     T0Mono,
     T0Set,
     /// Proven in the typed body behind the entry guard on the receiver
@@ -1073,6 +1082,21 @@ fn judge(
             );
         }
     }
+    // The intrinsic member of one builtin family. Like OwnLength it names
+    // no layout slot or body. A write onto a builtin prototype that alone
+    // keeps it from the site is the site's reason.
+    let native_why = match native_member(m, s, toks, prim) {
+        Ok(receivers) => {
+            return (
+                receivers,
+                false,
+                Verdict::NativeMember,
+                true,
+                FxHashMap::default(),
+            )
+        }
+        Err(why) => why,
+    };
     let mut receivers = Vec::new();
     let mut top = false;
     let mut verdict: Option<Verdict> = None;
@@ -1264,7 +1288,162 @@ fn judge(
             }
         }
     };
+    let verdict = match (verdict, native_why) {
+        (Verdict::No(_), Some(why)) => Verdict::No(why),
+        (v, _) => v,
+    };
     (receivers, top, verdict, fixed_shape, targets)
+}
+
+/// BIV (CHB §2): the receivers of a NativeMember site, or why there are
+/// none. `Err(Some(..))` names the write onto a builtin prototype that alone
+/// keeps an otherwise proven site (obligations 1-3 hold); `Err(None)`: an
+/// obligation 1-3 fails, the site keeps its other reason.
+///
+/// 1. One family: every primitive a String and no object, or every object
+///    an Array exotic object ([`exact_array`]), or every object a
+///    collection of one kind; closed markers are skipped (their callers'
+///    values are beside them), ⊤ and other markers are none.
+/// 2. The family's intrinsic chain defines the key: a function for a call,
+///    a function or a data member for a read (`builtins::native_described`).
+/// 3. No receiver holds the key as an own property ([`native_own_free`]).
+/// 4. No builtin prototype is written under the key or under any key: no
+///    accessor on `Object.prototype` (E23), no redefinition of a builtin
+///    prototype's key (defineProperty on one or through ⊤) and no hard
+///    operation on them, no program write onto them, no store into ⊤
+///    (which may be any of them). Per unit, other units' writes are
+///    replayed into the same facts (`SharedWrite`).
+fn native_member(
+    m: &Model,
+    s: &crate::gen::ReadSite,
+    toks: &[Tok],
+    prim: u16,
+) -> Result<Vec<String>, Option<String>> {
+    use crate::builtins::NativeFamily;
+    let mut fam: Option<NativeFamily> = None;
+    let mut receivers = Vec::new();
+    let join = |f: NativeFamily, fam: &mut Option<NativeFamily>| match fam {
+        None => {
+            *fam = Some(f);
+            true
+        }
+        Some(g) => *g == f,
+    };
+    if prim != 0 {
+        if prim != crate::model::prim::STR {
+            return Err(None);
+        }
+        join(NativeFamily::Str, &mut fam);
+        receivers.push("primitive:string".to_string());
+    }
+    for &t in toks {
+        if m.closed_marker(t) {
+            continue;
+        }
+        let f = if exact_array(m, t) {
+            NativeFamily::Array
+        } else {
+            match m.toks[t as usize] {
+                TokKind::Obj(tm, _) if !m.is_marker(t) => match m.tmpls[tm as usize].kind {
+                    TmplKind::BObj {
+                        what: w @ ("Map" | "Set" | "WeakMap" | "WeakSet"),
+                        ..
+                    } => NativeFamily::Collection(w),
+                    _ => return Err(None),
+                },
+                _ => return Err(None),
+            }
+        };
+        if !join(f, &mut fam) {
+            return Err(None);
+        }
+        let Some(tm) = m.tmpl_of(t) else {
+            return Err(None);
+        };
+        receivers.push(m.tmpls[tm as usize].display.clone());
+    }
+    let Some(fam) = fam else {
+        return Err(None);
+    };
+    let a = s.key;
+    if !crate::builtins::native_described(fam, &m.atoms[a as usize], s.is_call) {
+        return Err(None);
+    }
+    for &t in toks {
+        if !m.closed_marker(t) && !native_own_free(m, fam, t, a) {
+            return Err(None);
+        }
+    }
+    let objproto = m.tok_index.get(&TokKind::ObjectProto).copied();
+    if m.objproto_accessor
+        || m.reshaped_any
+        || m.reshaped_keys.contains(&a)
+        || objproto.is_some_and(|op| m.hard.contains_key(&op))
+    {
+        return Err(Some(
+            "native member: a builtin prototype may be redefined (accessor, defineProperty)".into(),
+        ));
+    }
+    let (through_top, own) = match objproto {
+        Some(op) => crate::builtins::native_written_by(m, op, a),
+        None => (crate::builtins::native_written(m, TOP, a), false),
+    };
+    if own {
+        return Err(Some(
+            "native member: the program writes the key onto a builtin prototype".into(),
+        ));
+    }
+    if through_top {
+        return Err(Some(
+            "native member: a store into ⊤ may write the key onto a builtin prototype".into(),
+        ));
+    }
+    receivers.sort();
+    receivers.dedup();
+    Ok(receivers)
+}
+
+/// Obligation 3 of [`native_member`]: no object `t` denotes holds key `a`
+/// as an own property. A primitive String holds no named key but `length`.
+/// An Array: the solve's own value of the key on `t` holds nothing (its
+/// field, else its named non-index keys' values `named_any`, else, per
+/// unit, its shared cell's named keys): a named store, a store under a key
+/// that may be no index, unknown code's writes (an escape, a hard
+/// operation: ⊤ and every primitive), another unit's named store (the
+/// cell's `#named` contract, DECISIONS 94) all put a value there. A
+/// collection's entries are its field values too (`field_any`), so its
+/// facts are the writes themselves: no named store of the key on its
+/// template (`writers`), no store under a computed key or `__proto__`
+/// (`super_relink`), no escape, no hard operation, no accessor.
+fn native_own_free(m: &Model, fam: crate::builtins::NativeFamily, t: Tok, a: Atom) -> bool {
+    use crate::builtins::NativeFamily;
+    let empty = |n: Option<&NodeId>| {
+        n.is_none_or(|&n| {
+            let nd = &m.nodes[n as usize];
+            !nd.dropped && nd.pts.is_empty() && nd.prim == 0
+        })
+    };
+    match fam {
+        NativeFamily::Str => true,
+        // `__proto__` (or a computed key that may be it) stored into it.
+        NativeFamily::Array if m.super_relink.contains(&t) => false,
+        NativeFamily::Array => match m.fields.get(&(t, a)) {
+            Some(n) => empty(Some(n)),
+            None => empty(m.named_any.get(&t)) && empty(m.cell_arrs.get(&t)),
+        },
+        NativeFamily::Collection(_) => {
+            let Some(tm) = m.tmpl_of(t) else {
+                return false;
+            };
+            m.writers
+                .get(&(tm, a))
+                .is_none_or(|w| w.ctor.is_empty() && w.post.is_empty())
+                && !m.super_relink.contains(&t)
+                && !m.is_escaped(t)
+                && !m.hard.contains_key(&t)
+                && m.accessor_keys.get(&t).is_none_or(|k| k.is_empty())
+        }
+    }
 }
 
 /// The bodies a callee set holds, or why it is not a set of bodies: it
