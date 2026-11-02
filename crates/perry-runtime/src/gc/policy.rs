@@ -1617,7 +1617,6 @@ fn defer_old_reclaim_to_precise_safepoint() -> bool {
 /// the conservative scan. Out of line and cold, so the trigger evaluation every
 /// allocation slow path runs keeps its pre-#11873 shape.
 #[cold]
-#[optimize(size)]
 #[inline(never)]
 fn old_reclaim_at_allocation_point() {
     if gc_moving_loop_polls_enabled() && defer_old_reclaim_to_precise_safepoint() {

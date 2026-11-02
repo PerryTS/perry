@@ -1228,7 +1228,6 @@ impl ShapeTable {
     }
 
     #[cold]
-    #[optimize(size)]
     #[inline(never)]
     fn seed_function_shapes(&self) {
         let mut inner = self.inner.borrow_mut();

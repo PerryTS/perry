@@ -358,7 +358,6 @@ pub(crate) unsafe fn fixed_generator_state_of_object(
 /// The `[[GeneratorState]]` of an instance off its birth layout: own keys or
 /// integrity transitions keep the brand and the private slot.
 #[cold]
-#[optimize(size)]
 #[inline(never)]
 unsafe fn transitioned_generator_state_bits(obj: *const ObjectHeader) -> Option<u64> {
     if !crate::object::shapes::object_has_brand(obj, GENERATOR_STATE_BRAND) {
@@ -482,7 +481,6 @@ unsafe fn async_or_transitioned_record_bits(
 
 /// [`record_of_record_held`] off both birth layouts: the brand names the kind.
 #[cold]
-#[optimize(size)]
 #[inline(never)]
 unsafe fn transitioned_record_held_bits(obj: *const ObjectHeader) -> Option<(u64, bool)> {
     if let Some(bits) = transitioned_generator_state_bits(obj) {

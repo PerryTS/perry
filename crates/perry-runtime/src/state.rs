@@ -128,7 +128,6 @@ pub(crate) fn state() -> &'static RuntimeState {
 }
 
 #[cold]
-#[optimize(size)]
 #[inline(never)]
 fn init_state() -> &'static RuntimeState {
     let raw = Box::into_raw(RuntimeState::new_boxed());

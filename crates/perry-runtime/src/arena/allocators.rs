@@ -154,7 +154,6 @@ fn arena_alloc_no_collect(size: usize, align: usize) -> *mut u8 {
 // of every no-collection caller's hot nursery bump. This retains the same
 // allocation contract, accounting and sampling behavior on a refusal.
 #[cold]
-#[optimize(size)]
 #[inline(never)]
 fn arena_alloc_no_collect_slow(size: usize, align: usize) -> *mut u8 {
     unsafe {
@@ -590,7 +589,6 @@ pub(crate) unsafe fn arena_alloc_gc_object_word_offering(
 }
 
 #[cold]
-#[optimize(size)]
 #[inline(never)]
 unsafe fn arena_alloc_gc_slow_offering(
     size: usize,

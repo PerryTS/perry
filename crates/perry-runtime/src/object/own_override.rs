@@ -600,7 +600,6 @@ unsafe fn push_patched_proto(
 /// declined: forwarded, carrying named properties or descriptors, sealed,
 /// frozen, or not an ordinary array at all.
 #[cold]
-#[optimize(size)]
 #[inline(never)]
 unsafe fn push_or_own_declined(
     arr: *mut crate::array::ArrayHeader,

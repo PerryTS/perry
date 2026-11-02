@@ -70,7 +70,6 @@ impl RuntimeHandleStack {
     }
 
     #[cold]
-    #[optimize(size)]
     #[inline(never)]
     fn grow(&self) {
         // Register the owner before allocating. During late TLS teardown this

@@ -309,7 +309,6 @@ pub(crate) unsafe fn store_proven_own_slot(
 }
 
 #[cold]
-#[optimize(size)]
 #[inline(never)]
 unsafe fn store_proven_own_slot_slow(
     obj: *mut ObjectHeader,

@@ -170,7 +170,6 @@ pub(crate) unsafe fn run_function_intrinsic(
 /// constructor goes to the class arm; anything else back to the tower. Out of
 /// line so the inlined arm stays small.
 #[cold]
-#[optimize(size)]
 #[inline(never)]
 unsafe fn function_shape_decline(
     object: f64,

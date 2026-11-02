@@ -118,7 +118,6 @@ pub(crate) unsafe fn constfn_store_info(value_bits: u64) -> Option<u64> {
 /// lane `slot`. Deprecate the lane on the carried shape and restamp `obj` to
 /// the normalized successor. The caller writes the value afterwards.
 #[cold]
-#[optimize(size)]
 #[inline(never)]
 pub(crate) unsafe fn object_store_generalize(obj: *mut ObjectHeader, slot: u32) {
     let id = object_shape_stamp(obj);

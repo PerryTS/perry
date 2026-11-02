@@ -265,7 +265,6 @@ pub(super) fn mark_image_roots(valid_ptrs: &ValidPointerSet, minor_only: bool) -
 /// child is copied and the slot rewritten; nothing is re-remembered (the cell
 /// stays in this set). Returns the number of slots that changed.
 #[cold]
-#[optimize(size)]
 #[inline(never)]
 pub(super) unsafe fn visit_image_roots_copying<const DIAGNOSTICS: bool>(
     collector: &mut CopyingNurseryCollector,
@@ -295,7 +294,6 @@ pub(super) unsafe fn visit_image_roots_copying<const DIAGNOSTICS: bool>(
 
 /// The copying minor's pinned-young preflight over the same slots.
 #[cold]
-#[optimize(size)]
 #[inline(never)]
 pub(super) unsafe fn preflight_image_roots(checker: &mut CopyingNurseryPreflight) {
     for header in image_remembered_headers() {

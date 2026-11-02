@@ -15,7 +15,6 @@ use std::sync::atomic::Ordering;
 // Keep prototype misses out of the ordinary runtime element-read body too.
 // Inlining the walk preparation adds index saves to dense reads.
 #[cold]
-#[optimize(size)]
 #[inline(never)]
 pub(super) unsafe fn array_oob_prototype_get(receiver: usize, index: u32) -> f64 {
     array_miss_index_get(receiver as *const ArrayHeader, index)
