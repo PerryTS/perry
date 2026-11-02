@@ -278,19 +278,6 @@ pub fn endpoint(owner: &SocketOwner, remote: bool) -> SocketResult<SocketAddr> {
         .as_socket()
         .ok_or(ErrorCode::Unknown.into())
 }
-pub fn disconnect(s: &Socket) -> SocketResult<()> {
-    let storage = socket2::SockAddrStorage::zeroed();
-    let len = storage.size_of();
-    // SAFETY: zeroed storage has AF_UNSPEC on all supported native platforms.
-    // The full initialized storage length is supplied to connect.
-    let address = unsafe { socket2::SockAddr::new(storage, len) };
-    match s.connect(&address) {
-        #[cfg(target_os = "macos")]
-        Err(e) if matches!(e.raw_os_error(), Some(libc::EINVAL | libc::EAFNOSUPPORT)) => Ok(()),
-        result => Ok(result?),
-    }
-}
-
 pub fn keepalive_parameter(
     socket: &Socket,
     field: usize,

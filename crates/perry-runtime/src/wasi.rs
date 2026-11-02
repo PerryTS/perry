@@ -556,16 +556,9 @@ fn emit_wasi_warning() {
 }
 
 pub(crate) fn emit_wasi_static_warning() {
-    if WASI_WARNING_EMITTED
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_ok()
-    {
-        eprintln!(
-            "(node:{}) ExperimentalWarning: WASI is an experimental feature and might change at any time",
-            crate::os::current_process_id()
-        );
-        eprintln!("(Use `node --trace-warnings ...` to show where the warning was created)");
-    }
+    // Namespace imports and constructor imports share the once-only queued
+    // process warning, including delivery to process.on("warning") listeners.
+    js_wasi_emit_warning();
 }
 
 #[no_mangle]

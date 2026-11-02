@@ -10,6 +10,7 @@ use super::{
     State,
 };
 use perry_abi::component_io as abi;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use wasmtime::component::Resource;
 
@@ -23,6 +24,7 @@ pub struct UdpSocket {
     family: IpAddressFamily,
     phase: Phase,
     network: crate::Network,
+    remote: Option<SocketAddr>,
 }
 pub enum Receive {
     Idle,
@@ -32,12 +34,14 @@ pub enum Receive {
 pub struct Incoming {
     socket: Arc<Socket>,
     network: crate::Network,
+    remote: Option<SocketAddr>,
     pub state: Receive,
 }
 pub struct Outgoing {
     socket: Arc<Socket>,
     network: crate::Network,
     family: IpAddressFamily,
+    remote: Option<SocketAddr>,
     pub pending: Option<Operation>,
     permit: u64,
 }
@@ -75,7 +79,9 @@ impl Incoming {
                 Ok(c) if c.error.kind != 0 => Err(completion_error(c.error)),
                 Ok(c) => {
                     let from = from_native(c.address);
-                    if !permitted(&self.network, from) {
+                    if !permitted(&self.network, from)
+                        || self.remote.is_some_and(|remote| remote != from)
+                    {
                         continue;
                     }
                     Ok(udp::IncomingDatagram {
@@ -126,6 +132,7 @@ impl udp_create_socket::Host for State {
             family,
             phase: Phase::Unbound,
             network: self.options.network.clone(),
+            remote: None,
         })?)
     }
 }
@@ -182,20 +189,13 @@ impl udp::HostUdpSocket for State {
             validate(a, s.family, true)?;
             permit(&s.network, a)?;
         }
-        let owned = s.owner.owned()?;
-        if let Some(a) = remote {
-            match owned.connect(&a.into()) {
-                #[cfg(target_os = "linux")]
-                Err(e) if e.raw_os_error() == Some(libc::EINVAL) => {
-                    disconnect(owned)?;
-                    owned.connect(&a.into())?;
-                }
-                result => result?,
-            }
-        } else if owned.peer_addr().is_ok() {
-            disconnect(owned)?;
-        }
+        // Keep the WASI association in the streams. Turnloop's UDP operation
+        // sends one whole datagram with sendto; BSD rejects that operation on
+        // a kernel-connected socket (EISCONN). A stream write is unsuitable:
+        // the driver rejects it for UDP and it would elide empty datagrams.
+        // Matching the associated peer on receive preserves connected policy.
         let native = s.owner.drive(self.io)?;
+        s.remote = remote;
         let network = s.network.clone();
         let family = s.family;
         Ok((
@@ -203,6 +203,7 @@ impl udp::HostUdpSocket for State {
                 Incoming {
                     socket: native.clone(),
                     network: network.clone(),
+                    remote,
                     state: Receive::Idle,
                 },
                 &socket,
@@ -212,6 +213,7 @@ impl udp::HostUdpSocket for State {
                     socket: native,
                     network,
                     family,
+                    remote,
                     pending: None,
                     permit: 0,
                 },
@@ -228,9 +230,7 @@ impl udp::HostUdpSocket for State {
     }
     fn remote_address(&mut self, socket: Resource<UdpSocket>) -> SocketResult<IpSocketAddress> {
         let s = self.table.get(&socket)?;
-        endpoint(&s.owner, true)
-            .map(encode)
-            .map_err(|_| ErrorCode::InvalidState.into())
+        s.remote.map(encode).ok_or(ErrorCode::InvalidState.into())
     }
     fn address_family(&mut self, socket: Resource<UdpSocket>) -> wasmtime::Result<IpAddressFamily> {
         Ok(self.table.get(&socket)?.family)
@@ -343,10 +343,7 @@ impl udp::HostOutgoingDatagramStream for State {
         }
         s.permit = 0;
         let datagram = datagrams.into_iter().next().unwrap();
-        let connected = query(&s.socket, |s| s.peer_addr())
-            .ok()
-            .and_then(|a| a.as_socket());
-        let remote = match (datagram.remote_address.map(decode), connected) {
+        let remote = match (datagram.remote_address.map(decode), s.remote) {
             (Some(a), Some(b)) if a != b => return Err(ErrorCode::InvalidArgument.into()),
             (Some(a), _) | (_, Some(a)) => a,
             _ => return Err(ErrorCode::InvalidArgument.into()),
@@ -414,6 +411,7 @@ mod tests {
         let peer = StdUdp::bind("127.0.0.1:0").unwrap();
         peer.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
         let denied = StdUdp::bind("127.0.0.1:0").unwrap();
+        let other = StdUdp::bind("127.0.0.1:0").unwrap();
         let mut s = State::new(&crate::WasiOptions {
             network: crate::Network {
                 udp: true,
@@ -425,6 +423,10 @@ mod tests {
                     crate::Address {
                         address: "127.0.0.1".parse().unwrap(),
                         port: Some(peer.local_addr().unwrap().port()),
+                    },
+                    crate::Address {
+                        address: "127.0.0.1".parse().unwrap(),
+                        port: Some(other.local_addr().unwrap().port()),
                     },
                 ],
                 ..Default::default()
@@ -511,8 +513,46 @@ mod tests {
             decode(U::remote_address(&mut s, borrow(&socket)).unwrap()),
             peer.local_addr().unwrap()
         );
+        assert_eq!(O::check_send(&mut s, borrow(&output)).unwrap(), 1);
+        assert!(matches!(
+            O::send(
+                &mut s,
+                borrow(&output),
+                vec![udp::OutgoingDatagram {
+                    data: vec![1],
+                    remote_address: Some(encode(other.local_addr().unwrap()))
+                }]
+            ),
+            Err(SocketError::Code(ErrorCode::InvalidArgument))
+        ));
+        // A different granted endpoint still cannot enter an associated stream.
+        other.send_to(b"wrong-associated-peer", address).unwrap();
+        peer.send_to(b"associated-peer", address).unwrap();
+        let readable = I::subscribe(&mut s, borrow(&input)).unwrap();
+        wait(&mut s, &readable);
+        let packets = I::receive(&mut s, borrow(&input), 16).unwrap();
+        assert_eq!(packets.len(), 1);
+        assert_eq!(packets[0].data, b"associated-peer");
+        H::drop(&mut s, readable).unwrap();
+        // Empty packets must be sent, rather than treated as a completed write.
+        assert_eq!(O::check_send(&mut s, borrow(&output)).unwrap(), 1);
+        assert_eq!(
+            O::send(
+                &mut s,
+                borrow(&output),
+                vec![udp::OutgoingDatagram {
+                    data: vec![],
+                    remote_address: None,
+                }]
+            )
+            .unwrap(),
+            1
+        );
         I::drop(&mut s, input).unwrap();
         O::drop(&mut s, output).unwrap();
+        let (n, source) = peer.recv_from(&mut bytes).unwrap();
+        assert_eq!(n, 0);
+        assert_eq!(source, address);
         let (input, output) = U::stream(&mut s, borrow(&socket), None).unwrap();
         assert!(matches!(
             U::remote_address(&mut s, borrow(&socket)),
