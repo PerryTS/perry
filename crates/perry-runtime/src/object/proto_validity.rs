@@ -298,6 +298,11 @@ unsafe fn ensure_meta_for_mark(obj: usize, flag: u64) -> Option<*mut crate::obje
     if !meta.is_null() && (*meta).flags & flag != 0 {
         return Some(meta);
     }
+    // SNAP census: the mark (an empty record, its flag, the private shape
+    // lineage) classifies an object the program already holds; no program
+    // operation observes it (design §2.10.11).
+    #[cfg(perry_gc_instruments)]
+    let _census = crate::snap_census::representation();
     let scope = crate::gc::RuntimeHandleScope::new();
     let handle = scope.root_raw_mut_ptr(object);
     let (meta, object) = handle

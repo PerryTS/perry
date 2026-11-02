@@ -192,6 +192,9 @@ pub(super) fn compile_module_entry(
         }
         if std::env::var_os("PERRY_SNAP_CENSUS").is_some_and(|v| !v.is_empty()) {
             llmod.declare_function("js_snap_entry_body", VOID, &[]);
+            if entry_in_init {
+                llmod.declare_function("js_snap_entry_module", VOID, &[]);
+            }
         }
         // Issue #753: emit a no-op `<entry_prefix>__init` stub so the
         // dispatch site in some other module that does `await
@@ -1118,6 +1121,10 @@ pub(super) fn compile_module_entry(
             buffer_alias_base,
         };
         if entry_in_init {
+            // SNAP census: the entry module's evaluation is the entry body.
+            if std::env::var_os("PERRY_SNAP_CENSUS").is_some_and(|v| !v.is_empty()) {
+                ctx.block().call_void("js_snap_entry_module", &[]);
+            }
             ctx.block()
                 .call_void(&format!("{}__init", module_prefix), &[]);
         } else {

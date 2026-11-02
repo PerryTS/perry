@@ -104,9 +104,49 @@ pub(crate) fn dyn_code(kind: u8) {
 #[inline(always)]
 pub(crate) fn holds_collection() -> bool {
     #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
-    return runner::on();
+    return runner::holds_collection();
     #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
     false
+}
+
+/// `object_meta_ensure` is about to store a fresh, all-zero record into the
+/// owner's meta word `slot` (design §2.10.11: an empty install is
+/// representation). Instrumented builds only.
+#[cfg(perry_gc_instruments)]
+#[inline(always)]
+pub(crate) fn meta_install(slot: usize) {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    if runner::on() {
+        runner::meta_install(slot);
+    }
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    let _ = slot;
+}
+
+/// The record `meta` now hangs off the owner's meta word `slot`: its words
+/// are the owner's. Instrumented builds only.
+#[cfg(perry_gc_instruments)]
+#[inline(always)]
+pub(crate) fn meta_installed(slot: usize, meta: usize) {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    if runner::on() {
+        runner::meta_installed(slot, meta);
+    }
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    let _ = (slot, meta);
+}
+
+/// A classification mark (`ensure_meta_for_mark`) runs while this lives:
+/// representation, not program state (design §2.10.11). Instrumented
+/// builds only.
+#[cfg(perry_gc_instruments)]
+#[inline(always)]
+pub(crate) fn representation() -> Bookkeeping {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    if runner::on() && runner::representation(1) {
+        return Bookkeeping { active: true };
+    }
+    Bookkeeping { active: false }
 }
 
 /// `cells` (an object's metadata record, its overflow table) now belong to
@@ -361,6 +401,19 @@ impl Drop for RuntimeScope {
 /// Codegen calls this where the entry module's own body starts (after its
 /// eager imports), in instrumented compiles only (`PERRY_SNAP_CENSUS` set
 /// while compiling). The census boundary of an ESM entry.
+/// The program evaluates its entry as a module (it has a worker): the
+/// evaluation that starts next is the entry body (design §2.3). Emitted by
+/// census compiles only, right before the entry module's `__init`.
+#[cfg(perry_gc_instruments)]
+#[no_mangle]
+pub extern "C" fn js_snap_entry_module() {
+    crate::effect!(pure);
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    if runner::on() || runner::start_if_requested() {
+        runner::entry_module();
+    }
+}
+
 #[cfg(perry_gc_instruments)]
 #[no_mangle]
 pub extern "C" fn js_snap_entry_body() {

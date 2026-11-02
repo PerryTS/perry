@@ -63,6 +63,11 @@ pub(super) fn on() -> bool {
     ANCHOR.on.load(Relaxed)
 }
 
+/// Collection is held until the boundary (not in the weights run).
+pub(super) fn holds_collection() -> bool {
+    on() && !state().noprotect
+}
+
 fn state() -> &'static mut State {
     // SAFETY: set once at start, never freed; the runner is single-threaded
     // (module evaluation and jobs run on the main thread; a fault on another
@@ -373,6 +378,9 @@ struct Init {
     evals: u32,
     /// The check run skipped this member's body parts.
     skipped: bool,
+    /// The entry module's own evaluation (a program with a worker evaluates
+    /// its entry as a module): the entry body. The check run runs it.
+    entry_module: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -478,6 +486,20 @@ struct State {
     reborn: u64,
     silent_stores: u64,
     noprotect: bool,
+    /// The meta rule (design §2.10.11; `PERRY_SNAP_META=0` turns it off):
+    /// installing an empty meta record and marking an object a prototype
+    /// are representation, and a meta record's words are its owner's.
+    meta_rule: bool,
+    /// The owner's meta word whose (empty) record is being stored now.
+    meta_slot: usize,
+    /// Meta installs seen; records of pre-existing owners added to rule 4's
+    /// pre-existing set; classification marks (representation scopes).
+    meta_installs: u64,
+    meta_owned: u64,
+    marks: u64,
+    /// `js_snap_entry_module`: the next evaluation is the entry module's own
+    /// (its body is the entry body, design §2.3).
+    entry_module_next: bool,
     /// Global root slots on no tracked page (the thread pointer's page,
     /// or not a binding: a root slot elsewhere): not watched.
     untracked_slots: u64,
@@ -662,6 +684,12 @@ unsafe fn start(out: String) {
         reborn: 0,
         silent_stores: 0,
         noprotect: std::env::var("PERRY_SNAP_NOPROTECT").is_ok_and(|v| v == "1"),
+        meta_rule: !std::env::var("PERRY_SNAP_META").is_ok_and(|v| v == "0"),
+        meta_slot: 0,
+        meta_installs: 0,
+        meta_owned: 0,
+        marks: 0,
+        entry_module_next: false,
         untracked_slots: 0,
         top_mode: std::env::var("PERRY_SNAP_MODE").is_ok_and(|v| v == "top"),
         pre_bits: map_zeroed::<u64>(((res_hi - res_lo) / 8).div_ceil(64).max(1)),
@@ -742,8 +770,11 @@ unsafe fn start(out: String) {
     ANCHOR.state.store(&mut *st as *mut State, Relaxed);
     std::mem::forget(st);
     let st = state();
-    // Nothing moves until the boundary.
-    crate::gc::gc_suppress();
+    // Nothing moves until the boundary. The weights run (no protection)
+    // collects as production does: its Ir per init includes the collections.
+    if !st.noprotect {
+        crate::gc::gc_suppress();
+    }
     // The objects that exist now are the runtime's (init 0).
     crate::arena::arena_walk_objects_with_block_index(|header, _| {
         let size = (*(header as *const crate::gc::GcHeader)).size as usize;
@@ -851,6 +882,7 @@ fn blank_init(addr: usize, parent: u32, reach: Reach) -> Init {
         in_d: false,
         faults: 0,
         skipped: false,
+        entry_module: false,
     }
 }
 
@@ -986,7 +1018,12 @@ pub(super) fn init_enter(addr: usize) {
         }
     };
     let edge = st.require_edge.take() == Some(parent_id);
-    let reach = if st.require_depth > 0 || edge {
+    let entry_module = std::mem::take(&mut st.entry_module_next)
+        && st.entry_init != 0
+        && parent_id == st.entry_init;
+    let reach = if entry_module {
+        Reach::EntryEager
+    } else if st.require_depth > 0 || edge {
         Reach::Require
     } else if !parent_in_body {
         if parent.is_none() {
@@ -1004,7 +1041,18 @@ pub(super) fn init_enter(addr: usize) {
     init.enter_seq = st.seq;
     init.open = true;
     let parent_dynamic = parent_id != 0 && st.inits[parent_id as usize].dynamic;
-    init.dynamic = reach == Reach::DynImport || parent_dynamic;
+    init.dynamic = !entry_module && (reach == Reach::DynImport || parent_dynamic);
+    if entry_module {
+        // The entry module's evaluation is the entry body (§2.10.7): in D,
+        // reached at startup in every run, never part of the import() subgraph.
+        init.entry_module = true;
+        init.in_d = true;
+        init.host = Some(Hit {
+            class: Effect::HostRead as u8,
+            what: "entry_body",
+            pcs: [0; 6],
+        });
+    }
     if init.dynamic && !st.q7 {
         // Without write containment an init of the `import()` subgraph has
         // no proof of its own: it runs at the import, after the entry body.
@@ -1124,6 +1172,61 @@ pub(super) fn entry_body() {
         });
         set_mode_for_top(st);
     }
+}
+
+/// The entry module's evaluation is next (`js_snap_entry_module`).
+pub(super) fn entry_module() {
+    state().entry_module_next = true;
+}
+
+/// `object_meta_ensure` stores a fresh (all-zero) record into the owner's
+/// meta word at `slot`: an empty meta behaves as no meta, so the store is
+/// representation, like the string alias hint (design §2.10.11).
+pub(super) fn meta_install(slot: usize) {
+    let st = state();
+    if st.meta_rule {
+        st.meta_slot = slot & !7;
+    }
+}
+
+/// The record `meta` now hangs off the owner's meta word `slot`. What is
+/// written into it later is a write of the owner: under rule 4 the record
+/// of a pre-existing owner is pre-existing too.
+pub(super) fn meta_installed(slot: usize, meta: usize) {
+    let st = state();
+    st.meta_slot = 0;
+    st.meta_installs += 1;
+    if !st.meta_rule || !st.rule4_armed || !pre_existing(st, slot) {
+        return;
+    }
+    let Some(h) = object_start(st, meta) else { return };
+    let Some(size) = st.sizes.get(h as u64) else { return };
+    let e = h + size as usize;
+    let i = st.pre_sorted.partition_point(|&(a, _)| a <= h);
+    st.pre_sorted.insert(i, (h, e));
+    st.meta_owned += 1;
+    let mut p = h & !(PAGE - 1);
+    while p < e {
+        flag_page(st, p, PF_PRE);
+        unsafe { libc::mprotect(p as *mut _, PAGE, policy(st, p)) };
+        p += PAGE;
+    }
+}
+
+/// A classification mark (`ensure_meta_for_mark`: the prototype or exotic
+/// read receiver flag, its empty record, the private shape lineage) starts
+/// (`delta` 1) or ends (-1): representation, not program state. Returns
+/// whether the scope is active (the meta rule is on).
+pub(super) fn representation(delta: i32) -> bool {
+    let st = state();
+    if !st.meta_rule {
+        return false;
+    }
+    if delta > 0 {
+        st.marks += 1;
+    }
+    st.bookkeeping += delta;
+    true
 }
 
 pub(super) fn attached(obj: usize, cells: &[usize]) {
@@ -1329,6 +1432,11 @@ fn page_flags(st: &State, addr: usize) -> Option<*mut u8> {
 // ---------------------------------------------------------------------------
 
 fn policy(st: &State, page: usize) -> i32 {
+    // The weights run (`PERRY_SNAP_NOPROTECT=1`) takes no fault: its Ir per
+    // init is the program's, not the census's.
+    if st.noprotect {
+        return libc::PROT_READ | libc::PROT_WRITE;
+    }
     let Some(f) = page_flags(st, page) else {
         return libc::PROT_READ | libc::PROT_WRITE;
     };
@@ -1786,6 +1894,10 @@ fn note_access(st: &mut State, word: usize, write: bool, pc: usize) {
         st.faults_ignored += 1;
         return;
     }
+    if write && word == st.meta_slot {
+        st.faults_ignored += 1;
+        return;
+    }
     if st.env_words.len > 0 {
         if let Some(v) = st.env_words.get(word as u64) {
             env_word_access(st, v, word, write, pc);
@@ -2206,6 +2318,11 @@ fn write_report(st: &mut State) {
         st.host_outside,
         st.t0.elapsed().as_millis(),
         st.perf_fd >= 0,
+    );
+    let _ = writeln!(
+        f,
+        "#meta\trule={}\tinstalls={}\towned={}\tmarks={}",
+        st.meta_rule as u8, st.meta_installs, st.meta_owned, st.marks
     );
     let _ = writeln!(
         f,
@@ -2732,7 +2849,7 @@ pub(super) fn skip_body() -> bool {
     match st.frames.last() {
         Some(f) if f.kind == FrameKind::Init => {
             let i = &mut st.inits[f.init as usize];
-            if st.skip.binary_search(&i.addr).is_ok() {
+            if !i.entry_module && st.skip.binary_search(&i.addr).is_ok() {
                 i.skipped = true;
                 return true;
             }
@@ -2939,7 +3056,7 @@ fn write_env_report(st: &State, f: &mut std::fs::File, rank: &[u64]) {
     }
     if !st.skip.is_empty() {
         for (id, i) in st.inits.iter().enumerate().skip(1) {
-            if i.in_d && !i.skipped && i.addr != ENTRY_BODY_ADDR {
+            if i.in_d && !i.skipped && i.addr != ENTRY_BODY_ADDR && !i.entry_module {
                 let _ = writeln!(f, "#checkfail\tjoined_d\t{id}\t{:x}", i.addr);
             }
         }
@@ -2949,7 +3066,8 @@ fn write_env_report(st: &State, f: &mut std::fs::File, rank: &[u64]) {
         if let Ok(mut d) = std::fs::File::create(format!("{}.dslots", st.out)) {
             for (k, &slot) in st.globals_log.iter().enumerate() {
                 let owner = st.slot_owner.get(k).copied().unwrap_or(0);
-                if owner != 0 && in_d(owner) {
+                // The entry module runs in the check run: its slots are not poisoned.
+                if owner != 0 && in_d(owner) && !st.inits[owner as usize].entry_module {
                     let _ = writeln!(d, "{slot:x}\t{owner}");
                 }
             }
