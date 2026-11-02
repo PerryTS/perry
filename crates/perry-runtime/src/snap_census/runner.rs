@@ -451,6 +451,10 @@ struct State {
     transparent_hits: u64,
     entry_body_seq: u32,
     require_depth: i32,
+    /// A literal CommonJS require edge is calling its target's init guard
+    /// from this frame's init (`js_snap_require_edge`): the next evaluation
+    /// that frame starts was reached by `require`, not by `import()`.
+    require_edge: Option<u32>,
     bookkeeping: i32,
     w: WordSet,
     r: WordSet,
@@ -642,6 +646,7 @@ unsafe fn start(out: String) {
         transparent_hits: 0,
         entry_body_seq: 0,
         require_depth: 0,
+        require_edge: None,
         bookkeeping: 0,
         w: WordSet::new(28),
         r: WordSet::new(28),
@@ -980,7 +985,8 @@ pub(super) fn init_enter(addr: usize) {
                 || st.inits[f.init as usize].addr == ENTRY_BODY_ADDR
         }
     };
-    let reach = if st.require_depth > 0 {
+    let edge = st.require_edge.take() == Some(parent_id);
+    let reach = if st.require_depth > 0 || edge {
         Reach::Require
     } else if !parent_in_body {
         if parent.is_none() {
@@ -1057,6 +1063,14 @@ pub(super) fn init_part() {
 
 pub(super) fn require_depth(delta: i32) {
     state().require_depth += delta;
+}
+
+/// `js_snap_require_edge`: 1 before a literal CommonJS require edge calls its
+/// target's init guard, 0 after it (the target was already evaluated, so no
+/// evaluation took the mark).
+pub(super) fn require_edge(on: bool) {
+    let st = state();
+    st.require_edge = on.then(|| top_init(st));
 }
 
 pub(super) fn bookkeeping_depth(delta: i32) {

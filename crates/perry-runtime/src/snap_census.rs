@@ -443,6 +443,22 @@ pub extern "C" fn js_snap_env_site(kind: i32) {
     let _ = kind;
 }
 
+/// Codegen calls this around a literal CommonJS require edge's init-guard
+/// call, in instrumented compiles only (`cjsRequireEdge`): `on` 1 before, 0
+/// after. The evaluation the guard starts was reached by `require` (a static
+/// edge), not by `import()`: it is no member of a dynamic subgraph (design
+/// §2.10.7). A missing mark costs precision, never soundness.
+#[no_mangle]
+pub extern "C" fn js_snap_require_edge(on: i32) {
+    crate::effect!(pure);
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    if runner::on() {
+        runner::require_edge(on != 0);
+    }
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    let _ = on;
+}
+
 /// The check run (`PERRY_SNAP_SKIP=<D file>`): true when the evaluation now
 /// running is a member of D, whose body parts are skipped.
 #[inline(always)]
