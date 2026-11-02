@@ -53,6 +53,26 @@ git switch -c "release/v$VERSION"
 git push -u origin "release/v$VERSION"
 ```
 
+### Fold the release notes onto the release branch
+
+A release's notes come from the release's own archive, `changelog/v$VERSION/`,
+not from the whole pending queue. Fold the queue there and land it on the
+release branch, so the archive is part of the reviewed and tagged commit rather
+than a cleanup owed afterwards (that shape never ran once: see
+[changelog.d/README.md](../../../changelog.d/README.md)):
+
+```bash
+./scripts/cut_release_notes.sh --fold "v$VERSION" --dry-run   # what would move
+./scripts/cut_release_notes.sh --fold "v$VERSION"             # moves + commits
+git push                                                     # on release/v$VERSION
+python3 scripts/check_changelog_archive.py                   # archive is well formed
+```
+
+`--notes-only --version "v$VERSION"` (what `release-packages.yml` calls) then
+reads that folder, so re-running the release job produces the same notes. If the
+fold is still missing at tag time the release cuts from the pending queue anyway
+and the job logs a warning that names the owed fold.
+
 Run the two exact-SHA CI gates on that pinned branch and wait for both to pass:
 
 ```bash
