@@ -119,3 +119,23 @@ fn a_guard_without_a_loop_nest_is_not_hinted() {
     );
     assert_eq!(expect_hints(&ir), 0, "no hint without a nested loop:\n{ir}");
 }
+
+/// A constant condition names no likely side: `if (true)` around a nest in a
+/// loop is lowered as an unconditional branch and carries no hint.
+#[test]
+fn a_constant_guard_is_not_hinted() {
+    let ir = function_ir(
+        "function constGuard(n: number): number {
+           let c = 0;
+           for (let i = 0; i < n; i++) {
+             if (true) {
+               for (let j = 0; j < 4; j++) c += j;
+             }
+           }
+           return c;
+         }
+         console.log(constGuard(10));",
+        "constGuard",
+    );
+    assert_eq!(expect_hints(&ir), 0, "a constant guard was hinted:\n{ir}");
+}

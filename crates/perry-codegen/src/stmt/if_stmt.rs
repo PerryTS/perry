@@ -178,7 +178,10 @@ pub(crate) fn lower_if(
     // the skip is the cheap one that runs on every iteration that bypasses the
     // nest. Say so, so the skip is laid out as the fall-through: entering the
     // nest then costs one taken branch, the skip saves one each time.
+    // A condition that is a compile-time constant has no likely side to name.
     let i1 = if else_branch.is_none_or(|stmts| stmts.is_empty())
+        && i1 != "true"
+        && i1 != "false"
         && ctx
             .loop_targets
             .iter()
