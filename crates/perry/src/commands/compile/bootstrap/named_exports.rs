@@ -1,10 +1,11 @@
+use super::super::cjs_wrap::{is_commonjs, module_exports_is_opaque};
 use super::CompilationContext;
 use anyhow::{bail, Result};
 use perry_hir::walker::walk_expr_children;
 use perry_hir::{
     Class, Decorator, Export, Expr, Function, ImportSpecifier, Module, ModuleKind, Stmt,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -204,6 +205,68 @@ fn package_name(source: &str) -> &str {
 /// available, instead of inventing a perry_fn symbol that fails in the linker.
 pub(super) fn enforce(ctx: &mut CompilationContext) -> Result<()> {
     enforce_resolved_bare_imports(ctx)?;
+    for (importer, source, target, name, local) in static_named_edges(ctx) {
+        if availability(ctx, Path::new(&target), &name, &mut HashSet::new()) == Availability::Absent
+        {
+            // Ambient native-library declarations have no executable HIR export.
+            // The later import router binds manifest symbols (including ergonomic
+            // aliases), rejects ambiguous aliases, and prefers real TS wrappers.
+            // Let that router validate only names actually backed by this import's
+            // manifest; unrelated missing exports must still fail here.
+            let manifest_backed = ctx.native_libraries.iter().any(|library| {
+                library.module == source
+                    && library.functions.iter().any(|function| {
+                        function.name == name
+                            || super::super::resolve::ergonomic_export_alias(
+                                &library.module,
+                                &function.name,
+                            )
+                            .as_deref()
+                                == Some(name.as_str())
+                    })
+            });
+            if manifest_backed {
+                continue;
+            }
+            bail!(
+                "The requested module '{}' does not provide an export named '{}' \
+                 (imported as '{}' in {}). Resolved module: {}. \
+                 For CommonJS properties not exposed as named exports, use a default import and read the property from it.",
+                source, name, local, importer.display(), target
+            );
+        }
+    }
+    Ok(())
+}
+
+/// The program-wide names importers ask of a CommonJS module whose
+/// `module.exports` value its source does not spell out, and that the
+/// module does not otherwise export (see
+/// `CompilationContext::cjs_demanded_exports`). Grows the current set.
+pub(super) fn opaque_cjs_demand(
+    ctx: &mut CompilationContext,
+) -> BTreeMap<PathBuf, BTreeSet<String>> {
+    let mut demand = ctx.cjs_demanded_exports.clone();
+    let mut opaque: HashMap<PathBuf, bool> = HashMap::new();
+    for (_, _, target, name, _) in static_named_edges(ctx) {
+        let target = PathBuf::from(target);
+        if availability(ctx, &target, &name, &mut HashSet::new()) != Availability::Absent {
+            continue;
+        }
+        let is_opaque = *opaque.entry(target.clone()).or_insert_with(|| {
+            std::fs::read_to_string(&target)
+                .is_ok_and(|source| is_commonjs(&source) && module_exports_is_opaque(&source))
+        });
+        if is_opaque {
+            demand.entry(target).or_default().insert(name);
+        }
+    }
+    demand
+}
+
+/// Every value-bearing static named import between compiled modules, sorted:
+/// `(importer, specifier, resolved target, imported name, local name)`.
+fn static_named_edges(ctx: &CompilationContext) -> Vec<(PathBuf, String, String, String, String)> {
     let mut edges = Vec::new();
     let mut value_refs: HashMap<PathBuf, HashSet<String>> = HashMap::new();
     for (importer, module) in &ctx.native_modules {
@@ -242,38 +305,7 @@ pub(super) fn enforce(ctx: &mut CompilationContext) -> Result<()> {
         }
     }
     edges.sort();
-    for (importer, source, target, name, local) in edges {
-        if availability(ctx, Path::new(&target), &name, &mut HashSet::new()) == Availability::Absent
-        {
-            // Ambient native-library declarations have no executable HIR export.
-            // The later import router binds manifest symbols (including ergonomic
-            // aliases), rejects ambiguous aliases, and prefers real TS wrappers.
-            // Let that router validate only names actually backed by this import's
-            // manifest; unrelated missing exports must still fail here.
-            let manifest_backed = ctx.native_libraries.iter().any(|library| {
-                library.module == source
-                    && library.functions.iter().any(|function| {
-                        function.name == name
-                            || super::super::resolve::ergonomic_export_alias(
-                                &library.module,
-                                &function.name,
-                            )
-                            .as_deref()
-                                == Some(name.as_str())
-                    })
-            });
-            if manifest_backed {
-                continue;
-            }
-            bail!(
-                "The requested module '{}' does not provide an export named '{}' \
-                 (imported as '{}' in {}). Resolved module: {}. \
-                 For CommonJS properties not exposed as named exports, use a default import and read the property from it.",
-                source, name, local, importer.display(), target
-            );
-        }
-    }
-    Ok(())
+    edges
 }
 
 /// Names that `module`'s executable code reads as runtime bindings: imported

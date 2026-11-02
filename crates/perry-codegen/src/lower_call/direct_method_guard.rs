@@ -154,6 +154,18 @@ pub(crate) fn family_method_word(
     if fam.keys.iter().any(|(k, _)| k == property) {
         return None;
     }
+    family_layout_id(ctx, class_id)
+}
+
+/// The i32 layout id of class `class_id`'s family descriptor, loaded from the
+/// descriptor's `layout_id` word (written once at startup, before user code);
+/// `None` without layouts or a family. 0 when the runtime could not register
+/// the layout (then no birth uses it): compare it against 0 before use.
+pub(crate) fn family_layout_id(ctx: &mut FnCtx<'_>, class_id: u32) -> Option<String> {
+    if !crate::layout_desc::layouts_enabled("executable", ctx.target_triple) {
+        return None;
+    }
+    ctx.program_layouts.families.get(&class_id)?;
     let desc = crate::layout_desc::note_family_desc_use(class_id);
     let offset = crate::layout_desc::DESC_LAYOUT_ID_OFFSET.to_string();
     let blk = ctx.block();

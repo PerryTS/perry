@@ -5344,4 +5344,5 @@ perry_watchos_classes_registered	void
 perry_wpfacts_check_call	ptr	f64,i64,i64
 perry_wpfacts_check_call_miss	i32s	ptr,i64
 perry_wpfacts_check_field	i32s	f64,f64,i64,i64,i64,i32s,i32s,i32s,i64
+perry_wpfacts_check_miss	i32s	f64,i64
 setInterval	i64	i64,f64

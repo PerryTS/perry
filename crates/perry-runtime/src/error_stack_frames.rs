@@ -1075,12 +1075,10 @@ mod tests {
     ))]
     #[test]
     fn constructing_an_error_does_not_resolve_its_captured_names() {
-        unsafe {
-            crate::builtins::test_publish_bundle_name(
-                unread_error_probe as *const u8 as usize,
-                b"unreadErrorProbe",
-            );
-        }
+        crate::builtins::test_publish_bundle_name(
+            unread_error_probe as *const u8 as usize,
+            b"unreadErrorProbe",
+        );
         let before = FRAME_RESOLUTION_ATTEMPTS.load(std::sync::atomic::Ordering::SeqCst);
         let error = unread_error_probe();
         let scope = crate::gc::RuntimeHandleScope::new();
@@ -1118,18 +1116,14 @@ mod tests {
         const START: usize = 0x0000_7d10_0010_0000;
         const BEFORE: &[u8] = b"bundleNameBefore";
         const AFTER: &[u8] = b"bundleNameAfter";
-        unsafe {
-            crate::builtins::test_publish_bundle_name(START as *const u8 as usize, BEFORE);
-        }
+        crate::builtins::test_publish_bundle_name(START as *const u8 as usize, BEFORE);
         let mut blob = [0u8; MAX_CAPTURED_FRAMES * PC_CHARS];
         let len = encode_pcs(&[START + 32], &mut blob);
         assert_eq!(
             render_frames(&blob[..len], RENDER_LIMIT).as_deref(),
             Some("    at bundleNameBefore (<anonymous>)")
         );
-        unsafe {
-            crate::builtins::test_publish_bundle_name(START as *const u8 as usize, AFTER);
-        }
+        crate::builtins::test_publish_bundle_name(START as *const u8 as usize, AFTER);
 
         assert_eq!(
             render_frames(&blob[..len], RENDER_LIMIT).as_deref(),
@@ -1178,13 +1172,8 @@ mod tests {
             unsafe { crate::closure::JsFunctionInfo::from_code(THUNK_START as *const u8, 0) },
             &OWNER,
         );
-        unsafe {
-            crate::builtins::test_publish_bundle_name(
-                BUNDLE_START as *const u8 as usize,
-                BUNDLE_NAME,
-            );
-            crate::builtins::register_function_name(&native.info, THUNK_NAME);
-        }
+        crate::builtins::test_publish_bundle_name(BUNDLE_START as *const u8 as usize, BUNDLE_NAME);
+        crate::builtins::register_function_name(&native.info, THUNK_NAME);
         assert_eq!(
             crate::builtins::test_registered_name(&native.info).as_deref(),
             Some("get years"),

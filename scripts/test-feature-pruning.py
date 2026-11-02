@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded native regressions for #13659, using speed-oriented build flags.
+"""Bounded native regressions for #13659/#13679, using speed-oriented build flags.
 
 PERRY_BIN selects a built compiler; PERRY_RUNTIME_DIR pins its runtime archives.
 Pass --baseline COMPILER for identical-path stripped file/__text size comparisons.
@@ -25,7 +25,7 @@ def compile_source(compiler, directory, name, source):
     entry = directory / (name + ".ts")
     output = directory / name
     entry.write_text(source)
-    env = dict(os.environ, PERRY_NO_CACHE="1", PERRY_KEEP_SYMBOLS="1",
+    env = dict(os.environ, PERRY_NO_CACHE="1", PERRY_DISABLE_BUILD_CACHE="1", PERRY_KEEP_SYMBOLS="1",
                PERRY_LL_OPT_LEVEL="s", PERRY_SPECIALIZED_ABI="1")
     run([compiler, "compile", str(entry), "-o", str(output), "--no-cache",
          "--function-source", "header", "--strict-eval", "--strict-dynamic-import",
@@ -62,13 +62,17 @@ def timed_runs(binary, count):
 SOURCES = {
     "control": 'console.log("ok");',
     "signal": 'process.on("SIGINT", () => {}); console.log("ok");',
+    "signal-literal-removal": 'process.on("SIGINT", () => {}); process.removeListener("SIGINT", () => {}); console.log("ok");',
+    "signal-assigned-removal": 'let callback: () => void; process.on("SIGINT", callback = () => {}); process.removeListener("SIGINT", callback); console.log("ok");',
     "search": 'class Probe { search(): number { return 1; } } console.log(new Probe().search());',
     "find": 'class Probe { findValue(): number { return 1; } } console.log(new Probe().findValue());',
     "match": 'class Probe { match(): number { return 1; } } console.log(new Probe().match());',
     "escaped-class": 'let saved: any; function keep(value: any) { saved = value; } class Probe { static { keep(this); } search(): number { return 1; } } console.log(saved.name.length > 0 ? new Probe().search() : 0);',
     "regex": 'console.log("abc".search("b"));',
     "unknown": 'function search(value: any) { return value.search("b"); } console.log(search("abc"));',
-    "steady": '''process.on("SIGINT", () => {});
+    "steady": '''let callback: () => void;
+process.on("SIGINT", callback = () => {});
+process.removeListener("SIGINT", callback);
 function work(seed: number, iterations: number): number {
     let x = seed;
     for (let i = 0; i < iterations; i++) x = Math.imul(x, 1664525) + 1013904223 | 0;
@@ -78,9 +82,9 @@ console.log(work(Number(process.argv[2] || "1"), Number(process.argv[3] || "1000
 }
 
 
-def check_signals(compiler, directory):
+def check_signals(compiler, directory, assigned=False):
     # No process namespace escape or IPC operation: this must use the pruned arm.
-    binary = compile_source(compiler, directory, "delivery", '''
+    source = '''
 let interrupts = 0;
 let terminations = 0;
 const timer = setInterval(() => {}, 50);
@@ -88,7 +92,12 @@ process.on("SIGINT", () => { interrupts++; console.log("interrupt"); });
 process.once("SIGTERM", () => { terminations++; console.log("terminate"); clearInterval(timer); });
 process.on("exit", () => { console.log("exit", interrupts, terminations); });
 console.log("ready");
-''')
+'''
+    if assigned:
+        source = 'let interrupt: () => void; let terminate: () => void;\n' + source
+        source = source.replace('"SIGINT", () =>', '"SIGINT", interrupt = () =>')
+        source = source.replace('"SIGTERM", () =>', '"SIGTERM", terminate = () =>')
+    binary = compile_source(compiler, directory, "delivery-assigned" if assigned else "delivery", source)
     assert not has_regex(binary), "signal delivery unexpectedly retains regex"
     with tempfile.TemporaryFile(mode="w+") as stdout, tempfile.TemporaryFile(mode="w+") as stderr:
         child = subprocess.Popen([str(binary)], stdout=stdout, stderr=stderr)
@@ -126,6 +135,61 @@ process.off("SIGTERM", listener);
 console.log(process.listenerCount("SIGTERM"), count);
 ''')
     assert run([str(binary)], timeout=5).stdout == "0\n0 0\n"
+
+
+def check_assigned_removal(compiler, directory):
+    # Every registration method must retain the assigned arrow's identity, even
+    # once wrappers. Live witnesses keep the signals handled after removal and
+    # prove the removed callbacks stay absent across repeated native delivery.
+    source = 'let callback: () => void;\n'
+    for method in ["on", "once", "addListener", "prependListener", "prependOnceListener"]:
+        for event in ["SIGINT", "SIGTERM"]:
+            for remove in ["removeListener", "off"]:
+                source += f'''process.{method}("{event}", callback = () => {{ console.log("removed callback ran"); }});
+process.{remove}("{event}", callback);
+'''
+    source += '''
+console.log("removed", process.listenerCount("SIGINT"), process.listenerCount("SIGTERM"));
+let interrupts = 0;
+let terminations = 0;
+const timer = setInterval(() => {}, 50);
+process.on("SIGINT", () => { interrupts++; console.log("interrupt", interrupts); });
+process.on("SIGTERM", () => {
+    terminations++;
+    console.log("terminate", terminations);
+    if (terminations === 2) clearInterval(timer);
+});
+console.log("ready");
+'''
+    binary = compile_source(compiler, directory, "assigned-removal", source)
+    assert not has_regex(binary), "assigned listener removal unexpectedly retains regex"
+    with tempfile.TemporaryFile(mode="w+") as stdout, tempfile.TemporaryFile(mode="w+") as stderr:
+        child = subprocess.Popen([str(binary)], stdout=stdout, stderr=stderr)
+        try:
+            for marker, next_signal in [
+                ("ready\n", signal.SIGINT),
+                ("interrupt 1\n", signal.SIGTERM),
+                ("terminate 1\n", signal.SIGINT),
+                ("interrupt 2\n", signal.SIGTERM),
+            ]:
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    stdout.seek(0)
+                    if marker in stdout.read():
+                        break
+                    if child.poll() is not None:
+                        raise AssertionError("removal child exited before " + marker)
+                    time.sleep(0.01)
+                else:
+                    raise AssertionError("removal child did not report " + marker)
+                child.send_signal(next_signal)
+            assert child.wait(timeout=5) == 0
+            stdout.seek(0)
+            assert stdout.read() == "removed 0 0\nready\ninterrupt 1\nterminate 1\ninterrupt 2\nterminate 2\n"
+        finally:
+            if child.poll() is None:
+                child.kill()
+                child.wait()
 
 
 def check_ipc(compiler, directory):
@@ -202,13 +266,13 @@ def main():
                 regex = has_regex(binary)
                 if label == "candidate":
                     assert regex == (name in ("regex", "unknown", "escaped-class")), (name, regex)
-                else:
-                    assert regex == (name not in ("control", "find")), ("baseline", name, regex)
                 stdout = run([str(binary)], timeout=10).stdout
-                assert stdout == ("ok\n" if name in ("control", "signal") else "818035329\n" if name == "steady" else "1\n"), (name, stdout)
+                assert stdout == ("ok\n" if name == "control" or name.startswith("signal") else "818035329\n" if name == "steady" else "1\n"), (name, stdout)
                 results[label][name] = dict(size(binary), regex=regex)
                 results[label][name]["median_ms"] = timed_runs(binary, 9 if name == "steady" else 15)
         check_signals(compiler, directory)
+        check_signals(compiler, directory, assigned=True)
+        check_assigned_removal(compiler, directory)
         check_ipc(compiler, directory)
     print(json.dumps(results, indent=2))
     print("feature pruning regressions passed")

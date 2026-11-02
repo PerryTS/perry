@@ -84,7 +84,10 @@ fn a_published_method_reads_a_key_every_instance_holds() {
     let mods = [("a", a.as_str()), ("m", MAIN)];
     for per_unit in [true, false] {
         let k = kind_of(&modules(&mods, per_unit), "E", "c");
-        assert!(k.contains("builtin") && !k.contains("undef"), "unit={per_unit} c: {k}");
+        assert!(
+            k.contains("builtin") && !k.contains("undef"),
+            "unit={per_unit} c: {k}"
+        );
     }
     never_stronger(&mods);
 }
@@ -97,14 +100,20 @@ fn a_constructor_path_without_the_key_reads_undefined() {
     let mods = [("a", a.as_str()), ("m", MAIN)];
     for per_unit in [true, false] {
         let k = kind_of(&modules(&mods, per_unit), "E", "c");
-        assert!(k.contains("builtin") && k.contains("undef"), "unit={per_unit} c: {k}");
+        assert!(
+            k.contains("builtin") && k.contains("undef"),
+            "unit={per_unit} c: {k}"
+        );
     }
     never_stronger(&mods);
 }
 
 #[test]
 fn a_deleted_key_reads_undefined() {
-    let a = class("", "t = new Map<string, number>(); drop(): void { delete (this as any).t; }");
+    let a = class(
+        "",
+        "t = new Map<string, number>(); drop(): void { delete (this as any).t; }",
+    );
     let main = "import { E } from './a'; const e = new E(true); e.drop(); e.m(); console.log(e.c);";
     let mods = [("a", a.as_str()), ("m", main)];
     for per_unit in [true, false] {
@@ -130,8 +139,15 @@ fn a_declared_field_one_path_leaves_unset_holds_undefined() {
     let pf = facts(&declared("if (b) this.t = new Map<string, number>();"));
     let k = kind_of(&pf, "E", "t");
     assert!(k.contains("undef") && k.contains("builtin"), "t: {k}");
-    let get: Vec<_> = pf.sites.iter().filter(|s| s.key == "get" && s.is_call).collect();
-    assert!(!get.is_empty() && get.iter().all(|s| s.verdict != Verdict::NativeMember), "{get:?}");
+    let get: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| s.key == "get" && s.is_call)
+        .collect();
+    assert!(
+        !get.is_empty() && get.iter().all(|s| s.verdict != Verdict::NativeMember),
+        "{get:?}"
+    );
 }
 
 #[test]
@@ -141,6 +157,13 @@ fn a_declared_field_every_path_stores_holds_no_undefined() {
     ));
     let k = kind_of(&pf, "E", "t");
     assert!(!k.contains("undef") && k.contains("builtin"), "t: {k}");
-    let get: Vec<_> = pf.sites.iter().filter(|s| s.key == "get" && s.is_call).collect();
-    assert!(!get.is_empty() && get.iter().all(|s| s.verdict == Verdict::NativeMember), "{get:?}");
+    let get: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| s.key == "get" && s.is_call)
+        .collect();
+    assert!(
+        !get.is_empty() && get.iter().all(|s| s.verdict == Verdict::NativeMember),
+        "{get:?}"
+    );
 }

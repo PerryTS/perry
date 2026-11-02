@@ -49,7 +49,6 @@ mod expr_member;
 pub(crate) use expr_member::{
     private_storage_property, wrap_private_guard, PRIV_OP_READ, PRIV_OP_WRITE,
 };
-pub use expr_member::private_value_storage_key;
 mod expr_misc;
 mod expr_new;
 mod expr_new_builtins;

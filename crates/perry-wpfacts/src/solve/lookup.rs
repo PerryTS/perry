@@ -65,7 +65,11 @@ impl Model {
     /// on a builtin prototype or through ⊤ (`reshaped_keys`), where a setter
     /// or a read-only value would intercept the store that makes the key.
     pub(crate) fn shadows(&self, t: Tok, a: Atom) -> bool {
-        if t == TOP || self.reshaped_any || self.reshaped_keys.contains(&a) || self.objproto_accessor {
+        if t == TOP
+            || self.reshaped_any
+            || self.reshaped_keys.contains(&a)
+            || self.objproto_accessor
+        {
             return false;
         }
         let top = self.top_reshaped_any || self.top_reshaped_keys.contains(&a);
@@ -76,9 +80,7 @@ impl Model {
             // Instances of these classes made in another unit may have
             // escaped there, unseen here: a delete or defineProperty
             // through ⊤ revokes the key on them.
-            return !top
-                && !classes.is_empty()
-                && classes.iter().all(|&p| self.class_holds(p, a));
+            return !top && !classes.is_empty() && classes.iter().all(|&p| self.class_holds(p, a));
         }
         match self.tmpl_of(t) {
             Some(tm) => {
@@ -285,6 +287,15 @@ impl Model {
     /// dst ⊇ value of `key` read on object `t` (receiver `origin`).
     pub fn load_from(&mut self, origin: Tok, t: Tok, key: Key, dst: NodeId) {
         self.mark_use(t, crate::model::MARK_READ);
+        // A class private field on an object this unit does not own: what
+        // the class's code stored (`private_field`).
+        if let Key::Named(a) = key {
+            if self.is_private_atom(a) && !self.owns_private(t) {
+                let p = self.private_field(a);
+                self.edge(p, dst);
+                return;
+            }
+        }
         if self.is_iter_key(key) {
             match self.toks[t as usize] {
                 TokKind::Top
@@ -306,9 +317,8 @@ impl Model {
                 self.add_prim(dst, prim::UNDEF);
                 return;
             }
-            // DECISIONS 235: an element key is a number, never
-            // `constructor`: ⊤ read under it is ⊤, not the Function
-            // constructor.
+            // An element of ⊤ is ⊤. Its key is an index, never
+            // `constructor`: no Function constructor (DECISIONS 235).
             if t == TOP {
                 self.add_tok(dst, TOP);
                 return;
@@ -348,21 +358,25 @@ impl Model {
         // each of those reads its own absence (CHB3), so the marker adds
         // none (as `judge` skips it).
         let closed = self.closed_marker(t);
-        let present = closed || match (key, self.tmpl_of(t)) {
-            (Key::Named(a), Some(tm)) => {
-                let sure = self.tmpls[tm as usize].kind.is_fact_unit()
-                    && !self.keys_unsure.contains(&tm)
-                    && (self.tmpls[tm as usize].definite.contains(&a) || self.spread_sure(tm, a));
-                if sure && self.present_seen.insert((tm, a, dst)) {
-                    self.present_reads.entry(tm).or_default().push((a, dst));
+        let present = closed
+            || match (key, self.tmpl_of(t)) {
+                (Key::Named(a), Some(tm)) => {
+                    let sure = self.tmpls[tm as usize].kind.is_fact_unit()
+                        && !self.keys_unsure.contains(&tm)
+                        && (self.tmpls[tm as usize].definite.contains(&a)
+                            || self.spread_sure(tm, a));
+                    if sure && self.present_seen.insert((tm, a, dst)) {
+                        self.present_reads.entry(tm).or_default().push((a, dst));
+                    }
+                    sure
                 }
-                sure
-            }
-            _ => false,
-        };
-        // A private element read (`held`) never sees its key absent: the
-        // guard throws first.
-        if !present && !self.nodes[dst as usize].held {
+                _ => false,
+            };
+        // A class private field (`Model::private_atom`) is never read
+        // absent: its class's guard throws on an object without it first
+        // (ECMA-262 PrivateGet).
+        let private = matches!(key, Key::Named(a) if self.is_private_atom(a));
+        if !present && !private {
             self.add_prim(dst, prim::UNDEF);
         }
         // What a closed marker's own load gives (its classes' chain through
@@ -396,9 +410,9 @@ impl Model {
                 own(self, all);
             }
         }
-        // A private element is the object's own: its read consults no
+        // A private field is the object's own: its read consults no
         // prototype and no accessor (ECMA-262 PrivateGet).
-        if self.nodes[dst as usize].held {
+        if private {
             return;
         }
         // A marker is use tracking, not a value (DECISIONS 111): a load from
@@ -728,7 +742,10 @@ impl Model {
     pub(crate) fn is_builtin_proto(&self, q: Tok) -> bool {
         matches!(
             self.toks[q as usize],
-            TokKind::ObjectProto | TokKind::NativeProto(_) | TokKind::Builtin(_) | TokKind::BuiltinFn
+            TokKind::ObjectProto
+                | TokKind::NativeProto(_)
+                | TokKind::Builtin(_)
+                | TokKind::BuiltinFn
         )
     }
 

@@ -18,7 +18,8 @@
 //!   why a wasm target keeps the dispatcher).
 //!
 //! A set holding anything else has no facts here and keeps the complete
-//! generic call; nothing is guarded. A contract build first asks
+//! generic call; nothing is guarded. A contract or facts-verification build
+//! (`verify_facts`) first asks
 //! `perry_wpfacts_check_call` (a live function object of plain form) and
 //! compares the returned info with the proven bodies' infos.
 
@@ -257,7 +258,7 @@ fn emit_proven_call(
     };
     let mut call_args: Vec<String> = args.iter().take(width).cloned().collect();
     call_args.resize(width, undefined);
-    if crate::codegen::helpers::check_contracts() {
+    if crate::verify_facts::witnesses() {
         emit_call_witness(ctx, symbols, callee_box, width);
     }
     let handle = unbox_to_i64(ctx.block(), callee_box);
@@ -284,16 +285,11 @@ fn emit_proven_call(
 /// callee and its call form and returns its info, which must be one of the
 /// proven bodies' infos.
 fn emit_call_witness(ctx: &mut FnCtx<'_>, symbols: &[String], callee_box: &str, argc: usize) {
-    let site = ctx.wpfacts_sites as i64;
-    ctx.wpfacts_sites += 1;
+    let site = crate::verify_facts::site_arg(ctx, &format!("proven call bodies={symbols:?}"));
     let info = ctx.block().call(
         PTR,
         "perry_wpfacts_check_call",
-        &[
-            (DOUBLE, callee_box),
-            (I64, &argc.to_string()),
-            (I64, &site.to_string()),
-        ],
+        &[(DOUBLE, callee_box), (I64, &argc.to_string()), (I64, &site)],
     );
     let mut hit: Option<String> = None;
     for sym in symbols {
@@ -315,7 +311,7 @@ fn emit_call_witness(ctx: &mut FnCtx<'_>, symbols: &[String], callee_box: &str, 
     let _ = ctx.block().call(
         crate::types::I32,
         "perry_wpfacts_check_call_miss",
-        &[(PTR, &info), (I64, &site.to_string())],
+        &[(PTR, &info), (I64, &site)],
     );
     ctx.block().br(&ok_label);
     ctx.current_block = ok_idx;

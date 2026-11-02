@@ -33,10 +33,11 @@
 //! (`class_field_global_index`): a disagreement means no elision.
 //!
 //! Every elision records its proof: with `PERRY_FACTS_DUMP` set, one line per
-//! elided site goes to `<dump>.elisions`; in a `PERRY_CHECK_CONTRACTS=1`
-//! build each elided site calls `perry_wpfacts_check_field` (perry-runtime
-//! `wpfacts_check.rs`), which re-derives class, slot and kind from the
-//! object and aborts on a mismatch.
+//! elided site goes to `<dump>.elisions`; in a `PERRY_CHECK_CONTRACTS=1` or
+//! `PERRY_VERIFY_FACTS=1` build (`verify_facts`) each elided site calls
+//! `perry_wpfacts_check_field` (perry-runtime `wpfacts_check.rs`), which
+//! re-derives class, slot and kind from the object and aborts, naming the
+//! site, on a mismatch.
 
 use anyhow::Result;
 use perry_hir::Expr;
@@ -583,9 +584,17 @@ pub(crate) fn emit_witness(
     flags: u32,
     site: u64,
 ) {
-    if !crate::codegen::helpers::check_contracts() {
+    if !crate::verify_facts::witnesses() {
         return;
     }
+    let what = format!(
+        "{site:#018x} {} .{property} classes={:?} class_ids={:?} slots={:?}",
+        if flags & WPF_STORE != 0 { "store" } else { "read" },
+        p.class_names,
+        p.class_ids,
+        p.slots
+    );
+    let site_arg = crate::verify_facts::site_arg(ctx, &what);
     let key_idx = ctx.strings.intern(property);
     let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
     let (c01, c23) = pack_cids(&p.class_ids);
@@ -631,7 +640,7 @@ pub(crate) fn emit_witness(
             (I32, &off),
             (I32, &(p.kind_mask as i32).to_string()),
             (I32, &flags.to_string()),
-            (I64, &(site as i64).to_string()),
+            (I64, &site_arg),
         ],
     );
 }
@@ -868,6 +877,19 @@ fn lower_guarded_get(
             let chk_label = ctx.block_label(chk_idx);
             ctx.block().cond_br(&both, &chk_label, &miss_label);
             ctx.current_block = chk_idx;
+            // A literal family keeps its late keys and names class 0: its
+            // objects carry the family descriptor's layout word, not a class
+            // id (every other class is told by its class id alone).
+            let literals: Vec<u32> = p
+                .class_ids
+                .iter()
+                .copied()
+                .filter(|c| ctx.program_layouts.literal_families.contains(c))
+                .collect();
+            let literal_families: Vec<String> = literals
+                .into_iter()
+                .filter_map(|c| crate::lower_call::direct_method_guard::family_layout_id(ctx, c))
+                .collect();
             let blk = ctx.block();
             // Word 0 is an object's class id but also an array's or a
             // string's `length`: `[x]` would pass for a class whose id is 1.
@@ -888,6 +910,20 @@ fn lower_guarded_get(
                     Some(prev) => blk.or(crate::types::I1, &prev, &eq),
                     None => eq,
                 });
+            }
+            if !literal_families.is_empty() {
+                let word_ptr = super::receiver_range::emit_field_ptr(blk, &recv.biased, 4);
+                let word = blk.load(I32, &word_ptr);
+                for id in &literal_families {
+                    let eq = blk.icmp_eq(I32, &word, id);
+                    // 0: the runtime could not register the layout.
+                    let registered = blk.icmp_ne(I32, id, "0");
+                    let eq = blk.and(crate::types::I1, &eq, &registered);
+                    any = Some(match any {
+                        Some(prev) => blk.or(crate::types::I1, &prev, &eq),
+                        None => eq,
+                    });
+                }
             }
             ok = any.map(|any| blk.and(crate::types::I1, &is_object, &any));
         } else {

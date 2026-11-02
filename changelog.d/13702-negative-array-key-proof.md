@@ -1,0 +1,1 @@
+- Avoid formatting and allocating missing negative integer array keys when the array's live layout and unmodified intrinsic prototypes prove absence. Own properties, getters, prototype mutations, custom prototypes and erased non-array receivers retain the full property lookup. The proof reuses existing object/header fields and introduces no cache or side table.

@@ -712,6 +712,8 @@ macro_rules! rooted_callback {
         }
 
         impl<'s> $name<'s> {
+            // Not every instantiation of this macro is built through `new`.
+            #[allow(dead_code)]
             #[inline]
             fn new(
                 scope: &'s crate::gc::RuntimeHandleScope,

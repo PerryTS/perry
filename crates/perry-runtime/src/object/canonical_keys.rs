@@ -1069,6 +1069,7 @@ unsafe fn probe(
 ///
 /// # Safety
 /// The caller suppresses collection while the existing canonical strings are read.
+#[inline(always)]
 pub(crate) unsafe fn probe_born_layout(
     _proof: &SharedLayout,
     entries: &[(&str, f64)],

@@ -966,7 +966,7 @@ pub fn lower_module_full_with_platform_globals(
 
     // #10421: a `Function` constructor reached as a value (an alias,
     // `ctx.Function`, `fn.constructor(...)`) needs the interpreter too.
-    pre_scan_function_ctor_reach(ast_module);
+    pre_scan_function_ctor_reach(ast_module, source_file_path);
 
     // #8882: every class DECLARATION name at any depth, for `lower_new`'s
     // unresolved-constructor guard (see `pre_scan/class_decl_names.rs`).

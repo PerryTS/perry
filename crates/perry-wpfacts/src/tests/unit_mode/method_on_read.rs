@@ -36,8 +36,15 @@ fn t_proven(pf: &ProgramFacts, key: &str) -> bool {
 /// no layout: the callee's calls on what it is passed are described.
 fn reads_the_method(mods: &[(&str, &str)]) -> ProgramFacts {
     let (u, w) = (units_of(mods), whole_of(mods));
-    let stronger: Vec<_> = proven_set(&u).difference(&proven_set(&w)).cloned().collect();
-    assert!(stronger.is_empty(), "per unit stronger than whole: {stronger:?}\n{}", u.dump_text());
+    let stronger: Vec<_> = proven_set(&u)
+        .difference(&proven_set(&w))
+        .cloned()
+        .collect();
+    assert!(
+        stronger.is_empty(),
+        "per unit stronger than whole: {stronger:?}\n{}",
+        u.dump_text()
+    );
     for k in KEYS {
         assert!(t_proven(&w, k), "whole {k}\n{}", w.dump_text());
     }
@@ -121,8 +128,15 @@ export function run() { return transform({ inner: { factory: new Factory() }, f:
 console.log(run());"#;
     let mods = [("n", N), ("t", t)];
     let (u, w) = (units_of(&mods), whole_of(&mods));
-    let stronger: Vec<_> = proven_set(&u).difference(&proven_set(&w)).cloned().collect();
-    assert!(stronger.is_empty(), "per unit stronger than whole: {stronger:?}\n{}", u.dump_text());
+    let stronger: Vec<_> = proven_set(&u)
+        .difference(&proven_set(&w))
+        .cloned()
+        .collect();
+    assert!(
+        stronger.is_empty(),
+        "per unit stronger than whole: {stronger:?}\n{}",
+        u.dump_text()
+    );
     for k in ["inner", "factory", "createIdentifier", "kind"] {
         assert!(t_proven(&w, k), "whole {k}\n{}", w.dump_text());
         assert!(t_proven(&u, k), "unit {k}\n{}", u.dump_text());

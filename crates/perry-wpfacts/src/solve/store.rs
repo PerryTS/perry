@@ -274,6 +274,17 @@ impl Model {
     }
 
     pub(crate) fn store_into(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) {
+        // A class private field: what its class's code stores (`private_field`);
+        // on an object of this unit, its own field too.
+        if let Key::Named(a) = key {
+            if self.is_private_atom(a) {
+                let p = self.private_field(a);
+                self.edge(src, p);
+                if !self.owns_private(t) {
+                    return;
+                }
+            }
+        }
         // An element store (`push`, `unshift`, `splice`: the element key) is
         // an index store: on an Array it writes its elements only, which no
         // named non-index key reads (`is_elem_array`); on anything else it
@@ -559,13 +570,17 @@ impl Model {
         let effect = match (tm.and_then(|tm| self.foreign.get(&tm)), key) {
             (Some(facts), Key::Named(a)) if matches!(self.toks[t as usize], TokKind::Obj(..)) => {
                 let k = &self.atoms[a as usize];
+                let private = self.is_private_atom(a);
                 match facts.kind {
                     "litclass" | "lit" => {
                         k != "__proto__"
-                            && !facts.fields.iter().any(|f| !f.data_field && &f.key == k)
+                            && !facts
+                                .fields
+                                .iter()
+                                .any(|f| !f.data_field && f.is(k, private))
                     }
                     "class" => facts.fields.iter().any(|f| {
-                        f.data_field && &f.key == k && (f.definite || f.declared || f.reserved)
+                        f.data_field && f.is(k, private) && (f.definite || f.declared || f.reserved)
                     }),
                     _ => false,
                 }

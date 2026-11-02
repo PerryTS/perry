@@ -20,21 +20,13 @@ pub(crate) fn private_storage_property(ctx: &LoweringContext, field_name: &str) 
     match ctx.resolve_private(field_name) {
         Some((_, class_id, member)) => {
             if member.kind == super::super::PrivKind::Field {
-                private_value_storage_key(class_id, field_name)
+                crate::private_names::private_value_key(class_id, field_name)
             } else {
                 format!("#<perry:private-member:{class_id}:{field_name}>")
             }
         }
         None => field_name.to_string(),
     }
-}
-
-/// The physical property key of the instance private field `field_name`
-/// (its source spelling, `#x`) of the class with HIR id `class_id`: the key
-/// every read and write of the field names, and the one `js_private_field_add`
-/// installs at construction.
-pub fn private_value_storage_key(class_id: u32, field_name: &str) -> String {
-    format!("#<perry:private-value:{class_id}:{field_name}>")
 }
 
 pub(crate) fn is_class_expr_self_binding(ctx: &LoweringContext, object: &Expr) -> bool {

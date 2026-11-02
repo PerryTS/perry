@@ -654,7 +654,7 @@ impl Model {
     /// The program site behind `call`: itself for a call of the program,
     /// the template a call an instance made renames, or the site a call the
     /// solver made was made for.
-    fn origin_of(&self, call: CallId) -> Option<CallId> {
+    pub(crate) fn origin_of(&self, call: CallId) -> Option<CallId> {
         if (call as usize) < self.sum.n_prog {
             return Some(call);
         }
@@ -1538,10 +1538,11 @@ impl Model {
         for j in 0..self.calls[c].spread.len() {
             let s = self.calls[c].spread[j];
             let elems = self.node_l("spread-elems");
+            let ek = self.elem_key();
             self.cons(
                 s,
                 Cons::Load {
-                    key: Key::Any,
+                    key: ek,
                     dst: elems,
                 },
             );

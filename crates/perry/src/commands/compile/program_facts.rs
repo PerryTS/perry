@@ -96,9 +96,11 @@ pub(crate) fn run(
     modules: &BTreeMap<PathBuf, perry_hir::Module>,
     export_sources: perry_wpfacts::ExportSources,
     dynamic_code: bool,
+    interpreted_sources: bool,
     dynamic_code_reach: &perry_hir::dynamic_code::DynamicCodeReach,
     wrapped: &std::collections::HashMap<PathBuf, super::types::CjsWrapDebugSource>,
     roots: Vec<String>,
+    cache_dir: &Path,
 ) -> Option<Arc<perry_wpfacts::ProgramFacts>> {
     if !perry_wpfacts::enabled_from_env() {
         return None;
@@ -137,6 +139,7 @@ pub(crate) fn run(
         explain: std::env::var("PERRY_FACTS_EXPLAIN").is_ok_and(|v| v == "1")
             || perry_codegen::fallback_diag::enabled(),
         dynamic_code_reach: dynamic_code_reach.clone(),
+        interpreted_sources,
         dynamic_code: dynamic_code.then(|| {
             "E14 the program can run interpreted code (deferred new Function/eval or node:vm)"
                 .into()
@@ -170,6 +173,7 @@ pub(crate) fn run(
     };
     let elapsed = started.elapsed().as_secs_f64() * 1000.0;
     if let Some(path) = &dump {
+        let synthetic = synthetic_module_dirs(cache_dir);
         let mut text = pf.dump_text();
         text.push_str(&format!("# pass_wall_ms {elapsed:.1}\n"));
         // CJS modules are parsed wrapped: their site offsets are in wrapped
@@ -190,9 +194,13 @@ pub(crate) fn run(
                 }
             }
         }
+        let text = stable_synthetic_paths(text.into_bytes(), &synthetic);
         let written = std::fs::write(path, text).and_then(|()| {
             let mut f = std::fs::OpenOptions::new().append(true).open(path)?;
-            let mut w = std::io::BufWriter::new(&mut f);
+            let mut w = StableDump {
+                inner: std::io::BufWriter::new(&mut f),
+                synthetic: &synthetic,
+            };
             pf.append_streamed(&mut w)?;
             std::io::Write::flush(&mut w)
         });
@@ -495,7 +503,10 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
         let fields = t
             .fields
             .iter()
-            .filter(|f| (f.definite || f.declared || f.reserved) && f.data_field)
+            // A private field's row is not codegen's: codegen finds a
+            // private field by its completed shape (#11791), and its view
+            // looks a public key up by spelling (`ElisionFacts::field`).
+            .filter(|f| (f.definite || f.declared || f.reserved) && f.data_field && !f.private)
             .filter_map(|f| {
                 let (classes, nullable) = holder_classes(f).unwrap_or_default();
                 Some(FactsField {
@@ -531,6 +542,88 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
 /// whole-program reference mode.
 fn per_unit_facts(env: Option<&str>) -> bool {
     env != Some("0")
+}
+
+/// The directories compiler-generated modules (the CommonJS support module,
+/// script strings, native ESM namespaces) are written to: `<cache dir>/
+/// synthetic-modules`, as given and canonical (the modules are keyed by their
+/// canonical path).
+fn synthetic_module_dirs(cache_dir: &Path) -> Vec<Vec<u8>> {
+    let dir = cache_dir.join("synthetic-modules");
+    let mut dirs = Vec::new();
+    if let Ok(canonical) = dir.canonicalize() {
+        dirs.push(canonical);
+    }
+    dirs.push(dir);
+    dirs.dedup();
+    dirs.iter()
+        .map(|d| d.to_string_lossy().into_owned().into_bytes())
+        .collect()
+}
+
+/// A synthetic module's name is its file under the cache dir, so the same
+/// program dumped from two cache dirs would differ in every line naming one.
+/// The dump names it relative to the cache dir instead (the file name is a
+/// hash of the entry, stable across cache dirs).
+fn stable_synthetic_paths(mut bytes: Vec<u8>, synthetic: &[Vec<u8>]) -> Vec<u8> {
+    const STABLE: &[u8] = b"<cache-dir>/synthetic-modules";
+    for dir in synthetic {
+        if dir.is_empty() {
+            continue;
+        }
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i..].starts_with(dir) {
+                out.extend_from_slice(STABLE);
+                i += dir.len();
+            } else {
+                out.push(bytes[i]);
+                i += 1;
+            }
+        }
+        bytes = out;
+    }
+    bytes
+}
+
+/// The streamed per-unit diagnostics go through the same rewrite.
+struct StableDump<'a, W: std::io::Write> {
+    inner: W,
+    synthetic: &'a [Vec<u8>],
+}
+
+impl<W: std::io::Write> std::io::Write for StableDump<'_, W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.write_all(buf)?;
+        Ok(buf.len())
+    }
+    fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
+        self.inner
+            .write_all(&stable_synthetic_paths(buf.to_vec(), self.synthetic))
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+#[cfg(test)]
+mod stable_dump_tests {
+    use super::*;
+
+    #[test]
+    fn the_cache_dir_is_not_part_of_a_synthetic_module_name() {
+        let a = synthetic_module_dirs(Path::new("/tmp/c-a"));
+        let b = synthetic_module_dirs(Path::new("/var/x/c-b"));
+        let line =
+            |d: &str| format!("M 3 {d}/synthetic-modules/perry-cjs-00ff.mjs\nF /src/app.ts\n");
+        let na = stable_synthetic_paths(line("/tmp/c-a").into_bytes(), &a);
+        let nb = stable_synthetic_paths(line("/var/x/c-b").into_bytes(), &b);
+        assert_eq!(na, nb);
+        assert!(String::from_utf8(na)
+            .unwrap()
+            .contains("<cache-dir>/synthetic-modules/perry-cjs-00ff.mjs"));
+    }
 }
 
 #[cfg(test)]
@@ -572,6 +665,7 @@ pub(crate) fn live_dynamic_imports(
     modules: &BTreeMap<PathBuf, perry_hir::Module>,
     export_sources: perry_wpfacts::ExportSources,
     dynamic_code: bool,
+    interpreted_sources: bool,
     dynamic_code_reach: &perry_hir::dynamic_code::DynamicCodeReach,
     roots: Vec<String>,
 ) -> Option<std::collections::BTreeSet<(String, String)>> {
@@ -600,6 +694,7 @@ pub(crate) fn live_dynamic_imports(
         ),
         export_sources,
         dynamic_code_reach: dynamic_code_reach.clone(),
+        interpreted_sources,
         dynamic_code: dynamic_code.then(|| {
             "E14 the program can run interpreted code (deferred new Function/eval or node:vm)"
                 .into()

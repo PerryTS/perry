@@ -432,6 +432,7 @@ impl Model {
                     && !self.settle_bf_written()
                     && !self.settle_for_in()
                     && !self.settle_define()
+                    && !crate::builtins::settle_native_given(self)
                 {
                     break;
                 }
@@ -576,6 +577,12 @@ impl Model {
         // only its reach marker. Under a named key it holds that key's
         // reach marker instead (design §18.4).
         // A path marker's named field holds its step (DECISIONS 158).
+        // A class private field (`Model::private_atom`) is reached by its
+        // name only, by its class's code: no computed key writes or reads
+        // it, no spread copies it, no reflection lists it.
+        if self.is_private_atom(a) {
+            return n;
+        }
         if self.is_marker(t) && (!self.reach_marker.contains(&t) || self.is_path_marker(t)) {
             let r = self.keyed_reach_of(t, a);
             self.add_tok(n, r);
@@ -659,6 +666,9 @@ impl Model {
         }
         self.spread_to.entry(s).or_default().push((d, site));
         for a in self.field_keys.get(&s).cloned().unwrap_or_default() {
+            if self.is_private_atom(a) {
+                continue;
+            }
             let f = self.field(s, a);
             self.store_into(d, Key::Named(a), f, site);
         }
@@ -691,11 +701,18 @@ impl Model {
     /// construction, `push` and the like put at an index, and every store
     /// under a computed key) are no value of a named non-index key, which
     /// reads `named_any` instead. A marker's fields are its reach markers.
+    ///
+    /// A Map, Set, WeakMap or WeakSet (`builtins::is_collection`) likewise:
+    /// its entries (`field_any`) sit in internal slots and are no property
+    /// at all, so a named key (`map.get`) never reads them; a store under a
+    /// computed key is a property and reaches both.
     pub fn is_elem_array(&self, t: Tok) -> bool {
         matches!(self.toks[t as usize], TokKind::Obj(tm, _)
-            if matches!(self.tmpls[tm as usize].kind,
-                TmplKind::Arr { .. } | TmplKind::Args { .. }))
-            && !self.is_marker(t)
+        if match self.tmpls[tm as usize].kind {
+            TmplKind::Arr { .. } | TmplKind::Args { .. } => true,
+            TmplKind::BObj { what, .. } => builtins::is_collection(what),
+            _ => false,
+        }) && !self.is_marker(t)
     }
 
     /// The values of `t` under a key no store named: for an Array the ones
@@ -790,6 +807,33 @@ impl Model {
         // named-key replay in `visits` does not cover them.
         self.any_walk_holders.entry(t).or_default().push((t, act));
         self.accessor_hit(t, t, Key::Any, act);
+    }
+
+    /// What class private field `a` (`Model::private_atom`) holds on any
+    /// object: every store of the class's code under it lands here
+    /// (`store_into`). Only that code names it, all of it in this unit, and
+    /// an object holds it only once the class's own initializer ran on it
+    /// (the brand), so a read on a receiver this unit does not own (a
+    /// marker, ⊤, another unit's instance) finds what this holds: the
+    /// value never leaves through that receiver.
+    pub fn private_field(&mut self, a: Atom) -> NodeId {
+        if let Some(&n) = self.private_fields.get(&a) {
+            return n;
+        }
+        let n = self.node_named("private", || format!("private({a})"));
+        self.private_fields.insert(a, n);
+        n
+    }
+
+    /// `t` is an object of this unit (no marker, ⊤ or stand-in): its
+    /// private fields are its own field nodes.
+    pub(crate) fn owns_private(&self, t: Tok) -> bool {
+        match self.toks[t as usize] {
+            TokKind::Obj(tm, _) | TokKind::ClassObj(tm) => {
+                !self.is_marker(t) && !self.foreign.contains_key(&tm)
+            }
+            _ => false,
+        }
     }
 
     pub fn all_fields(&mut self, t: Tok) -> NodeId {
@@ -1068,7 +1112,8 @@ impl Model {
             if self.virt_protos.contains_key(&r) {
                 self.register_virt(r, classes);
             } else if self.arg_members.get(&r).is_some_and(|ms| {
-                ms.iter().all(|m| self.virt_protos.contains_key(m) && !self.virt_tok_open.contains(m))
+                ms.iter()
+                    .all(|m| self.virt_protos.contains_key(m) && !self.virt_tok_open.contains(m))
             }) {
                 let mut cs: Vec<TmplId> = Vec::new();
                 for m in self.arg_members[&r].clone() {
@@ -1137,11 +1182,12 @@ impl Model {
     /// hard operation on one or lets one escape, or an accessor on the
     /// chain may answer it.
     fn virt_own(&self, t: Tok, classes: &[TmplId], a: Atom) -> bool {
-        self.virt_tok_open.contains(&t) || classes.iter().any(|&p| {
-            self.virt_open.contains(&p)
-                || self.virt_revoked.contains(&(p, a))
-                || self.chain_accessor_key(p, a)
-        })
+        self.virt_tok_open.contains(&t)
+            || classes.iter().any(|&p| {
+                self.virt_open.contains(&p)
+                    || self.virt_revoked.contains(&(p, a))
+                    || self.chain_accessor_key(p, a)
+            })
     }
 
     /// The classes of receiver token / marker `t` that another unit's
@@ -1955,7 +2001,10 @@ impl Model {
                 of,
                 builtin,
             } => {
-                format!("chainunion {n} {} {dst} {of} {builtin}", self.key_name(*key))
+                format!(
+                    "chainunion {n} {} {dst} {of} {builtin}",
+                    self.key_name(*key)
+                )
             }
             Cons::ProtoGiven { protos } => format!("protogiven {n} {protos}"),
             Cons::ParentGiven { of } => format!("parentgiven {n} {of}"),

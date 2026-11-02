@@ -427,6 +427,10 @@ pub(crate) fn emit_proven_shape_recheck(
     expected_shape_id: &str,
     proven_label: &str,
     generic_label: &str,
+    // The class's family layout id (an i32 value) when its births carry the
+    // family word instead of the birth id: the other word the receiver may
+    // legitimately carry. 0 is an unregistered layout and never matches.
+    family_id: Option<&str>,
 ) {
     let blk = ctx.block();
 
@@ -450,6 +454,15 @@ pub(crate) fn emit_proven_shape_recheck(
     let shape_id = blk.load(I32, &sid_ptr);
     let shape_ok =
         crate::typed_shape::emit_compatible_shape_eq(blk, &shape_id, expected_shape_id, &[]);
+    let shape_ok = match family_id {
+        Some(family) => {
+            let is_family = blk.icmp_eq(I32, &shape_id, family);
+            let registered = blk.icmp_ne(I32, family, "0");
+            let is_family = blk.and(I1, &is_family, &registered);
+            blk.or(I1, &shape_ok, &is_family)
+        }
+        None => shape_ok,
+    };
 
     let mut acc = not_fwd;
     acc = blk.and(I1, &acc, &unlatched);
