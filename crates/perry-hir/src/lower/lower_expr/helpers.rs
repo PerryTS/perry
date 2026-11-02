@@ -17,11 +17,13 @@ use crate::lower_types::extract_ts_type_with_ctx;
 use crate::lower::module_decl::native_default_import::is_cjs_style_native_default_import;
 
 /// Whether `PERRY_GLOBAL_SCRIPT_THIS` is set — compile the program as a
-/// *global script* rather than a CJS module, so module top-level `this`
-/// lowers to `globalThis` instead of the `module.exports` stand-in
+/// *global script* rather than a CJS module, so a CommonJS module's top-level
+/// `this` lowers to `globalThis` instead of the `module.exports` stand-in
 /// (`Expr::ModuleTopThis`). This matches a conforming Test262 host (and the
 /// Node oracle's `vm.runInThisContext`, #5346/#5511); the default stays
-/// CJS so standalone builds match `node --experimental-strip-types`. Read
+/// CJS so standalone builds match `node --experimental-strip-types`. An ES
+/// module is unaffected: its top-level `this` is `undefined` whichever host
+/// evaluates it (#13558). Read
 /// once per process — the env is fixed for the lifetime of a compile (#5579).
 ///
 /// #11625: in `cfg(test)` builds only, an active

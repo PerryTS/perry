@@ -128,7 +128,7 @@ pub use lower_module_fn::{
     lower_module_with_class_id, lower_module_with_class_id_and_types,
     lower_module_with_class_id_types_and_seed, lower_module_with_class_id_types_seed_and_entry,
 };
-pub(crate) use module_strict::module_has_strict_mode;
+pub(crate) use module_strict::{module_has_module_goal, module_has_strict_mode};
 
 mod lower_expr;
 pub(crate) use lower_expr::{

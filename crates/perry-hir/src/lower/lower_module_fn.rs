@@ -942,6 +942,10 @@ pub fn lower_module_full_with_platform_globals(
     ctx.is_external_module = is_external_module;
     ctx.assign_class_fields = assign_class_fields;
     ctx.module_strict = module_has_strict_mode(ast_module, source_file_path);
+    // #13558: a module's top-level `this` is `undefined`, so lowering needs the
+    // module goal beside the strictness it already derives from the same two
+    // inputs (format/package context + in-source module syntax).
+    ctx.module_goal_is_module = module_has_module_goal(ast_module, source_file_path);
     ctx.current_strict = ctx.module_strict;
     if let Some(seed) = imported_class_fields {
         ctx.seed_imported_class_fields(seed);
