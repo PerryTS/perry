@@ -1233,6 +1233,22 @@ impl Model {
                 }
             }
         }
+        self.param_defines.clear();
+        let defs: Vec<(Tok, Vec<(Option<Atom>, bool)>)> =
+            self.marker_defines.iter().map(|(&t, ds)| (t, ds.clone())).collect();
+        for (t, ds) in defs {
+            for m in self.marker_members(t) {
+                if !self.param_marker.contains_key(&m) || self.reach_marker.contains(&m) {
+                    continue;
+                }
+                let v = self.param_defines.entry(m).or_default();
+                for &d in &ds {
+                    if !v.contains(&d) {
+                        v.push(d);
+                    }
+                }
+            }
+        }
     }
 
     pub(crate) fn marker_members(&self, t: Tok) -> Vec<Tok> {

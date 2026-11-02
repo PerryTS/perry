@@ -852,6 +852,32 @@ impl<'a> Gen<'a> {
                 };
                 self.m.cons(p, Cons::Miss { key });
             }
+            // and its defineProperty calls on the argument: on
+            // `Object.prototype` the accessor under any key (DECISIONS
+            // 242(1)), on a literal what the whole program does to it.
+            for (_, k, data) in c.param_defines.iter().filter(|d| d.0 as usize == i) {
+                let r = self.m.reason("E5 defineProperty by another unit's function");
+                match k {
+                    Some(k) => {
+                        let key = self.m.atom(k);
+                        self.m.cons(
+                            p,
+                            Cons::DefineKey {
+                                key,
+                                data: *data,
+                                reason: r,
+                            },
+                        );
+                    }
+                    None => self.m.cons(
+                        p,
+                        Cons::Hard {
+                            kind: crate::model::Hard::E5DefineProperty,
+                            reason: r,
+                        },
+                    ),
+                }
+            }
             if u & MARK_ESCAPE != 0 {
                 if let Some(d) = self.m.diagnostic.as_mut() {
                     d.stand_in_params.push((p, c.name.clone(), i as u32, None));

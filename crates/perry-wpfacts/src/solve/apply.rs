@@ -387,6 +387,12 @@ impl Model {
                             self.top_origin(n)
                         );
                     }
+                    // DECISIONS 242 (contract half): a defineProperty under
+                    // a computed key on another unit's argument: the caller
+                    // runs it there (`FnContract::param_defines`).
+                    if kind == Hard::E5DefineProperty && self.is_marker(t) {
+                        self.note_marker_define(t, None, false);
+                    }
                     self.mark_hard(t, kind, reason);
                 }
             }
@@ -401,6 +407,7 @@ impl Model {
                 for &t in toks {
                     if self.is_marker(t) {
                         self.note_inst(t, true);
+                        self.note_marker_define(t, Some(key), data);
                     }
                     // A key the layout already holds as data may move into an
                     // accessor pair in its slot, and a class instance's layout

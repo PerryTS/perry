@@ -177,8 +177,10 @@ console.log(mk(1, String(process.argv.length)));"#;
         pf.templates
             .iter()
             .filter(|t| t.birth_keys == ["x", "y"])
-            .map(|t| (t.prefix_stable, t.fixed_layout, t.escape.clone()))
+            .map(|t| (t.prefix_stable, t.fixed_layout, t.escape.is_some()))
             .collect()
     };
+    // The escape reasons differ by mode (whole: the descriptor's accessor;
+    // per unit: the argument of another unit's function), the facts do not.
     assert_eq!(xy(&w), xy(&u), "the defined literal: whole = per unit");
 }

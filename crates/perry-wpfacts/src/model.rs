@@ -2075,6 +2075,11 @@ pub struct Model {
     /// argument (`Cons::Miss`).
     pub marker_reads: FxHashMap<Tok, Vec<Key>>,
     pub param_reads: FxHashMap<Tok, Vec<Key>>,
+    /// DECISIONS 242 (contract half): the defineProperty calls (key, `None`
+    /// computed; data) met on a marker token, and per parameter marker
+    /// after the solve (`settle_marker_ops`): `FnContract::param_defines`.
+    pub marker_defines: FxHashMap<Tok, Vec<(Option<Atom>, bool)>>,
+    pub param_defines: FxHashMap<Tok, Vec<(Option<Atom>, bool)>>,
     /// An argument marker: the uses some named key of it had, its own
     /// (its keyed reach markers') and its containers' (`keyed_use`). During
     /// the solve a keyed use matters to the markers it stands for only as

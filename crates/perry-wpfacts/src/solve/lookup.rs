@@ -316,6 +316,15 @@ impl Model {
         self.tmpls[tm as usize].chain_miss = true;
     }
 
+    /// DECISIONS 242 (contract half): a defineProperty on marker `t`
+    /// (`None`: under a computed key), published per parameter.
+    pub(crate) fn note_marker_define(&mut self, t: Tok, key: Option<Atom>, data: bool) {
+        let ds = self.marker_defines.entry(t).or_default();
+        if !ds.contains(&(key, data)) {
+            ds.push((key, data));
+        }
+    }
+
     /// The reads of `tm` that found a key no longer sure read `undefined`.
     pub(crate) fn flush_present_reads(&mut self, tm: TmplId) {
         let reads = self.present_reads.remove(&tm).unwrap_or_default();
