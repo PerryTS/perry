@@ -337,7 +337,17 @@ unsafe fn array_record_enter(
     if header.obj_type != crate::gc::GC_TYPE_ARRAY {
         return array_record_refused(value, record, None);
     }
-    let array = crate::array::clean_arr_ptr(raw as *const crate::array::ArrayHeader);
+    let raw = raw as *const crate::array::ArrayHeader;
+    // Admission above already proved this header belongs to the receiver.
+    // Reuse it for arena arrays without repeating the raw-pointer ownership
+    // lookup. The headed cleaner still resolves forwarded and sparse heads.
+    // Non-arena arrays retain the raw cleaner's stricter length validation.
+    // No allocation or safepoint separates the header probe from this use.
+    let array = if header.gc_flags & crate::gc::GC_FLAG_ARENA != 0 {
+        crate::array::clean_headed_arr_ptr(raw, header)
+    } else {
+        crate::array::clean_arr_ptr(raw)
+    };
     let value = crate::value::js_nanbox_pointer(array as i64);
     if !out.is_null() {
         *out = value;

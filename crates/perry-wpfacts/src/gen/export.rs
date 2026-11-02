@@ -663,6 +663,18 @@ impl<'a> Gen<'a> {
     /// or an argument of a call through its parameter, DECISIONS 140), node
     /// `n`: `None` if no contract describes what it holds, else whether
     /// publishing it changed anything (its fields leave, classes go out).
+    /// DECISIONS 241: function token `t` is held by other units by name:
+    /// another unit's (a stand-in) or a contract function of this one.
+    pub(crate) fn fn_published(&self, t: Tok) -> bool {
+        match self.m.toks[t as usize] {
+            TokKind::Func(f, _) => {
+                self.stand_in_fc.contains_key(&t)
+                    || self.m.contract_fns.contains(&f) && self.m.funcs[f as usize].func_id != u32::MAX
+            }
+            _ => false,
+        }
+    }
+
     fn publish_result(&mut self, f: FnIdx, n: NodeId, r: u32) -> Option<bool> {
         let mut changed = false;
         // A marker of no family of this run (the result's own marker,
@@ -870,6 +882,32 @@ impl<'a> Gen<'a> {
                         fl.vals_top = true;
                     }
                     self.m.sink_node(v, r);
+                    changed = true;
+                }
+            }
+        }
+        // DECISIONS 241: what this unit stores on a function value other
+        // units hold (a stand-in, a contract function) goes to them as a
+        // result does; what no contract describes leaves.
+        let mut fstores: Vec<(FnIdx, NodeId)> = self
+            .m
+            .fn_stored
+            .iter()
+            .map(|(&(t, _), &n)| (t, n))
+            .chain(self.m.fn_stored_any.iter().map(|(&t, &n)| (t, n)))
+            .filter(|&(t, n)| !self.fn_store_top.contains(&n) && self.fn_published(t))
+            .filter_map(|(t, n)| match self.m.toks[t as usize] {
+                TokKind::Func(f, _) => Some((f, n)),
+                _ => None,
+            })
+            .collect();
+        fstores.sort_unstable();
+        for (f, n) in fstores {
+            match self.publish_result(f, n, r) {
+                Some(ch) => changed |= ch,
+                None => {
+                    self.fn_store_top.insert(n);
+                    self.m.sink_node(n, r);
                     changed = true;
                 }
             }

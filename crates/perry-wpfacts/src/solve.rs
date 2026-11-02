@@ -636,6 +636,12 @@ impl Model {
         if let Some(&seed) = self.cell_arrs.get(&t) {
             self.edge(seed, n);
         }
+        // DECISIONS 241: what the units stored under this key.
+        if let Some(j) = self.joined_of(t) {
+            if let Some(&(_, v)) = j.keys.iter().find(|(k, _)| *k == a) {
+                self.edge(v, n);
+            }
+        }
         n
     }
 
@@ -696,6 +702,18 @@ impl Model {
         self.accessor_hit(s, s, Key::Any, act);
     }
 
+    /// DECISIONS 241: the join's values of function token `t`'s own
+    /// properties (`fn_joined`).
+    fn joined_of(&self, t: Tok) -> Option<crate::model::FnJoined> {
+        if self.fn_joined.is_empty() {
+            return None;
+        }
+        match self.toks.get(t as usize) {
+            Some(TokKind::Func(f, _)) => self.fn_joined.get(f).cloned(),
+            _ => None,
+        }
+    }
+
     pub fn field_any(&mut self, t: Tok) -> NodeId {
         if let Some(&n) = self.field_any.get(&t) {
             return n;
@@ -708,6 +726,10 @@ impl Model {
         self.rel(|| format!("fieldany {n} {t}"));
         let all = self.all_fields(t);
         self.edge(n, all);
+        // DECISIONS 241: what the units stored under a computed key.
+        if let Some(v) = self.joined_of(t).and_then(|j| j.any) {
+            self.edge(v, n);
+        }
         // Arrays and primitive boxes hold primitives at unknown indices.
         n
     }
@@ -861,6 +883,12 @@ impl Model {
         self.nodes[n as usize].of_marker = self.is_marker(t);
         self.all_fields.insert(t, n);
         self.rel(|| format!("allfields {n} {t}"));
+        // DECISIONS 241: every key the units stored, read under any key.
+        if let Some(j) = self.joined_of(t) {
+            for (_, v) in j.keys {
+                self.edge(v, n);
+            }
+        }
         // A path marker read under a computed key: its `[]` step
         // (DECISIONS 158).
         if self.is_path_marker(t) {

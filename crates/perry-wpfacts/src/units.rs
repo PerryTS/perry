@@ -577,6 +577,60 @@ pub(crate) struct ArgContract {
     pub top: bool,
 }
 
+/// DECISIONS 241: what the units store on a function value's own
+/// properties (contract name), per named key and under a computed key
+/// (`any`). Every holder of the function, its owner included, reads key
+/// `k` as its own store, the stand-in of `keys[k]` and of `any`
+/// (`ProgramFacts::fn_stores_out`, joined over every unit). `prototype`
+/// is never listed (DECISIONS 210(1)).
+#[derive(Clone, Debug, Default, PartialEq, Hash)]
+pub(crate) struct FnStores {
+    /// Sorted by key; empty once `any` is present.
+    pub keys: Vec<(String, ValueContract)>,
+    pub any: Option<ValueContract>,
+}
+
+impl FnStores {
+    /// The keyed join, then the subsumption (`subsume`). Monotone.
+    pub(crate) fn join(&mut self, o: &FnStores) {
+        for (k, vc) in &o.keys {
+            match self.keys.binary_search_by(|(x, _)| x.as_str().cmp(k)) {
+                Ok(i) => self.keys[i].1.join(vc),
+                Err(i) => self.keys.insert(i, (k.clone(), vc.clone())),
+            }
+        }
+        if let Some(a) = &o.any {
+            match &mut self.any {
+                Some(s) => s.join(a),
+                None => self.any = Some(a.clone()),
+            }
+        }
+        self.subsume();
+    }
+
+    /// A computed-key store may name any key, so a keyed read reads `any`
+    /// anyway: the keyed entries go into `any` (NSV: kept beside it, they
+    /// grow without bound). An unknown `any` is the top, a fixed point.
+    /// Once `any`, always `any`.
+    pub(crate) fn subsume(&mut self) {
+        let Some(any) = &mut self.any else {
+            return;
+        };
+        for (_, vc) in std::mem::take(&mut self.keys) {
+            any.join(&vc);
+        }
+        if any.unknown {
+            let why = any.why.clone();
+            *any = ValueContract {
+                prim: crate::model::prim::ALL,
+                unknown: true,
+                why,
+                ..Default::default()
+            };
+        }
+    }
+}
+
 /// Joins `b` into `a` as sets: what `b` holds that `a` lacks is appended,
 /// so `a ⊔ a = a` (the driver compares last round's value with the join).
 fn union_into<T: Clone + PartialEq>(a: &mut Vec<T>, b: &[T]) {
@@ -1191,6 +1245,9 @@ pub(crate) struct Published {
     /// joined (`ProgramFacts::ctor_runs_out`): its owner constructs it with
     /// their union on its own `new <f>` layout and publishes that layout.
     pub(crate) ctor_runs: FxHashMap<String, ArgContract>,
+    /// DECISIONS 241: per function value (contract name), what every unit
+    /// stores on its own properties, joined (`FnStores`).
+    pub(crate) fn_stores: FxHashMap<String, FnStores>,
     /// The argument contracts of closed functions (decision 13), by
     /// (module path, name): the union over every unit's calls.
     pub(crate) args: FxHashMap<(String, String), ArgContract>,

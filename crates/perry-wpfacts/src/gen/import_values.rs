@@ -607,6 +607,48 @@ impl<'a> Gen<'a> {
     /// defining unit runs it on (`note_field_fns`); any other receiver
     /// escapes. An arrow function ignores its receiver. A static member
     /// (`holder.1`) is called on the class object instead.
+    /// DECISIONS 241: function `f` (this unit's, or a stand-in) holding the
+    /// name `name` reads what every unit stored on its own properties
+    /// (`Published::fn_stores`), each value as its stand-in, under its key
+    /// in every token of `f` (`Model::fn_joined`).
+    pub(crate) fn read_fn_stores(&mut self, mi: u32, f: FnIdx, name: &str) {
+        let Some(fs) = self.unit_in.and_then(|u| u.fn_stores.get(name)) else {
+            return;
+        };
+        if self.m.fn_joined.contains_key(&f) {
+            return;
+        }
+        // Inserted first: a value naming `f` itself reaches it again.
+        self.m.fn_joined.insert(f, Default::default());
+        let mut j = crate::model::FnJoined::default();
+        for (k, vc) in &fs.keys {
+            let v = self.stand_in_value(mi, k, vc);
+            let a = self.m.atom(k);
+            j.keys.push((a, v));
+        }
+        if let Some(vc) = &fs.any {
+            j.any = Some(self.stand_in_value(mi, "[computed key]", vc));
+        }
+        // The tokens of `f` made meanwhile read it too.
+        let toks: Vec<Tok> = (0..self.m.toks.len() as Tok)
+            .filter(|&t| matches!(self.m.toks[t as usize], TokKind::Func(g, _) if g == f))
+            .collect();
+        for t in toks {
+            for &(a, v) in &j.keys {
+                if let Some(&n) = self.m.fields.get(&(t, a)) {
+                    self.m.edge(v, n);
+                }
+                if let Some(&n) = self.m.all_fields.get(&t) {
+                    self.m.edge(v, n);
+                }
+            }
+            if let (Some(v), Some(&n)) = (j.any, self.m.field_any.get(&t)) {
+                self.m.edge(v, n);
+            }
+        }
+        self.m.fn_joined.insert(f, j);
+    }
+
     pub(super) fn stand_in_fn_of(
         &mut self,
         mi: u32,
@@ -691,6 +733,9 @@ impl<'a> Gen<'a> {
         self.m.add_tok(n, tok);
         self.stand_in_fns.insert((c.name.clone(), holder), (n, tok));
         self.stand_in_fc.insert(tok, c);
+        // DECISIONS 241: its own properties hold what the units stored
+        // there (registered above: `k.parse = k` names this stand-in).
+        self.read_fn_stores(mi, fx, &c.name);
         // DECISIONS 210: a `new` of it constructs its owner's `new <name>`
         // layout: its stand-in instance is held here once the owner
         // published it (read like a cell, `other_layout`; a broken one is
