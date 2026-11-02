@@ -44,6 +44,7 @@ mod native_fs;
 mod native_proto;
 mod native_member;
 mod own_length;
+mod private_field;
 mod unknown_accessor_key;
 mod parent_value;
 mod prim_result;

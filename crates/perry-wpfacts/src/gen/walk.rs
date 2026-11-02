@@ -600,11 +600,17 @@ impl<'a> Gen<'a> {
                     );
                 }
                 None => {
-                    if f.is_private {
-                        // `#x`: a private slot, never reachable by name.
-                        continue;
-                    }
-                    let a = self.m.atom(&f.name);
+                    // `#x` is defined at construction as an own private
+                    // element under its storage key, the key every
+                    // `this.#x` read and write names (`PrivateGuard` +
+                    // named access). It is no public layout key (no birth
+                    // key, no slot) and, stored in the construction phase,
+                    // no key add.
+                    let key = match f.is_private {
+                        true => perry_hir::lower::private_value_storage_key(c.id, &f.name),
+                        false => f.name.clone(),
+                    };
+                    let a = self.m.atom(&key);
                     let thisn = self.m.node_l("field-this");
                     self.m.edge(fthis, thisn);
                     self.m.cons(

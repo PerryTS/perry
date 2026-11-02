@@ -801,7 +801,13 @@ impl<'a> Gen<'a> {
                         func: fx.f,
                     });
                 }
-                self.load(o, Key::Named(a))
+                let dst = self.load(o, Key::Named(a));
+                // An instance private field read: the guard (kind field, op
+                // read) passes only a receiver holding the element.
+                if matches!(object.as_ref(), Expr::PrivateGuard { kind: 0, op: 0, .. }) {
+                    self.m.nodes[dst as usize].held = true;
+                }
+                dst
             }
             Expr::PropertySet {
                 object,

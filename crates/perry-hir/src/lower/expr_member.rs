@@ -43,6 +43,7 @@ pub(crate) use private_guard::{
     is_class_expr_self_binding, private_storage_property, wrap_private_guard, PRIV_OP_READ,
     PRIV_OP_WRITE,
 };
+pub use private_guard::private_value_storage_key;
 pub(crate) use process_literals::{process_allowed_node_flags_literal, process_features_literal};
 pub(crate) use process_props::{
     is_ws_ready_state_receiver, lower_process_named_property, process_metadata_native_property,

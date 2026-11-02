@@ -356,7 +356,9 @@ impl Model {
             }
             _ => false,
         };
-        if !present {
+        // A private element read (`held`) never sees its key absent: the
+        // guard throws first.
+        if !present && !self.nodes[dst as usize].held {
             self.add_prim(dst, prim::UNDEF);
         }
         match key {
@@ -382,6 +384,11 @@ impl Model {
                 let all = self.all_fields(t);
                 self.edge(all, dst);
             }
+        }
+        // A private element is the object's own: its read consults no
+        // prototype and no accessor (ECMA-262 PrivateGet).
+        if self.nodes[dst as usize].held {
+            return;
         }
         // A marker is use tracking, not a value (DECISIONS 111): a load from
         // it reads its fields only. A parameter marker has no prototype here

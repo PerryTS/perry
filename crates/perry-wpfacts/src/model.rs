@@ -1162,6 +1162,10 @@ pub struct Node {
     /// A field node of a marker (its any-key, keyed and all-fields
     /// nodes): it holds the marker's reach markers as themselves.
     pub of_marker: bool,
+    /// The result of an instance private field read (`o.#x`): its guard
+    /// throws on a receiver without the element, so the read never sees
+    /// the key absent (no `undefined` for absence, `load_from`).
+    pub held: bool,
 }
 
 /// A store site: where, and whether it is a construction-phase writer for

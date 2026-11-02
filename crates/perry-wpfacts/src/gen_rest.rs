@@ -140,11 +140,13 @@ impl<'a> Gen<'a> {
                 let _ = self.expr(fx, object);
                 self.prim_node(prim::BOOL)
             }
+            // The guard returns its receiver or throws (a receiver without
+            // the brand, any primitive among them): its value is the
+            // receiver's, nothing more.
             Expr::PrivateGuard { object, .. } => {
                 let o = self.expr(fx, object);
                 let out = self.tmp("privguard");
                 self.m.edge(o, out);
-                self.m.add_prim(out, prim::ALL);
                 out
             }
             Expr::ClassMethodHome { is_static, .. } => match fx.class {
