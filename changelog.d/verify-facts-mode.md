@@ -1,4 +1,4 @@
- (a compile-time switch, part of the cache key) makes
+Compiler switch `PERRY_VERIFY_FACTS=1` (a compile-time switch, part of the cache key) makes
 codegen emit a runtime check at every proof it consumes: elided field reads,
 writes and updates (class, key at slot, value kind), proven value and field
 calls, the class switch of proven method dispatch, proven static calls, the
