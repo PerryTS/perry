@@ -120,9 +120,28 @@ cargo_build=(mbx build)
 "${cargo_build[@]}" --profile prod --target "$target" -p perry
 "${cargo_build[@]}" --profile prod --target "$target" -p perry-runtime -p perry-runtime-static
 "${cargo_build[@]}" --profile prod --target "$target" -p perry-stdlib -p perry-stdlib-static
-# The compiler and both shipped wrapper archives in one graph (#7358).
-"${cargo_build[@]}" --profile prod --target "$target" \
-  -p perry -p perry-runtime-static -p perry-stdlib-static
+# The compiler, both shipped wrapper archives and every native extension in one
+# graph (#7358), so they share one feature union. #5716: the governance
+# inventory is the explicit shipping set. Best-effort per crate, as on the other
+# release legs: if the combined build fails the core must still build alone,
+# and each extension is then retried on its own.
+governed_ext_packages=$(./scripts/release_ext_packages.sh)
+core_packages=(-p perry -p perry-runtime-static -p perry-stdlib-static)
+ext_packages=()
+while IFS= read -r package; do
+  ext_packages+=(-p "$package")
+done <<< "$governed_ext_packages"
+if ! "${cargo_build[@]}" --keep-going --profile prod --target "$target" \
+  "${core_packages[@]}" "${ext_packages[@]}"; then
+  echo "::warning::combined ext build failed on the musl target; building the core alone, then each extension on its own"
+  "${cargo_build[@]}" --profile prod --target "$target" "${core_packages[@]}"
+  while IFS= read -r package; do
+    echo "::group::build $package"
+    "${cargo_build[@]}" --profile prod --target "$target" "${core_packages[@]}" -p "$package" \
+      || echo "  (skipped $package -- failed to build on the musl target)"
+    echo "::endgroup::"
+  done <<< "$governed_ext_packages"
+fi
 
 # The WebAssembly host archive: perry links it for a WebAssembly program and
 # never builds it while compiling. lto=false, as in release-packages.yml: an

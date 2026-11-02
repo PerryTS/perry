@@ -63,30 +63,24 @@ impl NodeTagStore {
     }
 }
 
+/// `db.createTagStore(maxSize)`: `undefined` is the default 1000, any other
+/// value must be an integer in 1..i32::MAX.
 pub(crate) fn node_sqlite_tag_store_capacity(value: f64) -> usize {
     let js = value_from_f64(value);
+    if js.is_undefined() {
+        return 1000;
+    }
     let number = if js.is_int32() {
         js.as_int32() as f64
     } else if js.is_number() {
         js.as_number()
     } else {
-        return 1000;
+        throw_type("The \"maxSize\" argument must be a positive integer.");
     };
-    if !number.is_finite() {
-        return if number.is_sign_positive() {
-            i32::MAX as usize
-        } else {
-            0
-        };
+    if number.fract() != 0.0 || number < 1.0 || number > i32::MAX as f64 {
+        throw_range("The \"maxSize\" argument must be a positive integer.");
     }
-    let truncated = number.trunc();
-    if truncated <= 0.0 {
-        0
-    } else if truncated >= i32::MAX as f64 {
-        i32::MAX as usize
-    } else {
-        truncated as usize
-    }
+    number as usize
 }
 
 /// `db.createTagStore(maxSize)`.

@@ -33,7 +33,7 @@ use crate::lower_patterns::{
 };
 use crate::lower_types::{extract_param_type_with_ctx, extract_ts_type_with_ctx};
 
-use super::{lower_expr, LoweringContext};
+use super::{class_binding_read, lower_expr, LoweringContext};
 
 /// Lower an object-literal property *value* with NamedEvaluation: when the
 /// value is an anonymous function / arrow / class expression and the property
@@ -892,7 +892,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                             Type::Any,
                         )
                     } else if ctx.lookup_class(&name).is_some() {
-                        (Expr::ClassRef(name.clone()), Type::Any)
+                        (class_binding_read(ctx, &name), Type::Any)
                     } else if ctx.lookup_native_module(&name).is_some() {
                         // #5242: a native-module-bound name (`import { relative }
                         // from 'path'`) used as a shorthand property. Resolve it to
@@ -1115,7 +1115,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                                 return_type,
                             }
                         } else if ctx.lookup_class(&name).is_some() {
-                            Expr::ClassRef(name.clone())
+                            class_binding_read(ctx, &name)
                         } else if let Some(value) = builtin_global_value_expr(ctx, &name) {
                             value
                         } else {
@@ -1525,7 +1525,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                             return_type,
                         }
                     } else if ctx.lookup_class(&name).is_some() {
-                        Expr::ClassRef(name.clone())
+                        class_binding_read(ctx, &name)
                     } else if ctx.lookup_native_module(&name).is_some() {
                         // #5242: native-module-bound shorthand (`{ relative }` from
                         // `import { relative } from 'path'`). Resolve to the builtin

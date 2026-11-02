@@ -13,6 +13,7 @@ pub(crate) use export::UNDESCRIBED;
 mod for_in;
 mod glue;
 mod native_result;
+mod once;
 mod primitives;
 mod shared_closures;
 mod view;
@@ -238,6 +239,9 @@ pub struct Gen<'a> {
     pub(crate) binding_writes: FxHashMap<u32, NodeId>,
     pub(crate) write_top: crate::pts::FxHashSet<u32>,
     pub(crate) stand_in_fc: FxHashMap<Tok, &'a crate::units::FnContract>,
+    /// DECISIONS 241: stores on a published function no contract describes
+    /// (`contract_check`): sunk, published unknown.
+    pub(crate) fn_store_top: crate::pts::FxHashSet<NodeId>,
     /// Classes with a parent value (§17.2), fed after the bodies.
     pub(crate) parent_values: Vec<(u32, TmplId, Option<String>)>,
     /// Classes whose evaluated parent fed the parent value.
@@ -295,6 +299,12 @@ pub struct Gen<'a> {
     /// `FactsConfig::roots`: modules loaded whatever imports them.
     pub roots: Vec<String>,
     pub init_fn_of: FxHashMap<u32, FnIdx>,
+    /// RPG1b: per module, its once closures (`once::once_closures`).
+    pub once_ids: Vec<FxHashMap<u32, bool>>,
+    /// RPG1b: the walk is at a statement of a function body (`order_ok`),
+    /// inside that many loops of it (`StoreSite::in_loop`).
+    pub order_ok: bool,
+    pub loop_depth: u32,
     /// Object-literal IIFE parameter node → the literal template it births.
     pub iife_birth: FxHashMap<NodeId, TmplId>,
     /// Construction-phase analysis of plain functions used as constructors.
@@ -482,6 +492,7 @@ impl<'a> Gen<'a> {
             param_guard: FxHashMap::default(),
             param_ty: Vec::new(),
             class_contracts: Vec::new(),
+            fn_store_top: Default::default(),
             unit_in: None,
             view: None,
             stand_ins: FxHashMap::default(),
@@ -500,6 +511,9 @@ impl<'a> Gen<'a> {
             dynamic_only: Default::default(),
             roots: Vec::new(),
             init_fn_of: FxHashMap::default(),
+            once_ids: Vec::new(),
+            order_ok: false,
+            loop_depth: 0,
             iife_birth: FxHashMap::default(),
             fn_phase: FxHashMap::default(),
             rooted_stores: Default::default(),
@@ -1021,6 +1035,12 @@ impl<'a> Gen<'a> {
     ) -> FnIdx {
         if let Some(&f) = self.mods[mi as usize].funcs.get(&id) {
             return f;
+        }
+        if is_closure {
+            if let Some(&reload) = self.once_ids.get(mi as usize).and_then(|o| o.get(&id)) {
+                let f = self.m.funcs.len() as FnIdx;
+                self.m.once_fns.insert(f, (mi, reload));
+            }
         }
         let fx = self.m.funcs.len() as FnIdx;
         let tok = self.m.tok(TokKind::Func(fx, NO_CTX));
