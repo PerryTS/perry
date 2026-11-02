@@ -2,7 +2,7 @@
 
 Objective: complete supported WASI 0.3.0 hosting and Perry-authored component
 output, including reusable typed plugin interfaces. The implementation branch
-is integrated with main `ee0d9183d4496489dd4532247a64c66b57969230` as of November 1.
+is integrated with main `63cb3a9535b860161fd7bc0f887265dec83fefe4` as of November 2.
 The resource/ALS milestone landed in PR #13370. Existing historical receipts
 retain their original scope. An implemented helper or passing narrow test does
 not establish completion of a row below.
@@ -224,12 +224,26 @@ file set were verified locally. Public generation, returned-actor lifecycle
 auditing, actual repeated-label endpoint execution and the remaining rows stay
 open. Subsequent private-name collision fixes have separate unit qualification.
 
+The [weak-slot repair receipt](validation/wasi-moving-weak-slots-20261102.json)
+qualifies a later runtime fix at `5cd1705734`. Fresh release WebSocket output
+passed at `6ea71cc1a3`, but its separate shared-resource moving test exposed a
+stale FinalizationRegistry target. Copying now repairs remembered weak slots
+without tracing through them and retains their custody for later minors.
+The same new regression fails on the previous runtime and passes after two
+actual moves followed by weak-only target collection. All 6,422 runtime and
+299 stdlib tests pass together with normal debug assertions and serial execution.
+A fresh instrumented P3 archive passes all 17 shared-resource and 20 transport
+phases, relocating 17,789 and 12,898 objects with evacuation verification.
+The native compiler and plain reference archive are reused at `6ea71cc1a3`;
+this is targeted runtime qualification. All 138 indexed evidence files and
+their exact sizes, hashes and regular-file set were verified locally.
+
 | Requirement | Required evidence | Current state |
 | --- | --- | --- |
 | Canonical async imports and exports | Public generated components compose in both directions; overlapping calls, immediate/delayed completion, errors, post-return work and Store reuse | Experimental scalar/compound and recorded synchronous-started import profiles qualified on Linux; public CLI guarded |
 | Resource ownership across async calls | Imported/exported nominal resources, compound aliases, pre-start cancellation, returned-result races, borrow expiry at return/cancel, exactly-once drops and moving GC | Actual experimental entry point qualifies basic and compound C/Perry/C profiles on Linux, including 24 duplicate-owner rejections, 188 exactly-once drops, unclaimed results and moving GC; public async CLI remains guarded |
 | Guest `future<T>` and `stream<T>` | Readable/writable ownership, arbitrary supported WIT payloads, void, bounded writes, backpressure, final partial chunks, closure, cancellation and cleanup across suspension | Experimental reads/writes and sync/async factories qualified on Linux, including owned exported-resource records through named-interface factories: latest receipt has 17 resource phases plus 20 earlier-profile regressions, 17,356 and 12,870 relocated guest objects respectively, and 38 WIT/C tests. Runtime125 unit evidence is separately sourced with unchanged production inputs; 30 writer and 26 reader sanitizer cases pass. Subsequent imported/shared-resource receipt qualifies 19 imported phases, 17 strengthened local-resource phases and 20 transport regressions with 40 WIT/C tests. The subsequent synchronous-started import receipt qualifies 19 new phases plus all 56 earlier regressions at the new runtime, with 40 WIT/C and 129 fresh runtime unit tests. Repeated-label composition and wrong-owner rejection now pass unit validation; actual repeated-label endpoint interop, wider lifecycle coverage, staged-profile canonical cancellation and public adapters remain |
-| WASI 0.3.0 command output | A public command/runtime profile with `wasi:cli/run@0.3.0`, explicit system-interface versions and execution in a host providing the declared 0.3.0 imports; no implicit reliance on P2 compatibility | Integration branch implements `--target wasip3`; historical command/guest-GC receipts remain scoped to their sources; the latest WebSocket receipt qualifies 11 compiled P3 commands and 45 ordinary command phases plus unchanged external-source/control/20 MiB real socket cases. Native production variants, release/platform qualification and landing remain; `--target wasi` retains P2 |
+| WASI 0.3.0 command output | A public command/runtime profile with `wasi:cli/run@0.3.0`, explicit system-interface versions and execution in a host providing the declared 0.3.0 imports; no implicit reliance on P2 compatibility | Integration branch implements `--target wasip3`. The fresh Linux prod/release WebSocket receipt at `6ea71cc1a3` qualifies 27 functional phases including eight real socket client cases. The earlier `02cf3068ae` receipt separately qualifies eleven compiled P3 commands and 45 command phases. Full current command regressions, installed platform qualification and landing remain; `--target wasi` retains P2 |
 | Complete supported 0.3.0 WASI interfaces | Commands, clocks, randomness, filesystem, TCP/UDP/DNS and HTTP execute through Turnloop with capability checks, I/O cancellation and shutdown | Linux provider/command/HTTP receipts exist; complete current-profile matrix still required |
 | Cross-language interoperability | Public Perry output composed with independent Rust and maintained-C components, including resources and future/stream payloads | Scalar/compound cancellation examples and current actual resource-bearing endpoint/named-interface factory profiles exist; subsequent shared-resource receipt qualifies imported resources and cross-export record/future aliases on Linux; repeated-label nominal composition passes unit validation; actual generated repeated-label endpoint interop and the wider value matrix remain unqualified |
 | Runtime integration | Promise/nextTick task isolation, rejection identity, ALS, suspended-value tracing, teardown and positive moving-GC witnesses | Public ALS constructors/methods link from runtime alone; recorded Linux imports/exports and moving-GC profiles pass. Actual P3 libraries now preserve agent TLS across SDK tasks, including canonical WAIT/resume. The recorded synchronous-started import profile also qualifies ALS across interleaved native loans/exchanges and both moving modes. Shared-provider regression and wider platform/package coverage remain |

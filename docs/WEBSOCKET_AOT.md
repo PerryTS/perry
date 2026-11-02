@@ -32,10 +32,13 @@ original source and build profiles; its separate 45 command regression phases
 and eleven compiled P3 commands were not reexecuted by this release workload.
 
 This application passes while broader WASI 0.3 qualification remains incomplete.
-A separate resource-bearing future factory fails evacuation verification under
-forced moving GC with the fresh instrumented runtime. Ordinary execution passes;
-the failing seed and full diagnostic log are included in the evidence archive.
-Passing this WebSocket workload does not qualify that resource profile.
+A separate resource-bearing future factory failed evacuation verification under
+forced moving GC at this release receipt's source. The
+[later weak-slot repair receipt](validation/wasi-moving-weak-slots-20261102.json)
+qualifies the fix at `5cd1705734`: all 17 resource phases and 20 transport phases
+pass, with 17,789 and 12,898 relocated guest objects respectively. The fresh
+instrumented runtime uses that source; its native compiler and plain reference
+runtime remain sourced at `6ea71cc1a3`. Full WASI 0.3 qualification remains open.
 
 The stripped P1 artifact contains 5,347,131 bytes of code (91.49%) and 478,665
 bytes in its data section. A separate diagnostic build with names identifies

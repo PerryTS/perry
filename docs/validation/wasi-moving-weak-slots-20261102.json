@@ -1,0 +1,51 @@
+{
+  "date": "2026-11-02",
+  "source": "5cd1705734c73181d74380cac317f358a67c868d",
+  "scope": "Remembered weak-target repair in normal native debug units and actual P3 resources/transport",
+  "fullWasi030Qualified": false,
+  "strictTokioBanPassed": true,
+  "baseline": {
+    "source": "ecba6994f0f3ba82b01b7aea07c7b9feed350f1d plus identical regression test",
+    "actuallyFailedOnStaleTarget": true,
+    "executedIn": "v183",
+    "reusedWithExactTestEquality": true
+  },
+  "candidateRegressionPassed": true,
+  "normalDebugUnits": {
+    "runtimePassed": 6422,
+    "runtimeIgnored": 47,
+    "stdlibPassed": 299,
+    "stdlibIgnored": 1,
+    "runtimeAndStdlibTogether": true,
+    "serial": true
+  },
+  "p3RuntimeFresh": true,
+  "p3RuntimeProfile": "release gc-instruments",
+  "nativeCompilerAndPlainRuntimeReusedAtSource": "6ea71cc1a3675506869ea1ea3fe1cdff30d3fa7d",
+  "newAllOutputCohortQualified": false,
+  "profiles": {
+    "shared-acceptance": {
+      "passedPhases": 17,
+      "moving": {
+        "guestCopiedObjects": 17789,
+        "guestEvacuationVerified": true
+      }
+    },
+    "transport-acceptance": {
+      "passedPhases": 20,
+      "moving": {
+        "guestCopiedObjects": 12898,
+        "guestEvacuationVerified": true
+      }
+    }
+  },
+  "evidence": {
+    "archive": "wasi-030-v185-evidence.tar.gz",
+    "indexedFiles": 138,
+    "bytes": 394872493,
+    "sha256": "a6935cd69bb1149ece5ddae38ea4d9a210f49e08df385bc703a92e13fd8ef024",
+    "exactRegularFileSetVerified": true,
+    "allIndexedSizesAndHashesVerified": true,
+    "archiveExtracted": false
+  }
+}
