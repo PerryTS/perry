@@ -810,6 +810,7 @@ pub(super) fn compile_module_entry(
             source_function: "module_init".to_string(),
             source_function_slug: crate::expr::native_region_slug("module_init"),
             active_region_id: None,
+            byte_view_fallback_loop: false,
             native_facts: &main_native_facts,
             locals: HashMap::new(),
             local_types: init_local_types,

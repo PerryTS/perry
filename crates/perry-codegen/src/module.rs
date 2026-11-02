@@ -314,6 +314,69 @@ impl LlModule {
         self.metadata_lines.push(line);
     }
 
+    /// Give every loop latch tag (see [`crate::inst::BranchMeta`]) its own
+    /// numbered loop ID, once all functions are lowered. Each latch gets a
+    /// distinct `!K = distinct !{!K, ...}` (LLVM loop IDs are per loop); the
+    /// operand nodes (`!{!"perry.region", !"<id>"}` per region,
+    /// `!{!"perry.byte_view.fallback"}`) are shared. Ids follow the largest
+    /// numbered metadata line, so they cannot collide with the alias-scope
+    /// tables. Idempotent: a numbered tag keeps its id.
+    pub(crate) fn number_loop_metadata(&mut self) {
+        let mut next = self
+            .metadata_lines
+            .iter()
+            .filter_map(|line| metadata_definition_id(line))
+            .max()
+            .unwrap_or(0)
+            + 1;
+        let mut operand_nodes: HashMap<String, u32> = HashMap::new();
+        let mut lines = Vec::new();
+        let mut operand = |text: String, next: &mut u32, lines: &mut Vec<String>| -> u32 {
+            *operand_nodes.entry(text.clone()).or_insert_with(|| {
+                let id = *next;
+                *next += 1;
+                lines.push(format!("!{id} = {text}"));
+                id
+            })
+        };
+        for function in &mut self.functions {
+            for block in function.blocks_mut() {
+                for inst in block.insts_mut() {
+                    let meta = match inst {
+                        crate::inst::LlInst::Br { meta, .. }
+                        | crate::inst::LlInst::CondBr { meta, .. } => meta,
+                        _ => continue,
+                    };
+                    let Some(tag) = meta.as_mut().and_then(|meta| meta.loop_tag.as_mut()) else {
+                        continue;
+                    };
+                    if tag.id != 0 {
+                        continue;
+                    }
+                    let mut operands = String::new();
+                    if let Some(region) = &tag.region {
+                        let text = format!(
+                            "!{{!\"perry.region\", !\"{}\"}}",
+                            llvm_metadata_string(region)
+                        );
+                        let id = operand(text, &mut next, &mut lines);
+                        operands.push_str(&format!(", !{id}"));
+                    }
+                    if tag.byte_view_fallback {
+                        let text = "!{!\"perry.byte_view.fallback\"}".to_string();
+                        let id = operand(text, &mut next, &mut lines);
+                        operands.push_str(&format!(", !{id}"));
+                    }
+                    let id = next;
+                    next += 1;
+                    tag.id = id;
+                    lines.push(format!("!{id} = distinct !{{!{id}{operands}}}"));
+                }
+            }
+        }
+        self.metadata_lines.extend(lines);
+    }
+
     /// Declare an external function (FFI import). Deduped by name — later
     /// calls with the same name are no-ops. If a function with the same name
     /// is later *defined* in this module, the declaration is dropped at
@@ -1589,8 +1652,8 @@ impl LlModule {
             .flat_map(|(bi, names)| names.iter().map(move |n| (n.as_str(), bi)))
             .collect();
         for gi in 0..all_globals.len() {
-            let Some(&bi) = crate::fn_record::record_body(all_globals[gi])
-                .and_then(|body| body_unit.get(body))
+            let Some(&bi) =
+                crate::fn_record::record_body(all_globals[gi]).and_then(|body| body_unit.get(body))
             else {
                 continue;
             };
@@ -1914,4 +1977,18 @@ fn has_js_call_abi(function: &LlFunction) -> bool {
         && function.params[2..]
             .iter()
             .all(|(ty, _)| *ty == crate::types::DOUBLE)
+}
+
+/// An LLVM metadata string body: printable ASCII except `"` and `\\` as-is,
+/// every other byte as `\\XX`.
+fn llvm_metadata_string(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for byte in text.bytes() {
+        if (0x20..0x7f).contains(&byte) && byte != b'"' && byte != b'\\' {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("\\{byte:02X}"));
+        }
+    }
+    out
 }

@@ -587,6 +587,7 @@ pub(super) fn compile_method(
             class.name, method.name
         )),
         active_region_id: None,
+        byte_view_fallback_loop: false,
         native_facts: &native_facts,
         locals,
         local_types,

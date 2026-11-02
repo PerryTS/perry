@@ -347,7 +347,8 @@ pub(super) fn lower(
     let fast_label = ctx.block_label(fast_idx);
     let slow_label = ctx.block_label(slow_idx);
     let merge_label = ctx.block_label(merge_idx);
-    ctx.block().cond_br(&admitted, &fast_label, &slow_label);
+    ctx.block()
+        .cond_br_byte_view_version(&admitted, &fast_label, &slow_label);
 
     let labels = ctx.pending_labels.clone();
     ctx.current_block = fast_idx;
@@ -481,7 +482,16 @@ pub(super) fn lower(
     ctx.current_block = slow_idx;
     ctx.pending_labels = labels;
     let saved_fast_path = std::mem::replace(&mut ctx.disable_buffer_fast_path, true);
+    // Its latch says it is the original copy; the admission branch above
+    // says which copy runs. Together they let a proof exclude this copy's
+    // generic accesses only where they sit behind the admission.
+    ctx.byte_view_fallback_loop = true;
     let slow = lower_for_after_init(ctx, init, condition, update, body, "for.byte_view_slow");
+    debug_assert!(
+        !ctx.byte_view_fallback_loop,
+        "the original copy took the fallback mark"
+    );
+    ctx.byte_view_fallback_loop = false;
     ctx.disable_buffer_fast_path = saved_fast_path;
     slow?;
     if !ctx.block().is_terminated() {

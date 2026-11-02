@@ -1881,12 +1881,12 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
                 );
                 Ok(())
             }
-            I::Br { label } => {
+            I::Br { label, .. } => {
                 let b = self.block(label);
                 self.builder.build_unconditional_branch(b).map_err(be)?;
                 Ok(())
             }
-            I::CondBr { cond, t, f } => {
+            I::CondBr { cond, t, f, .. } => {
                 let cv = self.val(self.ctx.bool_type().into(), cond)?;
                 let tb = self.block(t);
                 let fb = self.block(f);

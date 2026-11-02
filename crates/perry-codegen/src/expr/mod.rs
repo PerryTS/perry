@@ -422,6 +422,10 @@ pub(crate) struct FnCtx<'a> {
     pub source_function_slug: String,
     /// Stable id for the labeled loop currently being lowered.
     pub active_region_id: Option<String>,
+    /// Set by `stmt/byte_view_loop.rs` right before it lowers the original
+    /// (fallback) copy of a versioned loop; the next for-loop lowering takes
+    /// it and marks its latch (see `crate::inst::LoopTag`).
+    pub byte_view_fallback_loop: bool,
     /// Full native-region fact graph collected for this lowered HIR region.
     ///
     /// Existing fields below borrow individual subgraphs for compatibility

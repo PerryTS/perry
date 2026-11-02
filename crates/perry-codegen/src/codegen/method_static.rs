@@ -259,6 +259,7 @@ pub(in crate::codegen) fn compile_static_method(
             class.name, f.name
         )),
         active_region_id: None,
+        byte_view_fallback_loop: false,
         native_facts: &native_facts,
         locals,
         local_types,

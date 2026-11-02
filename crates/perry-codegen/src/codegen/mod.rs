@@ -4466,6 +4466,7 @@ fn lower_module(
     closed_targets::apply(&mut llmod);
     let total_buffer_scopes = llmod.buffer_alias_counter;
     emit_buffer_alias_metadata(&mut llmod, total_buffer_scopes);
+    llmod.number_loop_metadata();
     llmod
         .native_rep_records
         .extend(typed_clone_rejection_records);

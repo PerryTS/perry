@@ -1137,8 +1137,8 @@ fn facts_of(
             collecting = !gc_leaf;
         }
         LlInst::AsmBarrier => {}
-        LlInst::Br { label } => succs.push(label.clone()),
-        LlInst::CondBr { cond, t, f } => {
+        LlInst::Br { label, .. } => succs.push(label.clone()),
+        LlInst::CondBr { cond, t, f, .. } => {
             use_op(&mut uses, cond);
             succs.push(t.clone());
             succs.push(f.clone());
@@ -1251,7 +1251,10 @@ fn raw_facts(gc: &crate::gc_call_effects::GcEffects, text: &str, slots: &HashSet
     // position that has to be picked correctly.
     let is_invoke = rhs.starts_with("invoke ");
     if rhs.starts_with("br label %") {
-        succs.push(rhs["br label %".len()..].trim().to_string());
+        let target = &rhs["br label %".len()..];
+        // A latch carries `, !llvm.loop !N` after its target.
+        let target = target.split(',').next().unwrap_or(target);
+        succs.push(target.trim().to_string());
     } else if rhs.starts_with("br i1 ") || rhs.starts_with("switch ") || is_invoke {
         for part in rhs.split("label %").skip(1) {
             succs.push(

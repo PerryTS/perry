@@ -1166,6 +1166,7 @@ pub(super) fn compile_closure(
         source_function: format!("closure_{}", func_id),
         source_function_slug: crate::expr::native_region_slug(&format!("closure_{}", func_id)),
         active_region_id: None,
+        byte_view_fallback_loop: false,
         native_facts: &native_facts,
         locals,
         local_types,
