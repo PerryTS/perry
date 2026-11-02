@@ -1,0 +1,19 @@
+{
+  "date": "2026-11-02",
+  "failedRun": "https://github.com/PerryTS/perry/actions/runs/41385649057",
+  "failedJob": 125085937584,
+  "failedSource": "0ba2ee0342920c2bdc632c2316decfb544bb658c",
+  "failure": "component_guest_acceptance.py build-rust-host: fixture pinned Wasmtime 48.0.7 while perry-wasi requires 48.0.8; fresh resolution rejected 48.0.8 under the seven-day adoption policy.",
+  "fix": "Align the fixture engine pin with perry-wasi and resolve against the existing workspace lock; preserve the seven-day policy.",
+  "offlineMetadataExitCode": 0,
+  "wasmtimeVersions": [
+    "48.0.8"
+  ],
+  "packagesNewToBothPreservedLocks": [],
+  "tokioPackages": [],
+  "registryVersionDowngrades": [],
+  "scope": "Standalone Rust acceptance fixture only; workspace Cargo.toml and Cargo.lock are unchanged.",
+  "fixtureExecutionQualified": false,
+  "requiredP3JobPassed": false,
+  "fullWasi030Qualified": false
+}
