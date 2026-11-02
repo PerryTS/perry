@@ -419,7 +419,15 @@ pub(crate) fn emit_layout_key_list(
         if hex.is_empty() || hex.len() % 2 != 0 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
             return "null".into();
         }
-        slots.push(Slot::ImageString(format!("perry_image_literal_0_{hex}")));
+        // The record's own name rule: a long key is named by its digest,
+        // not spelled (`string_pool::image_record_symbol_of`).
+        let bytes: Vec<u8> = (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).expect("hex checked above"))
+            .collect();
+        slots.push(Slot::ImageString(
+            super::string_pool::image_record_symbol_of(&bytes, false),
+        ));
     }
     let entries = keys
         .iter()
@@ -670,6 +678,40 @@ mod tests {
         emit_test_fixture_install(block, &fixture);
         block.ret_void();
         module.to_ir()
+    }
+
+    /// A key longer than the spelled-name limit names its image string
+    /// record by digest, as the record's definition does. Spelling it from
+    /// the atom's hex referenced an undefined symbol (`LLVM IR parse error:
+    /// use of undefined value @perry_image_literal_0_4543...`, a TypeScript
+    /// diagnostic message used as an object key in oxfmt's typescript
+    /// bundle).
+    #[test]
+    fn a_long_key_names_its_record_by_digest() {
+        let long = "ECMAScript_imports_and_exports_cannot_be_written_".repeat(6);
+        let hex: String = long.bytes().map(|b| format!("{b:02x}")).collect();
+        let short_hex: String = "length".bytes().map(|b| format!("{b:02x}")).collect();
+        let keys = vec![
+            (format!("perry_atom_{short_hex}"), 0, 0, 0),
+            (format!("perry_atom_{hex}"), 0, 0, 1),
+        ];
+        let mut module = LlModule::new("aarch64-apple-darwin");
+        emit_layout_key_list(&mut module, "keys", &keys);
+        let ir = module.to_ir();
+        let record = super::super::string_pool::image_record_symbol_of(long.as_bytes(), false);
+        assert!(
+            record.starts_with(&format!("perry_image_literal_0_s{}_", long.len())),
+            "{record}"
+        );
+        assert!(ir.contains(&format!("@{record}")), "{ir}");
+        assert!(
+            !ir.contains(&format!("perry_image_literal_0_{hex}")),
+            "{ir}"
+        );
+        assert!(
+            ir.contains(&format!("@perry_image_literal_0_{short_hex}")),
+            "{ir}"
+        );
     }
 
     #[test]

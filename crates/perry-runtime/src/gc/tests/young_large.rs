@@ -24,7 +24,6 @@ fn large_leaf_has_dedicated_young_storage_and_no_payload_scan() {
         let p = leaf(LARGE_OBJECT_THRESHOLD_BYTES + 8);
         (p as *mut u64).write(string_bits(small));
         let header = header_from_user_ptr(p as *const u8);
-        let total = (*header).size as usize;
         assert_eq!(
             crate::arena::classify_heap_generation(p),
             HeapGeneration::Nursery
@@ -222,7 +221,7 @@ fn large_leaf_pressure_does_not_pretenure_the_special_json_output() {
 
 #[test]
 fn old_legacy_large_backing_still_classifies_secondary_objects() {
-    std::thread::spawn(|| unsafe {
+    std::thread::spawn(|| {
         let _guard = CopyingNurseryTestGuard::new(0);
         let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
         let first =

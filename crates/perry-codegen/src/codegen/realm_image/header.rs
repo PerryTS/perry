@@ -16,6 +16,7 @@ use perry_abi::realm_header::{
 };
 use perry_hir::realm_manifest::{RealmDeclaration, RealmHeaderFacts, RealmValue};
 
+#[cfg(test)]
 use super::*;
 
 fn agree(cell: &RealmDeclaration, manifest: u16, derived: u16) -> Result<u16, String> {

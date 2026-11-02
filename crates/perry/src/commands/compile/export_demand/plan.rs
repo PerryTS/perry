@@ -118,7 +118,6 @@ pub(crate) fn plan(
                         )),
                         None => {}
                     },
-                    None => {}
                 }
             }
         }

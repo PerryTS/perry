@@ -8,7 +8,9 @@
 # callgrind_annotate per function, join by function name.
 #
 # Writes <outdir>/<witness>.tsv (fn, ir_main, ir_head, delta; delta descending) and
-# <outdir>/summary.tsv (witness, total_main, total_head, delta, functions_with_plus_ir).
+# <outdir>/summary.tsv (witness, total_main, total_head, delta, functions_with_plus_ir, then the .text
+# and file bytes of each arm's unpadded link: text_main, text_head, text_delta, bin_main, bin_head,
+# bin_delta). The size columns are reported, not gated.
 # Exit 1 if a witness total is above main, or a function with +Ir is not listed in allow.txt
 # (one function name per line, '#' comments). A matched +/- pair from inlining is explained by
 # listing both names there.
@@ -132,14 +134,18 @@ measure() { # arm name dir args  (runs $OUT/w/$n.$arm from the one path $OUT/w/$
   echo "${totals[0]}"
 }
 
-printf "witness\ttotal_main\ttotal_head\tdelta\tfns_plus\n" > "$OUT/summary.tsv"; fail=0
+# .text bytes and file bytes of a linked binary: "<text> <file>"
+sizes() { echo "$(readelf -SW "$1" | awk '$2==".text" { print strtonum("0x" $6) }') $(stat -c %s "$1")"; }
+printf "witness\ttotal_main\ttotal_head\tdelta\tfns_plus\ttext_main\ttext_head\ttext_delta\tbin_main\tbin_head\tbin_delta\n" > "$OUT/summary.tsv"; fail=0
 for spec in "${W[@]}"; do
   IFS='|' read -r n d s a <<< "$spec"
   if [ -n "${IRDIFF_ONLY:-}" ] && [[ " $IRDIFF_ONLY " != *" $n "* ]]; then continue; fi
-  if [ ! -f "$d/$s" ]; then echo "MISSING $n: no harness at $d/$s" | tee -a "$OUT/missing.txt"; printf "%s\tMISSING\tMISSING\t-\t-\n" "$n" >> "$OUT/summary.tsv"; continue; fi
+  if [ ! -f "$d/$s" ]; then echo "MISSING $n: no harness at $d/$s" | tee -a "$OUT/missing.txt"; printf "%s\tMISSING\tMISSING\t-\t-\t-\t-\t-\t-\t-\t-\n" "$n" >> "$OUT/summary.tsv"; continue; fi
   zero=-,-; [ "$LINKPAD" = 1 ] && zero=$(python3 "$LINKPAD_PY" zero "$OUT/pad"),-
   compile main "$MAIN" "$WS_MAIN" "$n" "$d" "$s" "$zero" || { echo "COMPILE-FAIL $n main"; fail=1; continue; }
   compile head "$HEAD" "$WS_HEAD" "$n" "$d" "$s" "$zero" || { echo "COMPILE-FAIL $n head"; fail=1; continue; }
+  # sizes of the unpadded links, before linkpad adds any pad
+  read -r xm bm <<< "$(sizes "$OUT/w/$n.main")"; read -r xh bh <<< "$(sizes "$OUT/w/$n.head")"
   if [ "$LINKPAD" = 1 ]; then
     linkpad "$n" "$d" "$s" || { rm -rf "$OUT/tmp/cache.main" "$OUT/tmp/cache.head"; echo "LINKPAD-FAIL $n: layouts differ (see $OUT/$n.layout.txt, $OUT/pads.tsv)"; fail=1; continue; }
   fi
@@ -154,7 +160,7 @@ for spec in "${W[@]}"; do
   # a +row is checked unless it is allowed or unstable; FILENAME (not NR==FNR) so an empty list does not pass vacuously
   bad=$(awk -F'\t' 'FILENAME==ARGV[1] || FILENAME==ARGV[2] { ok[$0]; next } $4>0 && !($1 in ok)' "$OUT/tmp/allow.$n" "$OUT/tmp/unst.$n" "$OUT/$n.tsv" | wc -l)
   for a in main head; do awk -F'\t' -v w="$n" -v a="$a" '{ printf "unstable\t%s\t%s\t%s\tspread=%d\n", w, a, $1, $4 }' "$OUT/cg/$n.$a.unstable" >> "$OUT/unstable.tsv"; done
-  printf "%s\t%s\t%s\t%d\t%d\n" "$n" "$tm" "$th" $((th-tm)) "$plus" >> "$OUT/summary.tsv"
+  printf "%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n" "$n" "$tm" "$th" $((th-tm)) "$plus" "$xm" "$xh" $((xh-xm)) "$bm" "$bh" $((bh-bm)) >> "$OUT/summary.tsv"
   [ "$th" -gt "$tm" ] && { echo "TOTAL ABOVE MAIN: $n (+$((th-tm)))"; fail=1; }
   [ "$bad" -gt 0 ] && { echo "UNEXPLAINED +Ir in $n: $bad functions (see $OUT/$n.tsv)"; fail=1; }
 done

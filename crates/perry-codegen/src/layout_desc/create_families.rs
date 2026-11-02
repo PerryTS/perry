@@ -30,7 +30,7 @@ mod emission;
 
 pub(crate) use emission::{
     after_stmt, before_stmt, emission, emit_holder_load, lower_add, lower_assign, lower_binding,
-    lower_create, lower_holder_read, ImageDesc,
+    lower_create, lower_holder_read,
 };
 
 pub(crate) use site::{add_site, create_site, holder_read, site};
@@ -38,7 +38,7 @@ use site::literal_add_site;
 
 pub(crate) use models::{Add, Create, CreateState, HolderRead, Site};
 pub use models::{ExportFact, ImageEntry, ImageKey, ProtoExports};
-use models::{exportable, plain_data};
+use models::plain_data;
 use models::{ACCESSOR, HAS_GET, HAS_SET, NON_CONFIGURABLE, NON_ENUMERABLE, NON_WRITABLE};
 
 mod proto_exports;

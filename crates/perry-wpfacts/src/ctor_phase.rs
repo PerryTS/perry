@@ -29,6 +29,14 @@ pub struct CtorPhase {
     pub assigned_order: Vec<String>,
     /// Keys definitely assigned before any observation.
     pub definite: Vec<String>,
+    /// Keys the constructor body itself stores on every exit path before
+    /// any observation. A declared field (`x: T;`) defines `undefined` at
+    /// field-init time: that makes its key present (`definite`), not its
+    /// `undefined` unobservable; only a store here does.
+    pub stored: Vec<String>,
+    /// Named fields defined after `this` may have been observed (an earlier
+    /// value, or their own, leaked it): an observer can find them absent.
+    pub late_fields: Vec<String>,
     /// Identity (`*const Expr as usize`) of construction-phase store exprs.
     pub phase_stores: BTreeSet<usize>,
 }
@@ -57,10 +65,20 @@ pub fn analyze(c: &Class) -> CtorPhase {
         })
         .collect();
     let methods: BTreeSet<String> = c.methods.iter().map(|m| m.name.clone()).collect();
-    match &c.constructor {
-        Some(ctor) => analyze_body(&fields, methods, &ctor.params, &ctor.body),
-        None => analyze_body(&fields, methods, &[], &[]),
-    }
+    let (params, body): (&[perry_hir::Param], &[Stmt]) = match &c.constructor {
+        Some(ctor) => (&ctor.params, &ctor.body),
+        None => (&[], &[]),
+    };
+    let mut ph = analyze_body(&fields, methods.clone(), params, body);
+    // The same walk with only initialized fields holding a value: a key a
+    // path leaves at its declared `undefined` is no `stored` key (a read of
+    // it before the store closes the phase there: fewer keys, never more).
+    let valued: Vec<(&Option<Expr>, Option<&str>)> = fields
+        .iter()
+        .map(|&(init, named)| (init, named.filter(|_| init.is_some())))
+        .collect();
+    ph.stored = analyze_body(&valued, methods, params, body).definite;
+    ph
 }
 
 /// The construction phase of a constructor-function body (`new f()`).
@@ -90,12 +108,19 @@ fn analyze_body(
         open: true,
         assigned: BTreeSet::new(),
     };
-    // Field initializers run first (base class) / right after super().
+    // A base constructor defines its fields right after binding `this`,
+    // before the parameter defaults run (node: field, then param). A derived
+    // one evaluates its parameter defaults first, but `this` is unbound
+    // there, so they cannot observe the instance; its fields are defined
+    // right after super().
     for (init, named) in fields {
         if let Some(init) = init {
             w.expr(&mut st, init);
         }
         if let Some(n) = named {
+            if !st.open {
+                w.ph.late_fields.push(n.to_string());
+            }
             st.assigned.insert(n.to_string());
         }
     }

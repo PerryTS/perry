@@ -247,6 +247,13 @@ impl<'a> Gen<'a> {
             return;
         };
         let mut declared = Vec::new();
+        let phase = self.ctor_phase.get(&tm).cloned();
+        // A parent constructor that leaks `this` lets an observer see the
+        // instance before any key of this class is stored or defined. Asked
+        // of the chain as it stands: `CtorPhase::parent_leaks` was taken
+        // before the solve, when a parent value not yet settled counts as a
+        // leak; `settle_parent_layouts` recomputes these keys once it is.
+        let parent_leaks = !self.parent_pending(tm) && self.parent_chain_leaks(tm);
         for f in &c.fields {
             if f.is_private || f.key_expr.is_some() {
                 continue;
@@ -260,18 +267,32 @@ impl<'a> Gen<'a> {
                 // stores it before anyone can observe the instance
                 // (`CtorPhase::definite`, below).
                 perry_hir::ClassFieldOrigin::ConstructorStore => push_unique(&mut reserved, a),
+                // A field is defined at the birth, in order: present from
+                // birth on unless the instance could be observed before its
+                // definition (`CtorPhase::late_fields`, a leaking parent);
+                // then it is a reservation like a constructor store.
+                perry_hir::ClassFieldOrigin::Definition
+                    if parent_leaks
+                        || phase
+                            .as_ref()
+                            .is_some_and(|ph| ph.late_fields.contains(&f.name)) =>
+                {
+                    push_unique(&mut reserved, a)
+                }
                 perry_hir::ClassFieldOrigin::Definition => push_unique(&mut definite, a),
             }
         }
         self.m.tmpls[tm as usize].declared = declared;
-        if let Some(ph) = self.ctor_phase.get(&tm).cloned() {
+        if let Some(ph) = phase {
             for k in &ph.assigned_order {
                 let a = self.m.atom(k);
                 push_unique(&mut keys, a);
             }
-            for k in &ph.definite {
-                let a = self.m.atom(k);
-                push_unique(&mut definite, a);
+            if !parent_leaks {
+                for k in &ph.definite {
+                    let a = self.m.atom(k);
+                    push_unique(&mut definite, a);
+                }
             }
         }
         // A parent that is a value (§17.2) is not known before the solve
@@ -562,11 +583,14 @@ impl<'a> Gen<'a> {
             fn_ctor: false,
         };
         let inst = self.m.tok(TokKind::Obj(tm, NO_CTX));
+        // A declared field's `undefined` is unobservable only when the
+        // constructor body stores the key on every path first (`stored`; its
+        // key being present from birth, `definite`, is not enough).
         let ctor_definite: Vec<String> = self
             .ctor_phase
             .get(&tm)
             .filter(|ph| !ph.parent_leaks)
-            .map(|ph| ph.definite.clone())
+            .map(|ph| ph.stored.clone())
             .unwrap_or_default();
         for f in &c.fields {
             let site = self.store_site(mi, fi, format!("field {}", f.name), Some(tm), true);
@@ -600,11 +624,15 @@ impl<'a> Gen<'a> {
                     );
                 }
                 None => {
-                    if f.is_private {
-                        // `#x`: a private slot, never reachable by name.
-                        continue;
-                    }
-                    let a = self.m.atom(&f.name);
+                    // `#x`: the class's private field, a key apart from
+                    // every public one (`Model::private_atom`).
+                    let a = match f.is_private {
+                        true => {
+                            let key = self.private_field_key(mi, c, &f.name);
+                            self.m.private_atom(&key)
+                        }
+                        false => self.m.atom(&f.name),
+                    };
                     let thisn = self.m.node_l("field-this");
                     self.m.edge(fthis, thisn);
                     self.m.cons(
@@ -641,9 +669,15 @@ impl<'a> Gen<'a> {
             // A declared static field (`Model::static_fields`), whether the
             // walk sees its initializer here or where a nested class is
             // evaluated.
+            let named = match f.is_private {
+                true => {
+                    let key = self.private_field_key(mi, c, &f.name);
+                    self.m.private_atom(&key)
+                }
+                false => self.m.atom(&f.name),
+            };
             if f.key_expr.is_none() {
-                let a = self.m.atom(&f.name);
-                self.m.static_fields.insert((tm, a));
+                self.m.static_fields.insert((tm, named));
             }
             if c.is_nested && (f.init.is_some() || f.key_expr.is_some()) {
                 // A nested class's static initializers run where the class
@@ -657,13 +691,12 @@ impl<'a> Gen<'a> {
                 Some(e) => self.expr(&sfx, e),
                 None => self.prim_node(prim::UNDEF),
             };
-            let a = self.m.atom(&f.name);
             let fl = match &f.key_expr {
                 Some(k) => {
                     let _ = self.expr(&sfx, k);
                     self.m.field_any(cobj)
                 }
-                None => self.m.field(cobj, a),
+                None => self.m.field(cobj, named),
             };
             self.m.edge(v, fl);
         }

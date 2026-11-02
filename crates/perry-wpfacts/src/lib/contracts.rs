@@ -26,7 +26,7 @@ pub(super) fn class_statics(
                 .get(&cobj)
                 .into_iter()
                 .flatten()
-                .filter(|&&k| Some(k as usize) != pa)
+                .filter(|&&k| Some(k as usize) != pa && !g.m.is_private_atom(k))
                 .filter_map(|&k| {
                     let n = *g.m.fields.get(&(cobj, k))?;
                     let ts = g.m.nodes[n as usize].pts.to_sorted();
@@ -81,6 +81,10 @@ pub(super) fn literal_field_fns(
     keys.dedup();
     let mut out = Vec::new();
     'key: for a in keys {
+        // A class private field is no key of the layout to a reader.
+        if g.m.is_private_atom(a) {
+            continue;
+        }
         let mut fs: Vec<(model::FnIdx, model::Tok)> = Vec::new();
         for &t in &mine {
             let Some(&n) = g.m.fields.get(&(t, a)) else {
@@ -241,6 +245,8 @@ pub(super) fn nested_layouts(
                     literal_shape: true,
                     facts,
                     methods: Vec::new(),
+                    getters: Vec::new(),
+                    own_getters: own_getters(&g, itm),
                     native_parent: None,
                     parent: foreign_parent(&g, itm),
                     field_fns: Vec::new(),
@@ -337,6 +343,78 @@ pub(super) fn chain_unsettled(g: &gen::Gen, tm: model::TmplId) -> bool {
         cur = t.parent;
     }
     false
+}
+
+/// The getters on `tm`'s prototype chain inside this unit, as `methods`
+/// walks it (`ClassContract::getters`): key and function name.
+pub(super) fn proto_getters(g: &gen::Gen, tm: model::TmplId) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut cur = Some(tm);
+    while let Some(c) = cur {
+        if g.m.foreign.contains_key(&c) {
+            break;
+        }
+        if let Some(&proto) = g.m.tok_index.get(&model::TokKind::Proto(c)) {
+            for &a in g.m.accessor_keys.get(&proto).into_iter().flatten() {
+                let Some((gs, _)) = g.m.accessors.get(&(proto, a)) else {
+                    continue;
+                };
+                for &t in gs {
+                    let f = g.m.tok_fn(t);
+                    if f == model::NO_FN {
+                        continue;
+                    }
+                    let e = (
+                        g.m.atoms[a as usize].clone(),
+                        g.m.funcs[f as usize].name.clone(),
+                    );
+                    if !out.contains(&e) {
+                        out.push(e);
+                    }
+                }
+            }
+        }
+        cur = g.m.tmpls[c as usize].parent;
+    }
+    out.sort();
+    out
+}
+
+/// The own accessors of literal layout `tm` (`ClassContract::own_getters`):
+/// every accessor installed on an object of `tm` (its birth defines them,
+/// `js_object_define_accessor`), as key and getter name; a key with only a
+/// setter carries an empty name. The key hides the prototype chain for the
+/// reader, as it does in the owner.
+pub(super) fn own_getters(g: &gen::Gen, tm: model::TmplId) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for (&(h, a), (gs, ss)) in g.m.accessors.iter() {
+        if !matches!(g.m.toks[h as usize], model::TokKind::Obj(..)) || g.m.tmpl_of(h) != Some(tm) {
+            continue;
+        }
+        let key = g.m.atoms[a as usize].clone();
+        let mut any = false;
+        for &t in gs {
+            let f = g.m.tok_fn(t);
+            if f == model::NO_FN {
+                continue;
+            }
+            any = true;
+            let e = (key.clone(), g.m.funcs[f as usize].name.clone());
+            if !out.contains(&e) {
+                out.push(e);
+            }
+        }
+        // A setter-only key, or a getter that is no function (a computed
+        // or unknown value): the key is still an own accessor.
+        if !any && (!ss.is_empty() || !gs.is_empty()) {
+            let e = (key.clone(), String::new());
+            if !out.contains(&e) {
+                out.push(e);
+            }
+        }
+    }
+    out.sort();
+    out
 }
 
 /// The first class up `tm`'s chain that is another unit's (a stand-in),
@@ -494,7 +572,7 @@ pub(super) fn fn_contract_of(
             .filter(|(g2, _)| *g2 == f)
             .map(|&(_, n)| n)
             .collect();
-    let d = describe_nodes(
+    let mut d = describe_nodes(
         g,
         templates,
         f,
@@ -503,6 +581,23 @@ pub(super) fn fn_contract_of(
         layouts_out,
         open_tm,
     );
+    // A ⊤ result has one spelling: `ret: None` with `ret_unknown` and every
+    // primitive kind, as `fn_named` describes one. A reader takes a result named
+    // by no contract (`None`) and one whose only member is ⊤ (`Some([])`,
+    // unknown, every kind) the same way (`Gen::fill_described`: ⊤ and every
+    // kind), but the two digests differ, and which one a solve publishes
+    // depends on the order its escapes ran (`ret_top` holds only a result
+    // that escaped before its function became a contract function). Readers
+    // embed the contract in what they publish, so its owner solved again and
+    // published the other spelling: oxfmt's esbuild `__commonJS` closures in
+    // the Supabase CLI alternated between the two every round, forever.
+    if d.layouts.as_ref().is_some_and(|l| l.is_empty()) && d.unknown && d.prim == model::prim::ALL {
+        d.layouts = None;
+    }
+    if d.layouts.is_none() {
+        d.unknown = true;
+        d.prim = model::prim::ALL;
+    }
     // DECISIONS 140: the calls the body makes through a parameter marker,
     // each argument described as the result is.
     let mut param_calls: Vec<units::ParamCall> = Vec::new();
@@ -1081,6 +1176,8 @@ pub(super) fn describe_nodes(
                             literal_shape,
                             facts: facts.clone(),
                             methods: Vec::new(),
+                            getters: Vec::new(),
+                            own_getters: own_getters(&g, tm),
                             native_parent: None,
                             parent: foreign_parent(&g, tm),
                             field_fns: Vec::new(),
@@ -1432,6 +1529,8 @@ pub(super) fn describe_toks(
                     literal_shape,
                     facts,
                     methods: Vec::new(),
+                    getters: Vec::new(),
+                    own_getters: own_getters(&g, tm),
                     native_parent: None,
                     parent: foreign_parent(&g, tm),
                     field_fns: Vec::new(),
@@ -1623,6 +1722,8 @@ pub(super) fn fn_inst_contract(
         literal_shape: false,
         facts,
         methods,
+        getters: proto_getters(g, tm),
+        own_getters: Vec::new(),
         native_parent: None,
         parent: None,
         field_fns: Vec::new(),
@@ -1892,6 +1993,8 @@ pub(super) fn arg_contract_of(
                             literal_shape: true,
                             facts: facts.clone(),
                             methods: Vec::new(),
+                            getters: Vec::new(),
+                            own_getters: own_getters(&g, tm),
                             native_parent: None,
                             parent: foreign_parent(&g, tm),
                             field_fns: Vec::new(),

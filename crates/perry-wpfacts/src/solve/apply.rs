@@ -771,6 +771,14 @@ impl Model {
                     if t == TOP || matches!(self.toks[t as usize], TokKind::ClassObj(_)) {
                         self.cons(src, Cons::ParentGiven { of: t });
                     }
+                    // A runtime object (⊤ may be one; `ObjectProto` stands for
+                    // every builtin prototype) takes `src` as its prototype:
+                    // its lookups may reach the keys of `src`'s chain.
+                    if (t == TOP || self.shared_of(t).is_some_and(|s| s != Shared::BuiltinFn))
+                        && !self.native_given.contains(&(t, src))
+                    {
+                        self.native_given.push((t, src));
+                    }
                     // `%Object.prototype%` is an immutable prototype exotic
                     // object: setting its [[Prototype]] to anything but its
                     // own (null) throws.
@@ -1048,6 +1056,8 @@ impl Model {
                 accessor,
             } => {
                 if let Some(k) = self.keyed_once(n, o, 0) {
+                    let dk = k.unwrap_or_else(|| self.atom(crate::STAR_KEY));
+                    self.define_on.insert((o, dk, !accessor));
                     match k {
                         Some(key) => self.cons(
                             o,
@@ -1085,7 +1095,14 @@ impl Model {
                 if (prim & !prim::NUM != 0 || !toks.is_empty())
                     && self.index_store_done.insert((n, site, false))
                 {
-                    self.cons(o, Cons::Store { key: Key::Any, src, site });
+                    self.cons(
+                        o,
+                        Cons::Store {
+                            key: Key::Any,
+                            src,
+                            site,
+                        },
+                    );
                 }
             }
             Cons::AccessorKeyed { holder, f, setter } => {
