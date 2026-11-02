@@ -229,7 +229,14 @@ fn a_class_bound_through_its_self_cell_is_a_contract() {
             .filter(|t| t.starts_with("/t2/r.js:R ") || t.starts_with("/t2/r.js:S "))
             .collect()
     };
-    assert!(pw.len() >= 8, "whole-program proves {:?}", pw);
+    // Whole program: `S` and `T` extend the factory's local `R` (an
+    // `extends` that is no binding), whose evaluation feeds their parent
+    // when the factory is walked (rule 7). No constructor of theirs runs
+    // (`newInstance` is never called, below), so `T::run`, `S::get`,
+    // `S.make` and both constructors are dead and keep no site: 7 sites.
+    // Before rule 7 the parent was ⊤ at gen (E11), the instances escaped
+    // and those bodies were walked as reachable from unknown code (11).
+    assert_eq!(pw.len(), 7, "whole-program proves {:?}", pw);
     let _ = (lost, classes);
     // Per unit 7 of 13. `T::run` calls `a.append(b, NONE)` with `a` read
     // from `this.k`, which per unit is ⊤ (DECISIONS 186): a ⊤ callee, so
@@ -238,8 +245,7 @@ fn a_class_bound_through_its_self_cell_is_a_contract() {
     // constructors is ⊤, and `this.v = v`, `this.k = S` store into ⊤: under
     // the static ⊤-store rule (#13338) that writes `v` and `k` on every
     // intrinsic prototype, so the read `this.k` in `run` is no longer
-    // proven per unit (it was the 8th site before the rule). Whole program
-    // proves all 13.
+    // proven per unit (it was the 8th site before the rule).
     assert_cjs_per_unit(&w, &u, 7);
     // `T.k = S` holds the class and the cell's `undefined` both ways: the
     // reader's import carries the binding's primitives.

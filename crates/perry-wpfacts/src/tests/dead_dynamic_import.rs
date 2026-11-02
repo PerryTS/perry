@@ -684,3 +684,62 @@ fn a_class_expression_parent_evaluated_later_is_its_parent() {
         &[("core", &unknown)]
     ));
 }
+
+/// Rule 8: the generic arm of a guarded `Object.create(p)` is the
+/// intrinsic's operation (a fresh object of the site whose chain holds `p`),
+/// not an unknown call whose result is ⊤. effect's ConfigProvider
+/// `buildEnvTrie` (`node.children ??= Object.create(null); node =
+/// children[seg] ??= {}`): with a ⊤ result the computed store is an any-key
+/// write on ⊤, every builtin key may be written and the language objects
+/// reach unknown code.
+const CREATE: &str = r#"
+export function child(seg: string) {
+  const children: any = Object.create(null);
+  children[seg] ??= {};
+  return children;
+}
+"#;
+#[test]
+fn a_guarded_object_create_is_a_fresh_object() {
+    let tail = format!("{MAKE_CALLED}\nimport {{ child }} from \"./mk\";\nconsole.log(child(String(process.argv.length)));");
+    for interp in [false, true] {
+        assert!(
+            !imports_formatter_with_make(CREATE, &tail, interp),
+            "interp={interp}: a guarded Object.create keeps the formatter import live"
+        );
+    }
+    // The fixture can fail: an unknown object in `children` makes the
+    // computed store an any-key write on ⊤ again.
+    let unknown = CREATE.replace("Object.create(null)", "(globalThis as any)[String(process.argv.length)]");
+    assert!(imports_formatter_with_make(&unknown, &tail, true));
+}
+
+
+/// Rule 7 for a member `extends` (@effect/platform-node's
+/// `NodeHttpIncomingMessage extends Inspectable.Class`): the HIR keeps the
+/// trailing name (`Class`) and the evaluated member; the name binds nothing
+/// in the module, the evaluation is the parent. With the parent ⊤, `this`
+/// in the constructor was ⊤ and `this[k] = ..` an any-key store on ⊤.
+const INSP: &str = r#"
+export const Class = /*#__PURE__*/function () {
+  return class Class { toJSON() { return { _id: "x" }; } };
+}();
+"#;
+const MSG: &str = r#"
+import * as Inspectable from "./insp";
+export class Msg extends Inspectable.Class {
+  source: any;
+  constructor(source: any) { super(); (this as any)[String(source)] = 1; this.source = source; }
+}
+"#;
+#[test]
+fn a_member_extends_evaluated_is_its_parent() {
+    let tail = format!("{MAKE_CALLED}\nimport {{ Msg }} from \"./msg\";\nconsole.log(new Msg(process.argv.length));");
+    let mods = [("insp", INSP), ("msg", MSG)];
+    for interp in [false, true] {
+        assert!(
+            !imports_formatter_with_mods("", &tail, interp, &mods),
+            "interp={interp}: a member `extends` keeps the formatter import live"
+        );
+    }
+}

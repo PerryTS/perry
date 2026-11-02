@@ -239,7 +239,7 @@ pub struct Gen<'a> {
     pub(crate) write_top: crate::pts::FxHashSet<u32>,
     pub(crate) stand_in_fc: FxHashMap<Tok, &'a crate::units::FnContract>,
     /// Classes with a parent value (§17.2), fed after the bodies.
-    pub(crate) parent_values: Vec<(u32, TmplId, Option<String>)>,
+    pub(crate) parent_values: Vec<(u32, TmplId, Option<String>, bool)>,
     /// Classes whose evaluated parent fed the parent value.
     pub(crate) parent_fed: std::collections::BTreeSet<TmplId>,
     /// Published module-scope value bindings (export, export node), checked
@@ -1401,7 +1401,8 @@ impl<'a> Gen<'a> {
             let pa = self.m.atom("prototype");
             let pp = self.load(pv, Key::Named(pa));
             self.m.tmpls[tm as usize].parent_value = Some((pv, pp));
-            self.parent_values.push((mi, tm, c.extends_name.clone()));
+            self.parent_values
+                .push((mi, tm, c.extends_name.clone(), c.extends_expr.is_some()));
         }
     }
 
@@ -1466,7 +1467,7 @@ impl<'a> Gen<'a> {
     /// binding `extends_name` names; with none, the parent is unknown code
     /// (⊤ runs the unknown constructor: E11 as before).
     pub(crate) fn feed_parent_values(&mut self) {
-        for (mi, tm, name) in std::mem::take(&mut self.parent_values) {
+        for (mi, tm, name, evaluated) in std::mem::take(&mut self.parent_values) {
             if self.parent_fed.contains(&tm) {
                 continue;
             }
@@ -1481,13 +1482,6 @@ impl<'a> Gen<'a> {
             };
             match bound {
                 Some(b) => self.m.edge(b, pv),
-                // An `extends` that is no binding is evaluated where the
-                // class is (`ClassExprFresh`'s `evaluated_parent`,
-                // `RegisterClassParentDynamic`), and that evaluation feeds
-                // the parent (`feed_parent`) when its code is walked: a
-                // closure's body may be walked later, during the solve. No
-                // instance exists before the class is evaluated.
-                None if name.is_none() => {}
                 // DECISIONS 95: per unit, another unit may evaluate the
                 // parent (`RegisterClassParentDynamic` in the CommonJS
                 // factory): what it evaluates is cell `parent:<module>:<class>`.
@@ -1499,6 +1493,15 @@ impl<'a> Gen<'a> {
                     );
                     self.seed_cell(&key, pv);
                 }
+                // An `extends` the HIR keeps as an expression (`extends_expr`:
+                // no binding, a member such as `Inspectable.Class`, a call) is
+                // evaluated where the class is: every lowering of such a class
+                // emits `RegisterClassParentDynamic` or `ClassExprFresh`'s
+                // `evaluated_parent`, and that evaluation feeds the parent
+                // (`feed_parent`) when its code is walked; a closure's body
+                // may be walked later, during the solve. No instance exists
+                // before the class is evaluated.
+                None if evaluated => {}
                 None => {
                     let r = self
                         .m

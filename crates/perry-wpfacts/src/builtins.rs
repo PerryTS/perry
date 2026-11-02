@@ -208,6 +208,11 @@ fn site_tmpl(m: &mut Model, call: CallId, what: &'static str) -> Tok {
             module: u32::MAX,
             site,
         }
+    } else if what == "Object.create" {
+        TmplKind::ObjCreate {
+            module: u32::MAX,
+            site,
+        }
     } else {
         TmplKind::BObj {
             module: u32::MAX,
@@ -226,7 +231,7 @@ fn site_tmpl(m: &mut Model, call: CallId, what: &'static str) -> Tok {
         ctor: None,
         native_parent: None,
         accessor_keys: vec![],
-        has_computed_members: false,
+        has_computed_members: what == "Object.create",
         field_init: None,
         proto_members: vec![],
         parent_value: None,
@@ -1595,8 +1600,25 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
         (BuiltinNs::Object, "isFrozen" | "isSealed" | "isExtensible" | "is" | "hasOwn") => {
             ret_prim(m, call, prim::BOOL);
         }
+        // Called as a value (the generic arm of a guarded namespace call,
+        // an alias), `Object.create(p)` is the operation its intrinsic
+        // lowers to (`Expr::ObjectCreate`): a fresh object of this site
+        // whose chain holds `p` (E10 on `p`'s templates). A descriptor
+        // argument or a spread leaves the operation unknown.
         (BuiltinNs::Object, "create") => {
-            unknown_method_proto(m, call, "argument of builtin Object.create", Some(0), true)
+            let c = m.calls[call as usize].clone();
+            match c.args.as_slice() {
+                [p] if c.spread.is_empty() => {
+                    let p = *p;
+                    let r = m.reason("E10 Object.create");
+                    m.cons(p, Cons::CreateProto { reason: r });
+                    let t = site_tmpl(m, call, "Object.create");
+                    let pn = m.proto_node(t);
+                    m.edge(p, pn);
+                    ret_tok(m, call, t);
+                }
+                _ => unknown_method_proto(m, call, "argument of builtin Object.create", Some(0), true),
+            }
         }
         // Called as a value (the generic arm of a guarded namespace call,
         // an alias), the builtin is the operation its intrinsic lowers to
