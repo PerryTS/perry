@@ -390,6 +390,13 @@ impl Model {
                     self.mark_hard(t, kind, reason);
                 }
             }
+            Cons::Miss { key } => {
+                for &t in toks {
+                    if t != TOP {
+                        self.note_chain_miss(t, key);
+                    }
+                }
+            }
             Cons::DefineKey { key, data, reason } => {
                 for &t in toks {
                     if self.is_marker(t) {

@@ -562,6 +562,19 @@ pub(super) fn fn_contract_of(
                 .filter(|&(_, u)| u != 0)
                 .map(|(a, u)| (g.m.atoms[a as usize].clone(), u))
                 .collect();
+            // DECISIONS 242 (contract half): every key the body reads on
+            // the argument (a miss site where the argument does not own
+            // it), `STAR_KEY` for a computed key; a key with uses is a
+            // read too.
+            for &k in g.m.param_reads.get(&mk).into_iter().flatten() {
+                let k = match k {
+                    model::Key::Named(a) => g.m.atoms[a as usize].clone(),
+                    model::Key::Any => crate::STAR_KEY.to_string(),
+                };
+                if !v.iter().any(|(x, _)| *x == k) {
+                    v.push((k, 0));
+                }
+            }
             v.sort();
             v
         })

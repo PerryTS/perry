@@ -841,6 +841,17 @@ impl<'a> Gen<'a> {
         for (i, &p) in params.iter().enumerate() {
             let u = c.params[i];
             let ru = c.reach[i];
+            // DECISIONS 242 (contract half): the callee's miss sites on the
+            // argument (each key it reads there, `STAR_KEY` a computed key)
+            // run here, on this unit's tokens, as the whole program runs
+            // them: a literal reached through a key it does not own.
+            for (k, _) in c.reach_keys.get(i).into_iter().flatten() {
+                let key = match k.as_str() {
+                    crate::STAR_KEY => crate::model::Key::Any,
+                    k => crate::model::Key::Named(self.m.atom(k)),
+                };
+                self.m.cons(p, Cons::Miss { key });
+            }
             if u & MARK_ESCAPE != 0 {
                 if let Some(d) = self.m.diagnostic.as_mut() {
                     d.stand_in_params.push((p, c.name.clone(), i as u32, None));

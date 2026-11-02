@@ -835,6 +835,10 @@ pub enum Cons {
     NotNullish { dst: NodeId },
     /// Every object token reaches a HARD operation.
     Hard { kind: Hard, reason: u32 },
+    /// DECISIONS 242 (contract half): another unit's function reads `key`
+    /// on the argument this node holds (`FnContract::reach_keys`): a miss
+    /// site without a value (`Model::note_chain_miss` on every token).
+    Miss { key: Key },
     /// `delete o.key`: E7 HARD on every object token; on ⊤ (which may be a
     /// builtin prototype) a write of `key` only.
     DeleteKey { key: Atom, reason: u32 },
@@ -1112,6 +1116,7 @@ impl Cons {
             Cons::Defined { .. } => "defined",
             Cons::NotNullish { .. } => "notnullish",
             Cons::Hard { .. } => "hard",
+            Cons::Miss { .. } => "miss",
             Cons::DeleteKey { .. } => "deletekey",
             Cons::AddsKeys => "addskeys",
             Cons::DefineKey { .. } => "definekey",
@@ -2063,6 +2068,13 @@ pub struct Model {
     /// argument markers, settled after the solve (`settle_keyed_uses`):
     /// the contract publishes them.
     pub keyed_uses: FxHashMap<Tok, Vec<(Atom, u8)>>,
+    /// DECISIONS 242 (contract half): the miss sites (`note_chain_miss`)
+    /// met on a marker token during the solve, and, settled after it over
+    /// `marker_members` (`settle_marker_ops`), per parameter marker: the
+    /// contract publishes them (`reach_keys`), the caller runs them on its
+    /// argument (`Cons::Miss`).
+    pub marker_reads: FxHashMap<Tok, Vec<Key>>,
+    pub param_reads: FxHashMap<Tok, Vec<Key>>,
     /// An argument marker: the uses some named key of it had, its own
     /// (its keyed reach markers') and its containers' (`keyed_use`). During
     /// the solve a keyed use matters to the markers it stands for only as

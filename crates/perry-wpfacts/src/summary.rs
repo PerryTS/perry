@@ -325,6 +325,7 @@ pub fn map_cons(
             reason,
         },
         Hard { kind, reason } => Hard { kind, reason },
+        Miss { key } => Miss { key },
         DeleteKey { key, reason } => DeleteKey { key, reason },
         AddsKeys => AddsKeys,
         DefineKey { key, data, reason } => DefineKey { key, data, reason },
@@ -567,6 +568,7 @@ fn gen_kind(c: &Cons) -> bool {
             | Guard { .. }
             | NotNullish { .. }
             | Hard { .. }
+            | Miss { .. }
             | DeleteKey { .. }
             | DefineKey { .. }
             | DefineAll { .. }

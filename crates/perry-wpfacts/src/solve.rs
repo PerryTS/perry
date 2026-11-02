@@ -2013,6 +2013,7 @@ impl Model {
                 )
             }
             Cons::AddsKeys => format!("addskeys {n}"),
+            Cons::Miss { key } => format!("miss {n} {}", self.key_name(*key)),
             Cons::DefineKey { key, data, reason } => {
                 format!(
                     "definekey {n} {} {} {reason}",

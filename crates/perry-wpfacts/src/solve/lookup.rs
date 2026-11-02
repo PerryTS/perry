@@ -275,6 +275,22 @@ impl Model {
     /// the object; a key a class prototype of its chain defines stops it
     /// before `Object.prototype`.
     pub(crate) fn note_chain_miss(&mut self, t: Tok, key: Key) {
+        // On a marker the miss site is another unit's: the contract names
+        // it (`reach_keys`) and the caller runs it on its argument
+        // (`Cons::Miss`), where the argument may not own the key
+        // (DECISIONS 242, contract half).
+        if self.is_marker(t) {
+            if let Key::Named(a) = key {
+                if self.is_private_atom(a) {
+                    return;
+                }
+            }
+            let ks = self.marker_reads.entry(t).or_default();
+            if !ks.contains(&key) {
+                ks.push(key);
+            }
+            return;
+        }
         let Some(tm) = self.tmpl_of(t) else {
             return;
         };
