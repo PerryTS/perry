@@ -25,6 +25,16 @@ their exact regular-file set were verified locally.
 | WASI 0.3 command component | 6,075,064 |
 | Optional native P3 command host | 33,102,952 |
 
+The [balanced production cohort](validation/wasi-balanced-production-cohort-20261102.json)
+subsequently passes the same 27 phases at `3a20cda3b5` with freshly built native
+artifacts and runtime archives. Its native executable is 7,550,816 bytes, P1
+module 4,748,649 bytes and P3 component 4,955,774 bytes. These sizes qualify the
+builder's functional output; the five-run profile experiment and scriptc
+timings below retain their original source/artifact identities. All 486
+indexed cohort evidence files were verified locally. The same cohort also
+passes the compound/cancellation and resource/transport regressions with
+positive moving-GC witnesses. Full WASI 0.3 support remains incomplete.
+
 These are measured release build sizes. The
 [pinned scriptc comparison](validation/websocket-scriptc-comparison-20261102.json)
 adds directional process measurements for native and P1 output. The

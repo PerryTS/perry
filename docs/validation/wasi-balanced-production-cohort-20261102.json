@@ -1,0 +1,173 @@
+{
+  "date": "2026-11-02",
+  "platform": "Linux x86_64",
+  "scope": "Current production native union and balanced WASI P1/P3 archives with functional and moving-GC regressions",
+  "source": {
+    "source": "3a20cda3b54da93aeeb633a5dda491d226d20c16",
+    "nativeProfile": "prod",
+    "guestRuntimeProfile": "release, runtime opt-s ThinLTO",
+    "nativeAndAllRuntimeArchivesFresh": true,
+    "unitExecutionSource": "5cd1705734c73181d74380cac317f358a67c868d",
+    "unitProductionEqualityVerified": true,
+    "fullUnitSuiteReused": true,
+    "affectedUnitTestsReexecuted": false,
+    "compilerThreads": 4,
+    "nativeCompilerProfile": "prod",
+    "independentProbeProfile": "perry-dev",
+    "upstreamSourceUnchanged": true,
+    "fairCompetitorBenchmarkQualified": false,
+    "fullWasi030Qualified": false
+  },
+  "compileChecks": {
+    "source": "3a20cda3b54da93aeeb633a5dda491d226d20c16",
+    "allElevenPassed": true,
+    "allElevenReexecuted": true,
+    "warningsAppliedToAllRustc": true,
+    "warningTargetContainsOnlyGlobalWarningBuilds": true,
+    "unwindArgumentsVerified": true,
+    "rustflagsEnvironmentUnmodified": true
+  },
+  "unitReuse": {
+    "unitExecutionSource": "5cd1705734c73181d74380cac317f358a67c868d",
+    "comparisonSource": "3a20cda3b54da93aeeb633a5dda491d226d20c16",
+    "changedFiles": [
+      "changelog.d/PENDING-wasi-runtime-size.md",
+      "changelog.d/PENDING-websocket-release-receipt.md",
+      "docs/WASI_030_COMPLETION.md",
+      "docs/WEBSOCKET_AOT.md",
+      "docs/validation/wasi-moving-weak-slots-20261102.json",
+      "docs/validation/websocket-scriptc-comparison-20261102.json",
+      "scripts/wasi_build_runtime.py"
+    ],
+    "allRustAndManifestLockConfigFilesIdentical": true,
+    "nativeUnitTestsReexecuted": false
+  },
+  "strictTokioBanPassed": true,
+  "witTestsPassed": 44,
+  "witTestsIgnored": 2,
+  "componentHostTestsPassed": 222,
+  "docsGeneratorRegressionsPassed": 4,
+  "nativeUnitExecutionSource": "5cd1705734c73181d74380cac317f358a67c868d",
+  "nativeRuntimeTestsPassed": 6422,
+  "nativeRuntimeTestsIgnored": 47,
+  "nativeStdlibTestsPassed": 299,
+  "nativeStdlibTestsIgnored": 1,
+  "fullNativeUnitSuiteReexecuted": false,
+  "websocketPhasesPassed": 27,
+  "websocketRealClientsIncluded": 8,
+  "compoundImportPhasesPassed": 24,
+  "compoundExportPhasesPassed": 18,
+  "canonicalCancellationParentPhasesPassed": 8,
+  "syncImportPhasesPassed": 19,
+  "importedResourcePhasesPassed": 19,
+  "sharedResourcePhasesPassed": 17,
+  "transportPhasesPassed": 20,
+  "moving": {
+    "cancellation-acceptance": {
+      "copiedObjects": 8031,
+      "evacuationVerified": true
+    },
+    "cancellation-acceptance/guest": {
+      "guestCopiedObjects": 37766,
+      "guestEvacuationVerified": true
+    },
+    "exports-acceptance": {
+      "guestCopiedObjects": 30921,
+      "guestEvacuationVerified": true
+    },
+    "sync-acceptance": {
+      "guestCopiedObjects": 29568,
+      "guestEvacuationVerified": true
+    },
+    "imported-acceptance": {
+      "guestCopiedObjects": 17963,
+      "guestEvacuationVerified": true
+    },
+    "shared-acceptance": {
+      "guestCopiedObjects": 17789,
+      "guestEvacuationVerified": true
+    },
+    "transport-acceptance": {
+      "guestCopiedObjects": 12898,
+      "guestEvacuationVerified": true
+    }
+  },
+  "artifacts": {
+    "native/OWNER": {
+      "bytes": 92,
+      "sha256": "feb6822a83c0e66869407e36d264fb70ad94067d2a18220222304ea4f1721df2"
+    },
+    "native/libperry_component_host.a": {
+      "bytes": 404094008,
+      "sha256": "12979452cd6a322f8691cd7939c6461c0270c711d0ade6eda6a2f750752da4db"
+    },
+    "native/libperry_runtime.a": {
+      "bytes": 84487878,
+      "sha256": "7fcf4d0d1c3ef8c701dba164116d3c32b7fdab9c64ae127d414b31a5e084deba"
+    },
+    "native/libperry_runtime.a.gc-effects": {
+      "bytes": 496941,
+      "sha256": "32236ef6e86fadb3a4ac737aa6dc79f66962f9a9bf346aec404269a859574c4a"
+    },
+    "native/libperry_stdlib.a": {
+      "bytes": 141698574,
+      "sha256": "096eb517f2f2ca058c2cf1da9128e833ae2d89c27672d48b20a92288f794420a"
+    },
+    "native/perry": {
+      "bytes": 112048928,
+      "sha256": "a6a0d011c74fc2dfb0d309d224e647e9f4dea68db67d9aaf06f127448301ccee"
+    },
+    "native/perry-gc-effects": {
+      "bytes": 25806880,
+      "sha256": "a6648bc0f0c5b3622a6072129407ff6ad35868eff4a88a788ee1e2005594315c"
+    },
+    "native/perry-wit": {
+      "bytes": 3473784,
+      "sha256": "8d157746105f9d5dd1cbe692c88fa7d24a6c74145b4d8291abd8936de9c6cae3"
+    },
+    "p1/OWNER": {
+      "bytes": 76,
+      "sha256": "8ba453af1b7c43d04e5bd2348848de1e6ef79fc7f0dfe6bbdd187986017b1c7e"
+    },
+    "p1/libperry_runtime.a": {
+      "bytes": 60588184,
+      "sha256": "4771a74d75afa4cdf132b22ff700df1a0d09810bbb68b23ef5358038ece1b81b"
+    },
+    "plain/OWNER": {
+      "bytes": 79,
+      "sha256": "1ebb056f8b05776f4f15464977345b0bf289a20b6861bf54459980e263eccd92"
+    },
+    "plain/libperry_runtime.a": {
+      "bytes": 47748026,
+      "sha256": "0fdcf3a13339e7a2902dc0b1d6df5674abb22746cdfd860fd9c836eec7481f06"
+    },
+    "instrumented/OWNER": {
+      "bytes": 86,
+      "sha256": "733ef8663467c4d9d55793406d37e1907ee1c42ec0dfe994054748289e5c7e40"
+    },
+    "instrumented/libperry_runtime.a": {
+      "bytes": 48439804,
+      "sha256": "0de6e58580dcc585935553e07d2ca037e81636a6afa8258118cfc23ac4c0231c"
+    }
+  },
+  "limitations": [
+    "Native units retain their separately executed 5cd source and complete production-input equality proof",
+    "P2 builder/package and new repeated-label/returned-actor profiles are separate qualifications",
+    "Public async generation, complete current providers, P3 installed platform packages and landing remain incomplete",
+    "Functional WebSocket phases do not qualify comparative throughput or the full compiler matrix"
+  ],
+  "fullWasi030Qualified": false,
+  "evidence": {
+    "archive": {
+      "archive": "wasi-030-v192-evidence.tar.gz",
+      "indexedFiles": 486,
+      "bytes": 940359712,
+      "sha256": "b48df8ab5ff8083ecff5b3cc4a937a0a2e835c7a192d950d133b91d4279dec90"
+    },
+    "exactRegularFileSetVerified": true,
+    "allIndexedSizesAndHashesVerified": true,
+    "archiveExtracted": false
+  },
+  "pointInTimeQualification": true,
+  "laterAdapterChangesQualifiedByThisReceipt": false
+}

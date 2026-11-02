@@ -238,6 +238,25 @@ The native compiler and plain reference archive are reused at `6ea71cc1a3`;
 this is targeted runtime qualification. All 138 indexed evidence files and
 their exact sizes, hashes and regular-file set were verified locally.
 
+The [balanced production cohort receipt](validation/wasi-balanced-production-cohort-20261102.json)
+qualifies source `3a20cda3b5` with a fresh coherent native `prod` union and
+P1/plain-P3/instrumented-P3 archives built through the size-balanced builder.
+All eleven derived compile commands were reexecuted and pass, along with the
+strict Tokio audit, 44 WIT/C tests (two ignored), 222 component-host tests and
+four docs generator regressions. The subsequent extern-name projection
+requires separate qualification.
+All 27 WebSocket phases, including eight real client cases, pass. Compound
+imports/exports, canonical cancellation, synchronous-started imports and the
+resource/transport regressions pass at the same artifact source. Moving
+witnesses include 37,766 imported-profile objects, 30,921 exported-profile
+objects, 29,568 synchronous-started objects, 17,963 imported-resource objects,
+17,789 shared-resource objects and 12,898 transport objects, with evacuation
+verification. The 6,422 runtime and 299 stdlib unit results retain their
+separately executed `5cd1705734` source and complete production-input equality
+proof. All 486 indexed evidence files, their sizes, hashes and exact regular
+file set were verified locally. New repeated-label and returned-actor profiles,
+public tooling, providers, installed P3 packages and qualified landing remain.
+
 | Requirement | Required evidence | Current state |
 | --- | --- | --- |
 | Canonical async imports and exports | Public generated components compose in both directions; overlapping calls, immediate/delayed completion, errors, post-return work and Store reuse | Experimental scalar/compound and recorded synchronous-started import profiles qualified on Linux; public CLI guarded |
