@@ -182,6 +182,26 @@ fn local_names_and_types_are_not_global_references() {
 }
 
 #[test]
+fn restricting_drops_top_and_closes_the_given_names() {
+    // `with` makes R top, and the scan closes it to the whole catalog.
+    let mut r = reach("new Map(); with ({}) { x; }");
+    assert!(r.is_full(), "{r:?}");
+    assert_eq!(r.names.len(), CATALOG.len());
+    r.restrict_to(["Buffer".to_string()]);
+    assert!(!r.is_full());
+    r.close(CATALOG);
+    // The given names and their births; nothing else.
+    let expected = ["Buffer", "Uint8Array", "%TypedArray%", "ArrayBuffer"];
+    assert_eq!(
+        r.names,
+        expected
+            .iter()
+            .map(|n| n.to_string())
+            .collect::<BTreeSet<_>>()
+    );
+}
+
+#[test]
 fn constant_code_is_program_code_and_birth_closure_is_transitive() {
     let r = reach("Function('return Buffer')(); eval('Map');");
     assert!(!r.is_full(), "{r:?}");
