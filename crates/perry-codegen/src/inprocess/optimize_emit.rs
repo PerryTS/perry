@@ -219,6 +219,7 @@ pub(super) fn optimize_and_emit(
             );
         }
     }
+    super::loop_alignment::apply(module, &target);
     // Include small units as well as budget offenders, so before/after size
     // audits do not lose their subject when a fix brings it below the cap.
     if std::env::var_os("PERRY_CODEGEN_UNIT_TIMINGS").is_some() {
