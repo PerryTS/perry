@@ -39,12 +39,12 @@ crate::perry_thread_local! {
 }
 
 /// Every image path visits a cell's slots through this one out-of-line,
-/// non-generic instance of the layout visitor. The paths are cold (bounded by
-/// the image) and sit inside hot collector functions; a generic visitor
-/// inlined at each of them grew `.text` by about 20 KB.
+/// non-generic entry into the shared rewrite-slot decoder. The paths are cold
+/// (bounded by the image) and sit inside hot collector functions; a generic
+/// visitor inlined at each of them grew `.text` by about 20 KB.
 #[inline(never)]
 unsafe fn visit_cell_slots(header: *mut GcHeader, visit: &mut dyn FnMut(GcMutableSlot)) {
-    visit_gc_rewrite_slots::<{ cfg!(test) }>(header, |slot| visit(slot));
+    visit_gc_rewrite_slots_shared::<{ cfg!(test) }>(header, visit);
 }
 
 /// Is `child_addr` a cell some collector owns, so that an image slot holding
