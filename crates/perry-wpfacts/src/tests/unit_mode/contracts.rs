@@ -325,8 +325,12 @@ pub(super) fn a_broken_namespace_field_function_resolves_only_the_units_that_see
     // a class a receiver marker stands for goes to the class's `virt-stored`
     // node for that key (`virt_store`), which the marker's reads take as its
     // own field: two such nodes (two keys) in each of the three rounds that
-    // solve `a` -> the pin below.
-    assert_eq!(pf.round_work, [765, 1105, 962, 42], "{:?}", pf.units);
+    // solve `a` -> [765, 1105, 962, 42]. CHB3: a load from a closed marker
+    // takes what the marker itself gives (its keyed reach, its classes'
+    // chain) through a `Cons::Defined` rule (no absence `undefined`): a
+    // few more rule applications in each of the three rounds that solve `a`
+    // -> the pin below.
+    assert_eq!(pf.round_work, [771, 1111, 968, 42], "{:?}", pf.units);
 }
 
 #[test]

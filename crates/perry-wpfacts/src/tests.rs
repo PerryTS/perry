@@ -45,6 +45,7 @@ mod native_proto;
 mod native_member;
 mod own_length;
 mod private_field;
+mod closed_marker_load;
 mod unknown_accessor_key;
 mod parent_value;
 mod prim_result;

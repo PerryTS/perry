@@ -343,8 +343,12 @@ impl Model {
             return;
         }
         // An absent key reads `undefined`: only a definite birth key of a
-        // fact unit is known to be present.
-        let present = match (key, self.tmpl_of(t)) {
+        // fact unit is known to be present. A closed marker holds no value
+        // of its own: every value its parameter can hold is beside it, and
+        // each of those reads its own absence (CHB3), so the marker adds
+        // none (as `judge` skips it).
+        let closed = self.closed_marker(t);
+        let present = closed || match (key, self.tmpl_of(t)) {
             (Key::Named(a), Some(tm)) => {
                 let sure = self.tmpls[tm as usize].kind.is_fact_unit()
                     && !self.keys_unsure.contains(&tm)
@@ -361,28 +365,35 @@ impl Model {
         if !present && !self.nodes[dst as usize].held {
             self.add_prim(dst, prim::UNDEF);
         }
+        // What a closed marker's own load gives (its classes' chain through
+        // `virt_load`, its keyed reach) carries no `undefined` either: the
+        // values beside it read their own (CHB3).
+        let own = |m: &mut Self, src: NodeId| match closed {
+            true => m.defined_from(src, dst),
+            false => m.edge(src, dst),
+        };
         match key {
             // A method key on a published receiver finds the class chain's
             // value, not the receiver's unknown own field (DECISIONS 59).
             Key::Named(a) => match self.virt_load(t, a) {
                 Some(v) => {
-                    self.edge(v, dst);
+                    own(self, v);
                     // A key another unit's subclass defines: a read finds an
                     // unknown own value (only a call through the receiver
                     // is that subclass's method, `virt_call`, DECISIONS 97).
                     if !self.virt_overriders(t, a).is_empty() {
                         let f = self.field(t, a);
-                        self.edge(f, dst);
+                        own(self, f);
                     }
                 }
                 None => {
                     let f = self.field(t, a);
-                    self.edge(f, dst);
+                    own(self, f);
                 }
             },
             Key::Any => {
                 let all = self.all_fields(t);
-                self.edge(all, dst);
+                own(self, all);
             }
         }
         // A private element is the object's own: its read consults no
@@ -439,9 +450,7 @@ impl Model {
             // A rule on the chain node, not an edge into a relay: an
             // observation node feeds only observation nodes (`edge`), and
             // `sum_skip` applies that to this rule by its `dst`.
-            if self.defined_done.insert((cv, dst)) {
-                self.cons(cv, Cons::Defined { dst });
-            }
+            self.defined_from(cv, dst);
         } else {
             self.edge(cv, dst);
         }
@@ -721,6 +730,15 @@ impl Model {
             self.toks[q as usize],
             TokKind::ObjectProto | TokKind::NativeProto(_) | TokKind::Builtin(_) | TokKind::BuiltinFn
         )
+    }
+
+    /// dst ⊇ `src`'s values without `undefined`: a rule on `src`, not an
+    /// edge into a relay (an observation node feeds only observation nodes,
+    /// `edge`; `sum_skip` applies that to this rule by its `dst`).
+    pub(crate) fn defined_from(&mut self, src: NodeId, dst: NodeId) {
+        if self.defined_done.insert((src, dst)) {
+            self.cons(src, Cons::Defined { dst });
+        }
     }
 
     /// The node whose values reach `dst` without `undefined` (`Cons::Defined`):
