@@ -85,6 +85,7 @@ pub(crate) fn current_thread_id() -> u64 {
         static CURRENT_THREAD_ID: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     }
     #[cold]
+    #[optimize(size)]
     #[inline(never)]
     fn compute() -> u64 {
         let mut hasher = DefaultHasher::new();

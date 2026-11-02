@@ -169,6 +169,7 @@ pub(crate) unsafe fn async_generator_record_of_object(
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(super) unsafe fn transitioned_record_bits(obj: *const ObjectHeader) -> Option<u64> {
     if !crate::object::shapes::object_has_brand(obj, ASYNC_GENERATOR_STATE_BRAND) {

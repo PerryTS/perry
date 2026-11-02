@@ -676,7 +676,11 @@ impl<'a> Gen<'a> {
                 let l = self.expr(fx, left);
                 let r = self.expr(fx, right);
                 let out = self.tmp("logical");
-                self.m.edge(l, out);
+                // `l ?? r` is `l` when it is not nullish.
+                match op {
+                    LogicalOp::Coalesce => self.m.cons(l, Cons::NotNullish { dst: out }),
+                    _ => self.m.edge(l, out),
+                }
                 // The right operand is the result only when the left one
                 // selects it.
                 let test = match op {
