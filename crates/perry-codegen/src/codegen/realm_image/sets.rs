@@ -19,20 +19,19 @@ fn index(entries: &[RealmValue]) -> Result<Option<perry_abi::OwnedSetIndex>, Str
             ))
         })
         .collect::<Result<Vec<_>, String>>()?;
-    let first = perry_abi::SMALL_SET_SCAN_MAX as usize + 1;
-    if entries.len() < first {
-        return Ok(None);
-    }
-    let mut index = perry_abi::OwnedSetIndex::new(first);
-    // Match the birth's insertion history, including the shared builder's
-    // rehash order; sizing once from final length gives different buckets.
-    for (slot, hash) in hashes.into_iter().enumerate() {
-        index.insert_hash(
-            hash,
-            u32::try_from(slot).map_err(|_| "realm Set too large")?,
-        );
-    }
-    Ok(Some(index))
+    // The runtime's threshold crossing builds a heap Set's index through the
+    // same function, so the image buckets are the ones a birth would have.
+    let insertions = hashes
+        .into_iter()
+        .enumerate()
+        .map(|(slot, hash)| {
+            Ok((
+                hash,
+                u32::try_from(slot).map_err(|_| "realm Set too large")?,
+            ))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(perry_abi::OwnedSetIndex::from_insertions(insertions))
 }
 
 pub(crate) fn emit_set(
