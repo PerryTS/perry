@@ -1696,6 +1696,18 @@ pub(crate) fn class_decl_prototype_value_selected(class_id: u32) -> f64 {
             .then(|| crate::value::js_nanbox_pointer(proto as i64))
             .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
     }
+    // A runtime-native class has no compiler declaration; its prototype is
+    // the object the runtime registered for it (`tty.WriteStream.prototype`;
+    // a registered parent CLASS OBJECT is a heritage edge, not a prototype).
+    // Materializing a declared holder here would publish the CLASS identity
+    // word over that prototype, and every instance would lose its inherited
+    // surface and `Object.getPrototypeOf` answer (#13686).
+    if super::declarations::class_declaration(class_id).is_none() {
+        let proto = class_prototype_object(class_id);
+        if !proto.is_null() && !super::is_class_object_ptr(proto as *const u8) {
+            return crate::value::js_nanbox_pointer(proto as i64);
+        }
+    }
     if !class_identity_has_surface(class_id) {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
