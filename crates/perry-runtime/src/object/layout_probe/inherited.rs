@@ -274,7 +274,7 @@ pub(super) unsafe fn chain_from<const ABSENT: bool>(
                 // hole slot is absent on this hop, and the complete walk
                 // continues past it.
                 if load == NO_LOAD && attributed_at(rn, pos) {
-                    return accessor_answer_at(next, rn, pos, NO_LOAD);
+                    return accessor_answer_at(next, rn, pos);
                 }
                 return walk(cur, next);
             }
@@ -478,7 +478,7 @@ pub(super) unsafe fn inherited_walk_at<const ABSENT: bool>(
                 // An accessor (or private entry) on the holder: the shape's
                 // answer. A hole slot of a plain data key: absent on this hop.
                 if !plain_data_at(rn, pos) {
-                    return accessor_answer_at(next, rn, pos, NO_LOAD);
+                    return accessor_answer_at(next, rn, pos);
                 }
             }
             Err(false) => return hole(),

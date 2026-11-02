@@ -141,5 +141,29 @@ fn an_overflow_accessor_is_answered_and_walked() {
         // and take the by-name read).
         let acc = probe_accessor_word(object, called, ch).expect("overflow accessor walked");
         assert!(acc.get != 0);
+        // The slow read decodes the getter half of the walked slot word only:
+        // the same getter as the whole pair, nothing of the setter half.
+        let (paired, ph) = atom("lane_d_overflow_paired");
+        crate::object::js_object_define_accessor(
+            f64::from_bits(crate::value::js_nanbox_pointer(object as i64).to_bits()),
+            f64::from_bits(paired),
+            getter(None, 23.0f64.to_bits()),
+            getter(None, 24.0f64.to_bits()),
+        );
+        let slot = probe_accessor_slot(object, paired, ph).expect("overflow slot walked");
+        let acc = crate::object::accessor_pair::pair_of_value(slot).expect("a pair");
+        assert!(acc.get != 0 && acc.set != 0, "the pair holds both halves");
+        let half = crate::object::accessor_pair::getter_half_of_value(slot);
+        assert_eq!(half.get, acc.get);
+        assert_eq!(
+            (half.raw_get, half.static_get),
+            (acc.raw_get, acc.static_get)
+        );
+        assert_eq!((half.set, half.raw_set, half.static_set), (0, 0, 0));
+        // A word that is no pair reads as the accessor with neither half.
+        assert_eq!(
+            crate::object::accessor_pair::getter_half_of_value(1.5f64.to_bits()),
+            crate::object::accessor_pair::Accessor::default()
+        );
     });
 }
