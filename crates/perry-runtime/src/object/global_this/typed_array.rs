@@ -684,8 +684,8 @@ fn install_typed_array_iterator_symbol(proto_obj: *mut ObjectHeader) {
     // `gc::tests::lazy_intrinsic_towers` for the gate.
     let _no_move = crate::gc::GcSuppressScope::new();
     let ctor = crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm(realm_decl! { BigInt64Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 8.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); BigUint64Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 8.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Float16Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 2.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Float32Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 4.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Float64Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 8.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Int16Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 2.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Int32Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 4.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Int8Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 1.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Uint16Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 2.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Uint32Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 4.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Uint8Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { fromBase64; fromHex; prototype; BYTES_PER_ELEMENT = 1.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Uint8ClampedArray, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 1.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); "%TypedArray%", kind = constructor, capture = [ref(Int8Array.prototype), ref(Uint8Array.prototype), ref(Int16Array.prototype), ref(Uint16Array.prototype), ref(Int32Array.prototype), ref(Uint32Array.prototype), ref(Float32Array.prototype), ref(Float64Array.prototype), ref(Uint8ClampedArray.prototype), ref(BigInt64Array.prototype), ref(BigUint64Array.prototype), ref(Float16Array.prototype)], members = { from; of; [Symbol.species] = accessor(get = "%TypedArray%[\"@@species\"].<get>"); }, spec = {name = "TypedArray"}, emit = metadata(realm_typed_array_public), births = [ArrayBuffer]; })] export crate::object::global_this::ctor_thunks::typed_array_constructor_call_thunk, 1; with_declared(0)),
-        TYPED_ARRAY_KIND_COUNT,
+        crate::fn_info!(#[realm(realm_decl! { BigInt64Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 8.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); BigUint64Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 8.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Float16Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 2.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Float32Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 4.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Float64Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 8.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Int16Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 2.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Int32Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 4.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Int8Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 1.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Uint16Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 2.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Uint32Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 4.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Uint8Array, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { fromBase64; fromHex; prototype; BYTES_PER_ELEMENT = 1.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); Uint8ClampedArray, kind = constructor, provider = builtin_constructor, extends = "%TypedArray%", members = { BYTES_PER_ELEMENT = 1.0; }, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); "%TypedArray%", kind = constructor, capture = [ref(Uint8Array.prototype)], members = { from; of; [Symbol.species] = accessor(get = "%TypedArray%[\"@@species\"].<get>"); }, spec = {name = "TypedArray"}, emit = metadata(realm_typed_array_public), births = [ArrayBuffer]; })] export crate::object::global_this::ctor_thunks::typed_array_constructor_call_thunk, 1; with_declared(0)),
+        1,
     );
     let proto = crate::realm_decl! { birth js_object_alloc(0, 0); realm { "%TypedArray%.prototype", members = { constructor; length = accessor(get = "%TypedArray%.prototype.length.<get>"); byteLength = accessor(get = "%TypedArray%.prototype.byteLength.<get>"); byteOffset = accessor(get = "%TypedArray%.prototype.byteOffset.<get>"); buffer = accessor(get = "%TypedArray%.prototype.buffer.<get>"); at; copyWithin; entries; every; fill; filter; find; findIndex; findLast; findLastIndex; forEach; includes; indexOf; join; keys; lastIndexOf; map; reduce; reduceRight; reverse; set; slice; some; sort; subarray; toLocaleString; toReversed; toSorted; values; with; toString = ref(Array.prototype.toString); [Symbol.toStringTag] = accessor(get = "%TypedArray%.prototype[\"@@toStringTag\"].<get>"); [Symbol.iterator] = ref("%TypedArray%.prototype.values"); }, births = ["%ArrayIteratorPrototype%", ArrayBuffer]; } };
     if ctor.is_null() || proto.is_null() {
@@ -794,36 +794,18 @@ pub(crate) fn typed_array_intrinsic_proto_ptr() -> *mut ObjectHeader {
 // #3664: generator / async-generator intrinsic prototype towers.
 // ---------------------------------------------------------------------------
 
-/// Element kinds, one `%TypedArray%` capture each (`typedarray::KIND_*`).
-const TYPED_ARRAY_KIND_COUNT: u32 = crate::typedarray::KIND_FLOAT16 as u32 + 1;
-
 /// The original Uint8Array prototype is owned by the traced intrinsic
 /// constructor, independent of writable globalThis.Uint8Array.
 pub(crate) fn typed_array_uint8_intrinsic_prototype_value() -> f64 {
-    typed_array_kind_intrinsic_prototype_value(crate::typedarray::KIND_UINT8)
-}
-
-/// The realm's original `<Kind>Array.prototype` for element kind `kind`.
-/// `%TypedArray%` (immortal, pinned for the thread) holds each per-kind
-/// intrinsic prototype in capture `kind`, stored while the realm is populated,
-/// so the answer never depends on the writable `globalThis.<Kind>Array`
-/// binding. `undefined` for a kind outside the table or before population.
-pub(crate) fn typed_array_kind_intrinsic_prototype_value(kind: u8) -> f64 {
-    if u32::from(kind) >= TYPED_ARRAY_KIND_COUNT {
-        return f64::from_bits(crate::value::TAG_UNDEFINED);
-    }
     let (ctor, _) = ensure_typed_array_intrinsic();
-    if ctor.is_null() {
-        return f64::from_bits(crate::value::TAG_UNDEFINED);
-    }
-    let value = crate::closure::js_closure_get_capture_f64(ctor, kind as u32);
+    let value = crate::closure::js_closure_get_capture_f64(ctor, 0);
     if crate::value::JSValue::from_bits(value.to_bits()).is_pointer() {
         return value;
     }
     // Populate the per-kind prototypes only when a real property walk needs
-    // them; populate stores each kind's original prototype in its capture.
+    // them. populate stores Uint8Array's original prototype in capture 0.
     crate::object::js_get_global_this();
     let ctor = crate::object::TYPED_ARRAY_INTRINSIC_PTR.load(std::sync::atomic::Ordering::Relaxed)
         as *const crate::closure::ClosureHeader;
-    crate::closure::js_closure_get_capture_f64(ctor, kind as u32)
+    crate::closure::js_closure_get_capture_f64(ctor, 0)
 }

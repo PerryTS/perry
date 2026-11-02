@@ -154,15 +154,71 @@ fn prototype_addrs() -> &'static [Cell<usize>; PROTOTYPE_ADDR_CACHE_COUNT] {
 /// second fact a reader has to trust — "each accessor resolves the builtin its
 /// cell is named for" — is established by construction instead of by a test
 /// that has to mutate a process-global to observe it (#7955).
-static PROTOTYPE_ADDR_BUILTINS: [&[u8]; PROTOTYPE_ADDR_CACHE_COUNT] = [
-    b"Array",
-    b"Object",
-    b"Function",
-    b"String",
-    b"Number",
-    b"Boolean",
-    b"Map",
+static PROTOTYPE_ADDR_BUILTINS: [crate::object::BuiltinConstructorIdentity;
+    PROTOTYPE_ADDR_CACHE_COUNT] = [
+    crate::object::BuiltinConstructorIdentity::Array,
+    crate::object::BuiltinConstructorIdentity::Object,
+    crate::object::BuiltinConstructorIdentity::Function,
+    crate::object::BuiltinConstructorIdentity::String,
+    crate::object::BuiltinConstructorIdentity::Number,
+    crate::object::BuiltinConstructorIdentity::Boolean,
+    crate::object::BuiltinConstructorIdentity::Map,
 ];
+
+/// How many intrinsic prototype cells a realm has: one per builtin
+/// declaration (`BuiltinConstructorIdentity`, 1-based).
+const INTRINSIC_PROTOTYPE_COUNT: usize = crate::object::GLOBAL_THIS_BUILTIN_CONSTRUCTORS.len();
+
+/// The realm's [[Intrinsics]] for builtin prototypes: `%Date.prototype%`,
+/// `%TypeError.prototype%`, `%Set.prototype%`, … — the object each family's
+/// instances inherit from, recorded when the realm binds `globalThis.<Name>`
+/// (`populate_global_this_builtins`). A later `globalThis.<Name> = X` replaces
+/// the writable binding only; every "what does this builtin inherit from"
+/// question is answered here, never through that binding.
+///
+/// One cell per [`crate::object::BuiltinConstructorIdentity`], all-zero
+/// (unrecorded) at birth, so it lives in the zero-filled
+/// [`crate::state::RuntimeState`] and costs nothing before the realm exists.
+/// The cells hold raw addresses of movable objects and follow the same
+/// algebra as the hot rows above: healed through the forwarding chain on
+/// read, rewritten by [`scan_prototype_addr_cache_roots_mut`].
+pub(crate) struct IntrinsicPrototypes {
+    cells: [Cell<usize>; INTRINSIC_PROTOTYPE_COUNT],
+}
+
+fn intrinsic_prototype_cells() -> &'static [Cell<usize>; INTRINSIC_PROTOTYPE_COUNT] {
+    &crate::state::state().intrinsic_prototypes.cells
+}
+
+/// Record `addr` as this realm's intrinsic prototype of `identity`. The
+/// first realm populated on a thread owns the cells, as it owns the hot rows
+/// ([`prime_prototype_addr_cache`]).
+pub(crate) fn note_intrinsic_prototype(
+    identity: crate::object::BuiltinConstructorIdentity,
+    addr: usize,
+) {
+    let cell = &intrinsic_prototype_cells()[identity as usize - 1];
+    if addr != 0 && cell.get() == 0 {
+        cell.set(addr);
+    }
+}
+
+/// This realm's intrinsic prototype of `identity`, or 0 when the realm has
+/// none (a builtin not yet bound while the realm is being populated). Builds
+/// the realm when this thread has none yet, exactly as the `globalThis`
+/// read it replaces did.
+pub(crate) fn intrinsic_prototype_addr(identity: crate::object::BuiltinConstructorIdentity) -> usize {
+    let cell = &intrinsic_prototype_cells()[identity as usize - 1];
+    let mut addr = cell.get();
+    if addr == 0 && !crate::object::global_this_is_materialized() {
+        crate::object::js_get_global_this();
+        addr = cell.get();
+    }
+    if addr == 0 {
+        return 0;
+    }
+    heal_prototype_addr(cell, addr)
+}
 
 /// GC root scanner for this thread's memoized prototype addresses (#6981).
 ///
@@ -181,6 +237,9 @@ static PROTOTYPE_ADDR_BUILTINS: [&[u8]; PROTOTYPE_ADDR_CACHE_COUNT] = [
 /// heap.
 pub fn scan_prototype_addr_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     for cell in prototype_addrs() {
+        rewrite_prototype_addr_slot(cell, visitor);
+    }
+    for cell in intrinsic_prototype_cells() {
         rewrite_prototype_addr_slot(cell, visitor);
     }
 }
@@ -305,23 +364,11 @@ fn bootstrap_prototype_addr(slot: usize) -> usize {
         let (_, proto) = crate::object::ensure_object_intrinsics();
         return proto as usize;
     }
-    let builtin = PROTOTYPE_ADDR_BUILTINS[slot];
-    let ctor = crate::object::js_get_global_this_builtin_value(builtin.as_ptr(), builtin.len());
-    let ctor_value = crate::value::JSValue::from_bits(ctor.to_bits());
-    let addr = if ctor_value.is_pointer() {
-        let ctor_ptr = ctor_value.as_pointer::<u8>() as usize;
-        let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
-        let proto_value = crate::value::JSValue::from_bits(proto.to_bits());
-        if proto_value.is_pointer() {
-            proto_value.as_pointer::<u8>() as usize
-        } else {
-            0
-        }
-    } else {
-        0
-    };
-    // Don't poison the cache with 0: during runtime init the global constructor
-    // may not be materialized yet. Re-derive until it resolves.
+    // The realm's intrinsic, never `globalThis.<Name>.prototype`: user code
+    // may have replaced that writable binding before this row's first use.
+    let addr = intrinsic_prototype_addr(PROTOTYPE_ADDR_BUILTINS[slot]);
+    // Don't poison the cache with 0: while the realm is being populated the
+    // intrinsic may not be recorded yet. Re-derive until it resolves.
     if addr != 0 {
         prototype_addrs()[slot].set(addr);
     }
@@ -444,29 +491,32 @@ pub(crate) fn test_prototype_addr_cache_wiring() -> [(usize, &'static [u8]); 7] 
     [
         (
             ARRAY_PROTO_CACHE,
-            PROTOTYPE_ADDR_BUILTINS[ARRAY_PROTO_CACHE],
+            PROTOTYPE_ADDR_BUILTINS[ARRAY_PROTO_CACHE].name().as_bytes(),
         ),
         (
             OBJECT_PROTO_CACHE,
-            PROTOTYPE_ADDR_BUILTINS[OBJECT_PROTO_CACHE],
+            PROTOTYPE_ADDR_BUILTINS[OBJECT_PROTO_CACHE].name().as_bytes(),
         ),
         (
             FUNCTION_PROTO_CACHE,
-            PROTOTYPE_ADDR_BUILTINS[FUNCTION_PROTO_CACHE],
+            PROTOTYPE_ADDR_BUILTINS[FUNCTION_PROTO_CACHE].name().as_bytes(),
         ),
         (
             STRING_PROTO_CACHE,
-            PROTOTYPE_ADDR_BUILTINS[STRING_PROTO_CACHE],
+            PROTOTYPE_ADDR_BUILTINS[STRING_PROTO_CACHE].name().as_bytes(),
         ),
         (
             NUMBER_PROTO_CACHE,
-            PROTOTYPE_ADDR_BUILTINS[NUMBER_PROTO_CACHE],
+            PROTOTYPE_ADDR_BUILTINS[NUMBER_PROTO_CACHE].name().as_bytes(),
         ),
         (
             BOOLEAN_PROTO_CACHE,
-            PROTOTYPE_ADDR_BUILTINS[BOOLEAN_PROTO_CACHE],
+            PROTOTYPE_ADDR_BUILTINS[BOOLEAN_PROTO_CACHE].name().as_bytes(),
         ),
-        (MAP_PROTO_CACHE, PROTOTYPE_ADDR_BUILTINS[MAP_PROTO_CACHE]),
+        (
+            MAP_PROTO_CACHE,
+            PROTOTYPE_ADDR_BUILTINS[MAP_PROTO_CACHE].name().as_bytes(),
+        ),
     ]
 }
 

@@ -85,14 +85,7 @@ unsafe fn read_constructor(owner: usize, kind: u8) -> f64 {
 /// constructor), so we distinguish "patched" by whether a descriptor or data
 /// field for the key exists at all.
 pub(crate) unsafe fn prototype_constructor_patch(kind: u8, owner: usize) -> Option<f64> {
-    let name = name_for_kind(kind);
-    let ctor = crate::object::js_get_global_this_builtin_value(name.as_ptr(), name.len());
-    let cv = JSValue::from_bits(ctor.to_bits());
-    if !cv.is_pointer() {
-        return None;
-    }
-    let ctor_ptr = crate::value::js_nanbox_get_pointer(ctor) as usize;
-    let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
+    let proto = crate::object::builtin_prototype_value(name_for_kind(kind));
     let pv = JSValue::from_bits(proto.to_bits());
     if !pv.is_pointer() {
         return None;

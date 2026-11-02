@@ -63,17 +63,9 @@ fn is_native_array_value(value: f64) -> bool {
 }
 
 pub(super) fn get_array_prototype_then_action() -> Result<Option<f64>, f64> {
-    let array_ctor = crate::object::js_get_global_this_builtin_value(b"Array".as_ptr(), 5);
-    if is_definitely_primitive(array_ctor) {
-        return Ok(None);
-    }
-    let array_proto = combinator_catch_js(|| unsafe {
-        crate::value::js_dynamic_object_get_property(
-            array_ctor,
-            b"prototype".as_ptr() as *const i8,
-            9,
-        )
-    })?;
+    // What an array inherits from: %Array.prototype%, not the writable
+    // `globalThis.Array` binding's `prototype`.
+    let array_proto = crate::object::builtin_prototype_value("Array");
     if is_definitely_primitive(array_proto) {
         return Ok(None);
     }
