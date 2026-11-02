@@ -44,5 +44,9 @@ fn a_cycle_through_a_parameter_type_is_broken_at_the_type_not_at_extends() {
         .filter(|d| !d.starts_with("override "))
         .collect();
     assert!(!pw.is_empty(), "{}", w.dump_text());
-    assert!(lost.is_empty() && broken.is_empty(), "lost {lost:?} broken {broken:?}\n{}", u.dump_text());
+    assert!(
+        lost.is_empty() && broken.is_empty(),
+        "lost {lost:?} broken {broken:?}\n{}",
+        u.dump_text()
+    );
 }

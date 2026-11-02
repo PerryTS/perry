@@ -304,7 +304,10 @@ pub(super) fn dependency_order(solves: &[Solve]) -> Vec<usize> {
                 continue;
             }
             // `v` is the root of a component: its members, the stack above it.
-            let at = comp_stack.iter().rposition(|&x| x == v).expect("root on stack");
+            let at = comp_stack
+                .iter()
+                .rposition(|&x| x == v)
+                .expect("root on stack");
             let mut members: Vec<usize> = comp_stack.split_off(at);
             for &m in &members {
                 on_stack[m] = false;
@@ -1356,6 +1359,7 @@ pub(super) fn unit_io(
     input: &Published,
 ) -> Vec<String> {
     use crate::dump::{fnv, FNV_OFFSET};
+    let synthetic = synthetic_dirs(sorted);
     let mut pos = vec![0usize; solves.len()];
     for (p, &si) in order.iter().enumerate() {
         pos[si] = p;
@@ -1366,43 +1370,43 @@ pub(super) fn unit_io(
         let u = u.as_ref().expect("every unit solved");
         let mut o: Vec<(String, u64)> = Vec::new();
         for ((_, n), c) in &u.contracts_out {
-            o.push((format!("class:{n}"), digest(c)));
+            o.push((format!("class:{n}"), sd(&synthetic, c)));
         }
         for ((_, n), c) in &u.fn_contracts_out {
-            o.push((format!("fn:{n}"), digest(c)));
+            o.push((format!("fn:{n}"), sd(&synthetic, c)));
         }
         for ((_, n), c) in &u.values_out {
-            o.push((format!("value:{n}"), digest(c)));
+            o.push((format!("value:{n}"), sd(&synthetic, c)));
         }
         for c in &u.layouts_out {
-            o.push((format!("layout:{}", c.display), digest(c)));
+            o.push((format!("layout:{}", c.display), sd(&synthetic, c)));
         }
         for (n, c) in &u.args_out {
-            o.push((format!("args:{n}"), digest(c)));
+            o.push((format!("args:{n}"), sd(&synthetic, c)));
         }
         for ((p, n), c) in &u.ctor_args_out {
-            o.push((format!("args:{p}:{n}"), digest(c)));
+            o.push((format!("args:{p}:{n}"), sd(&synthetic, c)));
         }
         for (n, c) in &u.this_args_out {
-            o.push((format!("this:{n}"), digest(c)));
+            o.push((format!("this:{n}"), sd(&synthetic, c)));
         }
         for n in &u.method_runs_out {
             o.push((format!("runs:{n}"), 0));
         }
         for (n, c) in &u.method_args_out {
-            o.push((format!("margs:{n}"), digest(c)));
+            o.push((format!("margs:{n}"), sd(&synthetic, c)));
         }
         for (n, c) in &u.ctor_runs_out {
-            o.push((format!("news:{n}"), digest(c)));
+            o.push((format!("news:{n}"), sd(&synthetic, c)));
         }
         for (d, k, kinds) in &u.stores_out {
-            o.push((format!("store:{d}.{k}"), digest(kinds)));
+            o.push((format!("store:{d}.{k}"), sd(&synthetic, kinds)));
         }
         for (k, c) in &u.cells_out {
-            o.push((format!("cell:{k}"), digest(c)));
+            o.push((format!("cell:{k}"), sd(&synthetic, c)));
         }
         for ((p, n), vc) in &u.writes_out {
-            o.push((format!("write:{p}.{n}"), digest(vc)));
+            o.push((format!("write:{p}.{n}"), sd(&synthetic, vc)));
         }
         for d in &u.reports {
             o.push((format!("report:{d}"), 0));
@@ -1525,6 +1529,57 @@ pub(super) fn unit_io(
         }
     }
     lines
+}
+
+/// The directories of the compiler-generated modules, read off the unit
+/// paths (`<cache dir>/synthetic-modules/...`).
+fn synthetic_dirs(sorted: &[(&str, &Module)]) -> Vec<Vec<u8>> {
+    const NAME: &str = "/synthetic-modules/";
+    let mut dirs: Vec<Vec<u8>> = sorted
+        .iter()
+        .filter_map(|(p, _)| {
+            p.find(NAME)
+                .map(|at| p.as_bytes()[..at + NAME.len() - 1].to_vec())
+        })
+        .collect();
+    dirs.sort();
+    dirs.dedup();
+    dirs
+}
+
+/// `digest` for the dump: a synthetic module is named by its file under the
+/// cache dir, and the value identity of a unit output must not depend on
+/// where the cache lives, so the cache dir part of the name is not hashed.
+fn sd<T: std::hash::Hash>(dirs: &[Vec<u8>], v: &T) -> u64 {
+    struct Stable<'a>(std::collections::hash_map::DefaultHasher, &'a [Vec<u8>]);
+    impl std::hash::Hasher for Stable<'_> {
+        fn write(&mut self, bytes: &[u8]) {
+            const STABLE: &[u8] = b"<cache-dir>/synthetic-modules";
+            let mut out = Vec::new();
+            let mut i = 0;
+            let mut hit = false;
+            while i < bytes.len() {
+                match self.1.iter().find(|d| bytes[i..].starts_with(d)) {
+                    Some(d) => {
+                        out.extend_from_slice(STABLE);
+                        i += d.len();
+                        hit = true;
+                    }
+                    None => {
+                        out.push(bytes[i]);
+                        i += 1;
+                    }
+                }
+            }
+            self.0.write(if hit { &out } else { bytes });
+        }
+        fn finish(&self) -> u64 {
+            self.0.finish()
+        }
+    }
+    let mut h = Stable(std::collections::hash_map::DefaultHasher::new(), dirs);
+    v.hash(&mut h);
+    std::hash::Hasher::finish(&h)
 }
 
 /// The units a newly broken contract changes (design §11.3): the unit
@@ -1729,7 +1784,10 @@ pub(super) fn merge_unit(
     pf.super_unrelinked.extend(u.super_unrelinked);
     pf.interp_guard = pf.interp_guard.take().or(u.interp_guard);
     pf.fnproto_bind_written = pf.fnproto_bind_written.take().or(u.fnproto_bind_written);
-    pf.array_iteration_written = pf.array_iteration_written.take().or(u.array_iteration_written);
+    pf.array_iteration_written = pf
+        .array_iteration_written
+        .take()
+        .or(u.array_iteration_written);
     pf.array_iterator_close_written = pf
         .array_iterator_close_written
         .take()
@@ -1762,7 +1820,8 @@ pub(super) fn merge_unit(
 /// adds nothing to that union: the other units' records decide the site.
 /// A site only dead records name stays one dead fact.
 pub(super) fn join_site_records(pf: &mut ProgramFacts) {
-    let dead = |s: &SiteFacts| matches!(&s.verdict, crate::Verdict::No(r) if r.starts_with("dead site"));
+    let dead =
+        |s: &SiteFacts| matches!(&s.verdict, crate::Verdict::No(r) if r.starts_with("dead site"));
     let key = |s: &SiteFacts| (s.module, s.byte_offset, s.key.clone(), s.is_call);
     let live: FxHashSet<(u32, u32, String, bool)> =
         pf.sites.iter().filter(|s| !dead(s)).map(key).collect();

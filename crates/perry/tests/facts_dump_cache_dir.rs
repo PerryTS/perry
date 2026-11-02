@@ -32,7 +32,15 @@ fn dump(dir: &Path, cache: &str) -> Vec<u8> {
         "compile failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    std::fs::read(&dump).expect("facts dump")
+    // Timings are the one part of a dump that varies between runs.
+    std::fs::read_to_string(&dump)
+        .expect("facts dump")
+        .lines()
+        // `W` lines name files beside the dump itself, not under the cache dir.
+        .filter(|l| !l.contains("_ms") && !l.contains(" ms=") && !l.starts_with("W "))
+        .map(|l| format!("{l}\n"))
+        .collect::<String>()
+        .into_bytes()
 }
 
 #[test]
@@ -54,6 +62,9 @@ fn two_cache_dirs_dump_the_same_bytes() {
         text.contains("<cache-dir>/synthetic-modules/perry-cjs-"),
         "the dump names no synthetic module"
     );
-    assert!(!text.contains("cache-first"), "the cache dir leaked");
+    if let Some(at) = text.find("cache-first") {
+        let from = at.saturating_sub(120);
+        panic!("the cache dir leaked: ...{}", &text[from..(at + 60).min(text.len())]);
+    }
     assert!(a == b, "the dump depends on the cache dir");
 }

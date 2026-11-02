@@ -1104,7 +1104,8 @@ impl Model {
             if self.virt_protos.contains_key(&r) {
                 self.register_virt(r, classes);
             } else if self.arg_members.get(&r).is_some_and(|ms| {
-                ms.iter().all(|m| self.virt_protos.contains_key(m) && !self.virt_tok_open.contains(m))
+                ms.iter()
+                    .all(|m| self.virt_protos.contains_key(m) && !self.virt_tok_open.contains(m))
             }) {
                 let mut cs: Vec<TmplId> = Vec::new();
                 for m in self.arg_members[&r].clone() {
@@ -1173,11 +1174,12 @@ impl Model {
     /// hard operation on one or lets one escape, or an accessor on the
     /// chain may answer it.
     fn virt_own(&self, t: Tok, classes: &[TmplId], a: Atom) -> bool {
-        self.virt_tok_open.contains(&t) || classes.iter().any(|&p| {
-            self.virt_open.contains(&p)
-                || self.virt_revoked.contains(&(p, a))
-                || self.chain_accessor_key(p, a)
-        })
+        self.virt_tok_open.contains(&t)
+            || classes.iter().any(|&p| {
+                self.virt_open.contains(&p)
+                    || self.virt_revoked.contains(&(p, a))
+                    || self.chain_accessor_key(p, a)
+            })
     }
 
     /// The classes of receiver token / marker `t` that another unit's
@@ -1991,7 +1993,10 @@ impl Model {
                 of,
                 builtin,
             } => {
-                format!("chainunion {n} {} {dst} {of} {builtin}", self.key_name(*key))
+                format!(
+                    "chainunion {n} {} {dst} {of} {builtin}",
+                    self.key_name(*key)
+                )
             }
             Cons::ProtoGiven { protos } => format!("protogiven {n} {protos}"),
             Cons::ParentGiven { of } => format!("parentgiven {n} {of}"),

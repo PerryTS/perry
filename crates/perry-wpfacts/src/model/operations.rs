@@ -98,7 +98,10 @@ impl Model {
             if matches!(name, None | Some("next" | "return")) {
                 first(&mut close, r);
             }
-            if matches!(name, None | Some(crate::builtins::WK_ITERATOR | "__proto__")) {
+            if matches!(
+                name,
+                None | Some(crate::builtins::WK_ITERATOR | "__proto__")
+            ) {
                 first(&mut member, r);
             }
         }
@@ -107,7 +110,8 @@ impl Model {
                 return Some(r);
             };
             let n = &self.nodes[k as usize];
-            (n.dropped || !n.pts.is_empty() || n.prim & (prim::STR | prim::SYMBOL) != 0).then_some(r)
+            (n.dropped || !n.pts.is_empty() || n.prim & (prim::STR | prim::SYMBOL) != 0)
+                .then_some(r)
         });
         let mut member = member
             .or(self.array_member_write)
