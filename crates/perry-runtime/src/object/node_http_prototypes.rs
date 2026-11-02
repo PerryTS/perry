@@ -993,7 +993,7 @@ mod tests {
     }
 
     unsafe fn on_layout(obj: usize) -> bool {
-        on_server_response_layout(crate::node_stream::instance_birth::instance_layout(
+        super::on_server_response_layout(crate::node_stream::instance_birth::instance_layout(
             obj as *const ObjectHeader,
         ))
     }
