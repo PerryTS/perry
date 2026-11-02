@@ -321,8 +321,13 @@ that engine permits compilation and actual execution. Both the plugin and the
 compiled command produce their exact expected output. All 97 indexed evidence
 files were verified locally. These artifacts retain the recorded `3a20` native
 and runtime sources and `97f` WIT/checker source. Fresh builds at the integrated
-main base, the three-platform qualification workflow and actual release
-staging retain separate pending results.
+main base and the three-platform qualification workflow retain separate results.
+The [Linux release staging receipt](validation/wasi-p3-release-stage-linux-20261102.json)
+now qualifies a fresh source-matched runtime bundle through the actual package
+CLI and installed command/plugin execution at `5fd648816b`. The release job
+passed; macOS and Windows retain separate qualification outcomes. The first
+platform run exposed P1 warning/export/stdio gaps and a macOS legacy UDP send
+failure. Fixes are pushed and the three-platform rerun is in progress.
 
 | Requirement | Required evidence | Current state |
 | --- | --- | --- |
@@ -334,7 +339,7 @@ staging retain separate pending results.
 | Cross-language interoperability | Public Perry output composed with independent Rust and maintained-C components, including resources and future/stream payloads | Recorded scalar/compound, imported-resource and cross-export aliases execute on Linux. The maintained public P3 path now qualifies generated C/Perry/C resource futures with an independent Rust host, repeated labels and wrong-owner rejection. Wider value/platform coverage remains |
 | Runtime integration | Promise/nextTick task isolation, rejection identity, ALS, suspended-value tracing, teardown and positive moving-GC witnesses | Public ALS constructors/methods link from runtime alone; recorded Linux imports/exports and moving-GC profiles pass. Actual P3 libraries now preserve agent TLS across SDK tasks, including canonical WAIT/resume. The recorded synchronous-started import profile also qualifies ALS across interleaved native loans/exchanges and both moving modes. Shared-provider regression and wider platform/package coverage remain |
 | HTTP layouts | Current supported layouts and limitations explicitly tested; concurrent root handlers, nested/imported fallback, streaming bodies and cancellation | Linux supported layouts qualified; broader composition coverage open |
-| Platform and packaging | Current source-matched ordinary/instrumented artifacts and installed public tools run on Linux x86_64, macOS ARM64 and Windows x64 | Linux has actual isolated P3 command/plugin execution using the recorded frozen cohort, with missing-runtime/engine controls. Fresh three-platform P3 packages and actual release staging are implemented and running; their results remain pending |
+| Platform and packaging | Current source-matched ordinary/instrumented artifacts and installed public tools run on Linux x86_64, macOS ARM64 and Windows x64 | Linux actual release staging now qualifies a fresh source-matched package CLI and installed P3 command/plugin execution, with missing-runtime/engine controls. macOS ARM64 and Windows x64 remain unqualified; the platform rerun includes the P1 and legacy UDP fixes |
 | Durable regression coverage | Required CI executes the advertised profiles and fails if the actual guest, cancellation or GC witness is absent | Required WASI wiring now includes public P3 components/commands and complete assertion-enabled serial runtime/stdlib units. The maintained public gate passes on Linux; actual execution of the extended required job is pending |
 | Dependency and compatibility invariants | No Tokio anywhere, existing P1/P2 profiles retained, coherent compiler/runtime/adapter ABI, no workspace version bump | Strict Tokio ban merged; verify every dependency and landing change |
 

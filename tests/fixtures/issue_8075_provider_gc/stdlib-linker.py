@@ -17,7 +17,35 @@ import sys
 def defined_symbols(library, darwin):
     flags = ["-gU"] if darwin else ["-D", "--defined-only"]
     output = subprocess.check_output(["nm", *flags, str(library)], text=True)
-    return {line.split()[-1] for line in output.splitlines() if len(line.split()) >= 3}
+    # Function-info export names contain literal builder tokens, including
+    # whitespace and semicolons. Only the address/type columns are separators.
+    return {parts[2] for line in output.splitlines()
+            if len(parts := line.split(maxsplit=2)) == 3}
+
+
+def quote_export_symbols(text):
+    """Treat exported ABI names as literal linker symbols, not script syntax."""
+    global_scope = False
+    lines = []
+    for line in text.splitlines(keepends=True):
+        if re.fullmatch(r"\s*global\s*:\s*", line):
+            global_scope = True
+        elif re.fullmatch(r"\s*local\s*:\s*", line):
+            global_scope = False
+        elif global_scope and (match := re.fullmatch(r'(\s+)(.+);\s*', line)):
+            name = match.group(2)
+            if name != "*" and not (name.startswith('"') and name.endswith('"')):
+                line = match.group(1) + json.dumps(name) + ";\n"
+        lines.append(line)
+    return "".join(lines)
+
+
+def export_symbol(line):
+    text = line.strip()
+    if not text.endswith(";"):
+        return None
+    name = text[:-1]
+    return json.loads(name) if name.startswith('"') and name.endswith('"') else name
 
 
 def build_runtime(arguments, archive, library, darwin, real_cc):
@@ -87,7 +115,7 @@ def runtime_native_link(arguments):
             if count != 1:
                 raise SystemExit("expected rustc runtime global export scope")
             exports = original.with_name("perry-runtime-exports.map")
-            exports.write_text(text)
+            exports.write_text(quote_export_symbols(text))
             rewritten.append("-Wl,--version-script=" + str(exports))
         elif argument.startswith("-Wl,-exported_symbols_list,") or (index and arguments[index - 1] == "-Wl,-exported_symbols_list"):
             prefix = "-Wl,-exported_symbols_list," if argument.startswith("-Wl,-exported_symbols_list,") else "-Wl,"
@@ -132,11 +160,10 @@ def main():
             # retain --no-undefined-version for every actual stdlib export.
             lines = []
             for line in path.read_text().splitlines(keepends=True):
-                match = re.fullmatch(r'\s*"?([^";\s]+)"?;\s*', line)
-                if not match or match.group(1) not in provided:
+                if export_symbol(line) not in provided:
                     lines.append(line)
             exports = library.parent / "stdlib-exports.map"
-            exports.write_text("".join(lines))
+            exports.write_text(quote_export_symbols("".join(lines)))
             arguments.append("-Wl,--version-script=" + str(exports))
         elif argument == "-Wl,-exported_symbols_list" or argument.startswith("-Wl,-exported_symbols_list,"):
             if argument == "-Wl,-exported_symbols_list":

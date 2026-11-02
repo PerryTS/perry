@@ -4,6 +4,18 @@
 //! atom half of the compiler-owned image; `layout_desc` keeps the layout half.
 use super::*;
 
+// COFF sorts read-only and writable inputs into separate sections even when
+// they share a name. Keep bounds with each characteristic: immutable runtime
+// atoms and mutable image binding atoms must both enter the image census.
+#[cfg(target_os = "windows")]
+#[used(linker)]
+#[link_section = ".perryatm$a"]
+static mut WRITABLE_ATOM_START: [u64; 1] = [0];
+#[cfg(target_os = "windows")]
+#[used(linker)]
+#[link_section = ".perryatm$z"]
+static mut WRITABLE_ATOM_END: [u64; 1] = [0];
+
 /// A program-named key (§6a). `kind` 0 is a string key: its precomputed
 /// FNV-1a hash (the runtime's key hash) and the immutable image string that
 /// is its one address. `kind` 1 is a well-known symbol: `string` null,
@@ -146,7 +158,14 @@ pub(crate) fn image_atoms() -> impl Iterator<Item = *mut StaticAtom> {
                 .map(|item| item.0.cast_mut()),
         )
     }
-    #[cfg(not(target_family = "wasm"))]
+    #[cfg(target_os = "windows")]
+    {
+        records::<StaticAtom>(atom_bounds()).chain(records::<StaticAtom>((
+            std::ptr::addr_of!(WRITABLE_ATOM_START) as usize + 8,
+            std::ptr::addr_of!(WRITABLE_ATOM_END) as usize,
+        )))
+    }
+    #[cfg(not(any(target_family = "wasm", target_os = "windows")))]
     {
         records::<StaticAtom>(atom_bounds())
     }

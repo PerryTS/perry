@@ -1,0 +1,46 @@
+{
+  "date": "2026-11-02",
+  "platform": "Linux x86_64",
+  "source": "5fd648816b4bed9bdc6bc89c3d1152ccd9ae3fcb",
+  "workflowRun": "https://github.com/PerryTS/perry/actions/runs/41387373853",
+  "runtimeJob": 125091383958,
+  "nativeJob": 125097254421,
+  "artifactId": 13118063155,
+  "packageCliExecuted": true,
+  "freshSourceMatchedNativeAndGuestArtifacts": true,
+  "result": {
+    "exitCode": 0,
+    "installedPlainP3Qualified": true,
+    "generatedTypedNativeBindingsExecuted": true,
+    "runtimeSource": "5fd648816b4bed9bdc6bc89c3d1152ccd9ae3fcb",
+    "repositoryLibraryFallbackRejected": true,
+    "fullWasi030Qualified": false
+  },
+  "actualP3Bundle": {
+    "files": [
+      {
+        "path": "libperry_runtime.a",
+        "sha256": "cc41776dcaa37946d4ca76b8282987b8da0308393df6cdde57c0c6b216d4cb1a",
+        "size": 47763542
+      }
+    ],
+    "perry_version": "0.5.1663",
+    "schema_version": 1,
+    "source_revision": "5fd648816b4bed9bdc6bc89c3d1152ccd9ae3fcb",
+    "target_triple": "wasm32-wasip3"
+  },
+  "installedCommandStdout": "installed P3 command\n",
+  "installedTypedPluginStdout": "PUBLIC ALL-ASYNC P3 PASS\n",
+  "localEvidence": {
+    "indexedFiles": 81,
+    "indexSha256": "5f30c1fc62c13db334c57cbcecbc1caad67c82303acd71a650fa1c1add549027",
+    "guestArchiveSizeAndHashVerifiedAgainstBundleManifest": true
+  },
+  "fullWasi030Qualified": false,
+  "limitations": [
+    "Linux release staging only; other native jobs retain their own outcomes.",
+    "No publication or PR was performed.",
+    "Source predates the subsequent P1 stdio/warning and legacy UDP fixes; fresh integrated qualification remains separate.",
+    "No claim of final full WASI 0.3.0 qualification."
+  ]
+}

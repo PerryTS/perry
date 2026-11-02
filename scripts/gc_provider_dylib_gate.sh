@@ -57,7 +57,7 @@ fi
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/perry-8075-provider.XXXXXX")
 printf '%s\n' 'Provider GC/Response/ALS qualification artifacts; owned by gc_provider_dylib_gate.sh.' > "$scratch/OWNER"
 provider_source="$scratch/perry-provider-source"
-provider_target_dir="$scratch/provider-target"
+provider_target_dir="${PERRY_PROVIDER_GC_TARGET_DIR:-$scratch/provider-target}"
 worktree_added=false
 cleanup() {
   # Qualification and failure investigations may need the exact provider graph,

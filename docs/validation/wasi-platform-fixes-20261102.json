@@ -1,0 +1,50 @@
+{
+  "date": "2026-11-02",
+  "initialFixSource": "abe8d9ef56af320cabd64c83e0290af7806b930e",
+  "subsequentDescriptorOwnershipFix": "f492803d65",
+  "changes": [
+    "One queued experimental process warning for namespace and constructor imports",
+    "Remove the spurious module-level wasiImport export; retain the instance property",
+    "Initialize and clone the authoritative fs descriptor registry for explicit WASI stdio, including Windows standard handles; reject closed descriptors with UVWASI_EBADF",
+    "Maintain legacy UDP associations and receive-peer filtering without kernel-connected sendto on BSD; test empty datagrams"
+  ],
+  "jointUnits": {
+    "source": "abe8d9ef56af320cabd64c83e0290af7806b930e",
+    "profile": "normal DEV",
+    "debugAssertions": true,
+    "optLevel": "0",
+    "packages": [
+      "perry-runtime",
+      "perry-stdlib"
+    ],
+    "testThreads": 1,
+    "runtime": {
+      "passed": 6422,
+      "failed": 0,
+      "ignored": 47
+    },
+    "stdlib": {
+      "passed": 299,
+      "failed": 0,
+      "ignored": 1
+    },
+    "requiredUnwindArgumentsVerified": true,
+    "buildFlagsEnvironmentUnmodified": true,
+    "archive": {
+      "name": "wasi-030-v234-evidence.tar.gz",
+      "bytes": 114854459,
+      "sha256": "c9d7c3ccd4bc756630fe44985ffb4219d141d18cb237cee968d2ec83e0af6d47",
+      "indexedFiles": 15
+    },
+    "exactRegularFileSetAndAllSizesAndHashesVerifiedLocally": true,
+    "archiveExtracted": false
+  },
+  "platformRerun": "https://github.com/PerryTS/perry/actions/runs/41395659335",
+  "platformRerunSource": "abe8d9ef56af320cabd64c83e0290af7806b930e",
+  "fullWasi030Qualified": false,
+  "limitations": [
+    "The recorded unit run and platform rerun predate the subsequent f492 descriptor-registry correction; that correction needs fresh qualification.",
+    "Native provider GC/Response/ALS work at 4944e9ac91 is still running.",
+    "No PR, publication or merge has been performed."
+  ]
+}
