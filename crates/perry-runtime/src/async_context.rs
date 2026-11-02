@@ -695,6 +695,7 @@ pub(crate) fn test_snapshot_with_store(store: f64) -> AsyncContextSnapshot {
             token: payload.token,
             stores: vec![store],
         }],
+        ..Default::default()
     }
 }
 
