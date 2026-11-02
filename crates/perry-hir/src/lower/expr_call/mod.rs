@@ -419,7 +419,7 @@ fn lower_call_inner(
                     ctx.lookup_native_module(ident.sym.as_ref())
                 {
                     if module_name.strip_prefix("node:").unwrap_or(module_name) == "sqlite"
-                        && method_name == "DatabaseSync"
+                        && matches!(method_name, "Database" | "DatabaseSync")
                     {
                         return Ok(Expr::NativeMethodCall {
                             module: "sqlite".to_string(),

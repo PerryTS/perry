@@ -132,7 +132,7 @@ pub(crate) use module_strict::module_has_strict_mode;
 
 mod lower_expr;
 pub(crate) use lower_expr::{
-    lower_expr, lower_expr_assignment, strict_global_assign_existing_or_throw,
+    class_binding_read, lower_expr, lower_expr_assignment, strict_global_assign_existing_or_throw,
     throw_reference_error_expr, try_desugar_reactive_text, unresolved_global_get_expr,
     with_implicit_unset_let, with_set_fallback_for_ident,
 };
