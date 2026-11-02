@@ -6977,6 +6977,11 @@ pub(super) fn lower_for_tiers(
     update: Option<&perry_hir::Expr>,
     body: &[Stmt],
 ) -> Result<()> {
+    // A byte loop over a Buffer/Uint8Array parameter whose body cannot run
+    // JS: one receiver admission proves the whole loop (`byte_view_loop`).
+    if super::byte_view_loop::lower(ctx, init, condition, update, body)? {
+        return Ok(());
+    }
 
     // #9160: `sum += strings[maskedIndex].length`. A one-time receiver,
     // window, element-tag, and accumulator check admits a clone whose array

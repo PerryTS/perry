@@ -22,6 +22,7 @@ mod boxed_frame_release_tests;
 mod boxed_local_init;
 #[cfg(test)]
 mod boxed_slot_no_root_tests;
+mod byte_view_loop;
 #[cfg(test)]
 mod class_field_loop_tests;
 mod class_first_loop;
