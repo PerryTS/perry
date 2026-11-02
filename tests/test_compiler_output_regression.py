@@ -558,10 +558,11 @@ def h1_equivalence_native_records():
         "helper_index": "h1_native_rep_equivalence_ts.module_init.helper_index",
         "same_buffer": "h1_native_rep_equivalence_ts.incinplace.same_buffer",
     }
+    # The H1_MIN_IR blocks the records name: each region resolves from them.
     blocks = {
-        "direct_bounded": "for.body.2",
-        "local_cast": "for.body.6",
-        "helper_index": "for.body.10",
+        "direct_bounded": "for.body.8",
+        "local_cast": "for.body.12",
+        "helper_index": "for.body.18",
         "same_buffer": "for.body.2.i",
     }
     records = []
@@ -2411,6 +2412,52 @@ idxset.bounded_numeric_merge.5:
                 "native_reps_no_unexpected_materialization_reasons" in error
                 for error in report["errors"]
             )
+        )
+
+    def test_native_id_region_resolves_from_its_records_not_optimized_labels(self):
+        workloads = {
+            "native_id_region": {
+                "named_regions": [
+                    {
+                        "name": "stores",
+                        "native_region_id": "t.module_init.stores",
+                        "required": True,
+                        "no_runtime_calls": True,
+                        "checks": [{"name": "stores_bytes", "min": {"store_i8": 3}}],
+                    }
+                ],
+            }
+        }
+
+        def verify(records):
+            return HARNESS.verify_artifacts(
+                workload="native_id_region",
+                ir_before=GOOD_IR,
+                # LLVM renamed the loop: no optimized label names it any more.
+                ir_after=GOOD_IR.replace("for.body.36", "vector.body"),
+                assembly=GOOD_ASM,
+                benchmark={"runs": [{"exit_code": 0}]},
+                vectorization={"vectorized_count": 1, "missed_count": 0, "analysis_count": 0},
+                workloads=workloads,
+                native_reps=[{"records": records}],
+            )
+
+        report = verify(
+            [native_record(block="for.body.36", region_id="t.module_init.stores")]
+        )
+        self.assertEqual(report["status"], "pass", report["errors"])
+        self.assertEqual(report["named_regions"]["stores"]["labels"], ["for.body.36"])
+        self.assertEqual(
+            report["native_named_regions"]["stores"]["labels"], ["for.body.36"]
+        )
+
+        # A record of another region does not make this one present.
+        report = verify(
+            [native_record(block="for.body.36", region_id="t.module_init.other")]
+        )
+        self.assertEqual(report["status"], "fail")
+        self.assertTrue(
+            any("named_region_stores_present" in error for error in report["errors"])
         )
 
     def test_scoped_materialization_checks_ignore_out_of_region_records(self):

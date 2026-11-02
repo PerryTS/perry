@@ -512,6 +512,9 @@ counter = "buffer_slow_path_calls"
 equals = 0
 detail = "buffer_slow_path_calls"
 
+# Each region is resolved from the native records carrying its
+# native_region_id: the blocks codegen emitted for that loop, before LLVM
+# renames, inlines or vectorizes them (no ordinal label selectors).
 [[workloads.h1_native_rep_equivalence.named_regions]]
 name = "direct_bounded"
 native_region_id = "h1_native_rep_equivalence_ts.module_init.direct_bounded"
@@ -519,11 +522,10 @@ required = true
 no_runtime_calls = true
 no_conversions = true
 
-[[workloads.h1_native_rep_equivalence.named_regions.selectors]]
-function_contains = "main"
-# Root-shading barriers currently shift the first module-init loop to body 8.
-label_any = ["for.body.8"]
-counter_min = { load_i8 = 1, store_i8 = 1 }
+[[workloads.h1_native_rep_equivalence.named_regions.checks]]
+name = "named_region_direct_bounded_byte_load_store"
+min = { load_i8 = 1, store_i8 = 1 }
+detail = "direct_bounded loads and stores bytes"
 
 [[workloads.h1_native_rep_equivalence.named_regions]]
 name = "local_cast"
@@ -532,11 +534,10 @@ required = true
 no_runtime_calls = true
 no_conversions = true
 
-[[workloads.h1_native_rep_equivalence.named_regions.selectors]]
-function_contains = "main"
-# The local-cast loop follows the vectorized direct loop's scalar remainder.
-label_any = ["for.body.12"]
-counter_min = { load_i8 = 1, store_i8 = 1 }
+[[workloads.h1_native_rep_equivalence.named_regions.checks]]
+name = "named_region_local_cast_byte_load_store"
+min = { load_i8 = 1, store_i8 = 1 }
+detail = "local_cast loads and stores bytes"
 
 [[workloads.h1_native_rep_equivalence.named_regions]]
 name = "helper_index"
@@ -545,10 +546,10 @@ required = true
 no_runtime_calls = true
 no_conversions = true
 
-[[workloads.h1_native_rep_equivalence.named_regions.selectors]]
-function_contains = "main"
-label_any = ["for.body.18"]
-counter_min = { load_i8 = 1, store_i8 = 1 }
+[[workloads.h1_native_rep_equivalence.named_regions.checks]]
+name = "named_region_helper_index_byte_load_store"
+min = { load_i8 = 1, store_i8 = 1 }
+detail = "helper_index loads and stores bytes"
 
 [[workloads.h1_native_rep_equivalence.named_regions]]
 name = "same_buffer"
@@ -557,10 +558,10 @@ required = true
 no_runtime_calls = true
 no_conversions = true
 
-[[workloads.h1_native_rep_equivalence.named_regions.selectors]]
-function_contains = "main"
-label_any = ["for.body.2.i"]
-counter_min = { load_i8 = 1, store_i8 = 1 }
+[[workloads.h1_native_rep_equivalence.named_regions.checks]]
+name = "named_region_same_buffer_byte_load_store"
+min = { load_i8 = 1, store_i8 = 1 }
+detail = "same_buffer loads and stores bytes"
 
 [workloads.h1_buffer_fastpath_bench]
 source = "benchmarks/compiler_output/fixtures/h1_buffer_fastpath_bench.ts"

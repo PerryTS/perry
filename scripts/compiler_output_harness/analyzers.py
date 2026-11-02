@@ -419,6 +419,47 @@ def named_hot_regions(workload_info: dict[str, Any], ir_after: str) -> dict[str,
     }
 
 
+def native_record_regions(
+    workload_info: dict[str, Any], ir_before: str, records: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Resolve each selector-less named region that names a `native_region_id`
+    from the compiler's own records for that region.
+
+    Codegen records every native access with the region id it belongs to and
+    the (function, block label) it emitted. Those labels are exact in the
+    pre-optimization IR; LLVM later inlines, renames and vectorizes the loop
+    (a tail-folded byte loop becomes an unnamed `vector.body`), so an ordinal
+    label in the optimized IR names whatever loop happens to land there. The
+    region is therefore the set of pre-optimization blocks its records name,
+    and its contract runs on their counters.
+    """
+    wanted: dict[str, str] = {}
+    for region in workload_info.get("named_regions", []) or []:
+        region_id = region.get("native_region_id")
+        if region_id and not region.get("selectors"):
+            wanted[str(region_id)] = str(region["name"])
+    if not wanted:
+        return {}
+    keys: dict[str, set[tuple[str, str]]] = {}
+    for record in records:
+        name = wanted.get(str(record.get("region_id") or ""))
+        if name:
+            keys.setdefault(name, set()).add(
+                (record.get("function") or "", record.get("block_label") or "")
+            )
+    selected: dict[str, list[tuple[str, str, dict[str, Any]]]] = {}
+    for function, label, body in extract_blocks_with_functions(ir_before):
+        for name, block_keys in keys.items():
+            if (function, label) in block_keys:
+                selected.setdefault(name, []).append(
+                    (function, label, block_counter_summary(body))
+                )
+    return {
+        name: merge_named_region_counters(region_blocks)
+        for name, region_blocks in selected.items()
+    }
+
+
 def region_counters(
     workload: str, ir_after: str, workloads: dict[str, Any] | None = None
 ) -> dict[str, Any]:

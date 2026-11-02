@@ -8,6 +8,7 @@ from typing import Any
 from .analyzers import (
     hot_loop_blocks,
     named_hot_regions,
+    native_record_regions,
     runtime_call_names,
 )
 from .common import (
@@ -1278,6 +1279,11 @@ def verify_artifacts(
     native_named_regions = named_hot_regions(workload_info, ir_before)
     counters = counters or {}
     native_records = _flatten_native_records(native_reps)
+    # A region named by its native id is the codegen's own loop: resolve it
+    # from its records in both views (see `native_record_regions`).
+    record_regions = native_record_regions(workload_info, ir_before, native_records)
+    named_regions.update(record_regions)
+    native_named_regions.update(record_regions)
 
     def add(name: str, passed: bool, detail: str, severity: str = "error") -> None:
         checks.append(
