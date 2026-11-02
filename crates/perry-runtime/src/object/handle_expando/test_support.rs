@@ -17,6 +17,13 @@ struct Guarded {
     guard: u64,
     record: Record,
 }
+thread_local! {
+    /// The records of this thread's live owners: a handle the bag dispatch is
+    /// asked about is dereferenced only when it is one of them (a typed handle
+    /// dispatcher probes the bag of every handle it sees, own properties first).
+    static OWNER_RECORDS: std::cell::RefCell<Vec<usize>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
 pub(crate) struct TestNativeOwner {
     // Drop the root scope before freeing the native argument cell.
     _roots: crate::gc::RuntimeHandleScope,
@@ -38,6 +45,8 @@ impl TestNativeOwner {
         unsafe {
             roots.root_nanbox_cell(&owner.record.bag);
         }
+        let record = &owner.record as *const Record as usize;
+        OWNER_RECORDS.with(|o| o.borrow_mut().push(record));
         Self {
             _roots: roots,
             owner,
@@ -50,6 +59,12 @@ impl TestNativeOwner {
         unsafe {
             *self.owner.record.bag.get() = 0.0;
         }
+    }
+}
+impl Drop for TestNativeOwner {
+    fn drop(&mut self) {
+        let record = &self.owner.record as *const Record as usize;
+        OWNER_RECORDS.with(|o| o.borrow_mut().retain(|r| *r != record));
     }
 }
 thread_local! {
@@ -89,8 +104,10 @@ unsafe extern "C" fn access(handle: i64, operation: u32, bits: u64, out: *mut u6
             Some(record) => record as *mut Record,
             None => return false,
         }
-    } else {
+    } else if OWNER_RECORDS.with(|o| o.borrow().contains(&(handle as usize))) {
         handle as *mut Record
+    } else {
+        return false;
     };
     if (*record).magic != MAGIC {
         return false;

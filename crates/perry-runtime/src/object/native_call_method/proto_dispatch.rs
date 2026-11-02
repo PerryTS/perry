@@ -68,8 +68,22 @@ pub(crate) unsafe fn call_on_native_backing(
         return None;
     }
     let raw = crate::value::js_nanbox_get_pointer(object) as usize;
-    if crate::object::field_get_set::is_fetch_subclass_body_method(method_name.as_bytes()) {
-        if let Some(id) = crate::object::fetch_subclass_handle_id(raw) {
+    // A Request/Response backing answers only its body methods here (its other
+    // members are accessors); every method of a Headers/Blob/File backing is a
+    // method of the native value.
+    let body_method =
+        crate::object::field_get_set::is_fetch_subclass_body_method(method_name.as_bytes());
+    // The backing probe reads a field (and may collect): keep `object` current.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let object_h = scope.root_nanbox_f64(object);
+    let backing = crate::object::fetch_subclass_handle_id(raw);
+    let object = object_h.get_nanbox_f64();
+    let raw = crate::value::js_nanbox_get_pointer(object) as usize;
+    if let Some(id) = backing {
+        let backing_owns_method = body_method
+            || crate::object::fetch_handle_kind_probe()
+                .is_some_and(|probe| matches!(probe(id as usize), 3..=5));
+        if backing_owns_method {
             if let Some(dispatch) = super::super::class_handles::handle_method_dispatch() {
                 return Some(dispatch(
                     id,

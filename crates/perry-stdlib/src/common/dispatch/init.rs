@@ -57,8 +57,9 @@ pub unsafe extern "C" fn js_handle_property_set_dispatch(
     // Native HANDLE values are ordinary, extensible objects in Node; this gives
     // them the same string-keyed own-property storage closures get from
     // `CLOSURE_PROPS`. The read half (`js_handle_property_dispatch`) consults
-    // every typed property FIRST and only falls back to this expando table, so a
-    // typed property name can never be shadowed by an expando copy. This is what
+    // this bag FIRST: an own property shadows the typed prototype members
+    // (`res.writeHead = hook` reads back `hook`), while names a typed setter
+    // claimed above never reach the bag. This is what
     // makes `debug`'s `createDebug.colors = [...]` persist and read back (the
     // wall: a Blob/Response-tagged `_` whose `.colors` write was silently
     // dropped, so `selectColor` read `undefined`).

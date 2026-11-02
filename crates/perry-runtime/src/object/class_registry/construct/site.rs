@@ -205,6 +205,13 @@ pub unsafe extern "C-unwind" fn js_class_value_super_construct_site(
     if let Some(receiver) = init_error_family_receiver(parent, this, args_ptr, args_len) {
         return receiver;
     }
+    // Likewise for the bases whose native state the receiver carries rather
+    // than becomes: the generic construct below would return a fresh Promise
+    // cell or Fetch handle in place of `this`, an instance with the base's
+    // intrinsic prototype instead of the subclass's.
+    if let Some(receiver) = init_backed_builtin_receiver(parent, this, args_ptr, args_len) {
+        return receiver;
+    }
     // Reified builtins have a Construct entry distinct from their Call entry
     // (Map/Set deliberately throw on Call). Preserve the current newTarget.
     if crate::proxy_hooks::proxy_is_proxy(parent) != 0
@@ -301,6 +308,66 @@ unsafe fn init_error_family_receiver(
         message,
         options,
     );
+    Some(this_h.get_nanbox_f64())
+}
+
+/// `super(...)` into a built-in whose instance state lives beside an ordinary
+/// object rather than in it: `Promise` (a backing promise cell) and the WHATWG
+/// Fetch bases `Request`/`Response`/`Headers`/`Blob` (a registry handle). The
+/// receiver the derived `new` allocated is the instance: its shape names the
+/// subclass prototype, so `instanceof`, the class's accessors and methods, and
+/// the fields the derived constructor writes after `super()` all stay on it.
+/// The base stores its state on that receiver, as the direct `super()`
+/// lowering does (`js_promise_subclass_init`, `js_request_subclass_init`).
+unsafe fn init_backed_builtin_receiver(
+    parent: f64,
+    this: f64,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    use super::super::super::global_this_tables::BuiltinConstructorIdentity as Identity;
+    let identity = crate::object::global_this_tables::constructor_identity(parent)?;
+    if !matches!(
+        identity,
+        Identity::Promise
+            | Identity::Request
+            | Identity::Response
+            | Identity::Headers
+            | Identity::Blob
+    ) {
+        return None;
+    }
+    let receiver = JSValue::from_bits(this.to_bits());
+    if !receiver.is_pointer()
+        || !crate::value::addr_class::try_read_gc_header(
+            receiver.as_pointer::<ObjectHeader>() as usize
+        )
+        .is_some_and(|header| crate::gc_type_is_object!(header.obj_type))
+    {
+        return None;
+    }
+    let args = if args_ptr.is_null() {
+        &[][..]
+    } else {
+        std::slice::from_raw_parts(args_ptr, args_len)
+    };
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let arg0 = args.first().copied().unwrap_or(undefined);
+    let arg1 = args.get(1).copied().unwrap_or(undefined);
+    // Both inits allocate (and the Promise executor runs user code), so the
+    // caller gets the refreshed receiver.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this_h = scope.root_nanbox_f64(this);
+    if identity == Identity::Promise {
+        crate::promise::subclass::js_promise_subclass_init(this_h.get_nanbox_f64(), arg0);
+    } else {
+        crate::object::global_this::init_fetch_backed_receiver(
+            identity.name(),
+            this_h.get_nanbox_f64(),
+            arg0,
+            arg1,
+        );
+    }
     Some(this_h.get_nanbox_f64())
 }
 

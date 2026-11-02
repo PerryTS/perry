@@ -27,6 +27,9 @@ pub(crate) enum Unknown {
     /// ⊤ stored into an intrinsic prototype or builtin function value: every
     /// builtin method read through it is unknown.
     IntrinsicPrototypeTopStore,
+    /// A key the program itself writes (or may write) onto a builtin
+    /// prototype: the builtin member it names may be replaced.
+    IntrinsicPrototypeWrite,
     /// A result of, or callback argument from, an opaque or unmodeled
     /// builtin.
     OpaqueBuiltin,
@@ -92,6 +95,7 @@ impl Unknown {
             EscapedThis => "escaped-this",
             UnknownCalleeEscape => "unknown-callee-escape",
             IntrinsicPrototypeTopStore => "intrinsic-prototype-top-store",
+            IntrinsicPrototypeWrite => "intrinsic-prototype-write",
             OpaqueBuiltin => "opaque-builtin",
             ComputedKey => "computed-key",
             EscapedObjectField => "escaped-object-field",
@@ -436,6 +440,12 @@ pub(crate) fn verdict_cause(v: &crate::Verdict) -> Option<Result<Unknown, String
         ComputedKey
     } else if starts("accessor key") {
         AccessorKey
+    } else if starts("native member: the program writes") {
+        IntrinsicPrototypeWrite
+    } else if starts("native member: a store into ⊤") {
+        IntrinsicPrototypeTopStore
+    } else if starts("native member: a builtin prototype may be redefined") {
+        ReflectiveOperation
     } else if starts("primitive receiver") {
         PrimitiveReceiver
     } else if starts("receiver is a builtin/function value") {

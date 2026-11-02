@@ -148,7 +148,9 @@ pub(super) fn emit_tower_pshape_call(
     owner: &str,
     cid: u32,
 ) -> String {
-    if layout_proven {
+    // A facts-verification build keeps the recheck: its miss is the witness.
+    let verify = layout_proven && crate::verify_facts::enabled();
+    if layout_proven && !verify {
         return ctx.block().call(DOUBLE, &route.clone_fn, case_arg_slices);
     }
     // The global is read ONCE per function (entry-hoisted); the case block only
@@ -195,6 +197,21 @@ pub(super) fn emit_tower_pshape_call(
     ctx.block().br(&join_label);
 
     ctx.current_block = generic_idx;
+    if verify {
+        let site = crate::verify_facts::site_arg(
+            ctx,
+            &format!(
+                "method {} layout proven: shape {expected_shape_id} ({})",
+                route.clone_fn, route.keys_global
+            ),
+        );
+        let recv_box = crate::expr::nanbox_pointer_inline(ctx.block(), recv_handle);
+        let _ = ctx.block().call(
+            crate::types::I32,
+            "perry_wpfacts_check_miss",
+            &[(DOUBLE, &recv_box), (crate::types::I64, &site)],
+        );
+    }
     let v_generic = ctx.block().call(DOUBLE, &route.generic_fn, case_arg_slices);
     let generic_end = ctx.block().label.clone();
     ctx.block().br(&join_label);
