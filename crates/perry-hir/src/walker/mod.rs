@@ -42,8 +42,8 @@
 //!    `Expr::clone` (`expr_clone.rs`) relies on both walkers visiting the
 //!    same fields in the same order: it lists the children with one and fills
 //!    the holes of a node's shallow copy with the other.
-//! 3. Add the variant's arm to `shallow` in `expr_clone.rs` (a compile
-//!    error too): a hole for each field the walkers visit, the rest cloned.
+//! 3. Add the variant's arm to `shallow` in the `expr_clone/shallow_*.rs`
+//!    group it belongs to (a missed variant panics on its first clone): a hole for each field the walkers visit, the rest cloned.
 //! 4. **If the variant carries a `LocalId` field** (a recurring source of
 //!    bug reports — see #167, #169, #212, #214), also add explicit handling
 //!    to:
