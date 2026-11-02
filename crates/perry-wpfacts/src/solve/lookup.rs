@@ -356,8 +356,11 @@ impl Model {
         // fact unit is known to be present. A closed marker holds no value
         // of its own: every value its parameter can hold is beside it, and
         // each of those reads its own absence (CHB3), so the marker adds
-        // none (as `judge` skips it).
-        let closed = self.closed_marker(t);
+        // none (as `judge` skips it). Only a parameter marker's own
+        // closedness (`closed_param`): it settles nothing and never turns
+        // off, while an argument marker's depends on members that may still
+        // join after this load (CHB5).
+        let closed = self.closed_param(t);
         let present = closed
             || match (key, self.tmpl_of(t)) {
                 (Key::Named(a), Some(tm)) => {
