@@ -24,6 +24,7 @@ mod apply;
 #[path = "solve/store.rs"]
 mod store;
 
+mod escape;
 mod fields;
 mod virt;
 
