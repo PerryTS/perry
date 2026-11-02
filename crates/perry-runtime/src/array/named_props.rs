@@ -65,9 +65,9 @@ pub(crate) unsafe fn array_property_bag_ensure(
     let scope = RuntimeHandleScope::new();
     let owner = scope.root_raw_mut_ptr(arr);
     let (named, owner) = owner.across_mut::<ArrayHeader, _>(|| {
-        crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(
-            crate::object::runtime_layouts::ARRAY_NAMED
-        ))
+        crate::object::layout_desc::perry_alloc_layout(
+            crate::object::runtime_layouts::ARRAY_NAMED::desc(),
+        )
     });
     publish_named(owner, named);
     named
@@ -81,7 +81,7 @@ pub(crate) unsafe fn array_prototype_property_bag_ensure(
     let owner = scope.root_raw_mut_ptr(arr);
     let (named, owner) = owner.across_mut::<ArrayHeader, _>(|| {
         crate::object::layout_desc::alloc_layout_prototype(
-            std::ptr::addr_of!(crate::object::runtime_layouts::ARRAY_PROTOTYPE_NAMED),
+            crate::object::runtime_layouts::ARRAY_PROTOTYPE_NAMED::desc(),
             room,
         )
     });

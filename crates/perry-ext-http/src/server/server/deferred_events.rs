@@ -311,9 +311,9 @@ fn listen_error_message(err: &ListenError) -> String {
 /// raw local would be read back stale (#8082).
 unsafe fn build_listen_error_value(err: &ListenError) -> f64 {
     let obj: *mut perry_ffi::ObjectHeader = unsafe {
-        perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
-            perry_ffi::runtime_layouts::RECORD_F17_0
-        ))
+        perry_ffi::runtime_layouts::alloc_runtime_record(
+            perry_ffi::runtime_layouts::RECORD_F17_0::desc(),
+        )
     };
     if obj.is_null() {
         return listen_error_message_value(err);

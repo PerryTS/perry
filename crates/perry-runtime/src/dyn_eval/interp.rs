@@ -588,7 +588,7 @@ pub(crate) fn exec_stmts(ctx: &Ctx, stmts: &[ast::Stmt], env_idx: usize) -> Flow
 pub(crate) fn exec_script_stmts(ctx: &Ctx, stmts: &[ast::Stmt], env_idx: usize) -> Flow {
     let mut vars = Vec::new();
     collect_var_names(stmts, &mut vars);
-    vars.sort_unstable();
+    crate::cold_sort::sort_by(&mut vars, |a, b| a.cmp(b));
     vars.dedup();
     for name in vars {
         if !env::is_bound(root_get(env_idx), &name) {
@@ -619,7 +619,7 @@ pub(crate) fn exec_direct_eval_stmts(
 ) -> Flow {
     let mut vars = Vec::new();
     collect_var_names(stmts, &mut vars);
-    vars.sort_unstable();
+    crate::cold_sort::sort_by(&mut vars, |a, b| a.cmp(b));
     vars.dedup();
     for name in vars {
         env::ensure_var_binding(root_get(variable_env_idx), &name);

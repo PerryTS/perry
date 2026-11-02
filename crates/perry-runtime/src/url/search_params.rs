@@ -306,9 +306,9 @@ pub(crate) fn create_url_search_params_object(entries: Vec<(String, String)>) ->
         crate::object::js_get_global_this();
     }
     let obj = unsafe {
-        crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(
-            crate::object::runtime_layouts::URL_SEARCH_PARAMS
-        ))
+        crate::object::layout_desc::perry_alloc_layout(
+            crate::object::runtime_layouts::URL_SEARCH_PARAMS::desc(),
+        )
     };
     // Owner starts as undefined; the URL constructor sets it when it adopts
     // this params object as its `.searchParams`.

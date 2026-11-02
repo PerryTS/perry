@@ -19,16 +19,16 @@ fn prototype_layout(serial: u64) -> Option<*const PerryLayoutDesc> {
     use crate::closure::shape::*;
     use crate::object::runtime_layouts as rl;
     Some(match serial {
-        INTRINSIC_SERIAL_EVENT_EMITTER_PROTOTYPE => &raw const rl::EVENT_EMITTER_PROTOTYPE,
-        INTRINSIC_SERIAL_STREAM_PROTOTYPE => &raw const rl::STREAM_PROTOTYPE,
-        INTRINSIC_SERIAL_READABLE_PROTOTYPE => &raw const rl::READABLE_PROTOTYPE,
-        INTRINSIC_SERIAL_WRITABLE_PROTOTYPE => &raw const rl::WRITABLE_PROTOTYPE,
-        INTRINSIC_SERIAL_DUPLEX_PROTOTYPE => &raw const rl::DUPLEX_PROTOTYPE,
-        INTRINSIC_SERIAL_TRANSFORM_PROTOTYPE => &raw const rl::TRANSFORM_PROTOTYPE,
-        INTRINSIC_SERIAL_PASSTHROUGH_PROTOTYPE => &raw const rl::PASSTHROUGH_PROTOTYPE,
-        INTRINSIC_SERIAL_OUTGOING_MESSAGE_PROTOTYPE => &raw const rl::OUTGOING_MESSAGE_PROTOTYPE,
-        INTRINSIC_SERIAL_SERVER_RESPONSE_PROTOTYPE => &raw const rl::SERVER_RESPONSE_PROTOTYPE,
-        INTRINSIC_SERIAL_INCOMING_MESSAGE_PROTOTYPE => &raw const rl::INCOMING_MESSAGE_PROTOTYPE,
+        INTRINSIC_SERIAL_EVENT_EMITTER_PROTOTYPE => rl::EVENT_EMITTER_PROTOTYPE::desc(),
+        INTRINSIC_SERIAL_STREAM_PROTOTYPE => rl::STREAM_PROTOTYPE::desc(),
+        INTRINSIC_SERIAL_READABLE_PROTOTYPE => rl::READABLE_PROTOTYPE::desc(),
+        INTRINSIC_SERIAL_WRITABLE_PROTOTYPE => rl::WRITABLE_PROTOTYPE::desc(),
+        INTRINSIC_SERIAL_DUPLEX_PROTOTYPE => rl::DUPLEX_PROTOTYPE::desc(),
+        INTRINSIC_SERIAL_TRANSFORM_PROTOTYPE => rl::TRANSFORM_PROTOTYPE::desc(),
+        INTRINSIC_SERIAL_PASSTHROUGH_PROTOTYPE => rl::PASSTHROUGH_PROTOTYPE::desc(),
+        INTRINSIC_SERIAL_OUTGOING_MESSAGE_PROTOTYPE => rl::OUTGOING_MESSAGE_PROTOTYPE::desc(),
+        INTRINSIC_SERIAL_SERVER_RESPONSE_PROTOTYPE => rl::SERVER_RESPONSE_PROTOTYPE::desc(),
+        INTRINSIC_SERIAL_INCOMING_MESSAGE_PROTOTYPE => rl::INCOMING_MESSAGE_PROTOTYPE::desc(),
         _ => return None,
     })
 }
@@ -80,14 +80,14 @@ fn instance_layout_of_prototype(serial: u64) -> Option<*const PerryLayoutDesc> {
     use crate::closure::shape::*;
     use crate::object::runtime_layouts as rl;
     Some(match serial {
-        INTRINSIC_SERIAL_EVENT_EMITTER_PROTOTYPE => &raw const rl::EVENT_EMITTER,
-        INTRINSIC_SERIAL_STREAM_PROTOTYPE => &raw const rl::LEGACY_STREAM,
-        INTRINSIC_SERIAL_READABLE_PROTOTYPE => &raw const rl::READABLE,
-        INTRINSIC_SERIAL_WRITABLE_PROTOTYPE => &raw const rl::WRITABLE,
-        INTRINSIC_SERIAL_DUPLEX_PROTOTYPE => &raw const rl::DUPLEX,
-        INTRINSIC_SERIAL_TRANSFORM_PROTOTYPE => &raw const rl::TRANSFORM,
-        INTRINSIC_SERIAL_PASSTHROUGH_PROTOTYPE => &raw const rl::PASSTHROUGH,
-        INTRINSIC_SERIAL_SERVER_RESPONSE_PROTOTYPE => &raw const rl::SERVER_RESPONSE,
+        INTRINSIC_SERIAL_EVENT_EMITTER_PROTOTYPE => rl::EVENT_EMITTER::desc(),
+        INTRINSIC_SERIAL_STREAM_PROTOTYPE => rl::LEGACY_STREAM::desc(),
+        INTRINSIC_SERIAL_READABLE_PROTOTYPE => rl::READABLE::desc(),
+        INTRINSIC_SERIAL_WRITABLE_PROTOTYPE => rl::WRITABLE::desc(),
+        INTRINSIC_SERIAL_DUPLEX_PROTOTYPE => rl::DUPLEX::desc(),
+        INTRINSIC_SERIAL_TRANSFORM_PROTOTYPE => rl::TRANSFORM::desc(),
+        INTRINSIC_SERIAL_PASSTHROUGH_PROTOTYPE => rl::PASSTHROUGH::desc(),
+        INTRINSIC_SERIAL_SERVER_RESPONSE_PROTOTYPE => rl::SERVER_RESPONSE::desc(),
         _ => return None,
     })
 }
@@ -193,14 +193,14 @@ pub(crate) unsafe fn birth_store(obj: *mut ObjectHeader, slot: u32, value: f64) 
 fn instance_layouts() -> [*const PerryLayoutDesc; 8] {
     use crate::object::runtime_layouts as rl;
     [
-        &raw const rl::EVENT_EMITTER,
-        &raw const rl::LEGACY_STREAM,
-        &raw const rl::READABLE,
-        &raw const rl::WRITABLE,
-        &raw const rl::DUPLEX,
-        &raw const rl::TRANSFORM,
-        &raw const rl::PASSTHROUGH,
-        &raw const rl::SERVER_RESPONSE,
+        rl::EVENT_EMITTER::desc(),
+        rl::LEGACY_STREAM::desc(),
+        rl::READABLE::desc(),
+        rl::WRITABLE::desc(),
+        rl::DUPLEX::desc(),
+        rl::TRANSFORM::desc(),
+        rl::PASSTHROUGH::desc(),
+        rl::SERVER_RESPONSE::desc(),
     ]
 }
 
@@ -335,14 +335,13 @@ pub(crate) unsafe fn layout_birth_store(obj: *mut ObjectHeader, name: &[u8], val
 pub(crate) unsafe fn state_object_slot(obj: *const ObjectHeader, readable: bool) -> Option<u32> {
     use crate::object::runtime_layouts::{self as rl, duplex_slot, readable_slot, writable_slot};
     let word = (*obj).parent_class_id;
-    let duplex = word == rl::DUPLEX.layout_id
-        || word == rl::TRANSFORM.layout_id
-        || word == rl::PASSTHROUGH.layout_id;
+    let duplex =
+        word == rl::DUPLEX::WORD || word == rl::TRANSFORM::WORD || word == rl::PASSTHROUGH::WORD;
     if readable {
-        (duplex || word == rl::READABLE.layout_id).then_some(readable_slot::STATE)
+        (duplex || word == rl::READABLE::WORD).then_some(readable_slot::STATE)
     } else if duplex {
         Some(duplex_slot::WRITABLE_STATE)
     } else {
-        (word == rl::WRITABLE.layout_id).then_some(writable_slot::STATE)
+        (word == rl::WRITABLE::WORD).then_some(writable_slot::STATE)
     }
 }

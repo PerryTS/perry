@@ -1076,9 +1076,9 @@ pub fn run_with_parse_cache(
         // DCE layer 2: modules only unreachable `import()` sites load.
         let mut roots = vec![entry_canonical.clone()];
         roots.extend(
-            ctx.worker_url_entries
-                .iter()
-                .flat_map(|(l, c)| [l.clone(), c.clone()]),
+            super::program_facts::module_roots(&ctx)
+                .into_iter()
+                .map(PathBuf::from),
         );
         if let Some(ext_dir) = &args.bundle_extensions {
             for (entry_path, _) in super::resolve::discover_extension_entries(ext_dir)? {
@@ -6540,6 +6540,9 @@ pub fn run_with_parse_cache(
             })
         );
     }
+    // R drives the entry module's realm emission (WRT3p-A1: the runtime
+    // layouts' descriptors and key lists).
+    let realm_reach = std::sync::Arc::new(realm_reach);
     let reach_report = super::reach_report::start(&ctx, args.output_type != "executable")?;
     let source_need = super::source_need::start(need, &dropped_source, source_need_seconds)?;
     // fninfer (decision 140): per-function inferred signatures over the
@@ -6684,6 +6687,9 @@ pub fn run_with_parse_cache(
                 std::sync::Arc::make_mut(&mut opts.program_facts.elision).dynamic_code_reach =
                     ctx.patched_builtins.dynamic_code_reach.clone();
                 opts.program_layouts = std::sync::Arc::clone(&program_layouts);
+                if opts.is_entry_module {
+                    opts.program_facts.realm_reach = Some(std::sync::Arc::clone(&realm_reach));
+                }
                 Ok::<_, String>(opts)
             })
             .collect::<Vec<_>>()

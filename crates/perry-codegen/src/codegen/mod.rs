@@ -4334,6 +4334,7 @@ fn lower_module(
             is_entry_module: opts.is_entry_module,
             non_entry_module_prefixes: &opts.non_entry_module_prefixes,
             output_type: &opts.output_type,
+            realm_reach: opts.program_facts.realm_reach.as_deref(),
             module_prefix: &module_prefix,
             class_table: &class_table,
             class_ids: &class_ids,

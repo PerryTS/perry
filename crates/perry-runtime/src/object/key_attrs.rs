@@ -1315,7 +1315,7 @@ pub(crate) unsafe fn object_accessor_key_names(
             out.push(String::from_utf8_lossy(bytes).into_owned());
         }
     }
-    out.sort();
+    crate::cold_sort::sort_by(&mut out, |a, b| a.cmp(b));
     out
 }
 

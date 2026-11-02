@@ -773,6 +773,25 @@ pub unsafe extern "C-unwind" fn js_fetch_or_value_super(
             }
         }
     }
+    // `class X extends AssertionError`: `super(options)` initializes the
+    // derived receiver (node: `class AssertionError extends Error`), which
+    // keeps the subclass prototype.
+    if bound_native_parent
+        .as_ref()
+        .is_some_and(|(module, method)| {
+            matches!(
+                super::super::native_module::normalize_native_module_alias(module.as_str()),
+                "assert" | "assert/strict"
+            ) && method.as_str() == "AssertionError"
+        })
+    {
+        let options = if args_len >= 1 && !args_ptr.is_null() {
+            *args_ptr
+        } else {
+            undef
+        };
+        return super::super::assert::js_assert_assertion_error_init_receiver(this_box, options);
+    }
     if bound_native_parent
         .as_ref()
         .is_some_and(|(module, method)| {

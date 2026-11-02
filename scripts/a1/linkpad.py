@@ -277,27 +277,28 @@ def level(pads, kind, n, am, ah):
     return True
 
 
-# .data.rel.ro lies in the RELRO region, which the linker anchors at its END: the region ends on a page boundary and
-# its start floats down by the region size. The region also holds what follows the section (.dynamic, .got, the
-# first .got.plt slots), whose size differs between arms (link-time-resolved GOT slots), and the runtime part of
-# the section differs whenever the runtime archive does. From the section start S, the marker M and the region end E:
-#   M - S = compiled bytes + mid pad                        (the inner part, set by the mid pad)
-#   E - M = runtime bytes + end pad + .dynamic, .got, ...   (the tail, set by the end pad)
-# Equal tails and equal inner parts give equal region sizes, hence the same page-aligned end (the RW base before
-# the region is the same in both arms), hence equal M and S. Leveling only the markers, with the end taken as
-# fixed, leaves a runtime size difference in the region end (page quantized) that a .data pad then absorbs: the
-# runtime bytes after the region coincide but GNU_RELRO does not (NXPA2a10: 127 atom records moved into
-# .data.rel.ro, +0x2010).
+# .data.rel.ro lies in the RELRO region (.tdata, .tbss, .init_array, .fini_array, .data.rel.ro, .dynamic, .got,
+# the first .got.plt slots). GNU ld ends the region on a page boundary by placing its START: after the read-only
+# segment's page, at page + ((-relro_size) mod page). So the RW start follows the region's size modulo a page, and a
+# pad in the region moves the start (down, wrapping up a page when the start would leave that page), never the end.
+# A plan that moves the marker by an address difference therefore cannot converge once the difference exceeds the
+# page slack: every wrap gives the page back. (WRT3p-A1: the candidate's runtime .data.rel.ro is 0x11000 smaller,
+# the head end pad grew by ~0x1000 a round to 84 KB and the RW start still differed by 0xb00.) Both conditions are
+# instead measured inside each binary, where no wrap enters:
+#   mid pad  equalizes the bytes from the region start to the marker (what precedes the runtime's bytes)
+#   end pad  equalizes the region's size (what follows them: the runtime tail, .dynamic, .got)
+# Equal sizes give equal RW starts, equal starts plus equal leading bytes give equal markers, and the region end,
+# hence .data and everything after it, coincides as well.
 ANCHORED = ".data.rel.ro"
 
 
-def anchored(pads, mk_m, mk_h, st_m, st_h, end_m, end_h):
+def anchored(pads, lead_m, lead_h, size_m, size_h):
     n = ANCHORED
-    old = {a: (pads[a]["end"].get(n, 0), pads[a]["mid"].get(n, 0)) for a in pads}
-    for kind, i, diff in (("end", 0, (end_h - mk_h) - (end_m - mk_m)), ("mid", 1, (mk_h - st_h) - (mk_m - st_m))):
+    for kind, diff in (("mid", lead_h - lead_m), ("end", size_h - size_m)):
         if diff:
-            d = old["head"][i] - old["main"][i] - diff
-            pads["head"][kind][n], pads["main"][kind][n] = max(d, 0), max(-d, 0)
+            # head carries diff more bytes: main's pad must exceed head's by diff more than it does now
+            d = pads["main"][kind].get(n, 0) - pads["head"][kind].get(n, 0) + diff
+            pads["main"][kind][n], pads["head"][kind][n] = max(d, 0), max(-d, 0)
             return True
     return False
 
@@ -339,7 +340,7 @@ def plan(main_bin, head_bin, pads_json, pad_dir):
         (mm, em, sm), (mh, eh, sh) = mk_m[n], mk_h[n]
         if n == ANCHORED:
             rm, rh = segments(main_bin)["GNU_RELRO"], segments(head_bin)["GNU_RELRO"]
-            changed = anchored(pads, mm, mh, sm, sh, rm[0] + rm[1], rh[0] + rh[1])
+            changed = anchored(pads, mm - rm[0], mh - rh[0], rm[1], rh[1])
         else:
             changed = level(pads, "mid", n, mm, mh)
             if not changed and em is not None:

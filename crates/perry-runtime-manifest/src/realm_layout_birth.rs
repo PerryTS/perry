@@ -29,8 +29,8 @@ pub(super) fn prototype(expression: &str, entry: &[Token<'_>]) -> Result<Value, 
     }
     let layout = info::text(args[0]);
     let name = layout
-        .strip_prefix("std::ptr::addr_of!(crate::object::runtime_layouts::")
-        .and_then(|s| s.strip_suffix(')'))
+        .strip_prefix("crate::object::runtime_layouts::")
+        .and_then(|s| s.strip_suffix("::desc()"))
         .ok_or("prototype birth requires its existing layout expression")?;
     let fields = descriptor(
         include_str!("../../perry-runtime/src/object/runtime_layouts/builtin_prototypes.rs"),
@@ -94,14 +94,14 @@ pub(super) fn prototype(expression: &str, entry: &[Token<'_>]) -> Result<Value, 
     Ok(d)
 }
 /// An ordinary object born on a declared static layout
-/// (`perry_alloc_layout(addr_of!(runtime_layouts::X))`): the layout's kind
+/// (`perry_alloc_layout(runtime_layouts::X::desc())`): the layout's kind
 /// decides its classification; it is not marked as a prototype at birth.
 pub(super) fn ordinary(expression: &str, entry: &[Token<'_>]) -> Result<Value, String> {
     let name = expression
         .strip_prefix(
-            "crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(crate::object::runtime_layouts::",
+            "crate::object::layout_desc::perry_alloc_layout(crate::object::runtime_layouts::",
         )
-        .and_then(|s| s.strip_suffix("))"))
+        .and_then(|s| s.strip_suffix("::desc())"))
         .ok_or("invalid layout birth")?;
     // `runtime_layout!(NAME, [kind = K,] family, variant, proto, [keys])`;
     // an omitted kind is the plain ordinary kind 0.
@@ -149,7 +149,7 @@ mod tests {
                 2208,
             ),
         ] {
-            let d = prototype(&format!("crate::object::layout_desc::alloc_layout_prototype(std::ptr::addr_of!(crate::object::runtime_layouts::{layout}),0)"), &tokens(entry).unwrap()).unwrap();
+            let d = prototype(&format!("crate::object::layout_desc::alloc_layout_prototype(crate::object::runtime_layouts::{layout}::desc(),0)"), &tokens(entry).unwrap()).unwrap();
             assert_eq!(
                 d.get("header").unwrap().get("reserved").unwrap().encode(),
                 reserved.to_string()

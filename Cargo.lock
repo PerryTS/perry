@@ -5142,6 +5142,7 @@ dependencies = [
  "log",
  "notify",
  "object 0.37.3",
+ "perry-abi",
  "perry-api-manifest",
  "perry-base64",
  "perry-cli-support",
