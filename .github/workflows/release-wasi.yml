@@ -16,6 +16,9 @@ on:
       wasip1:
         description: Whether the resolved release source also supports the wasip1 bundle
         value: ${{ jobs.runtime.outputs.wasip1 }}
+      wasip3:
+        description: Whether the resolved release source supports the public wasip3 bundle
+        value: ${{ jobs.runtime.outputs.wasip3 }}
 
 permissions:
   contents: read
@@ -23,10 +26,11 @@ permissions:
 jobs:
   runtime:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
     outputs:
       enabled: ${{ steps.profile.outputs.enabled }}
       wasip1: ${{ steps.profile.outputs.wasip1 }}
+      wasip3: ${{ steps.profile.outputs.wasip3 }}
     env:
       CARGO_BUILD_JOBS: "2"
       CARGO_INCREMENTAL: "0"
@@ -61,6 +65,11 @@ jobs:
           else
             echo wasip1=false >> "$GITHUB_OUTPUT"
           fi
+          if test -f scripts/component_p3_release_check.py && grep -q wasm32-wasip3 scripts/wasi_release.py; then
+            echo wasip3=true >> "$GITHUB_OUTPUT"
+          else
+            echo wasip3=false >> "$GITHUB_OUTPUT"
+          fi
       - name: Install Rust with the WASI target
         if: steps.profile.outputs.enabled == 'true'
         run: rustup toolchain install nightly-2026-10-04 --profile minimal --target wasm32-wasip2 --target wasm32-wasip1
@@ -73,6 +82,7 @@ jobs:
         shell: bash
         env:
           WASIP1: ${{ steps.profile.outputs.wasip1 }}
+          WASIP3: ${{ steps.profile.outputs.wasip3 }}
         run: |
           set -euo pipefail
           toolchain_env="$(./scripts/wasi_toolchain.sh "$RUNNER_TEMP/wasi")"
@@ -80,6 +90,10 @@ jobs:
           keys=(WASI_SDK_PATH CC_wasm32_wasip2 AR_wasm32_wasip2 CFLAGS_wasm32_wasip2 CC_SHELL_ESCAPED_FLAGS)
           if [[ "$WASIP1" == true ]]; then
             keys+=(CC_wasm32_wasip1 AR_wasm32_wasip1 CFLAGS_wasm32_wasip1)
+          fi
+          if [[ "$WASIP3" == true ]]; then
+            rustup target add wasm32-wasip3
+            keys+=(CC_wasm32_wasip3 AR_wasm32_wasip3 CFLAGS_wasm32_wasip3)
           fi
           for key in "${keys[@]}"; do
             printf '%s=%s\n' "$key" "${!key}" >> "$GITHUB_ENV"
@@ -120,4 +134,21 @@ jobs:
         with:
           name: perry-cross-wasm32-wasip1
           path: wasip1-release/*
+          if-no-files-found: error
+      - name: Build and package the source-matched wasip3 archive
+        if: steps.profile.outputs.wasip3 == 'true'
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ inputs.checkout-sha }}
+        run: |
+          set -euo pipefail
+          python3 scripts/wasi_build_runtime.py wasm32-wasip3
+          python3 scripts/wasi_release.py package --target wasm32-wasip3 --revision "$EXPECTED_SHA" \
+            --runtime target/wasm32-wasip3/release/libperry_runtime.a --output wasip3-release
+      - name: Upload the wasip3 runtime bundle
+        if: steps.profile.outputs.wasip3 == 'true'
+        uses: ./.github/actions/perry/actions/upload-artifact
+        with:
+          name: perry-cross-wasm32-wasip3
+          path: wasip3-release/*
           if-no-files-found: error

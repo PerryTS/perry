@@ -88,6 +88,9 @@ cp "$abort_target_dir/$target/prod/libperry_runtime.a" \
 # extension is then retried on its own.
 governed_ext_packages=$(./scripts/release_ext_packages.sh)
 core_packages=(-p perry -p perry-runtime-static -p perry-stdlib-static -p perry-wasm-host "${wasi_features[@]}")
+if [[ "${PERRY_RELEASE_WASIP3:-0}" == 1 ]]; then
+  core_packages+=(-p perry-component-host -p perry-wit)
+fi
 ext_packages=()
 while IFS= read -r package; do
   ext_packages+=(-p "$package")
