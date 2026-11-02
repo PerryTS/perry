@@ -5,6 +5,7 @@ use anyhow::{bail, ensure, Context, Result};
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use wit_parser::{Resolve, TypeDefKind, TypeId, WorldId, WorldItem};
+mod validation;
 
 pub fn parse_file(path: &Path, world: Option<&str>) -> Result<World> {
     let mut resolve = Resolve::default();
@@ -47,6 +48,7 @@ pub(crate) fn convert(resolve: &Resolve, id: WorldId) -> Result<World> {
     };
     let imports = converter.interfaces(world.imports.iter(), false)?;
     let exports = converter.interfaces(world.exports.iter(), true)?;
+    validation::endpoints(&converter.types)?;
     Ok(World {
         schema_version: SCHEMA_VERSION,
         name,

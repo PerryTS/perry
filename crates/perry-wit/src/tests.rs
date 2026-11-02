@@ -482,6 +482,34 @@ fn character_streams_are_rejected_before_emitting_unloadable_bindings() {
     .is_ok());
 }
 
+#[test]
+fn endpoint_parameters_reject_borrows_through_every_structural_container() {
+    for direction in ["import", "export"] {
+        for endpoint in ["future", "stream"] {
+            for payload in [
+                "borrow<item>",
+                "packet",
+                "list<packet>",
+                "option<packet>",
+                "result<packet, string>",
+                "tuple<u32, packet>",
+                "choice",
+                "future<packet>",
+            ] {
+                let source = format!("package test:endpoint-borrows; interface api {{ resource item; record packet {{ loan: borrow<item> }} variant choice {{ empty, value(packet) }} type pending = {endpoint}<{payload}>; consume: func(value: pending); }} world plugin {{ {direction} api; }}");
+                let error = parse(&source, None).unwrap_err();
+                assert!(
+                    format!("{error:#}")
+                        .contains("async endpoint payloads cannot contain borrow<T>"),
+                    "{direction} {endpoint}<{payload}>: {error:#}"
+                );
+            }
+        }
+    }
+    // Call-scoped loans remain legal parameters, including async functions.
+    assert!(parse("package test:valid-loans; interface api { resource item; loan: async func(value: borrow<item>); type pending = future<own<item>>; type packets = stream<tuple<char, string>>; consume: func(first: pending, second: packets); } world plugin { import api; }", None).is_ok());
+}
+
 #[cfg(unix)]
 #[test]
 fn experimental_async_exports_compile_without_changing_the_public_contract() {
