@@ -290,32 +290,21 @@ fn make_module_object(module: *mut c_void) -> f64 {
     if module.is_null() {
         return nanbox_undefined();
     }
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let obj_handle = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 2));
-
-    // String/key creation can collect and evacuate the fresh wrapper. Root
-    // each value first, then reload the object before entering the generic
-    // setter (which roots its arguments internally).
-    let kind_key = scope.root_string_ptr(named_key(b"__wasmKind"));
-    let kind_value = scope.root_nanbox_f64(string_value(b"module"));
-    crate::object::js_object_set_field_by_name(
-        obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
-        kind_key.get_raw_const_ptr::<crate::string::StringHeader>(),
-        kind_value.get_nanbox_f64(),
-    );
-
-    let ptr_key = scope.root_string_ptr(named_key(b"__wasmModulePtr"));
-    crate::object::js_object_set_field_by_name(
-        obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
-        ptr_key.get_raw_const_ptr::<crate::string::StringHeader>(),
-        module as usize as f64,
-    );
-
-    let obj = obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
-    // Wrapper identity, not either public property, is the unforgeable brand
-    // and the only route back to the trusted host handle.
+    // The wrapper carries no own properties: its identity is the brand and
+    // the registered wrapper state is the only route to the host handle
+    // (node: `Object.keys(module)` is empty, `{...module}` copies nothing).
+    let obj = crate::object::js_object_alloc(0, 0);
     crate::object::register_wasm_module_wrapper(obj as usize, module as usize);
     object_value(obj)
+}
+
+fn module_handle_or_throw(module_jsval: f64, api: &str) -> *mut c_void {
+    match extract_module_handle(module_jsval) {
+        Some(module) => module,
+        None => crate::exception::js_throw(wasm_type_error_value(&format!(
+            "WebAssembly.Module.{api}(): Argument 0 must be a WebAssembly.Module"
+        ))),
+    }
 }
 
 fn extract_module_handle(module_jsval: f64) -> Option<*mut c_void> {
@@ -432,9 +421,7 @@ pub extern "C" fn js_webassembly_compile(bytes_jsval: f64) -> f64 {
 pub extern "C" fn js_webassembly_module_exports(module_jsval: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let module_jsval = scope.root_nanbox_f64(module_jsval);
-    let Some(module) = extract_module_handle(module_jsval.get_nanbox_f64()) else {
-        return empty_array_value();
-    };
+    let module = module_handle_or_throw(module_jsval.get_nanbox_f64(), "exports");
     let len = unsafe { perry_wasm_host_module_exports_len(module) };
     let arr = scope.root_nanbox_f64(array_value(crate::array::js_array_alloc(len as u32)));
     for i in 0..len {
@@ -460,9 +447,7 @@ pub extern "C" fn js_webassembly_module_exports(module_jsval: f64) -> f64 {
 pub extern "C" fn js_webassembly_module_imports(module_jsval: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let module_jsval = scope.root_nanbox_f64(module_jsval);
-    let Some(module) = extract_module_handle(module_jsval.get_nanbox_f64()) else {
-        return empty_array_value();
-    };
+    let module = module_handle_or_throw(module_jsval.get_nanbox_f64(), "imports");
     let len = unsafe { perry_wasm_host_module_imports_len(module) };
     let arr = scope.root_nanbox_f64(array_value(crate::array::js_array_alloc(len as u32)));
     for i in 0..len {
@@ -505,9 +490,7 @@ pub extern "C" fn js_webassembly_module_custom_sections(module_jsval: f64, name_
     let scope = crate::gc::RuntimeHandleScope::new();
     let module_jsval = scope.root_nanbox_f64(module_jsval);
     let name_jsval = scope.root_nanbox_f64(name_jsval);
-    let Some(module) = extract_module_handle(module_jsval.get_nanbox_f64()) else {
-        return empty_array_value();
-    };
+    let module = module_handle_or_throw(module_jsval.get_nanbox_f64(), "customSections");
     let Some((name_ptr, name_len)) = extract_string_bytes(name_jsval.get_nanbox_f64()) else {
         return empty_array_value();
     };
