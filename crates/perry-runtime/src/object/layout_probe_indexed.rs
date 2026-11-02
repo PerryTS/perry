@@ -58,11 +58,11 @@ pub(super) unsafe fn get<const ABSENT: bool, const SITE: bool, const LAZY_HASH: 
         }
         return continued::<ABSENT, SITE, LAZY_HASH>(dir, obj, key_bits, hash, memo);
     }
-    // This existing shape fact proves a public accessor. The leaf must
-    // decline it; the collecting entrance reloads the live getter pair.
+    // This existing shape fact proves a public accessor at an inline slot:
+    // the pair is one load, and the shape answers what needs no user code.
     let load = entry_load(table, pos, i);
     if load == NO_LOAD && pos & ACCESSOR_ENTRY != 0 {
-        return hole();
+        return accessor_answer_at(obj, r, i, KeyIndex::word(table, i) as u32);
     }
     unloaded::finish::<ABSENT, SITE, LAZY_HASH>(dir, obj, key_bits, hash, i, load, memo)
 }
@@ -114,7 +114,7 @@ pub(super) unsafe fn continued<const ABSENT: bool, const SITE: bool, const LAZY_
         if w == key_bits {
             let load = entry_load(table, pos, i);
             if load == NO_LOAD && pos & ACCESSOR_ENTRY != 0 {
-                return hole();
+                return accessor_answer_at(obj, r, i, KeyIndex::word(table, i) as u32);
             }
             break (i, load);
         }

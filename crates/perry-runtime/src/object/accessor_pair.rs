@@ -186,6 +186,31 @@ pub(crate) unsafe fn pair_of_value(value: u64) -> Option<Accessor> {
     })
 }
 
+/// The getter half of the pair `value` holds, with the two loads a read's
+/// answer needs: the getter closure (0 when absent) and whether the half
+/// carries a class getter entry (instance or static). `None` when `value` is
+/// not a pair.
+///
+/// # Safety
+/// `value` is the slot value of a key whose entry carries `ENTRY_ACCESSOR`.
+#[inline(always)]
+pub(crate) unsafe fn pair_getter(value: u64) -> Option<(u64, bool)> {
+    if value & TAG_MASK != POINTER_TAG {
+        return None;
+    }
+    let pair = (value & POINTER_MASK) as *const ArrayHeader;
+    let header = crate::value::addr_class::pointer_value_header(value)?;
+    if header.obj_type != crate::gc::GC_TYPE_ARRAY || (*pair).length as usize != PAIR_LEN {
+        return None;
+    }
+    let w = crate::array::array_elements_ptr(pair);
+    let raw = *w.add(PAIR_RAW_GET);
+    Some((
+        closure_of(*w.add(PAIR_GET)),
+        raw_of(raw) != 0 || static_of(raw) != 0,
+    ))
+}
+
 /// The accessor stored in `obj`'s slot for key position `pos`.
 ///
 /// # Safety

@@ -269,11 +269,12 @@ pub(super) unsafe fn chain_from<const ABSENT: bool>(
                 if v.to_bits() != TAG_HOLE {
                     return v;
                 }
-                // An accessor or a private entry declines (the slow entry
-                // calls a getter); a hole slot is absent on this hop, and the
-                // complete walk continues past it.
+                // An accessor is the holder's answer (the slow entry calls a
+                // getter that needs the call), a private entry declines; a
+                // hole slot is absent on this hop, and the complete walk
+                // continues past it.
                 if load == NO_LOAD && attributed_at(rn, pos) {
-                    return hole();
+                    return accessor_answer_at(next, rn, pos, NO_LOAD);
                 }
                 return walk(cur, next);
             }
@@ -471,9 +472,13 @@ pub(super) unsafe fn inherited_walk_at<const ABSENT: bool>(
         match own_position(rn, key_bits, hash) {
             Ok(pos) => {
                 let v = value_at(next, rn, pos);
-                // A hole slot of a plain data key: absent on this hop.
-                if v.to_bits() != TAG_HOLE || !plain_data_at(rn, pos) {
+                if v.to_bits() != TAG_HOLE {
                     return v;
+                }
+                // An accessor (or private entry) on the holder: the shape's
+                // answer. A hole slot of a plain data key: absent on this hop.
+                if !plain_data_at(rn, pos) {
+                    return accessor_answer_at(next, rn, pos, NO_LOAD);
                 }
             }
             Err(false) => return hole(),

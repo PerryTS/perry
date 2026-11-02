@@ -145,17 +145,6 @@ pub(crate) fn emit_checked_callee_unbox(ctx: &mut FnCtx<'_>, callee: &str) -> St
     )
 }
 
-/// Does a fixed-name read of `property` own a shape/slot memo? Only a name
-/// some getter of the program is declared under can reach the collecting
-/// exit the memo serves; any other read keeps the stateless probe and owns
-/// no storage. A compile without the program's accessor names gives every
-/// read its memo.
-pub(crate) fn read_may_reach_getter(ctx: &FnCtx<'_>, property: &str) -> bool {
-    ctx.program_class_accessor_names
-        .as_ref()
-        .map_or(true, |names| names.may_read_through_getter(property))
-}
-
 /// Shared atomic storage for a site's shape/slot answers. No heap pointer or
 /// validity state is stored, so these zero-filled integer words need no root.
 pub(crate) fn emit_read_site_memo(ctx: &mut FnCtx<'_>, words: usize) -> String {
@@ -206,52 +195,9 @@ mod tests {
             "{ir}"
         );
     }
-    #[test]
-    fn only_a_declared_getter_name_owns_read_site_storage() {
-        use perry_hir::{Expr, Module, Stmt};
-        for (getter, memo) in [("width", true), ("height", false)] {
-            let mut module = Module::new("read_site_names.ts");
-            module.init.push(Stmt::Expr(Expr::PropertyGet {
-                byte_end: 0,
-                object: Box::new(Expr::GlobalGet(100)),
-                property: "width".into(),
-                byte_offset: 0,
-            }));
-            let names = crate::codegen::ClassAccessorNames::from_names(
-                [getter.to_string()],
-                std::iter::empty::<String>(),
-            );
-            let ir = String::from_utf8(
-                crate::compile_module(
-                    &module,
-                    crate::CompileOptions {
-                        emit_ir_only: true,
-                        program_class_accessor_names: Some(std::sync::Arc::new(names)),
-                        ..Default::default()
-                    },
-                )
-                .unwrap(),
-            )
-            .unwrap();
-            assert_eq!(ir.contains("_read_shape_slots = private"), memo, "{ir}");
-            assert_eq!(
-                ir.contains("call double @perry_probe_get_memo("),
-                memo,
-                "{ir}"
-            );
-            // Declarations name every entrance; only the calls differ.
-            let calls = |callee: &str| {
-                ir.lines()
-                    .any(|l| !l.starts_with("declare") && l.contains(&format!("@{callee}(")))
-            };
-            assert_eq!(calls("js_object_get_field_value_site"), memo, "{ir}");
-            assert_eq!(calls("perry_probe_get"), !memo, "{ir}");
-            assert_eq!(calls("js_object_get_field_value"), !memo, "{ir}");
-        }
-    }
 
     #[test]
-    fn read_site_storage_never_needs_tls_initialization() {
+    fn named_read_site_owns_no_storage_in_any_agent_mode() {
         use perry_hir::{Expr, Module, Stmt};
         for (worker, thread_agent) in [(false, false), (true, false), (false, true), (true, true)] {
             let mut module = Module::new("read_site_agents.ts");
@@ -274,12 +220,10 @@ mod tests {
                 .unwrap(),
             )
             .unwrap();
-            assert!(ir.contains("call double @perry_probe_get_memo("), "{ir}");
-            let declaration = ir
-                .lines()
-                .find(|line| line.contains("_read_shape_slots = private"))
-                .expect("a generic read must own its shape/slot storage");
-            assert!(!declaration.contains("thread_local"), "{declaration}");
+            // A named read answers accessors from the receiver's shape: it
+            // owns no per-site storage at all, so none can need TLS.
+            assert!(ir.contains("call double @perry_probe_get("), "{ir}");
+            assert!(!ir.contains("_read_shape_slots = private"), "{ir}");
         }
     }
 }

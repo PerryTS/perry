@@ -468,7 +468,10 @@ pub(super) fn compile_module_entry(
             blk.call_void("js_gc_init_with_layouts", &[(PTR, "@perry_layout_image")]);
             blk.call_void(
                 "perry_array_iteration_init",
-                &[(I32, &crate::expr::array_program_facts(&cross_module.wpfacts).to_string())],
+                &[(
+                    I32,
+                    &crate::expr::array_program_facts(&cross_module.wpfacts).to_string(),
+                )],
             );
             // Design step 4: mint the program's static literal ids in this
             // agent before any module init or user code (the seed unit the
@@ -804,7 +807,6 @@ pub(super) fn compile_module_entry(
             numeric_order_ready: Default::default(),
             program_has_worker: cross_module.program_has_worker,
             program_has_thread_agents: cross_module.program_has_thread_agents,
-            program_class_accessor_names: cross_module.program_class_accessor_names.clone(),
             func: main,
             module_slug: crate::expr::native_region_slug(strings.module_prefix()),
             source_function: "module_init".to_string(),

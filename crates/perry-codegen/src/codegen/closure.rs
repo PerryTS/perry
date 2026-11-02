@@ -441,6 +441,42 @@ pub(super) fn compile_typed_i32_closure(
 /// index map; `current_closure_ptr` carries the closure pointer SSA
 /// value name.
 #[allow(clippy::too_many_arguments)]
+/// The [`ReturnedCapture`](crate::fn_info::ReturnedCapture) of a closure body
+/// that is exactly `return <captured binding>`, decided from the maps the
+/// body's own `LocalGet` lowering reads (`expr/literals_vars.rs`): an unboxed
+/// capture is the capture word itself; a boxed one is its cell's value, at
+/// the binding's scope slot (`scope_env::access::read_bits`) or at a JSValue
+/// box's offset 0 (`emit_box_read`). A binding that may still be in its dead
+/// zone needs no exclusion: its cell then holds `TAG_TDZ`, which the runtime
+/// reader declines, so the call throws as the body would. A compiler-private
+/// i32/i1 control cell is not a JSValue cell and gets no fact.
+fn returned_capture(
+    ctx: &FnCtx<'_>,
+    body: &[perry_hir::Stmt],
+) -> Option<crate::fn_info::ReturnedCapture> {
+    let [perry_hir::Stmt::Return(Some(perry_hir::Expr::LocalGet(id)))] = body else {
+        return None;
+    };
+    let &index = ctx.closure_captures.get(id)?;
+    if ctx.pod_records.contains_key(id) || ctx.module_globals.contains_key(id) {
+        return None;
+    }
+    if !ctx.boxed_vars.contains(id) {
+        return Some(crate::fn_info::ReturnedCapture { index, cell: 0 });
+    }
+    if crate::expr::is_compiler_private_async_i32_control_local(ctx, *id)
+        || crate::expr::is_compiler_private_async_i1_control_local(ctx, *id)
+    {
+        return None;
+    }
+    let offset = crate::scope_env::access::slot(ctx, *id)
+        .map_or(0, |slot| crate::scope_env::access::slot_offset(slot.index));
+    Some(crate::fn_info::ReturnedCapture {
+        index,
+        cell: offset + 1,
+    })
+}
+
 pub(super) fn compile_closure(
     llmod: &mut LlModule,
     func_id: perry_hir::types::FuncId,
@@ -1160,7 +1196,6 @@ pub(super) fn compile_closure(
         numeric_order_ready: Default::default(),
         program_has_worker: cross_module.program_has_worker,
         program_has_thread_agents: cross_module.program_has_thread_agents,
-        program_class_accessor_names: cross_module.program_class_accessor_names.clone(),
         func: lf,
         module_slug: crate::expr::native_region_slug(strings.module_prefix()),
         source_function: format!("closure_{}", func_id),
@@ -1601,6 +1636,19 @@ pub(super) fn compile_closure(
             ctx.block().ret(DOUBLE, &undef);
         }
     }
+    // The public body of a closure that is exactly `return <captured
+    // binding>` says so in its info: a read of an accessor whose getter it is
+    // loads the binding instead of calling (layout_probe `accessor_answer`).
+    let returns_capture = (llvm_name == public_llvm_name
+        && !trusted_box_captures
+        && !versioned_loop_callback
+        && typed_public_trampoline.is_none()
+        && !private_resume_frame
+        && !private_async_resume_frame
+        && !is_async
+        && !is_generator)
+        .then(|| returned_capture(&ctx, body))
+        .flatten();
     let ic_globals = std::mem::take(&mut ctx.ic_globals);
     let typed_parse_rodata = std::mem::take(&mut ctx.typed_parse_rodata);
     let ic_end = ctx.ic_site_counter;
@@ -1611,6 +1659,9 @@ pub(super) fn compile_closure(
     drop(ctx);
     if private_async_resume_frame {
         crate::expr::private_resume_frame::async_adapter(llmod, module_prefix, func_id);
+    }
+    if let Some(rc) = returns_capture {
+        llmod.note_fn_info(&public_llvm_name, |facts| facts.returns_capture = Some(rc));
     }
     llmod.ic_counter = ic_end;
     llmod.buffer_alias_counter += buffer_alias_used;
