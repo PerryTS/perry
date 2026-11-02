@@ -778,3 +778,40 @@ fn a_member_extends_evaluated_is_its_parent() {
     let mods = [("insp", INSP), ("msg", unknown.as_str()), ("loader", LOADER)];
     assert!(imports_formatter_with_mods("", &tail, false, &mods));
 }
+
+
+/// Rule 9: `const EventEmitter = require("events").EventEmitter` binds the
+/// native module's export as `const { EventEmitter } = require("events")`
+/// does (HIR provenance, #10623), so `class Client extends EventEmitter` is
+/// the native parent (pg's `Client` and `Connection`). Before, the class was
+/// a user shadow whose evaluated parent is the native module ref (⊤):
+/// `this` in the constructor was ⊤, every `this.k = ..` a named store into
+/// ⊤, and a later `c.connection` read through a native prototype under that
+/// key an opaque member (`delete this.connection.s[k]`: E7 on ⊤).
+const PGC: &str = r#"
+const EventEmitter = require("events").EventEmitter;
+export class Client extends EventEmitter {
+  connection: any;
+  constructor(c: any) { super(); this.connection = c.connection || { s: {} as any }; }
+  drop(k: string) { delete this.connection.s[k]; }
+}
+"#;
+#[test]
+fn a_required_native_member_parent_is_the_native_parent() {
+    let m = perry_parser::parse_typescript(PGC, "cl.ts").expect("parses");
+    let h = perry_hir::lower_module(&m, "cl", "cl.ts").expect("lowers");
+    let c = h.classes.iter().find(|c| c.name == "Client").expect("class");
+    assert_eq!(c.native_extends, Some(("events".to_string(), "EventEmitter".to_string())));
+    assert!(c.extends_expr.is_none());
+    let tail = format!("{MAKE_CALLED}\nimport {{ Client }} from \"./cl\";\nconst c = new Client({{}});\nc.drop(String(process.argv.length));");
+    for interp in [false, true] {
+        assert!(
+            !imports_formatter_with_mods("", &tail, interp, &[("cl", PGC)]),
+            "interp={interp}: a required native parent keeps the formatter import live"
+        );
+    }
+    // The fixture can fail: a reassignable binding is a user value, the
+    // evaluated parent is the module ref (⊤).
+    let mutable = PGC.replace("const EventEmitter", "let EventEmitter");
+    assert!(imports_formatter_with_mods("", &tail, false, &[("cl", &mutable)]));
+}

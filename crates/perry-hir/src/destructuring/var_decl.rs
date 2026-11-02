@@ -41,6 +41,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
             // Strict-mode early error + native-instance/module shadow
             // tombstones (extracted to `binding_guards`).
             apply_binding_guards(ctx, decl, &name)?;
+            record_required_native_member(ctx, decl, &name, mutable);
 
             // Plain-object tagging + declared/inferred type computation
             // (extracted to `type_infer`).

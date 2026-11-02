@@ -143,6 +143,34 @@ pub(super) fn destructure_builtin_module_source(
     None
 }
 
+/// #10623 for the member form: `const EventEmitter =
+/// require("events").EventEmitter` (pg's `Client`/`Connection`) binds the
+/// local FROM the native module's export `EventEmitter`, as
+/// `const { EventEmitter } = require("events")` does. Class heritage
+/// (`class_decl.rs`) reads this provenance so `extends EventEmitter` is the
+/// native parent, not a user shadow evaluated as an unknown value. A `const`
+/// only: a reassignable binding may hold anything later.
+pub(super) fn record_required_native_member(
+    ctx: &mut LoweringContext,
+    decl: &ast::VarDeclarator,
+    name: &str,
+    mutable: bool,
+) {
+    if mutable {
+        return;
+    }
+    let Some(ast::Expr::Member(member)) = decl.init.as_deref() else {
+        return;
+    };
+    let ast::MemberProp::Ident(key) = &member.prop else {
+        return;
+    };
+    if require_resolvable_native_specifier(&member.obj).is_some() {
+        ctx.require_destructured_native_locals
+            .insert(name.to_string(), key.sym.to_string());
+    }
+}
+
 /// #3663 / #4905: register destructured builtin-module members as
 /// native-module aliases, mirroring what ESM named imports get
 /// generically in `module_decl.rs` (`import { connect } from 'net'`).
