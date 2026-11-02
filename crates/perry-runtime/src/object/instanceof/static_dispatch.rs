@@ -148,8 +148,25 @@ fn instanceof_dispatch(
         if !hi_sym.is_null() {
             let hi_f64 = f64::from_bits(crate::value::JSValue::pointer(hi_sym as *const u8).bits());
             if let Some(vb) = crate::symbol::class_static_symbol_lookup_in_chain(class_id, hi_f64) {
-                let cb = f64::from_bits(vb);
-                if let HasInstanceOutcome::Result(r) = dispatch_own_has_instance(cb, value) {
+                let mut cb = f64::from_bits(vb);
+                // The hook's receiver is C. A static-id caller names C by
+                // its id; its function object is the class value, whose first
+                // read may allocate, so both operands are rooted across it.
+                let target = match constructor {
+                    Some(target) => target,
+                    None => {
+                        let scope = crate::gc::RuntimeHandleScope::new();
+                        let lhs = scope.root_nanbox_f64(value);
+                        let hook = scope.root_nanbox_f64(cb);
+                        let target =
+                            crate::object::native_module::class_constructor_ref_value(class_id);
+                        value = lhs.get_nanbox_f64();
+                        cb = hook.get_nanbox_f64();
+                        target
+                    }
+                };
+                if let HasInstanceOutcome::Result(r) = dispatch_own_has_instance(cb, target, value)
+                {
                     return r;
                 }
             }

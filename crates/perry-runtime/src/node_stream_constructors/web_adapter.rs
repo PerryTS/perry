@@ -1105,23 +1105,38 @@ pub extern "C" fn js_node_stream_duplex_to_web(node_stream: f64) -> f64 {
     }
 }
 
+/// node's `ERR_INVALID_ARG_TYPE` for a `fromWeb` operand that is not the web
+/// stream it names: `what` is `"readableStream" argument` or
+/// `"pair.readable" property`.
+fn throw_not_web_stream(what: &str, class: &str, value: f64) -> ! {
+    let message = format!(
+        "The {what} must be an instance of {class}. Received {}",
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+/// `Readable.fromWeb(readableStream, options)`. An operand without a web
+/// reader is not a `ReadableStream`: a TypeError, as in node.
 #[no_mangle]
 pub extern "C" fn js_node_stream_readable_from_web(web_stream: f64, opts: f64) -> f64 {
     let readable = js_node_stream_readable_new(readable_from_options(opts));
     if install_web_readable_adapter(readable, web_stream) {
         readable
     } else {
-        js_node_stream_from_web(web_stream)
+        throw_not_web_stream("\"readableStream\" argument", "ReadableStream", web_stream)
     }
 }
 
+/// `Writable.fromWeb(writableStream, options)`; an operand without a web
+/// writer is a TypeError, as in node.
 #[no_mangle]
 pub extern "C" fn js_node_stream_writable_from_web(web_stream: f64, opts: f64) -> f64 {
     let writable = js_node_stream_writable_new(opts);
     if install_web_writable_adapter(writable, web_stream) {
         writable
     } else {
-        js_node_stream_from_web(web_stream)
+        throw_not_web_stream("\"writableStream\" argument", "WritableStream", web_stream)
     }
 }
 
@@ -1140,7 +1155,10 @@ pub extern "C" fn js_node_stream_duplex_from_web(pair: f64, opts: f64) -> f64 {
     if readable_ok || writable_ok {
         duplex
     } else {
-        js_node_stream_from_web(pair)
+        // Neither side is a web stream. This is the end of the generic
+        // `fromWeb` too (it routes every `{ readable, writable }` here), so
+        // falling back to it would come straight back.
+        throw_not_web_stream("\"pair.readable\" property", "ReadableStream", readable_web)
     }
 }
 
