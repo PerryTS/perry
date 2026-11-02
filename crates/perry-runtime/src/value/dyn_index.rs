@@ -650,7 +650,7 @@ pub extern "C" fn js_dyn_index_set_strict(obj: f64, index: f64, value: f64, stri
     // receiver writes here, so the runtime owns the symbol triage.
     if unsafe { crate::symbol::js_is_symbol(index) } != 0 {
         unsafe {
-            crate::symbol::js_object_set_symbol_property(obj, index, value);
+            crate::symbol::set_symbol_property_with_strictness(obj, index, value, strict);
         }
         return value;
     }
