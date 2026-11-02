@@ -1932,13 +1932,7 @@ enum SetPlan {
 /// [`perry_probe_set`] up to the key add: the own store, or the receiver
 /// and record an add starts from. GC leaf.
 #[inline(always)]
-unsafe fn set_plan(
-    dir: *const u8,
-    obj_bits: u64,
-    key_bits: u64,
-    hash: u64,
-    value: f64,
-) -> SetPlan {
+unsafe fn set_plan(dir: *const u8, obj_bits: u64, key_bits: u64, hash: u64, value: f64) -> SetPlan {
     use SetPlan::Stored;
     if obj_bits & TAG_MASK != POINTER_TAG {
         return Stored(0);

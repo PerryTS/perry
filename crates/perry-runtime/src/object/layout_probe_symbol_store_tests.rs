@@ -23,22 +23,33 @@ fn a_symbol_store_on_an_ordinary_receiver_takes_the_probe_store() {
             let a_bits = crate::value::POINTER_TAG | a as u64;
             let b_bits = crate::value::POINTER_TAG | b as u64;
             let symbol = crate::symbol::js_symbol_new_empty();
-            let get = |o: u64| crate::symbol::js_object_get_symbol_property(f64::from_bits(o), symbol);
+            let get =
+                |o: u64| crate::symbol::js_object_get_symbol_property(f64::from_bits(o), symbol);
             // The append: the probe proves the key absent and the add admitted,
             // and the canonical key-add transition takes it (no [[Set]], so no
             // HolderEdit, no owner or entry lookup).
-            assert!(symbol_store(a_bits, symbol.to_bits(), 5.0), "append must take the probe store");
+            assert!(
+                symbol_store(a_bits, symbol.to_bits(), 5.0),
+                "append must take the probe store"
+            );
             assert_eq!(get(a_bits), 5.0);
             // A second receiver of the same layout meets the same transition.
-            assert!(symbol_store(b_bits, symbol.to_bits(), 6.0), "append must take the probe store");
+            assert!(
+                symbol_store(b_bits, symbol.to_bits(), 6.0),
+                "append must take the probe store"
+            );
             assert_eq!(get(b_bits), 6.0);
             assert_eq!(
-                (*a).parent_class_id, (*b).parent_class_id,
+                (*a).parent_class_id,
+                (*b).parent_class_id,
                 "the first symbol store on a shape is one canonical transition"
             );
             // The existing key: an own plain entry takes the value in place.
             let word = (*a).parent_class_id;
-            assert!(symbol_store(a_bits, symbol.to_bits(), 7.0), "own store must take the probe store");
+            assert!(
+                symbol_store(a_bits, symbol.to_bits(), 7.0),
+                "own store must take the probe store"
+            );
             assert_eq!(get(a_bits), 7.0);
             assert_eq!((*a).parent_class_id, word, "an own store keeps the layout");
             // A frozen receiver declines, having changed nothing: [[Set]] answers.
@@ -75,13 +86,32 @@ fn a_symbol_append_through_either_entry_is_one_canonical_transition() {
             let symbol = crate::symbol::js_symbol_new_empty();
             crate::symbol::js_object_set_symbol_property(a_f, symbol, 5.0);
             crate::object::property_ops::js_put_value_set(b_f, symbol, 6.0, b_f, 1);
-            assert_eq!(crate::symbol::js_object_get_symbol_property(a_f, symbol), 5.0);
-            assert_eq!(crate::symbol::js_object_get_symbol_property(b_f, symbol), 6.0);
-            assert_eq!(crate::object::object_keys(a).count(), 2, "the symbol joins the key list");
-            assert_eq!(crate::object::object_keys(b).count(), 2, "the symbol joins the key list");
-            assert_ne!((*a).parent_class_id, before, "the append is a layout transition");
             assert_eq!(
-                (*a).parent_class_id, (*b).parent_class_id,
+                crate::symbol::js_object_get_symbol_property(a_f, symbol),
+                5.0
+            );
+            assert_eq!(
+                crate::symbol::js_object_get_symbol_property(b_f, symbol),
+                6.0
+            );
+            assert_eq!(
+                crate::object::object_keys(a).count(),
+                2,
+                "the symbol joins the key list"
+            );
+            assert_eq!(
+                crate::object::object_keys(b).count(),
+                2,
+                "the symbol joins the key list"
+            );
+            assert_ne!(
+                (*a).parent_class_id,
+                before,
+                "the append is a layout transition"
+            );
+            assert_eq!(
+                (*a).parent_class_id,
+                (*b).parent_class_id,
                 "both entries meet one canonical successor"
             );
             // One transition per append: the successor list holds the one

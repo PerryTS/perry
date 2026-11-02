@@ -190,8 +190,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
         let name = declaration.name;
         if name == "Buffer" {
             let name_bytes = name.as_bytes();
-            let name_key =
-                super::global_name_key(name_bytes);
+            let name_key = super::global_name_key(name_bytes);
             let ctor_value = super::super::native_module::buffer_constructor_value();
 
             // #9173: Buffer instances resolve to Buffer.prototype, whose own
@@ -577,8 +576,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
             finish_builtin_prototype(declaration, proto_obj);
         }
         let name_bytes = name.as_bytes();
-        let name_key =
-            super::global_name_key(name_bytes);
+        let name_key = super::global_name_key(name_bytes);
         super::super::define_builtin_data_property(
             singleton(),
             name_key,
@@ -770,8 +768,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
         // */A5.6/A5.7/A2.6/A2.7/A7.6/A7.7).
         super::super::native_module::set_builtin_closure_non_constructable(closure_ptr as usize);
         let name_bytes = name.as_bytes();
-        let name_key =
-            super::global_name_key(name_bytes);
+        let name_key = super::global_name_key(name_bytes);
         let fn_value = crate::value::js_nanbox_pointer(closure_ptr as i64);
         super::super::define_builtin_data_property(
             singleton(),
@@ -794,8 +791,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
     // Namespaces: plain ObjectHeader so typeof is "object" per spec.
     for name in GLOBAL_THIS_BUILTIN_NAMESPACES.iter().copied() {
         let name_bytes = name.as_bytes();
-        let name_key =
-            super::global_name_key(name_bytes);
+        let name_key = super::global_name_key(name_bytes);
         let ns_value = if matches!(name, "console" | "process") {
             // #6230: dynamic method calls on the namespace *value* (`const p =
             // process; p.exit(1)`, `process["exit"](1)`, dynamic `console.log`)

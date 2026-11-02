@@ -417,8 +417,7 @@ unsafe fn build_v8_instance(module: &str, id: usize) -> f64 {
     // instance, and `Object.getPrototypeOf(s) === v8.Serializer.prototype`
     // holds, which is what makes them reachable through ordinary lookup.
     let scope = crate::gc::RuntimeHandleScope::new();
-    let instance =
-        scope.root_nanbox_f64(f64::from_bits(JSValue::pointer(obj as *const u8).bits()));
+    let instance = scope.root_nanbox_f64(f64::from_bits(JSValue::pointer(obj as *const u8).bits()));
     let name = module.strip_prefix("v8.").unwrap_or(module);
     let constructor = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
         "v8", name,

@@ -137,7 +137,11 @@ fn an_own_named_property_denies_the_array_admission() {
             crate::string::canonical_key(b"indexOf"),
             own,
         );
-        assert_eq!(head, crate::array::clean_arr_ptr_mut(arr), "no element moved");
+        assert_eq!(
+            head,
+            crate::array::clean_arr_ptr_mut(arr),
+            "no element moved"
+        );
         let mut recv = crate::value::js_nanbox_pointer(head as i64);
         assert!(
             !array_fast_admits(recv),

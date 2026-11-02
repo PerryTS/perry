@@ -508,7 +508,9 @@ pub(crate) fn is_global_registered_symbol(ptr: usize) -> bool {
     }
     unsafe {
         let sym = ptr as *const SymbolHeader;
-        !sym.is_null() && (*sym).magic == SYMBOL_MAGIC && (*sym).registered & perry_abi::SYMBOL_GLOBAL_REGISTRY != 0
+        !sym.is_null()
+            && (*sym).magic == SYMBOL_MAGIC
+            && (*sym).registered & perry_abi::SYMBOL_GLOBAL_REGISTRY != 0
     }
 }
 
@@ -882,15 +884,25 @@ mod symbol_identity_is_header {
     /// proof first) agree on every real cell.
     fn accepted(ptr: usize) -> bool {
         let by_value = unsafe { js_is_symbol(boxed(ptr)) } != 0;
-        assert_eq!(by_value, is_registered_symbol(ptr), "value and word forms agree");
+        assert_eq!(
+            by_value,
+            is_registered_symbol(ptr),
+            "value and word forms agree"
+        );
         by_value
     }
 
     #[test]
     fn symbol_identity_is_header() {
         // SYMBOL_MAGIC in a cell whose header is not a symbol's: rejected.
-        assert!(!accepted(space_cell(crate::gc::GC_TYPE_OBJECT, SYMBOL_MAGIC)));
-        assert!(!accepted(space_cell(crate::gc::GC_TYPE_STRING, SYMBOL_MAGIC)));
+        assert!(!accepted(space_cell(
+            crate::gc::GC_TYPE_OBJECT,
+            SYMBOL_MAGIC
+        )));
+        assert!(!accepted(space_cell(
+            crate::gc::GC_TYPE_STRING,
+            SYMBOL_MAGIC
+        )));
         // A symbol header over a payload without the magic: rejected.
         assert!(!accepted(space_cell(GC_TYPE_SYMBOL, !SYMBOL_MAGIC)));
         // A symbol cell no registry owns is a symbol: the header is the proof.
@@ -905,19 +917,39 @@ mod symbol_identity_is_header {
         let for_value = unsafe { js_symbol_for(f64::from_bits(STRING_TAG | key as u64)) };
         let reg = (for_value.to_bits() & POINTER_MASK) as usize;
         let local = unsafe { alloc_symbol(std::ptr::null_mut(), false) } as usize;
-        for (name, ptr) in [("well-known", wk), ("runtime", rt), ("intl", intl), ("for", reg), ("local", local)] {
+        for (name, ptr) in [
+            ("well-known", wk),
+            ("runtime", rt),
+            ("intl", intl),
+            ("for", reg),
+            ("local", local),
+        ] {
             assert!(accepted(ptr), "{name} symbol is known by its header");
         }
         // Every persistent kind lives in the one process symbol space.
-        for (name, ptr) in [("well-known", wk), ("runtime", rt), ("intl", intl), ("for", reg)] {
-            assert!(space::holds(ptr), "{name} symbol is a cell of the symbol space");
+        for (name, ptr) in [
+            ("well-known", wk),
+            ("runtime", rt),
+            ("intl", intl),
+            ("for", reg),
+        ] {
+            assert!(
+                space::holds(ptr),
+                "{name} symbol is a cell of the symbol space"
+            );
         }
         assert!(!space::holds(local));
         // Kinds come from the payload bits.
         assert!(is_well_known_symbol(wk));
-        assert!(!is_well_known_symbol(rt) && !is_well_known_symbol(reg) && !is_well_known_symbol(local));
+        assert!(
+            !is_well_known_symbol(rt) && !is_well_known_symbol(reg) && !is_well_known_symbol(local)
+        );
         assert!(is_global_registered_symbol(reg));
-        assert!(!is_global_registered_symbol(wk) && !is_global_registered_symbol(rt) && !is_global_registered_symbol(local));
+        assert!(
+            !is_global_registered_symbol(wk)
+                && !is_global_registered_symbol(rt)
+                && !is_global_registered_symbol(local)
+        );
         // WeakRef / FinalizationRegistry targets: a registered symbol is refused,
         // the others are held weakly.
         assert!(!crate::weakref::is_valid_weak_target(for_value));
@@ -926,7 +958,14 @@ mod symbol_identity_is_header {
 
         // Raw words: the address is proven before anything is read.
         // Interior and misaligned words of a real space cell: rejected.
-        for raw in [bare - GC_HEADER_SIZE, bare + 8, bare + 16, bare + 1, bare + 4, bare + space::CELL - 8] {
+        for raw in [
+            bare - GC_HEADER_SIZE,
+            bare + 8,
+            bare + 16,
+            bare + 1,
+            bare + 4,
+            bare + space::CELL - 8,
+        ] {
             assert!(!is_registered_symbol(raw), "space interior {raw:#x}");
         }
         // The last cell of the range, past the bump (never handed out): rejected.
@@ -942,7 +981,14 @@ mod symbol_identity_is_header {
         assert!(!is_registered_symbol(image + 8) && !is_registered_symbol(image + 4));
         // Words that are no cell at all, among them a number's magnitude
         // (bare_receiver's 0x7fff_ffff_f000): rejected without a read.
-        for raw in [0usize, 8, 0x1000, crate::value::addr_class::HANDLE_BAND_MAX - 8, usize::MAX / 2, 0x7fff_ffff_f000] {
+        for raw in [
+            0usize,
+            8,
+            0x1000,
+            crate::value::addr_class::HANDLE_BAND_MAX - 8,
+            usize::MAX / 2,
+            0x7fff_ffff_f000,
+        ] {
             assert!(!is_registered_symbol(raw), "{raw:#x}");
         }
         // A readable-looking word on an inaccessible page: a read would fault.

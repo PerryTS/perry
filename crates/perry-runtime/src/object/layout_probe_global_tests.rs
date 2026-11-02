@@ -11,14 +11,16 @@ fn global_object_keys_are_atoms_and_a_miss_proves_absence() {
         .spawn(|| unsafe {
             crate::gc::initialize_runtime_fixture();
             let _no_move = crate::gc::GcSuppressScope::new();
-            let global =
-                crate::JSValue::from_bits(crate::object::js_get_global_this().to_bits());
+            let global = crate::JSValue::from_bits(crate::object::js_get_global_this().to_bits());
             assert!(global.is_pointer());
             let global = global.as_pointer::<ObjectHeader>();
             let record = record_of(test_dir(), perry_abi::LayoutWord((*global).parent_class_id));
             assert!(!record.is_null() && (*record).present());
             let count = (*record).logical_key_count as usize;
-            assert!(count > 100, "the global object lists its builtin names: {count}");
+            assert!(
+                count > 100,
+                "the global object lists its builtin names: {count}"
+            );
             let keys = (*record).keys as usize as *const crate::array::ArrayHeader;
             let words = crate::array::array_elements_ptr(keys) as *const u64;
             let mut not_atoms = Vec::new();
@@ -47,7 +49,10 @@ fn global_object_keys_are_atoms_and_a_miss_proves_absence() {
                         .unwrap_or_else(|| format!("{bits:#x}"));
                 not_atoms.push(text);
             }
-            assert!(not_atoms.is_empty(), "global keys that are not image atoms: {not_atoms:?}");
+            assert!(
+                not_atoms.is_empty(),
+                "global keys that are not image atoms: {not_atoms:?}"
+            );
             let word = derive_word(&*record);
             assert_eq!(
                 word & (PROBE_READY | PROBE_DECLINE | PROBE_ATOMS),
@@ -75,8 +80,7 @@ fn global_object_is_born_on_its_static_layout_and_population_keeps_it() {
         .spawn(|| unsafe {
             crate::gc::initialize_runtime_fixture();
             let _no_move = crate::gc::GcSuppressScope::new();
-            let global =
-                crate::JSValue::from_bits(crate::object::js_get_global_this().to_bits());
+            let global = crate::JSValue::from_bits(crate::object::js_get_global_this().to_bits());
             assert!(global.is_pointer());
             let global = global.as_pointer::<ObjectHeader>();
             let desc = std::ptr::addr_of!(crate::object::runtime_layouts::GLOBAL_OBJECT);
@@ -109,10 +113,25 @@ fn global_object_is_born_on_its_static_layout_and_population_keeps_it() {
             let keys = crate::object::object_keys(global);
             let family =
                 crate::object::canonical_keys::with_list_shapes(keys.node(), |l| l.family.len());
-            eprintln!("global layout {id:#x} birth {:#x} family {family:?}", (*desc).layout_id);
-            assert_eq!(entries.len(), (*desc).key_count as usize, "entries {entries:?}");
-            assert_eq!(keys.arr(), (*desc).image_keys, "the global left its image key list");
-            assert_eq!(family, Some(2), "shapes published on the global's keys; entries {entries:?}");
+            eprintln!(
+                "global layout {id:#x} birth {:#x} family {family:?}",
+                (*desc).layout_id
+            );
+            assert_eq!(
+                entries.len(),
+                (*desc).key_count as usize,
+                "entries {entries:?}"
+            );
+            assert_eq!(
+                keys.arr(),
+                (*desc).image_keys,
+                "the global left its image key list"
+            );
+            assert_eq!(
+                family,
+                Some(2),
+                "shapes published on the global's keys; entries {entries:?}"
+            );
         })
         .unwrap()
         .join()
@@ -146,7 +165,11 @@ fn builtin_global_atoms_are_image_data_and_never_seeded() {
                 }
                 let seeded = crate::object::layout_desc::image_atoms()
                     .any(|entry| std::ptr::eq(entry as *const _, atom as *const _));
-                assert!(!seeded, "global atom {} is in the static seed", String::from_utf8_lossy(bytes));
+                assert!(
+                    !seeded,
+                    "global atom {} is in the static seed",
+                    String::from_utf8_lossy(bytes)
+                );
                 assert_eq!(
                     crate::string::atom_lookup(bytes, (*atom).hash),
                     Some(string),

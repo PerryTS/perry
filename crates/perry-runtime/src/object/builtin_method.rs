@@ -92,9 +92,11 @@ unsafe fn array_recv(v: f64) -> Option<f64> {
     // in a header bit: an array that has one is not answered by
     // `Array.prototype` alone.
     (header._reserved & ARRAY_NOT_DEFAULT == 0
-        && (*(live as *const crate::array::ArrayHeader)).named.is_null()
+        && (*(live as *const crate::array::ArrayHeader))
+            .named
+            .is_null()
         && pristine(BuiltinProto::Array))
-        .then(|| f64::from_bits(POINTER_TAG | live as u64))
+    .then(|| f64::from_bits(POINTER_TAG | live as u64))
 }
 
 /// The live head a forwarded array alias names, or `None`.

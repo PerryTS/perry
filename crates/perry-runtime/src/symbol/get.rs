@@ -1473,7 +1473,11 @@ mod handle_meta_share_tests {
                 TAG_UNDEFINED,
                 "an unseeded wrapper reads undefined, as in node"
             );
-            assert_eq!(shared.to_bits(), meta.to_bits(), "the handle holds the meta object");
+            assert_eq!(
+                shared.to_bits(),
+                meta.to_bits(),
+                "the handle holds the meta object"
+            );
             assert_eq!(
                 seeded_got.to_bits(),
                 meta.to_bits(),

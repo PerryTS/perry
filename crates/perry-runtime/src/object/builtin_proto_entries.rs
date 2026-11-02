@@ -613,7 +613,9 @@ unsafe fn array_fast_admits(recv: f64) -> bool {
     header.obj_type == crate::gc::GC_TYPE_ARRAY
         && header._reserved & ARRAY_NOT_DEFAULT == 0
         && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
-        && (*((bits & POINTER_MASK) as *const crate::array::ArrayHeader)).named.is_null()
+        && (*((bits & POINTER_MASK) as *const crate::array::ArrayHeader))
+            .named
+            .is_null()
 }
 
 /// Does the array at `addr` (header `h`) own a named layout, where its named
