@@ -1064,11 +1064,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // in the i32 slot (`load` / `add ±1` / `store`), which post-`-O3`
             // promotes to a clean `phi i32` induction variable. The boxed
             // double views exist only as the expression's value; LLVM DCEs
-            // them when the update is a statement. `++`/`--` on an unsigned
-            // (`>>> 0`-written) local never qualifies for a slot (the
-            // collector disqualifies Update writes), so the rep here is
-            // always `I32` — materialize with `sitofp`.
-            if let Some((i32_slot, _rep)) = crate::expr::canonical_local_i32_slot(ctx, *id) {
+            // them when the update is a statement. A `U32` local updated here
+            // is the for…of record cursor, whose `++` runs only below the
+            // array's u32 length (`collectors/array_record_cursor.rs`), so the
+            // add never wraps and the boxed views materialize with `uitofp`.
+            if let Some((i32_slot, rep)) = crate::expr::canonical_local_i32_slot(ctx, *id) {
                 let blk = ctx.block();
                 let old_i32 = blk.load(I32, &i32_slot);
                 let delta = match op {
@@ -1077,8 +1077,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 };
                 let new_i32 = blk.add(I32, &old_i32, delta);
                 blk.store(I32, &new_i32, &i32_slot);
-                let old = blk.sitofp(I32, &old_i32, DOUBLE);
-                let new = blk.sitofp(I32, &new_i32, DOUBLE);
+                let (old, new) = if matches!(rep, crate::expr::SlotRep::U32) {
+                    (blk.uitofp(I32, &old_i32, DOUBLE), blk.uitofp(I32, &new_i32, DOUBLE))
+                } else {
+                    (blk.sitofp(I32, &old_i32, DOUBLE), blk.sitofp(I32, &new_i32, DOUBLE))
+                };
                 super::record_int_facts_for_update(ctx, *id, *op);
                 return Ok(if *prefix { new } else { old });
             }
