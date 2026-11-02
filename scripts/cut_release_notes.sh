@@ -178,6 +178,40 @@ self_test() {
   st_run "$tmp/a" --notes-only --version
   st_eq 'missing version value: exit status' "$st_status" 1
 
+  # I. A fragment is archived once, under the FIRST release that shipped it.
+  #    A later tag whose tree still carries an already-archived fragment (the
+  #    shape of a repo where an earlier fold never ran) must not archive it
+  #    again, and must still clear it from the pending queue.
+  st_fixture "$tmp/d" || { st_fail 'fixture d'; return 1; }
+  (
+    cd "$tmp/d" || exit 1
+    git tag v8.0.0
+  )
+  st_run "$tmp/d" --fold v8.0.0 --no-commit
+  st_eq 'first release: fold ok' "$st_status" 0
+  (
+    cd "$tmp/d" || exit 1
+    # The earlier release's fragments reappear in the tree, as they do when the
+    # fold was never run, and one genuinely new entry joins them.
+    printf 'entry alpha\n' > changelog.d/100-alpha.md
+    printf 'entry beta\n' > changelog.d/9-beta.md
+    printf 'entry unkeyed\n' > changelog.d/unkeyed-slug.md
+    printf 'entry eighth\n' > changelog.d/800-eighth.md
+    git add -A
+    git commit -qm reintroduced
+    git tag v8.1.0
+  )
+  st_run "$tmp/d" --fold v8.1.0 --no-commit
+  st_eq 'second release: fold ok' "$st_status" 0
+  st_eq 'second release: archives only its own entry' \
+    "$(st_count "$tmp/d/changelog/v8.1.0")" 1
+  if [ -f "$tmp/d/changelog/v8.1.0/800-eighth.md" ]; then st_pass 'second release: holds the new entry'; else st_fail 'second release: holds the new entry'; fi
+  if [ -f "$tmp/d/changelog/v8.0.0/100-alpha.md" ]; then st_pass 'second release: earlier archive untouched'; else st_fail 'second release: earlier archive untouched'; fi
+  if [ -f "$tmp/d/changelog/v8.1.0/100-alpha.md" ]; then st_fail 'second release: re-archived an earlier entry'; else st_pass 'second release: no re-archive'; fi
+  st_eq 'second release: queue cleared of archived entries' \
+    "$(st_count "$tmp/d/changelog.d")" 0
+  st_has 'second release: reports the skip' 'already archived' "$st_out"
+
   printf '\n'
   if [ "$st_failures" -eq 0 ]; then
     printf 'self-test passed\n'
@@ -273,6 +307,32 @@ write_manifest() {
 EOF
 }
 
+# A fragment is archived once, under the FIRST release that shipped it. A later
+# tag whose changelog.d/ still carries an earlier release's entries — the shape
+# of a repository where that earlier fold never ran — must not archive them
+# again, so the set of basenames already under changelog/v*/ is consulted before
+# copying anything.
+# The index is a FILE, not a variable piped into `grep -q`: `grep -q` exits on
+# its first match and closes the pipe, `printf` then takes EPIPE, and under
+# `set -o pipefail` the pipeline reports failure for a name that DID match.
+# That is not theoretical — it archived one already-archived fragment on the
+# real v0.5.1664 fold, and only the cross-archive gate below noticed. Reading a
+# file keeps the exit status the match's own.
+archived_index=""
+collect_archived_basenames() {
+  [ -d changelog ] || return 0
+  archived_index=$(mktemp)
+  # shellcheck disable=SC2064
+  trap "rm -f '$archived_index'" EXIT
+  find changelog -mindepth 2 -maxdepth 2 -type f -name '*.md' -exec basename {} \; \
+    | sort -u > "$archived_index"
+}
+
+is_archived() {
+  [ -n "$archived_index" ] && [ -s "$archived_index" ] || return 1
+  grep -qxF -- "$1" "$archived_index"
+}
+
 mode="release"
 version_raw=""
 dry_run=0
@@ -333,19 +393,35 @@ if [ "$mode" = "fold" ]; then
     if [ -f "$pending_dir/HIGHLIGHTS.md" ]; then highlights=1; fi
   fi
   [ -n "$entries" ] || die "no fragments recorded at $version — nothing to fold."
-  count=$(printf '%s\n' "$entries" | grep -c . || true)
+  total=$(printf '%s\n' "$entries" | grep -c . || true)
+  collect_archived_basenames
 
   if [ "$dry_run" = 1 ]; then
-    printf 'Would archive %s entries (%s source) into %s:\n' "$count" "$source_kind" "$archive"
-    printf '%s\n' "$entries" | sed 's/^/  /'
-    [ "$highlights" = 0 ] || printf '  %s\n' "$pending_dir/HIGHLIGHTS.md"
+    printf 'Would fold %s into %s (%s source):\n' "$version" "$archive" "$source_kind"
+    while IFS= read -r path; do
+      [ -n "$path" ] || continue
+      if [ "$source_kind" = "tag" ] && is_archived "${path##*/}"; then
+        printf '  skip (already archived)  %s\n' "$path"
+      else
+        printf '  archive                  %s\n' "$path"
+      fi
+    done <<< "$entries"
+    [ "$highlights" = 0 ] || printf '  archive                  %s\n' "$pending_dir/HIGHLIGHTS.md"
     exit 0
   fi
 
   mkdir -p "$archive"
+  skipped=0
   while IFS= read -r path; do
     [ -n "$path" ] || continue
     base=${path##*/}
+    if [ "$source_kind" = "tag" ] && is_archived "$base"; then
+      # Already archived under an earlier release: it keeps that folder, and it
+      # still leaves the pending queue.
+      skipped=$((skipped + 1))
+      git rm -q --ignore-unmatch -- "$path" >/dev/null 2>&1 || true
+      continue
+    fi
     if [ "$source_kind" = "tag" ]; then
       git show "$version:$path" > "$archive/$base"
       # A fragment edited after the release keeps its shipped text here; the
@@ -366,8 +442,15 @@ if [ "$mode" = "fold" ]; then
       git mv -- "$pending_dir/HIGHLIGHTS.md" "$archive/HIGHLIGHTS.md"
     fi
   fi
+  count=$(find "$archive" -maxdepth 1 -type f -name '*.md' \
+    ! -name README.md ! -name HIGHLIGHTS.md | wc -l | tr -d ' ')
+  if [ "$count" -eq 0 ]; then
+    rmdir "$archive" 2>/dev/null || true
+    die "nothing new for $version — every entry it shipped is already archived ($skipped skipped)."
+  fi
   write_manifest "$archive" "$version" "$source_kind" "$count" "$highlights"
   git add -- "$archive"
+  [ "$skipped" -eq 0 ] || printf 'Skipped %s entries already archived under an earlier release.\n' "$skipped"
   if [ "$no_commit" = 1 ]; then
     printf 'Archived %s entries for %s in %s (not committed).\n' "$count" "$version" "$archive"
     exit 0

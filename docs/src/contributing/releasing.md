@@ -68,6 +68,10 @@ git push                                                     # on release/v$VERS
 python3 scripts/check_changelog_archive.py                   # archive is well formed
 ```
 
+Every fragment is archived under the first release that shipped it, so this is
+safe to run on any release: one that still carries an earlier release's entries
+in `changelog.d/` archives only its own new ones.
+
 `--notes-only --version "v$VERSION"` (what `release-packages.yml` calls) then
 reads that folder, so re-running the release job produces the same notes. If the
 fold is still missing at tag time the release cuts from the pending queue anyway
