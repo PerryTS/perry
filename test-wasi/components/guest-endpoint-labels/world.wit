@@ -1,0 +1,20 @@
+package perry:guest-endpoint-labels@1.0.0;
+
+interface foreign {
+    resource item { constructor(value: u32); read: func() -> u32; }
+    record payload { owner: own<item>, text: string }
+}
+interface api {
+    use foreign.{item, payload};
+    type pending = future<payload>;
+    record counts { completed: u32, rejected: u32, failed: u32 }
+    make-future: func(value: u32) -> pending;
+    resource-value: func(value: borrow<item>) -> u32;
+    checkpoint: func() -> counts;
+}
+world plugin {
+    import foreign;
+    import left: foreign;
+    import right: foreign;
+    export api;
+}
