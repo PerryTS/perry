@@ -24,6 +24,13 @@ pass. The folder name and the manifest version are written from the same
 argument by the fold script, so they are self-consistent by construction;
 scripts/cut_release_notes.sh is the only writer.
 
+A FRAGMENT IS ARCHIVED ONCE
+---------------------------
+Under the first release that shipped it. Encoded here as "the same basename may
+not appear in two `changelog/v*/` folders", which is how the one real miss was
+caught: `grep -q` closing its pipe under `set -o pipefail` made an
+already-archived name look new during the v0.5.1664 fold.
+
 WHAT THE FRAGMENT CAP IS FOR
 ----------------------------
 It is a smoke alarm for "the fold stopped happening", not a style limit. One
@@ -72,6 +79,9 @@ def check(root: Path, max_pending: int = DEFAULT_MAX_PENDING) -> list[str]:
     errors: list[str] = []
     pending_entries = entry_files(pending_dir)
     pending_names = {p.name for p in pending_entries}
+    # A fragment is archived once, under the first release that shipped it, so
+    # the same basename must not appear in two release folders.
+    homes: dict[str, list[str]] = {}
 
     for child in sorted(archive_root.iterdir()):
         if not child.is_dir():
@@ -92,6 +102,8 @@ def check(root: Path, max_pending: int = DEFAULT_MAX_PENDING) -> list[str]:
             continue
         manifest_error = _manifest_errors(child, len(entries))
         errors.extend(manifest_error)
+        for name in (p.name for p in entries):
+            homes.setdefault(name, []).append(child.name)
         duplicated = pending_names & {p.name for p in entries}
         if duplicated:
             listed = ", ".join(sorted(duplicated)[:5])
@@ -99,6 +111,13 @@ def check(root: Path, max_pending: int = DEFAULT_MAX_PENDING) -> list[str]:
                 f"{child.name}: {len(duplicated)} fragment(s) also pending in "
                 f"changelog.d/ ({listed}) — a released fragment is archived once, "
                 f"never in both places"
+            )
+
+    for name, versions in sorted(homes.items()):
+        if len(versions) > 1:
+            errors.append(
+                f"{name}: archived under {', '.join(versions)} — a fragment is "
+                f"archived once, under the first release that shipped it"
             )
 
     if len(pending_entries) > max_pending:
@@ -245,6 +264,18 @@ def self_test() -> int:
 
         double = _build(tmp_path / "double", pending=("100-a.md",))
         expect("fragment both archived and pending", check(double), "also pending")
+
+        twice = _build(tmp_path / "twice", archive_name="v1.0.0")
+        second = twice / "changelog" / "v2.0.0"
+        second.mkdir()
+        for name in ("100-a.md",):
+            (second / name).write_text("entry\n")
+        (second / "manifest.json").write_text(
+            json.dumps(
+                {"version": "v2.0.0", "source": "tag", "entries": 1, "highlights": False}
+            )
+        )
+        expect("fragment archived under two versions", check(twice), "archived under")
 
         capped = _build(tmp_path / "cap", pending=("1-a.md", "2-b.md", "3-c.md"))
         expect("pending queue over the cap", check(capped, max_pending=2), "over the 2 cap")

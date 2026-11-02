@@ -7,4 +7,4 @@ Perry had 4,211 fragments in `changelog.d/` (5.7 MB of text) because the documen
 - The fold archives what the tag shipped (`git show`), not what the worktree holds, and warns when a fragment was edited after the release.
 - `scripts/check_changelog_archive.py` is a new required `lint` gate: it fails on a malformed archive, on a fragment that is both archived and pending, and on a pending queue over 6,000 fragments — the signature of a fold that stopped happening. Both it and `scripts/cut_release_notes.sh` carry a `--self-test`, also run by `scripts/pre-tag-check.sh`.
 
-The existing backlog is archived: the 1,509 entries recorded at tag `v0.5.1520` are in `changelog/v0.5.1520/`, byte-identical to the tag, and 2,713 fragments remain pending for the next release.
+The backlog is archived, every file byte-identical to the tag it shipped in: 1,509 entries in `changelog/v0.5.1520/` and 2,594 more in `changelog/v0.5.1664/`. A fragment is archived once, under the first release that shipped it, so the 1,496 entries the later tag still carried were skipped rather than duplicated. The pending queue drops from 4,211 fragments to the 122 merged since v0.5.1664.

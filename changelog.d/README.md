@@ -31,6 +31,13 @@ Fold on the release branch, **before** the tag:
 
 `changelog.d/` is then empty and the next cycle starts from zero.
 
+A fragment is archived **once, under the first release that shipped it**. A
+later tag whose tree still carries an earlier release's entries — the shape of
+a repository where that earlier fold never ran, which is exactly how
+`changelog/v0.5.1664/` was produced — archives only its own new entries, clears
+the already-archived ones from the queue anyway, and reports how many it
+skipped.
+
 Why a folder and not `git rm`: the fold used to be a manual *post-release* step
 and it never once ran — 0 `fold changesets` commits, 4,211 fragments, 5.7 MB of
 text, and every release body truncated at GitHub's 125,000-character limit
@@ -52,8 +59,8 @@ grows. History lives in `changelog/v*/`, in the GitHub Releases, and in git.
 
 `scripts/check_changelog_archive.py` is a required `lint` gate. It fails when an
 archive is malformed (no `manifest.json`, wrong `version`, wrong entry count),
-when one fragment is both archived and pending, or when the pending queue passes
-6,000 fragments. That last number is a smoke alarm, not a style limit: a normal
+when one fragment is both archived and pending, when one fragment sits in two
+release folders, or when the pending queue passes 6,000 fragments. That last number is a smoke alarm, not a style limit: a normal
 cycle is large (v0.5.1520 shipped 1,509 entries; the 0.5.1664 cycle is ~2,700),
 so the cap only trips on the signature of a fold that stopped happening for
 several releases — the state that produced this folder layout in the first
