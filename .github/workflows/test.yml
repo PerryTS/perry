@@ -5433,7 +5433,7 @@ jobs:
     needs: plan
     if: needs.plan.result == 'success' && fromJSON(needs.plan.outputs.plan).jobs.wasi_execution
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
     env:
       CARGO_BUILD_JOBS: '2'
       CARGO_INCREMENTAL: '0'
@@ -5461,7 +5461,7 @@ jobs:
           git config http.https://github.com/.extraheader "$auth_header"
         fi
     - name: Install Rust toolchain with the WASI targets
-      run: rustup toolchain install nightly-2026-10-04 --profile minimal --target wasm32-wasip2 --target wasm32-wasip1
+      run: rustup toolchain install nightly-2026-10-04 --profile minimal --target wasm32-wasip2 --target wasm32-wasip1 --target wasm32-wasip3
     - uses: ./.github/actions/setup-llvm22
     - uses: ./.github/actions/perry/Swatinem/rust-cache
       with:
@@ -5490,7 +5490,7 @@ jobs:
       run: |
         toolchain_env="$(./scripts/wasi_toolchain.sh "$RUNNER_TEMP/wasi")"
         eval "$toolchain_env"
-        for key in WASI_SDK_PATH WASMTIME CC_wasm32_wasip2 AR_wasm32_wasip2 CFLAGS_wasm32_wasip2 CC_wasm32_wasip1 AR_wasm32_wasip1 CFLAGS_wasm32_wasip1 CC_SHELL_ESCAPED_FLAGS; do
+        for key in WASI_SDK_PATH WASMTIME CC_wasm32_wasip2 AR_wasm32_wasip2 CFLAGS_wasm32_wasip2 CC_wasm32_wasip1 AR_wasm32_wasip1 CFLAGS_wasm32_wasip1 CC_wasm32_wasip3 AR_wasm32_wasip3 CFLAGS_wasm32_wasip3 CC_SHELL_ESCAPED_FLAGS; do
           printf '%s=%s\n' "$key" "${!key}" >> "$GITHUB_ENV"
         done
     - name: Build the runtime for wasm32-wasip2
@@ -5550,6 +5550,9 @@ jobs:
         path: |
           target/wasi-validation/
           target/component-validation/**/*.log
+          target/component-validation/**/*.stdout
+          target/component-validation/**/*.stderr
+          target/component-validation/**/*.json
           target/component-validation/**/results.json
           target/component-validation/**/*.component.wasm
           target/component-validation/source-revision.txt
