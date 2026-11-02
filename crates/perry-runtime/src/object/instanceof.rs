@@ -360,9 +360,8 @@ fn ordinary_has_instance_prototype_walk_rooted(
         // `function F(){}` that has not been constructed or read through the
         // materializing path) answers undefined to the dynamic read; its real
         // `.prototype` is the object the materializing read creates.
-        let materialized = crate::object::js_function_prototype_value_for_read(
-            type_ref.get_nanbox_f64(),
-        );
+        let materialized =
+            crate::object::js_function_prototype_value_for_read(type_ref.get_nanbox_f64());
         if proto_identity_addr(materialized) != 0 {
             target.set_nanbox_f64(materialized);
         }

@@ -121,8 +121,7 @@ pub(crate) unsafe fn prototype_constructor_patch(kind: u8, owner: usize) -> Opti
 
 /// The intrinsic constructor value for an element kind (`Uint8Array`, …).
 pub(crate) fn intrinsic_constructor(kind: u8) -> f64 {
-    let name = name_for_kind(kind);
-    crate::object::js_get_global_this_builtin_value(name.as_ptr(), name.len())
+    crate::object::builtin_constructor_value(name_for_kind(kind))
 }
 
 /// `Get(C, @@species)` — runs any species getter, propagating exceptions.

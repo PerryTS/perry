@@ -222,10 +222,7 @@ pub extern "C" fn js_promise_resolved(value: f64) -> *mut Promise {
                     }
                     .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
                     let ctor_h = scope.root_nanbox_f64(ctor);
-                    let intrinsic = crate::object::js_get_global_this_builtin_value(
-                        b"Promise".as_ptr(),
-                        b"Promise".len(),
-                    );
+                    let intrinsic = crate::object::builtin_constructor_value("Promise");
                     ctor_h.get_nanbox_f64().to_bits() == intrinsic.to_bits()
                 } else {
                     true

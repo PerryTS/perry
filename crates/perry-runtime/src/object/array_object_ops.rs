@@ -781,13 +781,32 @@ pub(crate) unsafe fn define_array_property(
 /// are the realm's intrinsics, pinned when the realm was populated; the
 /// writable `globalThis.Array` / `globalThis.Object` bindings name whatever
 /// user code stored there and are never consulted.
+///
+/// The cached `%Array.prototype%` row answers 0 until this thread's realm
+/// global exists, while `%Object.prototype%` can exist before it (an
+/// `Iterator.from({ next })` reaches it). Answering from the rows alone then
+/// gave an array `%Object.prototype%` and no `@@iterator`; the realm entry
+/// builds the realm on that first read, as the `globalThis.Array` read did.
 pub(crate) fn array_get_prototype_of_addr(raw_addr: usize) -> Option<f64> {
-    let array_proto = crate::array::array_prototype_addr();
+    let array_proto = match crate::array::array_prototype_addr() {
+        0 => {
+            let proto = crate::object::builtin_prototype_value("Array");
+            let proto = crate::value::JSValue::from_bits(proto.to_bits());
+            if proto.is_pointer() {
+                proto.as_pointer::<u8>() as usize
+            } else {
+                0
+            }
+        }
+        addr => addr,
+    };
     if array_proto != 0 && array_proto != raw_addr {
         return Some(crate::value::js_nanbox_pointer(array_proto as i64));
     }
-    let object_proto = crate::array::object_prototype_addr();
-    (object_proto != 0).then(|| crate::value::js_nanbox_pointer(object_proto as i64))
+    let object_proto = crate::object::builtin_prototype_value("Object");
+    crate::value::JSValue::from_bits(object_proto.to_bits())
+        .is_pointer()
+        .then_some(object_proto)
 }
 
 #[cfg(test)]

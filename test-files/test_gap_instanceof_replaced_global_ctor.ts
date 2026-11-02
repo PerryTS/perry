@@ -1,6 +1,7 @@
 // A builtin's instances inherit from the realm's intrinsic prototype.
 // Replacing the writable `globalThis.<Name>` binding afterwards must not
-// change what an existing instance inherits from or is an instance of.
+// change what an existing instance inherits from or is an instance of, nor
+// the constructor it inherits.
 export {};
 const g: any = globalThis;
 const gpo = Object.getPrototypeOf;
@@ -61,8 +62,23 @@ for (const [name, make] of families) {
   const viaGlobal = value instanceof g[name];
   const same = gpo(value) === proto;
   const stillOriginal = value instanceof original;
+  const ctor = value.constructor === original;
   g[name] = original;
-  rows.push(name + " " + instance + " " + viaGlobal + " " + same + " " + stillOriginal);
+  rows.push(name + " " + instance + " " + viaGlobal + " " + same + " " + stillOriginal + " " + ctor);
+}
+// %Array.prototype%'s own `constructor` stays %Array%; a promise resolves
+// through %Promise%, so `Promise.resolve(p)` still returns `p` itself.
+{
+  const A = g.Array, P = g.Promise;
+  const p = P.resolve(1);
+  g.Array = function Replacement() {};
+  g.Promise = function Replacement() {};
+  const own = Object.getOwnPropertyDescriptor(A.prototype, "constructor");
+  const arrayCtor = own !== undefined && own.value === A;
+  const same = P.resolve(p) === p;
+  g.Array = A;
+  g.Promise = P;
+  rows.push("array-own-ctor " + arrayCtor + " promise-resolve-same " + same);
 }
 // Generators: %GeneratorPrototype% is no global; replacing Function must not move it.
 const it = gen();
