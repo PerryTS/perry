@@ -2370,11 +2370,24 @@ fn write_report(st: &mut State) {
                 .entry(st.inits[b.init as usize].addr)
                 .or_insert((0xcbf29ce484222325, 0, 0));
             e.1 += 1;
+            let ty = unsafe { (*(b.addr as *const crate::gc::GcHeader)).obj_type };
+            dump(st.inits[b.init as usize].addr, bname, 0, format!("t{ty}:{}", b.size));
             // The GC header (mark and move-request bits) is no JS state.
             let mut off = crate::gc::GC_HEADER_SIZE;
+            // A Map store's native indexes are derived state (see
+            // `map::snap_native_index_range`): left out.
+            let skip = if ty == crate::gc::GC_TYPE_MAP_STORE {
+                let (s, e) = crate::map::snap_native_index_range();
+                (crate::gc::GC_HEADER_SIZE + s, crate::gc::GC_HEADER_SIZE + e)
+            } else {
+                (0, 0)
+            };
             while off + 8 <= b.size as usize {
                 let word = b.addr + off;
                 off += 8;
+                if word - b.addr >= skip.0 && word - b.addr < skip.1 {
+                    continue;
+                }
                 if st.w.contains(word as u64) {
                     if let Some(o) = wd_out.as_mut() {
                         use std::io::Write;
@@ -2387,6 +2400,46 @@ fn write_report(st: &mut State) {
                 }
                 let v = unsafe { *(word as *const u64) };
                 e.2 += 1;
+                // An ordinary object's first header word holds its class id
+                // and its ShapeId (a closure's: capture count and ShapeId). A ShapeId is the shape's NAME: ids are
+                // handed out in creation order, and the env object's keys
+                // (filled at startup) take ids too, so the same shape gets
+                // another id when the env block differs. It hashes as the
+                // shape it names: key list, counts, flags, prototype link,
+                // kind and representation.
+                if off - 8 == crate::gc::GC_HEADER_SIZE
+                    && (ty == perry_abi::GC_TYPE_OBJECT || ty == perry_abi::GC_TYPE_CLOSURE)
+                {
+                    let sid = (v >> 32) as u32;
+                    if let Some(d) = crate::object::shapes::shape_descriptor_for_word(
+                        crate::codegen_abi::LayoutWord(sid),
+                    ) {
+                        let pn = |w: u64| {
+                            name_of((w & 0xFFFF_FFFF_FFFF) as usize).map_or(w, |(n, o)| {
+                                n ^ (o as u64).rotate_left(17) ^ (w >> 48).rotate_left(40)
+                            })
+                        };
+                        let sname = [
+                            pn(d.keys),
+                            d.logical_key_count as u64,
+                            d.live_inline_slot_count as u64,
+                            d.integrity_flags as u64,
+                            pn(d.proto_id),
+                            d.object_kind as u8 as u64,
+                            d.hole_count as u64,
+                            d.summary as u64,
+                            d.rep,
+                            d.special_constfn_mask as u64,
+                        ]
+                        .iter()
+                        .fold(0xcbf29ce484222325u64, |h, &x| (h ^ x).wrapping_mul(0x100000001B3));
+                        mix(&mut e.0, v & 0xFFFF_FFFF);
+                        mix(&mut e.0, sname);
+                        let tok = format!("s{:x}:{sname:x}", v & 0xFFFF_FFFF);
+                        dump(st.inits[b.init as usize].addr, bname, off - 8, tok);
+                        continue;
+                    }
+                }
                 let hi = v >> 48;
                 if hi == 0 || hi >= 0x7FF9 {
                     if let Some((n, o)) = name_of((v & 0xFFFF_FFFF_FFFF) as usize) {

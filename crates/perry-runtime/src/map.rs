@@ -318,6 +318,8 @@ mod store;
 mod string_key;
 
 use store::*;
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) use store::snap_native_index_range;
 #[cfg(test)]
 pub(crate) use store::{
     finalize_map_side_allocation_for_gc, test_init_owned_map_store, test_map_index_bytes,
