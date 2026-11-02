@@ -1220,8 +1220,11 @@ impl Model {
     /// parameter's own.
     pub(crate) fn settle_marker_ops(&mut self) {
         self.param_reads.clear();
-        let reads: Vec<(Tok, Vec<Key>)> =
-            self.marker_reads.iter().map(|(&t, ks)| (t, ks.clone())).collect();
+        let reads: Vec<(Tok, Vec<Key>)> = self
+            .marker_reads
+            .iter()
+            .map(|(&t, ks)| (t, ks.clone()))
+            .collect();
         for (t, ks) in reads {
             for m in self.marker_members(t) {
                 if !self.param_marker.contains_key(&m) || self.reach_marker.contains(&m) {
@@ -1236,8 +1239,11 @@ impl Model {
             }
         }
         self.param_defines.clear();
-        let defs: Vec<(Tok, Vec<(Option<Atom>, bool)>)> =
-            self.marker_defines.iter().map(|(&t, ds)| (t, ds.clone())).collect();
+        let defs: Vec<(Tok, Vec<(Option<Atom>, bool)>)> = self
+            .marker_defines
+            .iter()
+            .map(|(&t, ds)| (t, ds.clone()))
+            .collect();
         for (t, ds) in defs {
             for m in self.marker_members(t) {
                 if !self.param_marker.contains_key(&m) || self.reach_marker.contains(&m) {

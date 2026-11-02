@@ -31,7 +31,10 @@ def(Object.getPrototypeOf({}), String(mk(1, "c")));
 console.log(mk(2, "d"));"#;
 
 /// The two producers: on the token, through a parameter (G1).
-const HOW: [(&str, &str, &str); 2] = [("direct", DIRECT_DEF, MAIN_DIRECT), ("param", PARAM_DEF, MAIN_PARAM)];
+const HOW: [(&str, &str, &str); 2] = [
+    ("direct", DIRECT_DEF, MAIN_DIRECT),
+    ("param", PARAM_DEF, MAIN_PARAM),
+];
 
 /// The literal `{ a, b }` templates, by (prefix_stable, fixed_layout, escape).
 fn lit(pf: &ProgramFacts) -> Vec<(bool, bool, Option<String>)> {
@@ -88,10 +91,28 @@ const SET_MISS: &str = r#"export function mk(n: number, k: string) {
 fn birth_keys_of_a_literal_do_not_depend_on_an_any_key_accessor() {
     for (how, a, main) in HOW {
         let (w, u) = modes(&[("a", a), ("b", BIRTH), ("main", main)]);
-        assert!(birth_safe(&w), "{how} whole {:?}\n{}", lit(&w), w.dump_text());
-        assert!(birth_safe(&u), "{how} per unit {:?}\n{}", lit(&u), u.dump_text());
-        assert!(proven(&w, "a") && proven(&w, "b"), "{how} whole sites {:?}", verdicts(&w, "a"));
-        assert!(proven(&u, "a") && proven(&u, "b"), "{how} unit sites {:?}", verdicts(&u, "a"));
+        assert!(
+            birth_safe(&w),
+            "{how} whole {:?}\n{}",
+            lit(&w),
+            w.dump_text()
+        );
+        assert!(
+            birth_safe(&u),
+            "{how} per unit {:?}\n{}",
+            lit(&u),
+            u.dump_text()
+        );
+        assert!(
+            proven(&w, "a") && proven(&w, "b"),
+            "{how} whole sites {:?}",
+            verdicts(&w, "a")
+        );
+        assert!(
+            proven(&u, "a") && proven(&u, "b"),
+            "{how} unit sites {:?}",
+            verdicts(&u, "a")
+        );
     }
 }
 
@@ -100,11 +121,25 @@ fn birth_keys_of_a_literal_do_not_depend_on_an_any_key_accessor() {
 /// (per unit missed the accessor when the define was another unit's).
 #[test]
 fn a_miss_site_escapes_the_literal_in_both_modes() {
-    for (name, b) in [("computed", COMPUTED_MISS), ("named", NAMED_MISS), ("set", SET_MISS)] {
+    for (name, b) in [
+        ("computed", COMPUTED_MISS),
+        ("named", NAMED_MISS),
+        ("set", SET_MISS),
+    ] {
         for (how, a, main) in HOW {
             let (w, u) = modes(&[("a", a), ("b", b), ("main", main)]);
-            assert!(chain_escaped(&w), "{name}/{how} whole {:?}\n{}", lit(&w), w.dump_text());
-            assert!(chain_escaped(&u), "{name}/{how} per unit {:?}\n{}", lit(&u), u.dump_text());
+            assert!(
+                chain_escaped(&w),
+                "{name}/{how} whole {:?}\n{}",
+                lit(&w),
+                w.dump_text()
+            );
+            assert!(
+                chain_escaped(&u),
+                "{name}/{how} per unit {:?}\n{}",
+                lit(&u),
+                u.dump_text()
+            );
             assert_eq!(lit(&w), lit(&u), "{name}/{how}: whole = per unit");
         }
     }
@@ -118,15 +153,32 @@ fn a_miss_site_escapes_the_literal_in_both_modes() {
 fn a_computed_read_in_another_units_callee_is_a_miss_on_the_argument() {
     let b = r#"import { look } from "./c";
 export function mk(n: number, k: string) { const o = { a: n, b: 2 }; return o.a + o.b + look(o, k); }"#;
-    let c = r#"export function look(o: any, k: string): number { return o[k] === undefined ? 0 : 1; }"#;
-    let c0 = r#"export function look(o: any, _k: string): number { return o.a === undefined ? 0 : 1; }"#;
+    let c =
+        r#"export function look(o: any, k: string): number { return o[k] === undefined ? 0 : 1; }"#;
+    let c0 =
+        r#"export function look(o: any, _k: string): number { return o.a === undefined ? 0 : 1; }"#;
     for (how, a, main) in HOW {
         let (w, u) = modes(&[("a", a), ("c", c), ("b", b), ("main", main)]);
-        assert!(chain_escaped(&w), "{how} whole {:?}\n{}", lit(&w), w.dump_text());
-        assert!(chain_escaped(&u), "{how} per unit {:?}\n{}", lit(&u), u.dump_text());
+        assert!(
+            chain_escaped(&w),
+            "{how} whole {:?}\n{}",
+            lit(&w),
+            w.dump_text()
+        );
+        assert!(
+            chain_escaped(&u),
+            "{how} per unit {:?}\n{}",
+            lit(&u),
+            u.dump_text()
+        );
         assert_eq!(lit(&w), lit(&u), "{how}: whole = per unit");
         let (w, u) = modes(&[("a", a), ("c", c0), ("b", b), ("main", main)]);
-        assert!(birth_safe(&w) && birth_safe(&u), "{how} own key read: {:?} {:?}", lit(&w), lit(&u));
+        assert!(
+            birth_safe(&w) && birth_safe(&u),
+            "{how} own key read: {:?} {:?}",
+            lit(&w),
+            lit(&u)
+        );
     }
 }
 
@@ -139,7 +191,11 @@ export function mk(n: number, _k: string) { const o = new C(n); return o.a + o.b
     for (how, a, main) in HOW {
         let (w, u) = modes(&[("a", a), ("b", b), ("main", main)]);
         for pf in [&w, &u] {
-            let c: Vec<_> = pf.templates.iter().filter(|t| t.display.ends_with(":C")).collect();
+            let c: Vec<_> = pf
+                .templates
+                .iter()
+                .filter(|t| t.display.ends_with(":C"))
+                .collect();
             assert!(!c.is_empty(), "{how} class C\n{}", pf.dump_text());
             assert!(
                 c.iter().all(|t| !t.prefix_stable),

@@ -303,7 +303,10 @@ fn an_unknown_subclass_runs_super_without_acquiring_private_arguments() {
 /// of a key the receiver may not own.
 #[test]
 fn an_any_key_accessor_on_object_prototype_refuses_only_a_receiver_with_a_miss() {
-    for (miss, refused) in [("", false), ("console.log((privateRecord as any)[key]);", true)] {
+    for (miss, refused) in [
+        ("", false),
+        ("console.log((privateRecord as any)[key]);", true),
+    ] {
         let pf = facts(&format!(
             "declare const key: string;
              const privateRecord = {{ source: 1, target: 2 }};

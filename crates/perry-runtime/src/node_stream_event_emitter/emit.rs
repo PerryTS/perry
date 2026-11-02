@@ -235,5 +235,7 @@ fn emit_unhandled_error_to_domain(target: f64, error: Option<f64>) -> bool {
 }
 
 fn error_monitor_event() -> f64 {
-    unsafe { crate::symbol::js_symbol_for(super::super::literal_string_value(b"events.errorMonitor")) }
+    unsafe {
+        crate::symbol::js_symbol_for(super::super::literal_string_value(b"events.errorMonitor"))
+    }
 }

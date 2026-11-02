@@ -24,7 +24,9 @@ fn modules(split: bool) -> BTreeMap<PathBuf, Module> {
          }}\n\
          export const Diagnostics = {{\n{}}};\n",
         (0..ENTRIES)
-            .map(|i| format!("    M{i}: diag({i}, Category.Error, \"M{i}_{i}\", \"message {i}.\"),\n"))
+            .map(|i| format!(
+                "    M{i}: diag({i}, Category.Error, \"M{i}_{i}\", \"message {i}.\"),\n"
+            ))
             .collect::<String>()
     );
     let reader = "import { Diagnostics } from \"./diag\";\n\
@@ -32,7 +34,11 @@ fn modules(split: bool) -> BTreeMap<PathBuf, Module> {
          export function run() { return Diagnostics.M5.code + Diagnostics.M700.code + size(Diagnostics.M400); }\n\
          console.log(run());\n";
     let mut out = BTreeMap::new();
-    for (p, src) in [("types", types), ("diag", table.as_str()), ("reader", reader)] {
+    for (p, src) in [
+        ("types", types),
+        ("diag", table.as_str()),
+        ("reader", reader),
+    ] {
         let path = format!("/fixture/{p}.ts");
         let mut m = lower(&path, src);
         for imp in &mut m.imports {
@@ -86,7 +92,11 @@ fn proven(pf: &ProgramFacts, key: &str) -> bool {
         .iter()
         .filter(|s| s.module == reader && s.key == key)
         .collect();
-    assert!(!sites.is_empty(), "no reader site {key}\n{}", pf.dump_text());
+    assert!(
+        !sites.is_empty(),
+        "no reader site {key}\n{}",
+        pf.dump_text()
+    );
     sites
         .iter()
         .all(|s| matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set))
@@ -99,7 +109,12 @@ fn a_chunked_table_proves_per_unit_as_whole() {
     // A head slot, a chunked slot, and fields of their values.
     for k in ["M5", "M700", "M400", "code", "message"] {
         assert!(proven(&whole, k), "whole {k}\n{}", whole.dump_text());
-        assert!(proven(&units, k), "per unit {k}: broken {:?}\n{}", units.broken, units.dump_text());
+        assert!(
+            proven(&units, k),
+            "per unit {k}: broken {:?}\n{}",
+            units.broken,
+            units.dump_text()
+        );
     }
     assert!(units.broken.is_empty(), "{:?}", units.broken);
 }
@@ -109,6 +124,11 @@ fn a_chunked_table_proves_per_unit_as_whole() {
 fn an_unchunked_table_proves_per_unit() {
     let units = facts(false, true);
     for k in ["M5", "M700", "M400", "code", "message"] {
-        assert!(proven(&units, k), "per unit {k}: broken {:?}\n{}", units.broken, units.dump_text());
+        assert!(
+            proven(&units, k),
+            "per unit {k}: broken {:?}\n{}",
+            units.broken,
+            units.dump_text()
+        );
     }
 }

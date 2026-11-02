@@ -149,7 +149,6 @@ pub(crate) fn lower_holder_read(
     })())
 }
 
-
 /// A carried prototype layout to emit: its descriptor, keys and
 /// [[Prototype]] (`None`: `%Object.prototype%`; `Some(None)`: null;
 /// `Some(Some(g))`: the `PerryProtoFamily` `g`).

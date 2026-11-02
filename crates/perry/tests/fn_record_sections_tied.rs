@@ -70,7 +70,10 @@ fn every_records_section_input_is_link_ordered() {
         }
     }
     // At least one body record and the sentinel.
-    assert!(ordered >= 2, "no tied perry_fnrec sections found (ordered = {ordered})");
+    assert!(
+        ordered >= 2,
+        "no tied perry_fnrec sections found (ordered = {ordered})"
+    );
     assert!(
         untied.is_empty(),
         "perry_fnrec inputs without SHF_LINK_ORDER (GNU ld < 2.36 rejects the mix): {untied:#?}"

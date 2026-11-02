@@ -856,7 +856,9 @@ impl<'a> Gen<'a> {
             // `Object.prototype` the accessor under any key (DECISIONS
             // 242(1)), on a literal what the whole program does to it.
             for (_, k, data) in c.param_defines.iter().filter(|d| d.0 as usize == i) {
-                let r = self.m.reason("E5 defineProperty by another unit's function");
+                let r = self
+                    .m
+                    .reason("E5 defineProperty by another unit's function");
                 match k {
                     Some(k) => {
                         let key = self.m.atom(k);

@@ -589,7 +589,11 @@ pub(crate) fn emit_witness(
     }
     let what = format!(
         "{site:#018x} {} .{property} classes={:?} class_ids={:?} slots={:?}",
-        if flags & WPF_STORE != 0 { "store" } else { "read" },
+        if flags & WPF_STORE != 0 {
+            "store"
+        } else {
+            "read"
+        },
         p.class_names,
         p.class_ids,
         p.slots
