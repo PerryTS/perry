@@ -452,9 +452,15 @@ fn object_set_static_prototype_impl_with(
                 crate::object::builtin_proto::note_array_prototype_write(obj_ptr, "relink");
             }
         } else if obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
-            // A lazy JSON array's materialized storage is a SEPARATE
-            // `GC_TYPE_ARRAY` allocation that does not carry the owner's bit,
-            // so keep the conservative process-wide invalidation here.
+            // A lazy JSON array becomes the ordinary array in place, keeping
+            // `GC_ARRAY_CUSTOM_PROTO` (`flip_to_array`), so it carries the
+            // per-array bit like any array. The process-wide invalidation
+            // stays: the lazy value itself never takes the inline guards.
+            unsafe {
+                let header =
+                    crate::gc::header_from_trusted_user_ptr(obj_ptr as *const u8).cast_mut();
+                (*header)._reserved |= crate::gc::GC_ARRAY_CUSTOM_PROTO;
+            }
             ARRAY_TARGET_PROTO_RECORDED.store(true, Ordering::Relaxed);
             crate::array::invalidate_array_index_fast_path();
             crate::object::builtin_proto::note_array_custom_proto();

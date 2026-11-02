@@ -69,7 +69,7 @@ fn lazy_json_ic_leaf_declines_without_materializing_under_moving_minors() {
                 crate::string::property_atom_hash(atom),
             );
             assert!(matches!(probed.to_bits(), TAG_HOLE | TAG_UNDEFINED));
-            assert!((*raw).materialized.is_null());
+            assert!(crate::json_tape::is_lazy_array(raw));
         }
         assert_eq!(
             gc_collection_count(),
@@ -95,6 +95,6 @@ fn lazy_json_ic_leaf_declines_without_materializing_under_moving_minors() {
     assert!(gc_collection_count() > before);
     assert_ne!(original, witness.get_raw_mut_ptr::<ObjectHeader>());
     lazy.with_const_ptr::<crate::json_tape::LazyArrayHeader, _>(|p| unsafe {
-        assert!(!(*p).materialized.is_null());
+        assert!(!crate::json_tape::is_lazy_array(p));
     });
 }

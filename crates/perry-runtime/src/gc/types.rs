@@ -1698,6 +1698,15 @@ pub(crate) const GC_ARRAY_RAW_F64_LAYOUT: u16 = 0x80;
 /// JSON array (whose materialized storage is a separate allocation that does
 /// not carry this bit).
 pub(crate) const GC_ARRAY_CUSTOM_PROTO: u16 = 0x40;
+/// The `_reserved` bits a lazy JSON array keeps when it becomes the ordinary
+/// array in place (`json_tape::flip_to_array`): the copy age every kind
+/// carries, the integrity level, and `GC_ARRAY_CUSTOM_PROTO`. Everything else
+/// is array layout state, which the flip rebuilds from the slots.
+pub(crate) const ARRAY_FLIP_KEPT_RESERVED: u16 = super::layout::GC_COPY_SURVIVAL_AGE_MASK
+    | OBJ_FLAG_FROZEN
+    | OBJ_FLAG_SEALED
+    | OBJ_FLAG_NO_EXTEND
+    | GC_ARRAY_CUSTOM_PROTO;
 /// Array was synthesized for a function's `arguments` binding. This is only
 /// meaningful for `GC_TYPE_ARRAY`; it lets `util.types.isArgumentsObject`
 /// distinguish Perry's internal `arguments` arrays from user rest arrays.
