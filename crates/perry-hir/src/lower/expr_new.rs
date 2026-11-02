@@ -1357,7 +1357,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                                             } else if let Some(local_id) = ctx.lookup_local(&name) {
                                                 Expr::LocalGet(local_id)
                                             } else if ctx.lookup_class(&name).is_some() {
-                                                Expr::ClassRef(name.clone())
+                                                crate::lower::class_binding_read(ctx, &name)
                                             } else {
                                                 continue;
                                             };
