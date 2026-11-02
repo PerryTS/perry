@@ -1039,3 +1039,48 @@ fn absent_overflow_definition_uses_final_data_entry() {
         });
     }
 }
+
+static LITERAL_FAMILY_DECLARATION: crate::object::class_registry::declarations::ClassDeclaration =
+    crate::object::class_registry::declarations::ClassDeclaration {
+        instance_layout: std::ptr::addr_of!(LITERAL_FAMILY),
+        ..crate::object::class_registry::declarations::ClassDeclaration::native(&[])
+    };
+
+/// A literal family's objects carry class id 0: the proven class is told by the
+/// family descriptor word its declaration owns (the runtime fact check's F4).
+#[test]
+fn a_literal_family_object_is_its_proven_class_by_the_layout_word() {
+    const CLASS: u32 = 60_301;
+    crate::gc::initialize_runtime_fixture();
+    let _lock = crate::gc::global_side_table_test_lock();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    unsafe {
+        crate::object::class_registry::declarations::js_register_class_declaration(
+            CLASS,
+            &LITERAL_FAMILY_DECLARATION,
+        )
+    };
+    let literal = scope.root_raw_mut_ptr(unsafe {
+        crate::object::layout_desc::perry_alloc_literal_layout(std::ptr::addr_of!(LITERAL_FAMILY))
+    });
+    let ordinary = scope.root_raw_mut_ptr(unsafe {
+        crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(LITERAL_OPTIONAL))
+    });
+    let (class_id, word) = literal.with_const_ptr(|obj: *const ObjectHeader| unsafe {
+        ((*obj).class_id, (*obj).parent_class_id)
+    });
+    assert_eq!(class_id, 0, "a literal family names class 0");
+    assert!(crate::object::layout_desc::word_is_class_family_layout(
+        word, CLASS
+    ));
+    assert!(
+        !crate::object::layout_desc::word_is_class_family_layout(word, CLASS + 1),
+        "a class without that declaration"
+    );
+    let other =
+        ordinary.with_const_ptr(|obj: *const ObjectHeader| unsafe { (*obj).parent_class_id });
+    assert!(
+        !crate::object::layout_desc::word_is_class_family_layout(other, CLASS),
+        "an ordinary classless layout is not the class's family"
+    );
+}

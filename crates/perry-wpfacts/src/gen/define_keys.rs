@@ -147,6 +147,44 @@ impl<'a> Gen<'a> {
         }
     }
 
+    /// The keys a store under computed key `e` may name, when they are a
+    /// finite set of constant strings: a constant (`const_key`), a
+    /// conditional whose branches are such sets, or a constant binding
+    /// initialized by one (`const k = w ? "a" : "b"`). Each is a named store.
+    pub(crate) fn const_key_set(&mut self, mi: u32, e: &Expr) -> Option<Vec<String>> {
+        fn go(g: &mut crate::gen::Gen, mi: u32, e: &Expr, depth: u32, out: &mut Vec<String>) -> bool {
+            if depth > 8 {
+                return false;
+            }
+            if let Some(s) = g.const_key(mi, e) {
+                if !out.contains(&s) {
+                    out.push(s);
+                }
+                return true;
+            }
+            match e {
+                Expr::Conditional {
+                    then_expr,
+                    else_expr,
+                    ..
+                } => go(g, mi, then_expr, depth + 1, out) && go(g, mi, else_expr, depth + 1, out),
+                Expr::LocalGet(id) | Expr::GlobalGet(id) => {
+                    let b = (mi, matches!(e, Expr::GlobalGet(_)), *id);
+                    match g.const_inits.get(&b) {
+                        Some(ConstInit::Value(x)) => {
+                            let x = x.clone();
+                            go(g, mi, &x, depth + 1, out)
+                        }
+                        _ => false,
+                    }
+                }
+                _ => false,
+            }
+        }
+        let mut out = Vec::new();
+        go(self, mi, e, 0, &mut out).then_some(out)
+    }
+
     /// The literal class a constant binding is born with.
     fn bound_literal(&self, b: Binding) -> Option<&String> {
         match self.const_inits.get(&b)? {

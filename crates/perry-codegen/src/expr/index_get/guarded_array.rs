@@ -40,6 +40,18 @@ pub(super) fn lower_trusted_plain_array_index_get(
     array_handle: &str,
     idx_i32: &str,
 ) -> String {
+    let raw = lower_trusted_array_slot(ctx, array_handle, idx_i32);
+    let blk = ctx.block();
+    let raw_bits = blk.bitcast_double_to_i64(&raw);
+    let is_hole = blk.icmp_eq(I64, &raw_bits, crate::nanbox::TAG_HOLE_I64);
+    let undefined = blk.bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64);
+    blk.select(I1, &is_hole, DOUBLE, &undefined, &raw)
+}
+
+/// Load storage without changing a hole into undefined. Callers either prove
+/// an own data element (the dense prefix) or test the raw hole before Get's
+/// prototype-sensitive fallback.
+fn lower_trusted_array_slot(ctx: &mut FnCtx<'_>, array_handle: &str, idx_i32: &str) -> String {
     crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_OTHER_TIER);
     let blk = ctx.block();
     let idx_i64 = blk.zext(I32, idx_i32, I64);
@@ -47,11 +59,7 @@ pub(super) fn lower_trusted_plain_array_index_get(
     let elements_addr = blk.array_elements_addr(array_handle);
     let element_addr = blk.add(I64, &elements_addr, &byte_offset);
     let element_ptr = blk.inttoptr(I64, &element_addr);
-    let raw = blk.load(DOUBLE, &element_ptr);
-    let raw_bits = blk.bitcast_double_to_i64(&raw);
-    let is_hole = blk.icmp_eq(I64, &raw_bits, crate::nanbox::TAG_HOLE_I64);
-    let undefined = blk.bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64);
-    blk.select(I1, &is_hole, DOUBLE, &undefined, &raw)
+    blk.load(DOUBLE, &element_ptr)
 }
 
 fn lower_trusted_numeric_array_index_get(
@@ -859,48 +867,78 @@ pub(crate) fn lower_record_index(
     payload_slot: &str,
     index_slot: &str,
 ) -> Result<String> {
+    let prefix = ctx.new_block("record.read.prefix");
+    let hit = ctx.new_block("record.read.prefix.hit");
+    let rest = ctx.new_block("record.read.rest");
     let fast = ctx.new_block("record.read.fast");
     let load = ctx.new_block("record.read.load");
+    let hole_check = ctx.new_block("record.read.hole");
+    let absent = ctx.new_block("record.read.absent");
     let cold = ctx.new_block("record.read.cold");
     let merge = ctx.new_block("record.read.merge");
+    let pl = ctx.block_label(prefix);
+    let hl = ctx.block_label(hit);
+    let rl = ctx.block_label(rest);
     let fl = ctx.block_label(fast);
     let ll = ctx.block_label(load);
+    let hole_label = ctx.block_label(hole_check);
+    let absent_label = ctx.block_label(absent);
     let cl = ctx.block_label(cold);
     let ml = ctx.block_label(merge);
     let bits = ctx.block().bitcast_double_to_i64(array);
     let handle = ctx.block().and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
     let word = emit_array_guard_word(ctx.block(), &handle);
-    let safe = emit_array_guard_word_ok(ctx.block(), &word, &handle);
-    let invalidated = ctx
-        .block()
-        .load(I8, "@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED");
-    let invalidated = ctx.block().and(
-        I8,
-        &invalidated,
-        crate::expr::array_proto_guard::INDEX_INVALIDATED_I8,
-    );
-    let prototype_clear = ctx.block().icmp_eq(I8, &invalidated, "0");
-    let safe = ctx.block().and(I1, &safe, &prototype_clear);
+    // Record entry proves an Array. Still reject forwarding before reading
+    // the live header: the body can allocate, grow, or mutate the receiver.
+    let typed = emit_array_guard_word_typed(ctx.block(), &word);
+    ctx.block().cond_br(&typed, &pl, &cl);
+    ctx.current_block = prefix;
+    let i = ctx.block().fptoui(DOUBLE, index, I32);
+    let own_prefix = ctx.block().array_ek_prefix(&handle);
+    let own = ctx.block().icmp_ult(I32, &i, &own_prefix);
+    ctx.block().cond_br(&own, &hl, &rl);
+    ctx.current_block = hit;
+    // P proves a descriptor-free, non-hole own element below both length and
+    // capacity. Prototype writes cannot intercept this Get. Use the existing
+    // header proof, reloaded at every step, just like ordinary indexed reads.
+    let own_value = lower_trusted_array_slot(ctx, &handle, &i);
+    let hp = ctx.block().label.clone();
+    ctx.block().br(&ml);
+    ctx.current_block = rest;
+    let safe = emit_and_no_named_layout(ctx.block(), "true", &handle);
     ctx.block().cond_br(&safe, &fl, &cl);
     ctx.current_block = fast;
-    let i = ctx.block().fptoui(DOUBLE, index, I32);
     let length_ptr = ctx.block().inttoptr(I64, &handle);
     let length = ctx.block().load(I32, &length_ptr);
     let logical = ctx.block().icmp_ult(I32, &i, &length);
-    // A pre-sized `new Array(n)` above the dense limit has a logical length
-    // over its backing store: a slot at or past capacity is a hole, which the
-    // cold dispatcher answers, not a raw load.
+    // A pre-sized array can have logical length above its backing capacity.
     let capacity_ptr = ctx.block().gep(I8, &length_ptr, &[(I64, "4")]);
     let capacity = ctx.block().load(I32, &capacity_ptr);
     let backed = ctx.block().icmp_ult(I32, &i, &capacity);
     let in_bounds = ctx.block().and(I1, &logical, &backed);
     ctx.block().cond_br(&in_bounds, &ll, &cl);
     ctx.current_block = load;
-    let value = lower_trusted_plain_array_index_get(ctx, &handle, &i);
+    // Test the raw slot, before hole canonicalization: holes must consult
+    // current prototypes, including getters installed by the previous step.
+    let value = lower_trusted_array_slot(ctx, &handle, &i);
     let bits = ctx.block().bitcast_double_to_i64(&value);
     let hole = ctx.block().icmp_eq(I64, &bits, crate::nanbox::TAG_HOLE_I64);
     let fp = ctx.block().label.clone();
-    ctx.block().cond_br(&hole, &cl, &ml);
+    ctx.block().cond_br(&hole, &hole_label, &ml);
+    ctx.current_block = hole_check;
+    // Preserve the old inline undefined result for a pristine prototype
+    // chain. Only absence depends on this protector; own slots never do.
+    let reserved = ctx.block().lshr(I32, &word, "16");
+    let reserved = ctx.block().trunc(I32, &reserved, crate::types::I16);
+    let clear = crate::expr::array_proto_guard::emit_array_default_prototype_chain(
+        ctx.block(),
+        &reserved,
+    );
+    ctx.block().cond_br(&clear, &absent_label, &cl);
+    ctx.current_block = absent;
+    let undefined = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    let ap = ctx.block().label.clone();
+    ctx.block().br(&ml);
     ctx.current_block = cold;
     ctx.block().store_volatile(DOUBLE, array, payload_slot);
     ctx.block().store(DOUBLE, index, index_slot);
@@ -912,9 +950,15 @@ pub(crate) fn lower_record_index(
     let cp = ctx.block().label.clone();
     ctx.block().br(&ml);
     ctx.current_block = merge;
-    Ok(ctx
-        .block()
-        .phi(DOUBLE, &[(&value, &fp), (&value_cold, &cp)]))
+    Ok(ctx.block().phi(
+        DOUBLE,
+        &[
+            (&own_value, &hp),
+            (&value, &fp),
+            (&undefined, &ap),
+            (&value_cold, &cp),
+        ],
+    ))
 }
 
 /// One guard for the record's live length and value. The cold operation owns
@@ -948,15 +992,14 @@ pub(crate) fn lower_record_next(
     let handle = ctx.block().and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
     let word = emit_array_guard_word(ctx.block(), &handle);
     let safe = emit_array_guard_word_ok(ctx.block(), &word, &handle);
-    let invalidated = ctx
-        .block()
-        .load(I8, "@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED");
-    let invalidated = ctx.block().and(
-        I8,
-        &invalidated,
-        crate::expr::array_proto_guard::INDEX_INVALIDATED_I8,
+    // A hole can be canonicalized inline only on a pristine default chain.
+    // A custom receiver prototype is independent of the global protector.
+    let reserved = ctx.block().lshr(I32, &word, "16");
+    let reserved = ctx.block().trunc(I32, &reserved, crate::types::I16);
+    let clear = crate::expr::array_proto_guard::emit_array_default_prototype_chain(
+        ctx.block(),
+        &reserved,
     );
-    let clear = ctx.block().icmp_eq(I8, &invalidated, "0");
     let safe = ctx.block().and(I1, &safe, &clear);
     ctx.block().cond_br(&safe, &bl, &cl);
     ctx.current_block = bounds;

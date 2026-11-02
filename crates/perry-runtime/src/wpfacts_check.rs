@@ -108,11 +108,44 @@ extern "C" fn report_at_exit() {
     );
 }
 
+/// The text a witness call names its site with: an interned string the
+/// compiler wrote (`file:line:col`, the lowering, what it expected).
+fn site_text(site: u64) -> String {
+    string_bytes(site as usize as *const StringHeader)
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+        .unwrap_or_else(|| format!("{site:#x}"))
+}
+
 #[cold]
 #[inline(never)]
 fn violate(site: u64, what: &str, detail: String) -> ! {
-    eprintln!("perry: wpfacts contract violated at elided site {site:#018x}: {what} ({detail})");
+    eprintln!(
+        "perry: wpfacts false proof at {}: {what} ({detail})",
+        site_text(site)
+    );
     std::process::abort();
+}
+
+/// What a value is, for a violation report: its tag, and for an object its
+/// class id and ShapeId.
+fn describe(bits: u64) -> String {
+    if bits & TAG_MASK != POINTER_TAG {
+        return format!("bits {bits:#018x} (kind {:#x})", kind_of(bits));
+    }
+    let addr = (bits & POINTER_MASK) as usize;
+    unsafe {
+        if crate::value::addr_class::is_handle_band(addr)
+            || crate::value::addr_class::try_read_tracked_gc_header_of_type(
+                addr,
+                crate::gc_object_type_pat!(),
+            )
+            .is_none()
+        {
+            return format!("pointer {addr:#x}, not an ordinary object");
+        }
+        let h = &*(addr as *const ObjectHeader);
+        format!("object {addr:#x} class_id {} shape_id {}", h.class_id, h.parent_class_id)
+    }
 }
 
 /// One elided field access. `cids01`/`cids23` carry up to four class ids
@@ -181,13 +214,21 @@ pub extern "C" fn perry_wpfacts_check_field(
         }
         (*(addr as *const ObjectHeader)).class_id
     };
+    let word = unsafe { (*(addr as *const ObjectHeader)).parent_class_id };
     let ids = [
         cids01 as u64 as u32,
         (cids01 as u64 >> 32) as u32,
         cids23 as u64 as u32,
         (cids23 as u64 >> 32) as u32,
     ];
-    if !ids.iter().any(|&c| c != u32::MAX && c == cid) {
+    // The receiver is a proven class by its class id, or by its layout word:
+    // a literal family keeps its late keys and names class 0, so its objects
+    // carry the family descriptor word of the proven class instead.
+    let admitted = ids.iter().any(|&c| {
+        c != u32::MAX
+            && (c == cid || crate::object::layout_desc::word_is_class_family_layout(word, c))
+    });
+    if !admitted {
         violate(
             site,
             "F4 receiver set",
@@ -302,6 +343,14 @@ pub extern "C" fn perry_wpfacts_check_call_miss(
         "callee set",
         format!("body info {info:p} is not a proven body"),
     );
+}
+
+/// A site whose lowering checked its proof inline (a method switch over the
+/// proven receiver classes, a static call's guard, a dispatch-tower layout
+/// recheck) found a value outside it: `value` is what it found.
+#[no_mangle]
+pub extern "C" fn perry_wpfacts_check_miss(value: f64, site: i64) -> i32 {
+    violate(site as u64, "inline check", describe(value.to_bits()));
 }
 
 #[cfg(test)]

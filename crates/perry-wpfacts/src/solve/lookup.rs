@@ -285,6 +285,15 @@ impl Model {
     /// dst ⊇ value of `key` read on object `t` (receiver `origin`).
     pub fn load_from(&mut self, origin: Tok, t: Tok, key: Key, dst: NodeId) {
         self.mark_use(t, crate::model::MARK_READ);
+        // A class private field on an object this unit does not own: what
+        // the class's code stored (`private_field`).
+        if let Key::Named(a) = key {
+            if self.is_private_atom(a) && !self.owns_private(t) {
+                let p = self.private_field(a);
+                self.edge(p, dst);
+                return;
+            }
+        }
         if self.is_iter_key(key) {
             match self.toks[t as usize] {
                 TokKind::Top
@@ -306,9 +315,8 @@ impl Model {
                 self.add_prim(dst, prim::UNDEF);
                 return;
             }
-            // DECISIONS 235: an element key is a number, never
-            // `constructor`: ⊤ read under it is ⊤, not the Function
-            // constructor.
+            // An element of ⊤ is ⊤. Its key is an index, never
+            // `constructor`: no Function constructor (DECISIONS 235).
             if t == TOP {
                 self.add_tok(dst, TOP);
                 return;
@@ -356,9 +364,7 @@ impl Model {
             }
             _ => false,
         };
-        // A private element read (`held`) never sees its key absent: the
-        // guard throws first.
-        if !present && !self.nodes[dst as usize].held {
+        if !present {
             self.add_prim(dst, prim::UNDEF);
         }
         match key {
@@ -384,11 +390,6 @@ impl Model {
                 let all = self.all_fields(t);
                 self.edge(all, dst);
             }
-        }
-        // A private element is the object's own: its read consults no
-        // prototype and no accessor (ECMA-262 PrivateGet).
-        if self.nodes[dst as usize].held {
-            return;
         }
         // A marker is use tracking, not a value (DECISIONS 111): a load from
         // it reads its fields only. A parameter marker has no prototype here

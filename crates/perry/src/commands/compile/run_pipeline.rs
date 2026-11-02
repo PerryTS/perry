@@ -1511,6 +1511,13 @@ pub fn run_with_parse_cache(
                 perry_hir::fix_imported_enums(hir_module, imported_enums_for_module);
             }
         }
+        // #10421: an `E.Function` read reaches the `Function` constructor
+        // unless `E` is an enum; the pre-scan deferred the imported ones.
+        perry_hir::eval_classifier::resolve_enum_member_receivers(|path, local| {
+            module_enums
+                .get(std::path::Path::new(path))
+                .is_some_and(|enums| enums.contains_key(local))
+        });
     }
 
     // Resolve imported and generic type-alias references in every module's
@@ -6330,6 +6337,7 @@ pub fn run_with_parse_cache(
             module_source: if args.debug_symbols
                 || opt_report_format == Some(OptReportFormat::Text)
                 || perry_codegen::fallback_diag::enabled()
+                || perry_codegen::verify_facts::enabled()
             {
                 match ctx.cjs_wrap_debug_sources.get(path) {
                     Some(w) => Some(w.wrapped_source.clone()),
@@ -6560,9 +6568,15 @@ pub fn run_with_parse_cache(
         perry_hir::has_deferred_dynamic_code_sites()
             || ctx.native_module_imports.contains("vm")
             || ctx.uses_data_url_dynamic_import,
+        // A real eval-like source site (DECISIONS 235); the link decision
+        // above also counts a `Function` member name.
+        !perry_hir::interpreted_source_sites().is_empty()
+            || ctx.native_module_imports.contains("vm")
+            || ctx.uses_data_url_dynamic_import,
         &ctx.patched_builtins.dynamic_code_reach,
         &ctx.cjs_wrap_debug_sources,
         super::program_facts::module_roots(&ctx),
+        &ctx.cache_dir,
     );
     program_step("whole-program facts", Some(facts_started));
     #[allow(clippy::type_complexity)]

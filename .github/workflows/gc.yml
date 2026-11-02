@@ -82,7 +82,7 @@ jobs:
           python3 scripts/actions_plan.py "${args[@]}"
   gc-ratchet__gc-ratchet:
     if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gc-ratchet'] && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')) }}
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 90
     permissions:
       contents: read
@@ -562,7 +562,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - os: macos-15
             arch: aarch64
             format: Mach-O
           - os: ubuntu-latest
@@ -1064,7 +1064,7 @@ jobs:
           PY
   gc-root-dominance__gc-root-dominance:
     if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gc-root-dominance'] && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')) }}
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 90
     steps:
       - name: Checkout repository (inline git)
@@ -1226,7 +1226,7 @@ jobs:
     name: gc-root-dominance / gc-root-dominance
   gc-root-dominance__gc-root-dominance-statepoints:
     if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gc-root-dominance'] && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')) }}
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 90
     steps:
       - name: Checkout repository (inline git)

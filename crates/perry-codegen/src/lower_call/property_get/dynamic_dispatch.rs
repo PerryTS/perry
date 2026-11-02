@@ -488,8 +488,9 @@ pub(crate) fn try_lower_instance_method_call(
             let switch = match &proven {
                 // The proven classes' ids select their implementors. The last
                 // class is the default arm (the receiver is one of them), as
-                // the read shape's last slot is; a contract build lists every
-                // class and its default is the witness.
+                // the read shape's last slot is; a contract or
+                // facts-verification build lists every class and its default
+                // is the witness.
                 Some((map, nullable)) => {
                     let label_of = |i: usize| {
                         case_idxs
@@ -498,7 +499,7 @@ pub(crate) fn try_lower_instance_method_call(
                             .map(|&(_, idx)| ctx.block_label(idx))
                             .expect("a proven class's implementor is cased")
                     };
-                    let contracts = crate::codegen::helpers::check_contracts();
+                    let contracts = crate::verify_facts::witnesses();
                     let (listed, default) = if *nullable || contracts {
                         (&map[..], generic_label.clone())
                     } else {
@@ -568,6 +569,7 @@ pub(crate) fn try_lower_instance_method_call(
                         // The facts prove the receiver is this arm's class
                         // (`proven`) and that class's layout never changes
                         // (`fixed_layout`): the arm needs no recheck.
+                        let owner = impl_owner[i].as_deref().unwrap_or_default();
                         let layout_proven =
                             proven.is_some() && tower_layout_proven(ctx, implementors[i].0);
                         emit_tower_pshape_call(
@@ -577,6 +579,8 @@ pub(crate) fn try_lower_instance_method_call(
                             &recv_handle,
                             &case_arg_slices,
                             layout_proven,
+                            owner,
+                            implementors[i].0,
                         )
                     }
                     None => {
@@ -600,13 +604,19 @@ pub(crate) fn try_lower_instance_method_call(
             // has none: its block is the contract build's witness, or dead.
             ctx.current_block = generic_idx;
             if closed {
-                if crate::codegen::helpers::check_contracts() {
-                    let site = ctx.wpfacts_sites as i64;
-                    ctx.wpfacts_sites += 1;
+                if crate::verify_facts::witnesses() {
+                    let ids: Vec<u32> = proven
+                        .as_ref()
+                        .map(|(map, _)| map.iter().map(|&(cid, _)| cid).collect())
+                        .unwrap_or_default();
+                    let site = crate::verify_facts::site_arg(
+                        ctx,
+                        &format!("method .{property} receiver class_ids={ids:?}"),
+                    );
                     let _ = ctx.block().call(
                         I32,
-                        "perry_wpfacts_check_call_miss",
-                        &[(crate::types::PTR, "null"), (I64, &site.to_string())],
+                        "perry_wpfacts_check_miss",
+                        &[(DOUBLE, &recv_box), (I64, &site)],
                     );
                 }
                 ctx.block().unreachable();

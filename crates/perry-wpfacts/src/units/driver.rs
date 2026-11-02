@@ -482,6 +482,12 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         let mut published_fns: FxHashSet<String> = FxHashSet::default();
         let mut reports: FxHashSet<String> = FxHashSet::default();
         let mut work = 0u64;
+        // The units this round solves: only their shared writes can be new.
+        let mut solved: Vec<usize> = Vec::new();
+        // A round past `LONG_ROUNDS` (64, 128, ...) names what each unit it
+        // solves changed (`no_fixpoint_report`).
+        let long = rounds >= LONG_ROUNDS && rounds.is_power_of_two();
+        let mut long_changes: Vec<(usize, Vec<String>)> = Vec::new();
         for level in &levels {
             // A unit over the bound keeps its result (`dependents`).
             for &si in level {
@@ -509,6 +515,11 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
                 // value one writer took from another's earlier write cannot
                 // pass back and forth between them after its source stopped
                 // writing it (tsc typescript.js#u4336/#u4339, period 2).
+                if long {
+                    if let Some(old) = per_unit[si].as_ref() {
+                        long_changes.push((si, output_changes(&u, old)));
+                    }
+                }
                 if let Some(old) = per_unit[si].take() {
                     let at: FxHashMap<String, usize> = u
                         .cells_out
@@ -524,6 +535,7 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
                     }
                 }
                 per_unit[si] = Some(u);
+                solved.push(si);
                 shared_seen[si] = shared_rounds.len() - 1;
             }
             if cfg.report && !todo.is_empty() {
@@ -1005,11 +1017,19 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         }
         input.writes = writes;
         // The shared objects' writes (`model::SharedWrite`): last round's
-        // joined with every unit's latest, so they only grow (D16). When
+        // joined with every unit's latest, so they only grow (D16). Last
+        // round's already holds every other unit's writes, so joining the
+        // units this round solved is that join; a unit's writes are mostly
+        // the program's few shared ones, so only new ones are cloned. When
         // they grew, the units that can see a new one are solved again.
         let mut shared = input.shared.clone();
-        for u in per_unit.iter().flatten() {
-            shared.extend(u.shared_out.iter().cloned());
+        for &si in &solved {
+            let u = per_unit[si].as_ref().expect("every unit solved");
+            for w in &u.shared_out {
+                if !shared.contains(w) {
+                    shared.insert(w.clone());
+                }
+            }
         }
         shared_closure(&mut shared);
         if shared != input.shared {
@@ -1031,6 +1051,9 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             shared_rounds.push(shared.clone());
         }
         input.shared = shared;
+        if long {
+            no_fixpoint_report(rounds, &solves, &long_changes, seeds.len());
+        }
         if cfg.report {
             eprintln!(
                 "perry: wpfacts census r{rounds} end seeds {} {}",
@@ -1356,6 +1379,7 @@ pub(super) fn unit_io(
     input: &Published,
 ) -> Vec<String> {
     use crate::dump::{fnv, FNV_OFFSET};
+    let synthetic = synthetic_dirs(sorted);
     let mut pos = vec![0usize; solves.len()];
     for (p, &si) in order.iter().enumerate() {
         pos[si] = p;
@@ -1366,43 +1390,43 @@ pub(super) fn unit_io(
         let u = u.as_ref().expect("every unit solved");
         let mut o: Vec<(String, u64)> = Vec::new();
         for ((_, n), c) in &u.contracts_out {
-            o.push((format!("class:{n}"), digest(c)));
+            o.push((format!("class:{n}"), sd(&synthetic, c)));
         }
         for ((_, n), c) in &u.fn_contracts_out {
-            o.push((format!("fn:{n}"), digest(c)));
+            o.push((format!("fn:{n}"), sd(&synthetic, c)));
         }
         for ((_, n), c) in &u.values_out {
-            o.push((format!("value:{n}"), digest(c)));
+            o.push((format!("value:{n}"), sd(&synthetic, c)));
         }
         for c in &u.layouts_out {
-            o.push((format!("layout:{}", c.display), digest(c)));
+            o.push((format!("layout:{}", c.display), sd(&synthetic, c)));
         }
         for (n, c) in &u.args_out {
-            o.push((format!("args:{n}"), digest(c)));
+            o.push((format!("args:{n}"), sd(&synthetic, c)));
         }
         for ((p, n), c) in &u.ctor_args_out {
-            o.push((format!("args:{p}:{n}"), digest(c)));
+            o.push((format!("args:{p}:{n}"), sd(&synthetic, c)));
         }
         for (n, c) in &u.this_args_out {
-            o.push((format!("this:{n}"), digest(c)));
+            o.push((format!("this:{n}"), sd(&synthetic, c)));
         }
         for n in &u.method_runs_out {
             o.push((format!("runs:{n}"), 0));
         }
         for (n, c) in &u.method_args_out {
-            o.push((format!("margs:{n}"), digest(c)));
+            o.push((format!("margs:{n}"), sd(&synthetic, c)));
         }
         for (n, c) in &u.ctor_runs_out {
-            o.push((format!("news:{n}"), digest(c)));
+            o.push((format!("news:{n}"), sd(&synthetic, c)));
         }
         for (d, k, kinds) in &u.stores_out {
-            o.push((format!("store:{d}.{k}"), digest(kinds)));
+            o.push((format!("store:{d}.{k}"), sd(&synthetic, kinds)));
         }
         for (k, c) in &u.cells_out {
-            o.push((format!("cell:{k}"), digest(c)));
+            o.push((format!("cell:{k}"), sd(&synthetic, c)));
         }
         for ((p, n), vc) in &u.writes_out {
-            o.push((format!("write:{p}.{n}"), digest(vc)));
+            o.push((format!("write:{p}.{n}"), sd(&synthetic, vc)));
         }
         for d in &u.reports {
             o.push((format!("report:{d}"), 0));
@@ -1525,6 +1549,54 @@ pub(super) fn unit_io(
         }
     }
     lines
+}
+
+/// The directories of the compiler-generated modules, read off the unit
+/// paths (`<cache dir>/synthetic-modules/...`).
+fn synthetic_dirs(sorted: &[(&str, &Module)]) -> Vec<Vec<u8>> {
+    const NAME: &str = "/synthetic-modules/";
+    let mut dirs: Vec<Vec<u8>> = sorted
+        .iter()
+        .filter_map(|(p, _)| p.find(NAME).map(|at| p.as_bytes()[..at + NAME.len() - 1].to_vec()))
+        .collect();
+    dirs.sort();
+    dirs.dedup();
+    dirs
+}
+
+/// `digest` for the dump: a synthetic module is named by its file under the
+/// cache dir, and the value identity of a unit output must not depend on
+/// where the cache lives, so the cache dir part of the name is not hashed.
+fn sd<T: std::hash::Hash>(dirs: &[Vec<u8>], v: &T) -> u64 {
+    struct Stable<'a>(std::collections::hash_map::DefaultHasher, &'a [Vec<u8>]);
+    impl std::hash::Hasher for Stable<'_> {
+        fn write(&mut self, bytes: &[u8]) {
+            const STABLE: &[u8] = b"<cache-dir>/synthetic-modules";
+            let mut out = Vec::new();
+            let mut i = 0;
+            let mut hit = false;
+            while i < bytes.len() {
+                match self.1.iter().find(|d| bytes[i..].starts_with(d)) {
+                    Some(d) => {
+                        out.extend_from_slice(STABLE);
+                        i += d.len();
+                        hit = true;
+                    }
+                    None => {
+                        out.push(bytes[i]);
+                        i += 1;
+                    }
+                }
+            }
+            self.0.write(if hit { &out } else { bytes });
+        }
+        fn finish(&self) -> u64 {
+            self.0.finish()
+        }
+    }
+    let mut h = Stable(std::collections::hash_map::DefaultHasher::new(), dirs);
+    v.hash(&mut h);
+    std::hash::Hasher::finish(&h)
 }
 
 /// The units a newly broken contract changes (design §11.3): the unit
@@ -1794,7 +1866,7 @@ pub(super) fn typed_param_verdicts(pf: &mut ProgramFacts) {
                         && keys.iter().all(|k| {
                             t.fields
                                 .iter()
-                                .any(|f| &f.key == k && f.definite && f.data_field)
+                                .any(|f| f.is(k, false) && f.definite && f.data_field)
                         })
                 })
                 .collect()
@@ -1829,6 +1901,165 @@ pub(super) fn unique_bindings<T>(values: &mut [(u32, T)], module: &str, kind: &s
             pair[0].0, pair[1].0,
             "per-unit facts: duplicate {kind} {} in {module}; cloned bodies must have distinct binding identities",
             pair[0].0,
+        );
+    }
+}
+
+/// The rounds after which the driver names what keeps it going (the corpus
+/// reaches its fixpoint in at most ~15). A round count that keeps growing is
+/// a unit whose outputs never settle: each report at round 64, 128, 256, ...
+/// names the units that round solved and what each changed.
+const LONG_ROUNDS: u32 = 64;
+
+/// What a unit's solve changed in its outputs against its last solve: each
+/// contract added (`+`), dropped (`-`) or changed, with the fields that
+/// differ.
+fn output_changes(u: &ProgramFacts, old: &ProgramFacts) -> Vec<String> {
+    fn keyed<K: std::fmt::Display + PartialEq, C: std::fmt::Debug + PartialEq>(
+        out: &mut Vec<String>,
+        what: &str,
+        new: &[(K, &C)],
+        old: &[(K, &C)],
+    ) {
+        for (k, c) in new {
+            match old.iter().find(|(ok, _)| ok == k) {
+                None => out.push(format!("+{what} {k}")),
+                Some((_, p)) if p != c => {
+                    out.push(format!("{what} {k} [{}]", changed_fields(*p, *c).join(" ")))
+                }
+                Some(_) => {}
+            }
+        }
+        for (k, _) in old {
+            if !new.iter().any(|(nk, _)| nk == k) {
+                out.push(format!("-{what} {k}"));
+            }
+        }
+    }
+    fn own(v: &ProgramFacts) -> Vec<(String, &FnContract)> {
+        v.own_fns_out.iter().map(|c| (c.name.clone(), c)).collect()
+    }
+    fn named<C>(v: &[((String, String), C)]) -> Vec<(String, &C)> {
+        v.iter().map(|(k, c)| (format!("{}:{}", k.0, k.1), c)).collect()
+    }
+    // A cell keeps the unit's last write joined with its latest
+    // (DECISIONS 197): what it holds after this solve is that join.
+    let joined: Vec<(String, ValueContract)> = old
+        .cells_out
+        .iter()
+        .map(|(k, c)| {
+            let mut j = c.clone();
+            if let Some((_, n)) = u.cells_out.iter().find(|(q, _)| q == k) {
+                j.join(n);
+            }
+            (k.clone(), j)
+        })
+        .chain(
+            u.cells_out
+                .iter()
+                .filter(|(k, _)| !old.cells_out.iter().any(|(q, _)| q == k))
+                .cloned(),
+        )
+        .collect();
+    fn cells(v: &[(String, ValueContract)]) -> Vec<(String, &ValueContract)> {
+        v.iter().map(|(k, c)| (k.clone(), c)).collect()
+    }
+    let mut out = Vec::new();
+    keyed(&mut out, "own_fn", &own(u), &own(old));
+    keyed(&mut out, "fn", &named(&u.fn_contracts_out), &named(&old.fn_contracts_out));
+    keyed(&mut out, "class", &named(&u.contracts_out), &named(&old.contracts_out));
+    keyed(&mut out, "value", &named(&u.values_out), &named(&old.values_out));
+    keyed(&mut out, "cell", &cells(&joined), &cells(&old.cells_out));
+    // Every other output the driver publishes or feeds back to the units:
+    // a change in any of them re-seeds a reader, so each is compared (a
+    // forwarded layout replaced each round once read as "nothing").
+    fn by_display(v: &[ClassContract]) -> Vec<(String, &ClassContract)> {
+        v.iter().map(|c| (c.display.clone(), c)).collect()
+    }
+    fn plain<C>(v: &[(String, C)]) -> Vec<(String, &C)> {
+        v.iter().map(|(k, c)| (k.clone(), c)).collect()
+    }
+    fn stores(v: &[(String, String, ValueContract)]) -> Vec<(String, &ValueContract)> {
+        v.iter().map(|(d, k, c)| (format!("{d}.{k}"), c)).collect()
+    }
+    keyed(&mut out, "layout", &by_display(&u.layouts_out), &by_display(&old.layouts_out));
+    keyed(&mut out, "args", &plain(&u.args_out), &plain(&old.args_out));
+    keyed(&mut out, "ctor_args", &named(&u.ctor_args_out), &named(&old.ctor_args_out));
+    keyed(&mut out, "store", &stores(&u.stores_out), &stores(&old.stores_out));
+    keyed(&mut out, "write", &named(&u.writes_out), &named(&old.writes_out));
+    keyed(&mut out, "this_args", &plain(&u.this_args_out), &plain(&old.this_args_out));
+    keyed(&mut out, "method_args", &plain(&u.method_args_out), &plain(&old.method_args_out));
+    keyed(&mut out, "ctor_runs", &plain(&u.ctor_runs_out), &plain(&old.ctor_runs_out));
+    for (what, new, was) in [
+        ("fn defined", &u.fns_defined, &old.fns_defined),
+        ("method run", &u.method_runs_out, &old.method_runs_out),
+        ("forwarded layout", &u.layouts_fwd, &old.layouts_fwd),
+        ("report", &u.reports, &old.reports),
+    ] {
+        for n in new.iter().filter(|n| !was.contains(n)) {
+            out.push(format!("+{what} {n}"));
+        }
+        for n in was.iter().filter(|n| !new.contains(n)) {
+            out.push(format!("-{what} {n}"));
+        }
+    }
+    let added = u.shared_out.iter().filter(|w| !old.shared_out.contains(w)).count();
+    let gone = old.shared_out.iter().filter(|w| !u.shared_out.contains(w)).count();
+    if added + gone != 0 {
+        out.push(format!("shared writes +{added} -{gone}"));
+    }
+    out
+}
+
+/// The top-level fields of `a` and `b` (one type) whose values differ, read
+/// from their derived `Debug` form: no list of fields to keep in step.
+pub(crate) fn changed_fields<T: std::fmt::Debug>(a: &T, b: &T) -> Vec<String> {
+    fn fields(s: &str) -> Vec<(String, String)> {
+        let mut v: Vec<(String, String)> = Vec::new();
+        for line in s.lines() {
+            let top = line.starts_with("    ") && !line.starts_with("     ");
+            match line[line.len().min(4)..].split_once(": ") {
+                Some((name, rest)) if top => v.push((name.to_string(), rest.to_string())),
+                _ => {
+                    if let Some(last) = v.last_mut() {
+                        last.1.push('\n');
+                        last.1.push_str(line);
+                    }
+                }
+            }
+        }
+        v
+    }
+    let (fa, fb) = (fields(&format!("{a:#?}")), fields(&format!("{b:#?}")));
+    let mut out: Vec<String> = fa
+        .iter()
+        .filter(|(n, x)| fb.iter().find(|(m, _)| m == n).is_none_or(|(_, y)| x != y))
+        .map(|(n, _)| n.clone())
+        .collect();
+    out.extend(fb.iter().filter(|(n, _)| !fa.iter().any(|(m, _)| m == n)).map(|(n, _)| n.clone()));
+    out
+}
+
+/// The no-fixpoint report of round `round`: the units it solved and what
+/// each changed (at most 16 units, 8 changes each).
+fn no_fixpoint_report(
+    round: u32,
+    solves: &[Solve<'_>],
+    changed: &[(usize, Vec<String>)],
+    seeds: usize,
+) {
+    eprintln!(
+        "perry: wpfacts: no fixpoint after {round} rounds: round {round} solved {} units, {seeds} seeded for the next",
+        changed.len()
+    );
+    for (si, cs) in changed.iter().take(16) {
+        let shown: Vec<&str> = cs.iter().take(8).map(|c| c.as_str()).collect();
+        eprintln!(
+            "perry: wpfacts:   {} changed {}: {}{}",
+            solves[*si].key,
+            cs.len(),
+            if shown.is_empty() { "nothing".to_string() } else { shown.join("; ") },
+            if cs.len() > 8 { "; ..." } else { "" }
         );
     }
 }
