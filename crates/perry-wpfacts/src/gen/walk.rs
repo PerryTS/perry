@@ -247,6 +247,13 @@ impl<'a> Gen<'a> {
             return;
         };
         let mut declared = Vec::new();
+        let phase = self.ctor_phase.get(&tm).cloned();
+        // A parent constructor that leaks `this` lets an observer see the
+        // instance before any key of this class is stored or defined. Asked
+        // of the chain as it stands: `CtorPhase::parent_leaks` was taken
+        // before the solve, when a parent value not yet settled counts as a
+        // leak; `settle_parent_layouts` recomputes these keys once it is.
+        let parent_leaks = !self.parent_pending(tm) && self.parent_chain_leaks(tm);
         for f in &c.fields {
             if f.is_private || f.key_expr.is_some() {
                 continue;
@@ -260,18 +267,32 @@ impl<'a> Gen<'a> {
                 // stores it before anyone can observe the instance
                 // (`CtorPhase::definite`, below).
                 perry_hir::ClassFieldOrigin::ConstructorStore => push_unique(&mut reserved, a),
+                // A field is defined at the birth, in order: present from
+                // birth on unless the instance could be observed before its
+                // definition (`CtorPhase::late_fields`, a leaking parent);
+                // then it is a reservation like a constructor store.
+                perry_hir::ClassFieldOrigin::Definition
+                    if parent_leaks
+                        || phase
+                            .as_ref()
+                            .is_some_and(|ph| ph.late_fields.contains(&f.name)) =>
+                {
+                    push_unique(&mut reserved, a)
+                }
                 perry_hir::ClassFieldOrigin::Definition => push_unique(&mut definite, a),
             }
         }
         self.m.tmpls[tm as usize].declared = declared;
-        if let Some(ph) = self.ctor_phase.get(&tm).cloned() {
+        if let Some(ph) = phase {
             for k in &ph.assigned_order {
                 let a = self.m.atom(k);
                 push_unique(&mut keys, a);
             }
-            for k in &ph.definite {
-                let a = self.m.atom(k);
-                push_unique(&mut definite, a);
+            if !parent_leaks {
+                for k in &ph.definite {
+                    let a = self.m.atom(k);
+                    push_unique(&mut definite, a);
+                }
             }
         }
         // A parent that is a value (§17.2) is not known before the solve
