@@ -93,14 +93,16 @@ impl AtomTable {
         hash: u64,
     ) -> Option<*const StringHeader> {
         if self.slots.is_empty() {
-            return None;
+            return crate::object::runtime_layouts::builtin_global_atom(bytes, hash);
         }
         let mask = self.slots.len() - 1;
         let mut i = Self::home(hash, mask);
         loop {
             let entry = &self.slots[i];
             if entry.string_ptr == 0 {
-                return None;
+                // The builtin global names are image atoms that are never
+                // seeded: their table is the global object's static layout.
+                return crate::object::runtime_layouts::builtin_global_atom(bytes, hash);
             }
             if entry.hash == hash {
                 let existing = entry.string_ptr as *const StringHeader;

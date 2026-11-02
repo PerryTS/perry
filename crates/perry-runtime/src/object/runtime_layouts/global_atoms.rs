@@ -1,8 +1,10 @@
 //! The global object's builtin names as image atoms (DEC 243(5)). Each is the
 //! image string and static atom a program naming the same key links to (the
 //! export names codegen gives them), so the agent's atom for a builtin global
-//! name exists from `seed_static_atoms` on: populate keys the global object
-//! with it and allocates no name, and every key of the global object is an atom.
+//! name is image data: the records are not in the atom section (no startup
+//! seed); the atom table answers them at a miss from the `GLOBAL_OBJECT`
+//! layout index. Populate keys the global object with them and allocates no
+//! name, and every key of the global object is an atom.
 use super::*;
 use super::intrinsic_private_atoms::REGEXP_PROTOTYPE;
 
@@ -19,13 +21,10 @@ macro_rules! global_atom {
         static $string: ImageString<{ $name.len() + 1 }> =
             image_bytes(concat!($name, "\0").as_bytes());
         wasm_string_image!($string);
+        // Not in the atom section: the static seed never walks it. The
+        // GLOBAL_OBJECT layout index (compile-time placed) is where the
+        // agent's atom table finds it (`builtin_global_atom` at a miss).
         #[used(linker)]
-        #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
-        #[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
-        #[cfg_attr(
-            not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
-            link_section = "perry_atoms"
-        )]
         #[export_name = $atom_export]
         pub(crate) static $atom: StaticAtom = StaticAtom {
             hash: atom_hash($name.as_bytes()),
@@ -34,7 +33,6 @@ macro_rules! global_atom {
             _pad: [0; 3],
             index: 0,
         };
-        wasm_atom!($atom);
         const _: () = assert!(export_spells($atom_export.as_bytes(), $name.as_bytes()));
     };
 }

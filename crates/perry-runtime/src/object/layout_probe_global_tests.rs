@@ -118,3 +118,46 @@ fn global_object_is_born_on_its_static_layout_and_population_keeps_it() {
         .join()
         .unwrap();
 }
+
+/// NXPA2a9 (ii): the builtin global names are image data, not a startup
+/// seed: no record of theirs is in the static atom section the seed walks
+/// (`image_atoms`), and the agent's atom for each is still its image string.
+/// Red-first: with the records back in `perry_atoms` the seed walks all 127.
+#[test]
+fn builtin_global_atoms_are_image_data_and_never_seeded() {
+    std::thread::Builder::new()
+        .stack_size(16 << 20)
+        .spawn(|| unsafe {
+            crate::gc::initialize_runtime_fixture();
+            let desc = std::ptr::addr_of!(crate::object::runtime_layouts::GLOBAL_OBJECT);
+            let keys = std::slice::from_raw_parts((*desc).keys, (*desc).key_count as usize);
+            let mut checked = 0usize;
+            for k in keys {
+                let atom = k.atom;
+                let string = (*atom).string;
+                let bytes = std::slice::from_raw_parts(
+                    crate::string::string_data(string),
+                    (*string).byte_len as usize,
+                );
+                if bytes == b"setTimeout" || bytes.starts_with(b"#<perry:private-value:") {
+                    // Runtime atoms of their own (timers, the intrinsic
+                    // private slot), seeded with the runtime's other atoms.
+                    continue;
+                }
+                let seeded = crate::object::layout_desc::image_atoms()
+                    .any(|entry| std::ptr::eq(entry as *const _, atom as *const _));
+                assert!(!seeded, "global atom {} is in the static seed", String::from_utf8_lossy(bytes));
+                assert_eq!(
+                    crate::string::atom_lookup(bytes, (*atom).hash),
+                    Some(string),
+                    "the atom of {}",
+                    String::from_utf8_lossy(bytes)
+                );
+                checked += 1;
+            }
+            assert_eq!(checked, 127);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
