@@ -44,7 +44,7 @@ const BODY_STMT_STACK_SEGMENT: usize = 2 * 1024 * 1024;
 // graph (#9194). The call boundary is intentional, including in optimized
 // compiler builds.
 #[inline(never)]
-fn finish_for_with_property_array_hoist(
+pub(crate) fn finish_for_with_property_array_hoist(
     ctx: &mut LoweringContext,
     init: Option<Box<Stmt>>,
     condition: Option<Expr>,
