@@ -1757,6 +1757,7 @@ mod helper_protocols;
 mod host_helpers;
 mod native_push;
 mod proto_own_call;
+mod receiver_param_call;
 mod regexp_results;
 mod string_methods;
 mod string_results;

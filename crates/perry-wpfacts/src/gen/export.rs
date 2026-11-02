@@ -873,13 +873,26 @@ impl<'a> Gen<'a> {
         // the marker escapes (the caller's function is then unknown code),
         // they escape as before.
         let calls = self.m.marker_calls.clone();
-        for (f, i, _, _, call) in calls {
+        for (f, i, path, key, call) in calls {
             let top = self
                 .m
                 .marker_of
                 .get(&(f, i))
                 .is_some_and(|&t| self.m.marker_is_top(t));
-            for a in self.m.calls[call as usize].args.clone() {
+            // The receiver of `o.k()` travels as the call's `this`
+            // (`ParamCall::this`), described and checked as an argument is;
+            // undescribed, it escapes as whole escapes the receiver of a
+            // call of an unknown function value.
+            let recv = match self.m.calls[call as usize].this {
+                crate::model::ThisArg::Node(n) if key.is_none() && path.is_none() => Some(n),
+                _ => None,
+            };
+            let args = self.m.calls[call as usize].args.clone();
+            let vals = args
+                .into_iter()
+                .map(|a| (a, false))
+                .chain(recv.map(|n| (n, true)));
+            for (a, is_this) in vals {
                 if self.call_arg_top.contains(&a) {
                     continue;
                 }
@@ -887,13 +900,19 @@ impl<'a> Gen<'a> {
                     Some(ch) => changed |= ch,
                     None => {
                         self.call_arg_top.insert(a);
-                        let ru = self
-                            .m
-                            .reason("passed to a call of an unknown function value");
+                        let ru = self.m.reason(if is_this {
+                            "receiver of a call of an unknown function value"
+                        } else {
+                            "passed to a call of an unknown function value"
+                        });
                         if let Some(d) = self.m.diagnostic.as_mut() {
                             d.esc_ctx.push(
-                                "contract: undescribed argument of a call through a parameter"
-                                    .into(),
+                                if is_this {
+                                    "contract: undescribed receiver of a call through a parameter"
+                                } else {
+                                    "contract: undescribed argument of a call through a parameter"
+                                }
+                                .into(),
                             );
                         }
                         self.m.sink_node(a, ru);

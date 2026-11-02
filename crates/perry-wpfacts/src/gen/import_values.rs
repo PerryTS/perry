@@ -1047,8 +1047,25 @@ impl<'a> Gen<'a> {
                 self.fill_described(mi, c, d, &d.value, this, &params, a, why);
                 args.push(a);
             }
+            // The receiver the body called it on, described as an argument
+            // is: this unit's function runs on a stand-in of that layout,
+            // and what it does to the stand-in is this unit's report to the
+            // owner (`Gen::reports`). None: called bare, `this` undefined.
+            let this_arg = match &pc.this {
+                None => ThisArg::Undef,
+                Some(d) => {
+                    let t = self
+                        .m
+                        .node_named("this", || format!("called{i}-this({})", c.name));
+                    self.m.own(t);
+                    self.m.nodes[t as usize].frame = run;
+                    let why = "receiver of a call from another unit's function";
+                    self.fill_described(mi, c, d, &d.value, this, &params, t, why);
+                    ThisArg::Node(t)
+                }
+            };
             let res = match &pc.key {
-                None => self.call_value(p, ThisArg::Undef, args, Vec::new()),
+                None => self.call_value(p, this_arg, args, Vec::new()),
                 Some(k) => {
                     let key = Key::Named(self.m.atom(k));
                     self.mcall(p, key, args, Vec::new())
