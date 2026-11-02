@@ -602,11 +602,21 @@ enum HasInstanceOutcome {
     Fallthrough,
 }
 
+/// C's `@@hasInstance`: the value already resolved by the caller, or read
+/// here from C with the given `@@hasInstance` key.
+#[derive(Clone, Copy)]
+enum OwnHook {
+    Value(f64),
+    Read(f64),
+}
+
 /// Spec `InstanceofOperator` / `GetMethod(C, @@hasInstance)`: a `null`/`undefined`
 /// value means "no hook" (→ ordinary `instanceof`), but a present **non-callable**
-/// value is a `TypeError` rather than a silent fall-through. `cb` is the already
-/// resolved `@@hasInstance` value of `target` (C), and a callable hook runs as
-/// `Call(cb, C, « value »)`: C is its receiver.
+/// value is a `TypeError` rather than a silent fall-through. `hook` is the
+/// `@@hasInstance` value of `target` (C), or the key to read it with; a read
+/// runs a getter that can collect, so both operands are rooted across it and
+/// written back refreshed. A callable hook runs as `Call(cb, C, « value »)`:
+/// C is its receiver.
 ///
 /// `Function.prototype[@@hasInstance]` (the intrinsic default, reached through
 /// a linked chain or copied onto C) answers `OrdinaryHasInstance(C, value)`,
@@ -615,7 +625,30 @@ enum HasInstanceOutcome {
 /// value bits against a fresh read of `Function.prototype`'s slot misses it
 /// whenever that read allocates and the collector moves `cb` first, and the
 /// thunk run with C would re-enter this same dispatch.
-fn dispatch_own_has_instance(cb: f64, target: f64, value: f64) -> HasInstanceOutcome {
+///
+/// Out of line and cold: a hook is the rare case, and its handle scope and
+/// calls stay out of the ordinary dispatch's frame.
+#[cold]
+#[inline(never)]
+fn dispatch_own_has_instance(
+    hook: OwnHook,
+    target: &mut f64,
+    value: &mut f64,
+) -> HasInstanceOutcome {
+    let cb = match hook {
+        OwnHook::Value(cb) => cb,
+        OwnHook::Read(key) => {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let lhs = scope.root_nanbox_f64(*value);
+            let rhs = scope.root_nanbox_f64(*target);
+            let cb =
+                unsafe { crate::symbol::js_object_get_symbol_property(rhs.get_nanbox_f64(), key) };
+            *value = lhs.get_nanbox_f64();
+            *target = rhs.get_nanbox_f64();
+            cb
+        }
+    };
+    let (target, value) = (*target, *value);
     let jv = crate::JSValue::from_bits(cb.to_bits());
     if jv.is_undefined() || jv.is_null() {
         return HasInstanceOutcome::Fallthrough;
