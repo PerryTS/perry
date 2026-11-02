@@ -14,21 +14,43 @@ use crate::object::layout_desc::{PerryLayoutDesc, LAYOUT_PROTO_NULL, LAYOUT_PROT
 use crate::object::ObjectHeader;
 use crate::value::JSValue;
 
+/// A runtime layout's fixed word and the descriptor a match reads. Identity
+/// is the word, never the descriptor: a program that does not reach a layout
+/// defines no descriptor for it, and naming one is a birth (`desc()` aborts).
+/// A matching word proves the layout was born, so `desc()` cannot abort there.
+type LayoutEntry = (u32, fn() -> *mut PerryLayoutDesc);
+
 /// The declared layout of the sealed node prototype of intrinsic `serial`.
-fn prototype_layout(serial: u64) -> Option<*const PerryLayoutDesc> {
+fn prototype_layout(serial: u64) -> Option<LayoutEntry> {
     use crate::closure::shape::*;
     use crate::object::runtime_layouts as rl;
     Some(match serial {
-        INTRINSIC_SERIAL_EVENT_EMITTER_PROTOTYPE => rl::EVENT_EMITTER_PROTOTYPE::desc(),
-        INTRINSIC_SERIAL_STREAM_PROTOTYPE => rl::STREAM_PROTOTYPE::desc(),
-        INTRINSIC_SERIAL_READABLE_PROTOTYPE => rl::READABLE_PROTOTYPE::desc(),
-        INTRINSIC_SERIAL_WRITABLE_PROTOTYPE => rl::WRITABLE_PROTOTYPE::desc(),
-        INTRINSIC_SERIAL_DUPLEX_PROTOTYPE => rl::DUPLEX_PROTOTYPE::desc(),
-        INTRINSIC_SERIAL_TRANSFORM_PROTOTYPE => rl::TRANSFORM_PROTOTYPE::desc(),
-        INTRINSIC_SERIAL_PASSTHROUGH_PROTOTYPE => rl::PASSTHROUGH_PROTOTYPE::desc(),
-        INTRINSIC_SERIAL_OUTGOING_MESSAGE_PROTOTYPE => rl::OUTGOING_MESSAGE_PROTOTYPE::desc(),
-        INTRINSIC_SERIAL_SERVER_RESPONSE_PROTOTYPE => rl::SERVER_RESPONSE_PROTOTYPE::desc(),
-        INTRINSIC_SERIAL_INCOMING_MESSAGE_PROTOTYPE => rl::INCOMING_MESSAGE_PROTOTYPE::desc(),
+        INTRINSIC_SERIAL_EVENT_EMITTER_PROTOTYPE => {
+            (rl::EVENT_EMITTER_PROTOTYPE::WORD, rl::EVENT_EMITTER_PROTOTYPE::desc)
+        }
+        INTRINSIC_SERIAL_STREAM_PROTOTYPE => (rl::STREAM_PROTOTYPE::WORD, rl::STREAM_PROTOTYPE::desc),
+        INTRINSIC_SERIAL_READABLE_PROTOTYPE => {
+            (rl::READABLE_PROTOTYPE::WORD, rl::READABLE_PROTOTYPE::desc)
+        }
+        INTRINSIC_SERIAL_WRITABLE_PROTOTYPE => {
+            (rl::WRITABLE_PROTOTYPE::WORD, rl::WRITABLE_PROTOTYPE::desc)
+        }
+        INTRINSIC_SERIAL_DUPLEX_PROTOTYPE => (rl::DUPLEX_PROTOTYPE::WORD, rl::DUPLEX_PROTOTYPE::desc),
+        INTRINSIC_SERIAL_TRANSFORM_PROTOTYPE => {
+            (rl::TRANSFORM_PROTOTYPE::WORD, rl::TRANSFORM_PROTOTYPE::desc)
+        }
+        INTRINSIC_SERIAL_PASSTHROUGH_PROTOTYPE => {
+            (rl::PASSTHROUGH_PROTOTYPE::WORD, rl::PASSTHROUGH_PROTOTYPE::desc)
+        }
+        INTRINSIC_SERIAL_OUTGOING_MESSAGE_PROTOTYPE => {
+            (rl::OUTGOING_MESSAGE_PROTOTYPE::WORD, rl::OUTGOING_MESSAGE_PROTOTYPE::desc)
+        }
+        INTRINSIC_SERIAL_SERVER_RESPONSE_PROTOTYPE => {
+            (rl::SERVER_RESPONSE_PROTOTYPE::WORD, rl::SERVER_RESPONSE_PROTOTYPE::desc)
+        }
+        INTRINSIC_SERIAL_INCOMING_MESSAGE_PROTOTYPE => {
+            (rl::INCOMING_MESSAGE_PROTOTYPE::WORD, rl::INCOMING_MESSAGE_PROTOTYPE::desc)
+        }
         _ => return None,
     })
 }
@@ -39,55 +61,83 @@ fn prototype_layout(serial: u64) -> Option<*const PerryLayoutDesc> {
 /// # Safety
 /// `layout` is a registered instance layout naming a node prototype family.
 pub(crate) unsafe fn sealed_chain(proto: f64, layout: *const PerryLayoutDesc) -> bool {
-    let mut family = (*layout).proto;
+    let family = (*layout).proto;
+    match chain_end(family) {
+        Some(end) => end,
+        None => sealed_prototype_chain(proto, (*family).serial),
+    }
+}
+
+/// The answer at a chain's end family: `%Object.prototype%` unwritten, or a
+/// null prototype. `None` for a node prototype family.
+fn chain_end(family: *const crate::object::layout_desc::PerryProtoFamily) -> Option<bool> {
+    if family == LAYOUT_PROTO_OBJECT {
+        return Some(crate::object::builtin_proto::pristine(
+            crate::object::builtin_proto::BuiltinProto::Object,
+        ));
+    }
+    (family == LAYOUT_PROTO_NULL).then_some(true)
+}
+
+/// [`sealed_chain`] from the sealed node prototype of intrinsic `serial`:
+/// `proto` is that prototype, and it and every prototype after it are on
+/// their layouts, unwritten. Names no instance layout, and a prototype
+/// layout's descriptor only after the prototype's word matched it.
+///
+/// # Safety
+/// `proto` is a live value's bits.
+unsafe fn sealed_prototype_chain(proto: f64, mut serial: u64) -> bool {
     let mut first = true;
     loop {
-        if family == LAYOUT_PROTO_OBJECT {
-            return crate::object::builtin_proto::pristine(
-                crate::object::builtin_proto::BuiltinProto::Object,
-            );
-        }
-        if family == LAYOUT_PROTO_NULL {
-            return true;
-        }
-        let serial = (*family).serial;
         let bits = crate::object::shapes::identity_prototype_word(serial);
         if first && bits != proto.to_bits() {
             return false;
         }
         first = false;
-        let Some(desc) = prototype_layout(serial) else {
+        let Some((layout_word, desc)) = prototype_layout(serial) else {
             return false;
         };
         if !JSValue::from_bits(bits).is_pointer() {
             return false;
         }
         // Sealed with its serial, so every write since (a store, a define, a
-        // delete, a relink) set its shadow bit.
+        // delete, a relink) set its shadow bit: an unwritten prototype still
+        // has its layout's word. That match also lets `desc()` run: the
+        // prototype was born on the layout, so its descriptor is defined.
         let word = (*JSValue::from_bits(bits).as_pointer::<ObjectHeader>()).parent_class_id;
-        if !(crate::object::shapes::SHAPE_ID_BASE..crate::object::layout_desc::UNSHADOWED_WORD_END)
-            .contains(&word)
+        if word != layout_word
+            || !(crate::object::shapes::SHAPE_ID_BASE..crate::object::layout_desc::UNSHADOWED_WORD_END)
+                .contains(&word)
         {
             return false;
         }
-        family = (*desc).proto;
+        let family = (*desc()).proto;
+        if let Some(end) = chain_end(family) {
+            return end;
+        }
+        serial = (*family).serial;
     }
 }
 
 /// The instance layout node's constructor of the sealed prototype of
-/// intrinsic `serial` gives its instances.
-fn instance_layout_of_prototype(serial: u64) -> Option<*const PerryLayoutDesc> {
+/// intrinsic `serial` gives its instances. A program that reaches the
+/// prototype reaches this layout too (`new (proto.constructor)()` and a
+/// derived `new F` birth on it), so after the chain matches, `desc()` is that
+/// birth.
+fn instance_layout_of_prototype(serial: u64) -> Option<LayoutEntry> {
     use crate::closure::shape::*;
     use crate::object::runtime_layouts as rl;
     Some(match serial {
-        INTRINSIC_SERIAL_EVENT_EMITTER_PROTOTYPE => rl::EVENT_EMITTER::desc(),
-        INTRINSIC_SERIAL_STREAM_PROTOTYPE => rl::LEGACY_STREAM::desc(),
-        INTRINSIC_SERIAL_READABLE_PROTOTYPE => rl::READABLE::desc(),
-        INTRINSIC_SERIAL_WRITABLE_PROTOTYPE => rl::WRITABLE::desc(),
-        INTRINSIC_SERIAL_DUPLEX_PROTOTYPE => rl::DUPLEX::desc(),
-        INTRINSIC_SERIAL_TRANSFORM_PROTOTYPE => rl::TRANSFORM::desc(),
-        INTRINSIC_SERIAL_PASSTHROUGH_PROTOTYPE => rl::PASSTHROUGH::desc(),
-        INTRINSIC_SERIAL_SERVER_RESPONSE_PROTOTYPE => rl::SERVER_RESPONSE::desc(),
+        INTRINSIC_SERIAL_EVENT_EMITTER_PROTOTYPE => (rl::EVENT_EMITTER::WORD, rl::EVENT_EMITTER::desc),
+        INTRINSIC_SERIAL_STREAM_PROTOTYPE => (rl::LEGACY_STREAM::WORD, rl::LEGACY_STREAM::desc),
+        INTRINSIC_SERIAL_READABLE_PROTOTYPE => (rl::READABLE::WORD, rl::READABLE::desc),
+        INTRINSIC_SERIAL_WRITABLE_PROTOTYPE => (rl::WRITABLE::WORD, rl::WRITABLE::desc),
+        INTRINSIC_SERIAL_DUPLEX_PROTOTYPE => (rl::DUPLEX::WORD, rl::DUPLEX::desc),
+        INTRINSIC_SERIAL_TRANSFORM_PROTOTYPE => (rl::TRANSFORM::WORD, rl::TRANSFORM::desc),
+        INTRINSIC_SERIAL_PASSTHROUGH_PROTOTYPE => (rl::PASSTHROUGH::WORD, rl::PASSTHROUGH::desc),
+        INTRINSIC_SERIAL_SERVER_RESPONSE_PROTOTYPE => {
+            (rl::SERVER_RESPONSE::WORD, rl::SERVER_RESPONSE::desc)
+        }
         _ => return None,
     })
 }
@@ -109,6 +159,15 @@ const DERIVED_LEVELS: usize = 8;
 /// # Safety
 /// `proto` is a live value's bits.
 pub(crate) unsafe fn derived_layout(proto: u64) -> Option<*const PerryLayoutDesc> {
+    derived_layout_entry(proto).map(|(_, desc)| desc() as *const PerryLayoutDesc)
+}
+
+/// [`derived_layout`] as the layout's word and descriptor: a probe compares
+/// the word and names no descriptor.
+///
+/// # Safety
+/// As [`derived_layout`].
+unsafe fn derived_layout_entry(proto: u64) -> Option<LayoutEntry> {
     use crate::object::key_attrs::SUMMARY_BLOCKS_STORE;
     use crate::object::shapes::ShapeObjectKind;
     let mut bits = proto;
@@ -126,8 +185,9 @@ pub(crate) unsafe fn derived_layout(proto: u64) -> Option<*const PerryLayoutDesc
         }
         let meta = crate::meta_read!(crate::meta_obj_from_type!(obj as *mut _, header.obj_type));
         if !meta.is_null() {
-            if let Some(layout) = instance_layout_of_prototype((*meta).proto_serial) {
-                return sealed_chain(f64::from_bits(bits), layout).then_some(layout);
+            if let Some(entry) = instance_layout_of_prototype((*meta).proto_serial) {
+                return sealed_prototype_chain(f64::from_bits(bits), (*meta).proto_serial)
+                    .then_some(entry);
             }
         }
         if crate::object::overflow::has_overflow(obj) {
@@ -189,26 +249,24 @@ pub(crate) unsafe fn birth_store(obj: *mut ObjectHeader, slot: u32, value: f64) 
     crate::object::key_view::fill_hole(obj, slot, value.to_bits());
 }
 
-/// Every runtime instance layout of a node constructor that the program's
-/// realm reaches. A layout the realm does not reach has no definition and no
-/// object is born on it, so an identification probe skips it instead of
-/// naming it (naming it is a birth, which aborts there).
-fn instance_layouts() -> impl Iterator<Item = *const PerryLayoutDesc> {
+/// Every runtime instance layout of a node constructor: its fixed word, and
+/// the descriptor a match reads. Identity is the word, never the descriptor:
+/// a program that does not reach a layout defines no descriptor for it, and
+/// naming one is a birth (`desc()` aborts). A matching word proves the layout
+/// was born, so its descriptor is defined and `desc()` cannot abort there.
+const INSTANCE_LAYOUTS: [(u32, fn() -> *mut PerryLayoutDesc); 8] = {
     use crate::object::runtime_layouts as rl;
     [
-        rl::EVENT_EMITTER::reached(),
-        rl::LEGACY_STREAM::reached(),
-        rl::READABLE::reached(),
-        rl::WRITABLE::reached(),
-        rl::DUPLEX::reached(),
-        rl::TRANSFORM::reached(),
-        rl::PASSTHROUGH::reached(),
-        rl::SERVER_RESPONSE::reached(),
+        (rl::EVENT_EMITTER::WORD, rl::EVENT_EMITTER::desc),
+        (rl::LEGACY_STREAM::WORD, rl::LEGACY_STREAM::desc),
+        (rl::READABLE::WORD, rl::READABLE::desc),
+        (rl::WRITABLE::WORD, rl::WRITABLE::desc),
+        (rl::DUPLEX::WORD, rl::DUPLEX::desc),
+        (rl::TRANSFORM::WORD, rl::TRANSFORM::desc),
+        (rl::PASSTHROUGH::WORD, rl::PASSTHROUGH::desc),
+        (rl::SERVER_RESPONSE::WORD, rl::SERVER_RESPONSE::desc),
     ]
-    .into_iter()
-    .flatten()
-    .map(|desc| desc as *const PerryLayoutDesc)
-}
+};
 
 /// The instance layout `obj` is on, when it is one of these: born on it
 /// (its word is the layout's), or born on its keys with another prototype
@@ -220,14 +278,16 @@ fn instance_layouts() -> impl Iterator<Item = *const PerryLayoutDesc> {
 /// `obj` is a live object header.
 pub(crate) unsafe fn instance_layout(obj: *const ObjectHeader) -> Option<*const PerryLayoutDesc> {
     let word = (*obj).parent_class_id;
-    if let Some(desc) = instance_layouts().find(|&desc| (*desc).layout_id == word) {
-        return Some(desc);
+    if let Some(&(_, desc)) = INSTANCE_LAYOUTS.iter().find(|&&(layout, _)| layout == word) {
+        return Some(desc() as *const PerryLayoutDesc);
     }
     derived_instance_layout(LayoutWord(word))
 }
 
 /// [`instance_layout`] of a shape id that is not a layout's own: the layout
-/// whose key list its shape has.
+/// whose key list its shape has. A layout that was never born has no shape
+/// record under its word, so it never matches and its descriptor is never
+/// named.
 #[inline(never)]
 unsafe fn derived_instance_layout(word: LayoutWord) -> Option<*const PerryLayoutDesc> {
     // A derived shape is minted in the dynamic band; a static id (every
@@ -241,11 +301,14 @@ unsafe fn derived_instance_layout(word: LayoutWord) -> Option<*const PerryLayout
     if keys == 0 {
         return None;
     }
-    instance_layouts().find(|&desc| {
-        (*desc).key_count == count
-            && crate::object::shapes::shape_keys_and_proto_for_word(LayoutWord((*desc).layout_id))
-                .is_some_and(|(layout_keys, _, _)| layout_keys == keys)
-    })
+    INSTANCE_LAYOUTS
+        .iter()
+        .find(|&&(layout, _)| {
+            crate::object::shapes::shape_keys_and_proto_for_word(LayoutWord(layout)).is_some_and(
+                |(layout_keys, layout_count, _)| layout_count == count && layout_keys == keys,
+            )
+        })
+        .map(|&(_, desc)| desc() as *const PerryLayoutDesc)
 }
 
 /// The storage slot of own key `bytes` (hash `hash`, computed here when
@@ -274,25 +337,23 @@ pub(crate) unsafe fn instance_layout_slot(
     }
 }
 
-/// Is `obj` on `layout` with a prototype chain that intercepts none of its
+/// Is `obj` on the layout of word `word` with a prototype chain that intercepts none of its
 /// keys: born on it with its sealed prototype unwritten ([`sealed_chain`]),
 /// or born on its keys under a derived chain ([`derived_layout`])? A native
 /// constructor's init asks once, then fills slots.
 ///
 /// # Safety
 /// `obj` is a live object header.
-pub(crate) unsafe fn on_layout_with_plain_chain(
-    obj: *const ObjectHeader,
-    layout: *const PerryLayoutDesc,
-) -> bool {
-    if instance_layout(obj) != Some(layout) {
+pub(crate) unsafe fn on_layout_with_plain_chain(obj: *const ObjectHeader, word: u32) -> bool {
+    // `instance_layout` names a descriptor only after a word matched it.
+    let Some(layout) = instance_layout(obj).filter(|&layout| (*layout).layout_id == word) else {
         return false;
-    }
+    };
     let proto = crate::object::shapes::object_prototype_word(obj);
-    if (*obj).parent_class_id == (*layout).layout_id {
+    if (*obj).parent_class_id == word {
         sealed_chain(f64::from_bits(proto), layout)
     } else {
-        derived_layout(proto) == Some(layout)
+        derived_layout_entry(proto).is_some_and(|(derived, _)| derived == word)
     }
 }
 
@@ -322,7 +383,7 @@ pub(crate) unsafe fn layout_birth_store(obj: *mut ObjectHeader, name: &[u8], val
     if *fields.add(key.slot as usize) != crate::value::TAG_HOLE {
         return false;
     }
-    if !on_layout_with_plain_chain(obj, layout) {
+    if !on_layout_with_plain_chain(obj, (*layout).layout_id) {
         return false;
     }
     birth_store(obj, key.slot, value);
