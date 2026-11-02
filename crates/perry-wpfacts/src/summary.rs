@@ -633,6 +633,16 @@ impl Model {
         if call != NO_NODE && self.sum.bound.insert((call, inst)) {
             self.wire_args(call, inst);
         }
+        // A contract function run on a receiver no call of this unit holds
+        // (`this_any`: another unit runs it there): no call takes its
+        // result, its contract does (design §11.2), as for its escaped
+        // instance (`escape_summarized`).
+        if call == NO_NODE && self.contract_fns.contains(&f) {
+            let r = self.sum.insts[inst as usize].ret;
+            if r != NO_NODE && !self.contract_rets.contains(&(f, r)) {
+                self.contract_rets.push((f, r));
+            }
+        }
     }
 
     /// Rule C: `f` has no `this` term (or no receiver) and returns a closure
