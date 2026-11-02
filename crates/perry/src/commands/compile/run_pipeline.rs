@@ -3122,9 +3122,10 @@ pub fn run_with_parse_cache(
         let self_namespace_import = hir_module.imports.iter().any(|import| {
             !import.type_only
                 && !import.runtime_erased
-                && import.specifiers.iter().any(|spec| {
-                    matches!(spec, perry_hir::ImportSpecifier::Namespace { .. })
-                })
+                && import
+                    .specifiers
+                    .iter()
+                    .any(|spec| matches!(spec, perry_hir::ImportSpecifier::Namespace { .. }))
                 && import
                     .resolved_path
                     .as_deref()
@@ -6217,7 +6218,6 @@ pub fn run_with_parse_cache(
             // function that enumerates it. Per-member reads already worked,
             // which is why the undefined value stayed silent.
             namespace_self_import: ctx.native_modules.get(path).is_some_and(|hir_module| {
-
                 hir_module.imports.iter().any(|import| {
                     !import.type_only
                         && !import.runtime_erased
@@ -6531,6 +6531,31 @@ pub fn run_with_parse_cache(
         );
     }
     realm_reach.program_signals(&ctx.patched_builtins);
+    // Test-only input of the realm-diff gate (DESIGN §3.2, "The R-restricted
+    // realm-diff gate"; scripts/realm_diff_gate.py): R becomes exactly the
+    // file's names with top dropped, so the dumper, which reflects over
+    // globalThis, is built with a partial image; the close below applies the
+    // birth relation. A top program's own names are not kept (a top scan is
+    // already closed to the whole catalog). Inert when unset; the line it
+    // prints lets the gate assert the input took effect, and the gate checks
+    // that the closed R equals the file. The cache keys hash the path
+    // (compile_env), not the file, so the gate compiles with PERRY_NO_CACHE.
+    if let Some(path) = std::env::var_os("PERRY_REALM_REACH_NAMES") {
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| anyhow::anyhow!("PERRY_REALM_REACH_NAMES {path:?}: {e}"))?;
+        let names: Vec<String> = serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .and_then(|v| serde_json::from_value(v.get("names")?.clone()).ok())
+            .ok_or_else(|| {
+                anyhow::anyhow!("PERRY_REALM_REACH_NAMES {path:?}: expected {{\"names\": [...]}}")
+            })?;
+        eprintln!(
+            "[realm-reach-names] {} {}",
+            path.to_string_lossy(),
+            names.len()
+        );
+        realm_reach.restrict_to(names);
+    }
     realm_reach.close(perry_codegen::realm_manifest::REALM);
     if std::env::var("PERRY_REALM_REACH").is_ok_and(|v| v == "1") {
         let reasons: Vec<_> = realm_reach.top.iter().map(|r| r.reason()).collect();
