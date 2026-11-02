@@ -563,12 +563,14 @@ pub fn platform_artifact_name() -> Option<&'static str> {
 }
 
 #[derive(Debug, Deserialize)]
-struct TrustedUpdateKey {
-    key_id: String,
-    public_key: String,
+pub(crate) struct TrustedUpdateKey {
+    pub(crate) key_id: String,
+    pub(crate) public_key: String,
 }
 
-fn trusted_cli_update_keys() -> Result<Vec<TrustedUpdateKey>> {
+/// The compiled-in keyring. It signs `perry update` manifests and, under a
+/// separate domain, `perry target add` manifests.
+pub(crate) fn trusted_cli_update_keys() -> Result<Vec<TrustedUpdateKey>> {
     let raw = option_env!("PERRY_CLI_UPDATE_PUBLIC_KEYS").context(
         "this Perry release has no trusted CLI update public keys; self-update is disabled until the release is built with PERRY_CLI_UPDATE_PUBLIC_KEYS",
     )?;
@@ -614,7 +616,7 @@ fn secure_staging_dir(install_dir: &std::path::Path) -> Result<tempfile::TempDir
     Ok(staging)
 }
 
-fn require_https(url: &str, what: &str) -> Result<()> {
+pub(crate) fn require_https(url: &str, what: &str) -> Result<()> {
     let parsed = url::Url::parse(url).with_context(|| format!("invalid {} URL", what))?;
     if parsed.scheme() != "https"
         || parsed.host_str().is_none()

@@ -541,6 +541,31 @@ fn template_facts(
         }
     }
     let mut fixed_layout = prefix_stable && adds == 0;
+    // Who can make each key present: a writer that runs after construction
+    // (or one of a computed key, which can be any key), and any writer at
+    // all. A private claim is made during construction, at no order this
+    // walk knows: it counts as a later writer of either kind.
+    let any = m.any_writers.get(&tm).cloned().unwrap_or_default();
+    let any_key_written = !any.ctor.is_empty() || !any.post.is_empty();
+    let written: Vec<(bool, bool)> = keys
+        .iter()
+        .enumerate()
+        .map(|(i, &a)| {
+            let claim = i >= tpl.birth_keys.len() && i < tpl.birth_keys.len() + claimed.len();
+            let w = m.writers.get(&(tm, a));
+            let post = claim || w.is_some_and(|w| !w.post.is_empty());
+            let ever = post || w.is_some_and(|w| !w.ctor.is_empty());
+            (post, ever)
+        })
+        .collect();
+    // A key a birth store defines (a field definition): it is added at its
+    // place in the chain's definition order, and a constructor body's
+    // stores run after its class's definitions.
+    let defined = |a: Atom| {
+        m.writers
+            .get(&(tm, a))
+            .is_some_and(|w| w.ctor.iter().any(|&s| m.stores[s as usize].birth))
+    };
     for (i, &a) in keys.iter().enumerate() {
         let birth = i < tpl.birth_keys.len();
         let claim = !birth && i < tpl.birth_keys.len() + claimed.len();
@@ -559,10 +584,26 @@ fn template_facts(
         if reserved {
             fixed_layout = false;
         }
-        let slot =
-            ((birth || claim) && (definite || declared || reserved) && slot_ok).then_some(i as u32);
+        // A key that may be absent while the instance is observable keeps
+        // its birth slot only when no later key can be present by the time
+        // it is added: the runtime then appends it after them, in
+        // enumeration order (`later_late_key_present`), and its birth slot
+        // stays the hole for life. A defined key comes after every later
+        // key that only construction writes; any other such key can be
+        // added at any time, after any later key that is ever written.
+        let in_order = definite || {
+            let def = defined(a);
+            !any_key_written
+                && written[i + 1..]
+                    .iter()
+                    .all(|&(post, ever)| if def { !post } else { !ever })
+        };
+        if !in_order {
+            fixed_layout = false;
+        }
+        let slot = ((birth || claim) && (definite || declared || reserved) && slot_ok && in_order)
+            .then_some(i as u32);
         let w = m.writers.get(&(tm, a)).cloned().unwrap_or_default();
-        let any = m.any_writers.get(&tm).cloned().unwrap_or_default();
         let readonly = escape.is_none()
             && hard.is_none()
             && w.post.is_empty()

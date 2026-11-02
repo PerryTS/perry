@@ -110,13 +110,8 @@ extern "C" fn start(_closure: *const ClosureHeader, this: JsThis) -> f64 {
         js_undefined(),
     )
 }
-extern "C" fn close(_closure: *const ClosureHeader, this: JsThis) -> f64 {
-    dispatch(
-        MessagePortOperation::Close,
-        this,
-        js_undefined(),
-        js_undefined(),
-    )
+extern "C" fn close(_closure: *const ClosureHeader, this: JsThis, callback: f64) -> f64 {
+    dispatch(MessagePortOperation::Close, this, callback, js_undefined())
 }
 extern "C" fn ref_port(_closure: *const ClosureHeader, this: JsThis) -> f64 {
     dispatch(
@@ -147,7 +142,7 @@ pub fn install_core_methods(object: *mut ObjectHeader) {
     let _no_move = crate::gc::GcSuppressScope::new();
     install_method(object, "postMessage", crate::fn_info!(#[realm(MessagePort.prototype.postMessage, constructible = true)] export crate::messaging::port_operations::post_message, 2; with_declared(2)), 2);
     install_method(object, "start", crate::fn_info!(#[realm(MessagePort.prototype.start, constructible = true)] export crate::messaging::port_operations::start, 0; with_declared(0)), 0);
-    install_method(object, "close", crate::fn_info!(#[realm(MessagePort.prototype.close, constructible = true)] export crate::messaging::port_operations::close, 0; with_declared(0)), 0);
+    install_method(object, "close", crate::fn_info!(#[realm(MessagePort.prototype.close, constructible = true)] export crate::messaging::port_operations::close, 1; with_declared(1)), 1);
     install_method(object, "ref", crate::fn_info!(#[realm(MessagePort.prototype.ref, constructible = true)] export crate::messaging::port_operations::ref_port, 0; with_declared(0)), 0);
     install_method(object, "unref", crate::fn_info!(#[realm(MessagePort.prototype.unref, constructible = true)] export crate::messaging::port_operations::unref_port, 0; with_declared(0)), 0);
     install_method(object, "hasRef", crate::fn_info!(#[realm(MessagePort.prototype.hasRef, constructible = true)] export crate::messaging::port_operations::has_ref_port, 0; with_declared(0)), 0);
