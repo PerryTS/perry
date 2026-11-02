@@ -90,6 +90,11 @@ extern "C" {
         method_name_ptr: *const u8,
         method_name_len: usize,
     ) -> f64;
+    fn js_node_http_response_prototype_method(
+        outgoing_only: i32,
+        name_ptr: *const u8,
+        name_len: usize,
+    ) -> f64;
     fn js_error_new_with_message(message: *mut StringHeader) -> *mut ErrorHeader;
     fn js_nanbox_pointer(ptr: i64) -> f64;
     fn js_object_set_field_by_name(
@@ -1184,6 +1189,17 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_property(
     }
 
     if let Some(name) = server_response_method_bytes_for_handle(response_root.get(), &property) {
+        // The inherited prototype method itself (one identity, node's
+        // `res.writeHead === ServerResponse.prototype.writeHead`); a
+        // stream/emitter member the http prototypes do not define stays a
+        // bound method of the handle.
+        let outgoing_only = super::response::response_state(response_root.get())
+            .is_some_and(|sr| sr.outgoing_message_only);
+        let method =
+            js_node_http_response_prototype_method(outgoing_only as i32, name.as_ptr(), name.len());
+        if method.to_bits() != TAG_UNDEFINED {
+            return method;
+        }
         return bind_handle_method(response_root.get(), name);
     }
 

@@ -299,6 +299,13 @@ unsafe extern "C" fn composite_handle_property_dispatch(
     property_name_ptr: *const u8,
     property_name_len: usize,
 ) -> f64 {
+    // Own properties shadow the prototype members every dispatcher below
+    // answers (ordinary [[Get]] order).
+    if let Some(v) =
+        super::handle_expando::handle_own_property_get(handle, property_name_ptr, property_name_len)
+    {
+        return v;
+    }
     let mut out = f64::from_bits(TAG_UNDEFINED);
     if HANDLE_PROPERTY_EXTENSION_DISPATCH_PTRS.any_claims(|p| {
         let f = std::mem::transmute::<*mut (), HandlePropertyDispatchExtensionFn>(p);
