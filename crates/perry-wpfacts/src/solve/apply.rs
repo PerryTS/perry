@@ -317,12 +317,26 @@ impl Model {
                 }
             }
             Cons::Guard { test, from, dst } => {
+                // A marker beside its values is no value (DECISIONS 74):
+                // the test waits for them, and fires if the marker leaves
+                // (75). A marker with none beside it holds anything.
                 let admits = prim & guard::prims(test) != 0
-                    || toks
-                        .into_iter()
-                        .any(|&t| t == TOP || guard::objects(test) || self.is_marker(t));
+                    || toks.iter().any(|&t| {
+                        t == TOP
+                            || if self.is_marker(t) {
+                                !self.beside_values(t)
+                            } else {
+                                guard::objects(test)
+                            }
+                    });
                 if admits {
                     self.edge(from, dst);
+                } else {
+                    for &t in toks {
+                        if self.beside_markers.contains(&t) {
+                            self.beside_guard.entry(t).or_default().push((from, dst));
+                        }
+                    }
                 }
             }
             Cons::Defined { dst } | Cons::NotNullish { dst } => {
@@ -1158,10 +1172,10 @@ impl Model {
                     );
                 }
             }
-            Cons::Arith { dst, add } => {
+            Cons::Arith { dst } => {
                 let mut out = 0u16;
                 // Objects go through ToPrimitive (user valueOf/toString).
-                let objs = prim::NUM | prim::BIGINT | if add { prim::STR } else { 0 };
+                let objs = prim::NUM | prim::BIGINT;
                 // A described parameter's marker is no value (DECISIONS 74);
                 // an argument marker is none while it stands for such
                 // markers alone, and adds the kinds if it leaves (75).
@@ -1177,14 +1191,44 @@ impl Model {
                 if prim & prim::BIGINT != 0 {
                     out |= prim::BIGINT;
                 }
-                if prim & (prim::NUM | prim::BOOL | prim::NULL | prim::UNDEF) != 0 {
+                if prim & (prim::NUM | prim::STR | prim::BOOL | prim::NULL | prim::UNDEF) != 0 {
                     out |= prim::NUM;
-                }
-                if prim & prim::STR != 0 {
-                    out |= if add { prim::STR } else { prim::NUM };
                 }
                 if out != 0 {
                     self.add_prim(dst, out);
+                }
+            }
+            Cons::Plus { str, num } => {
+                let mut s = 0u16;
+                let mut k = 0u16;
+                // Objects go through ToPrimitive (user valueOf/toString): a
+                // String or a numeric value. Markers as in `Arith`.
+                if toks.iter().any(|&t| !self.beside_values(t)) {
+                    s |= prim::STR;
+                    k |= prim::NUM | prim::BIGINT;
+                } else {
+                    for &t in toks {
+                        if self.beside_markers.contains(&t) {
+                            let later = self.beside_arith.entry(t).or_default();
+                            later.push((str, prim::STR));
+                            later.push((num, prim::NUM | prim::BIGINT));
+                        }
+                    }
+                }
+                if prim & prim::STR != 0 {
+                    s |= prim::STR;
+                }
+                if prim & prim::BIGINT != 0 {
+                    k |= prim::BIGINT;
+                }
+                if prim & (prim::NUM | prim::BOOL | prim::NULL | prim::UNDEF) != 0 {
+                    k |= prim::NUM;
+                }
+                if s != 0 {
+                    self.add_prim(str, s);
+                }
+                if k != 0 {
+                    self.add_prim(num, k);
                 }
             }
             Cons::ArrayLenArg { dst } => {

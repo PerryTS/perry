@@ -294,12 +294,6 @@ impl TemplateFacts {
 }
 
 pub fn derive(g: &mut Gen) -> (Vec<TemplateFacts>, Vec<SiteFacts>) {
-    let claimed: Vec<Option<Vec<Atom>>> = (0..g.m.tmpls.len() as TmplId)
-        .map(|tm| {
-            let own = g.m.tmpls[tm as usize].kind.is_fact_unit() && !g.m.foreign.contains_key(&tm);
-            own.then(|| g.claimed_private_atoms(tm)).flatten()
-        })
-        .collect();
     let m = &mut g.m;
     // A program-wide kill only for what the compiled program itself does:
     // an accessor it installs on `Object.prototype` (E23, any key). Dynamic
@@ -328,13 +322,7 @@ pub fn derive(g: &mut Gen) -> (Vec<TemplateFacts>, Vec<SiteFacts>) {
             });
             continue;
         }
-        let tf = template_facts(
-            m,
-            tm,
-            &global,
-            &objproto_hard,
-            claimed[tm as usize].as_deref(),
-        );
+        let tf = template_facts(m, tm, &global, &objproto_hard);
         out.push(tf);
     }
     let sites = site_facts(g, &out);
@@ -416,7 +404,6 @@ fn template_facts(
     tm: TmplId,
     global: &Option<String>,
     objproto_hard: &Option<String>,
-    claimed: Option<&[Atom]>,
 ) -> TemplateFacts {
     // The template's own token and every birth-site token: one layout.
     m.tok(TokKind::Obj(tm, NO_CTX));
@@ -524,12 +511,10 @@ fn template_facts(
     // Slots: birth order, valid up to the first non-definite / accessor key.
     let mut fields = Vec::new();
     let mut slot_ok = true;
+    // A private field's entry is a birth key at its declaration
+    // (`compute_birth_keys`, #8969): present wherever a read finds a value (a
+    // read before the claim throws the brand check).
     let mut keys: Vec<Atom> = tpl.birth_keys.clone();
-    // The private fields construction claims after the birth keys, each at
-    // the next inline slot (`Gen::claimed_private_atoms`): present wherever
-    // a read finds a value (a read before the claim throws the brand check).
-    let claimed = claimed.unwrap_or_default();
-    keys.extend(claimed.iter().copied());
     // Fields written later (non-birth) are reported too.
     for t in &ts {
         if let Some(fk) = m.field_keys.get(t) {
@@ -543,17 +528,14 @@ fn template_facts(
     let mut fixed_layout = prefix_stable && adds == 0;
     // Who can make each key present: a writer that runs after construction
     // (or one of a computed key, which can be any key), and any writer at
-    // all. A private claim is made during construction, at no order this
-    // walk knows: it counts as a later writer of either kind.
+    // all.
     let any = m.any_writers.get(&tm).cloned().unwrap_or_default();
     let any_key_written = !any.ctor.is_empty() || !any.post.is_empty();
     let written: Vec<(bool, bool)> = keys
         .iter()
-        .enumerate()
-        .map(|(i, &a)| {
-            let claim = i >= tpl.birth_keys.len() && i < tpl.birth_keys.len() + claimed.len();
+        .map(|&a| {
             let w = m.writers.get(&(tm, a));
-            let post = claim || w.is_some_and(|w| !w.post.is_empty());
+            let post = w.is_some_and(|w| !w.post.is_empty());
             let ever = post || w.is_some_and(|w| !w.ctor.is_empty());
             (post, ever)
         })
@@ -568,9 +550,8 @@ fn template_facts(
     };
     for (i, &a) in keys.iter().enumerate() {
         let birth = i < tpl.birth_keys.len();
-        let claim = !birth && i < tpl.birth_keys.len() + claimed.len();
         let is_accessor = accessor_keys.contains(&a);
-        let definite = (birth && tpl.definite.contains(&a) || claim) && !is_accessor;
+        let definite = birth && tpl.definite.contains(&a) && !is_accessor;
         let declared = birth && tpl.declared.contains(&a) && !is_accessor;
         let reserved = birth && tpl.reserved.contains(&a) && !definite && !is_accessor;
         if birth && !definite && !declared && !reserved {
@@ -601,7 +582,7 @@ fn template_facts(
         if !in_order {
             fixed_layout = false;
         }
-        let slot = ((birth || claim) && (definite || declared || reserved) && slot_ok && in_order)
+        let slot = (birth && (definite || declared || reserved) && slot_ok && in_order)
             .then_some(i as u32);
         let w = m.writers.get(&(tm, a)).cloned().unwrap_or_default();
         let readonly = escape.is_none()

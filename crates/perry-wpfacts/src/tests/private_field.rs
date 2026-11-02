@@ -70,18 +70,27 @@ fn a_private_map_field_initializer_reaches_its_reads() {
     // Base: "primitive receiver" (the read held only `undefined`).
     for key in ["set", "get", "clear"] {
         let v = verdicts(&pf, key, true);
-        assert!(all(&v, |v| *v == Verdict::NativeMember), "{key}: {v:?}\n{}", dump());
+        assert!(
+            all(&v, |v| *v == Verdict::NativeMember),
+            "{key}: {v:?}\n{}",
+            dump()
+        );
     }
     let v = verdicts(&pf, "size", false);
     assert!(all(&v, |v| *v == Verdict::NativeMember), "size: {v:?}");
     // What `get` returns is the literal `set` stored (base: dead site).
     for key in ["v", "d"] {
         let v = verdicts(&pf, key, false);
-        assert!(all(&v, |v| matches!(v, Verdict::T0Mono)), "{key}: {v:?}\n{}", dump());
+        assert!(
+            all(&v, |v| matches!(v, Verdict::T0Mono)),
+            "{key}: {v:?}\n{}",
+            dump()
+        );
     }
-    // Per unit is never stronger than whole, and in both modes the private
-    // key is no public layout key: the public field keeps its slot and the
-    // class its fixed layout.
+    // Per unit is never stronger than whole, and in both modes the class
+    // keeps its fixed layout. The private field's entry is claimed where it is
+    // declared (#8969, `perry_hir::private_names::construction_entries`): the
+    // public field defined after it is at slot 1, as the runtime builds it.
     let pu = modules(&[("a", TABLE), ("m", MAIN)], true);
     for s in &pu.sites {
         if matches!(s.verdict, Verdict::No(_)) {
@@ -108,7 +117,7 @@ fn a_private_map_field_initializer_reaches_its_reads() {
             .expect("E");
         assert!(e.prefix_stable && e.fixed_layout, "{}", p.dump_text());
         let n = e.fields.iter().find(|f| f.key == "n").expect("n");
-        assert_eq!(n.slot, Some(0), "{}", p.dump_text());
+        assert_eq!(n.slot, Some(1), "{}", p.dump_text());
     }
 }
 
@@ -122,9 +131,20 @@ fn a_private_field_value_reaches_a_public_copy() {
         "#,
     );
     let p = field(tmpl(&pf, "C"), "pub");
-    assert!(p.kind.desc().contains("obj{"), "{}\n{}", p.kind.desc(), pf.dump_text());
+    assert!(
+        p.kind.desc().contains("obj{"),
+        "{}\n{}",
+        p.kind.desc(),
+        pf.dump_text()
+    );
     let a = verdicts(&pf, "a", false);
-    assert!(all(&a, |v| !matches!(v, Verdict::No(r) if r.starts_with("primitive"))), "{a:?}");
+    assert!(
+        all(
+            &a,
+            |v| !matches!(v, Verdict::No(r) if r.starts_with("primitive"))
+        ),
+        "{a:?}"
+    );
 }
 
 #[test]
@@ -140,9 +160,17 @@ fn a_private_map_handed_to_unknown_code_keeps_its_calls() {
     "#;
     let pf = facts(src);
     let v = verdicts(&pf, "get", true);
-    assert!(all(&v, |v| matches!(v, Verdict::No(_))), "{v:?}\n{}", pf.dump_text());
+    assert!(
+        all(&v, |v| matches!(v, Verdict::No(_))),
+        "{v:?}\n{}",
+        pf.dump_text()
+    );
     // Control: without the leak the same call is the Map's own member.
     let pf = facts(&src.replace("ext(this.#t);", ""));
     let v = verdicts(&pf, "get", true);
-    assert!(all(&v, |v| *v == Verdict::NativeMember), "{v:?}\n{}", pf.dump_text());
+    assert!(
+        all(&v, |v| *v == Verdict::NativeMember),
+        "{v:?}\n{}",
+        pf.dump_text()
+    );
 }

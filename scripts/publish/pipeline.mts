@@ -15,6 +15,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from 'node:fs'
@@ -548,6 +549,12 @@ async function main(): Promise<void> {
   if (!next.released) process.exitCode = 1
 }
 
-if (process.argv[1] === fileURLToPath(new URL(import.meta.url))) {
+// Compare resolved paths: argv[1] keeps a symlinked prefix (macOS /var ->
+// /private/var, a linked checkout) that import.meta.url has resolved away.
+const isMainModule =
+  process.argv[1] !== undefined &&
+  realpathSync(process.argv[1]) === realpathSync(fileURLToPath(new URL(import.meta.url)))
+
+if (isMainModule) {
   await main()
 }
