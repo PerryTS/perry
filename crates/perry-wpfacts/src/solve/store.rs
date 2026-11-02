@@ -273,6 +273,78 @@ impl Model {
         Some(self.key_nodes.get(&n).copied())
     }
 
+    /// A store into a published method's receiver marker is a store into
+    /// an instance of this unit as well: the marker stands for instances of
+    /// the classes the method is published with (DECISIONS 59), and this
+    /// unit models every instance of its own classes and their subclasses,
+    /// wherever constructed (DECISIONS 125), as the class's instance token.
+    /// The reader replays the store on the object it admits
+    /// (`this_stores`), but a caller that runs the method unseen (an
+    /// override another unit's parent constructor calls, `override_node`)
+    /// replays nothing: without this the instance's layout and kinds miss
+    /// the store, and per unit would prove a slot, a readonly or a kind the
+    /// whole program does not (SHC6 h4). What it stores is the caller's
+    /// value (`Cons::CallerValue`).
+    fn store_into_own_instances(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) {
+        let Some(classes) = self.virt_protos.get(&t).cloned() else {
+            return;
+        };
+        let own: Vec<TmplId> = (0..self.tmpls.len() as TmplId)
+            .filter(|&tm| {
+                matches!(self.tmpls[tm as usize].kind, TmplKind::Class { .. })
+                    && !self.foreign.contains_key(&tm)
+                    && classes.iter().any(|&c| self.has_ancestor(tm, c))
+                    && self.has_foreign_ancestor(tm)
+            })
+            .collect();
+        if own.is_empty() {
+            return;
+        }
+        // The stored value is relative to the caller (a marker stands for
+        // what the caller passes or holds), and a caller running the method
+        // unseen puts nothing beside it: a marker is ⊤ in these instances.
+        let v = match self.caller_value.get(&src) {
+            Some(&v) => v,
+            None => {
+                let v = self.node_l("caller-value");
+                self.caller_value.insert(src, v);
+                let reason = self.reason("stored by a published method on its receiver");
+                self.cons(src, Cons::CallerValue { dst: v, reason });
+                v
+            }
+        };
+        for tm in own {
+            let inst = self.tok(TokKind::Obj(tm, NO_CTX));
+            self.store_into(inst, key, v, site);
+        }
+    }
+
+    /// Does `tm` descend from a class whose code this unit does not see:
+    /// another unit's class, or a parent that is no class of this unit
+    /// when it was generated (`parent_value`, §17.2). That code runs on
+    /// `tm`'s instances unseen (its constructor, its methods) and may call
+    /// `tm`'s methods on them (`override_node`).
+    fn has_foreign_ancestor(&self, tm: TmplId) -> bool {
+        let mut work = vec![tm];
+        let mut seen: Vec<TmplId> = Vec::new();
+        while let Some(c) = work.pop() {
+            if seen.contains(&c) {
+                continue;
+            }
+            seen.push(c);
+            if c != tm && self.foreign.contains_key(&c) {
+                return true;
+            }
+            let t = &self.tmpls[c as usize];
+            if t.parent_value.is_some() {
+                return true;
+            }
+            work.extend(t.parent);
+            work.extend(t.parent_links.iter().copied());
+        }
+        false
+    }
+
     pub(crate) fn store_into(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) {
         // A class private field: what its class's code stores (`private_field`);
         // on an object of this unit, its own field too.
@@ -487,6 +559,7 @@ impl Model {
                         self.this_open.insert(f);
                     }
                 }
+                self.store_into_own_instances(t, key, src, site);
                 return;
             }
         }

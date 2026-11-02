@@ -65,6 +65,9 @@ impl Model {
     /// on a builtin prototype or through ⊤ (`reshaped_keys`), where a setter
     /// or a read-only value would intercept the store that makes the key.
     pub(crate) fn shadows(&self, t: Tok, a: Atom) -> bool {
+        if t != TOP && self.regexp_last_index(t, a) {
+            return true;
+        }
         if t == TOP
             || self.reshaped_any
             || self.reshaped_keys.contains(&a)
@@ -1324,6 +1327,14 @@ impl Model {
                     self.call_bound(call, t);
                 }
             }
+            // A bare marker under a key of this unit's object (`o.k()` with
+            // `k` holding a parameter's own marker, DECISIONS 119): both
+            // halves at once. `call_tok` records the call for the caller's
+            // unit with the receiver described as its `this` (DECISIONS
+            // 140), or escapes marker, receiver and arguments as a call of
+            // an unknown function value, as whole does. (`this_to` has no
+            // arm for a marker.)
+            _ if self.bare_marker(t) => self.call_tok(call, t, None),
             _ => {}
         }
     }

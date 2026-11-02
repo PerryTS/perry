@@ -484,6 +484,54 @@ pub extern "C" fn js_node_http_method_fallback(
     }
 }
 
+/// The method a native-handle response inherits under `name`: the function
+/// object `ServerResponse.prototype` (or, for a bare `OutgoingMessage`,
+/// `OutgoingMessage.prototype`) holds, own or from its parent prototype, so
+/// `res.writeHead === ServerResponse.prototype.writeHead` as in node.
+/// Calling it runs the native method on its `this`
+/// ([`js_node_http_method_fallback`] for a handle), never the receiver's own
+/// replacement. `undefined` when neither prototype defines `name` as a method.
+#[no_mangle]
+pub extern "C" fn js_node_http_response_prototype_method(
+    outgoing_only: i32,
+    name_ptr: *const u8,
+    name_len: usize,
+) -> f64 {
+    if name_ptr.is_null() || name_len == 0 {
+        return undefined();
+    }
+    // SAFETY: the caller passes a live name byte range.
+    let name = unsafe { std::slice::from_raw_parts(name_ptr, name_len) };
+    let chain: &[HttpProto] = if outgoing_only != 0 {
+        &[HttpProto::OutgoingMessage]
+    } else {
+        &[HttpProto::ServerResponse, HttpProto::OutgoingMessage]
+    };
+    for &kind in chain {
+        let proto = ensure_http_prototype(kind);
+        let holder = JSValue::from_bits(proto.to_bits());
+        if !holder.is_pointer() {
+            return undefined();
+        }
+        // SAFETY: a live sealed prototype; its method slots are data slots,
+        // so no getter runs.
+        let Some(value) =
+            (unsafe { crate::object::own_property_get_by_bytes(holder.as_pointer(), name, proto) })
+        else {
+            continue;
+        };
+        let bits = value.bits();
+        let is_method = JSValue::from_bits(bits).is_pointer()
+            && crate::closure::is_closure_ptr((bits & crate::value::POINTER_MASK) as usize);
+        return if is_method {
+            f64::from_bits(bits)
+        } else {
+            undefined()
+        };
+    }
+    undefined()
+}
+
 fn bool_value(b: bool) -> f64 {
     f64::from_bits(if b {
         crate::value::TAG_TRUE

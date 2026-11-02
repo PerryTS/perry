@@ -771,6 +771,11 @@ pub enum Cons {
     /// into an object of this unit: every value but `f`'s parameter and
     /// argument markers, which are `f`'s receiver flow (`Cons::StoreOut`).
     OwnOnly { f: FnIdx, dst: NodeId },
+    /// SHC6 h4: what a store into a published method's receiver marker
+    /// puts into this unit's own instances (`store_into_own_instances`):
+    /// every value, a marker (a caller's value, relative to a caller that
+    /// may run the method unseen) as ⊤.
+    CallerValue { dst: NodeId, reason: u32 },
     /// The `this` of a contract stand-in of another unit's class `tmpl`
     /// (design §11.2): its instances are inside the contract; any other
     /// receiver escapes (that unit runs the method on it unseen).
@@ -1090,6 +1095,7 @@ impl Cons {
             Cons::TopSink { .. } => "top",
             Cons::HandOver { .. } => "handover",
             Cons::OwnOnly { .. } => "ownonly",
+            Cons::CallerValue { .. } => "callervalue",
             Cons::StoreOut { .. } => "storeout",
             Cons::ContractThis { .. } => "contractthis",
             Cons::OverrideThis { .. } => "overridethis",
@@ -1824,6 +1830,9 @@ pub struct Model {
     /// DECISIONS 149d: per (stored node, function) the node of its values
     /// that are not the function's markers (`Cons::OwnOnly`).
     pub rooted_own: FxHashMap<(NodeId, FnIdx), NodeId>,
+    /// Per stored node, its value as this unit's own instances hold it
+    /// (`Cons::CallerValue`).
+    pub caller_value: FxHashMap<NodeId, NodeId>,
     /// DECISIONS 118, argument markers: the named-key stores into one (each
     /// replayed on every marker that links in later), the `StoreOut`s it is
     /// the source of (function, parameter, reason: a member other than that

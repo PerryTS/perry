@@ -53,6 +53,111 @@ unsafe fn dispatch_handle_proto_method(
     ))
 }
 
+/// Call an own callable property of a native handle (`res.writeHead = hook;
+/// res.writeHead(200)`) with `this` bound to the handle. `None` when the
+/// handle's bag holds no own callable under `method_name`.
+unsafe fn dispatch_handle_own_method(
+    object: f64,
+    handle_id: usize,
+    method_name: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    let own = crate::object::handle_expando::handle_own_property_get(
+        handle_id as i64,
+        method_name.as_ptr(),
+        method_name.len(),
+    )?;
+    let bits = own.to_bits();
+    if (bits >> 48) != 0x7FFD {
+        return None;
+    }
+    let closure_ptr = (bits & crate::value::POINTER_MASK) as usize;
+    if closure_ptr == 0 || !crate::closure::is_closure_ptr(closure_ptr) {
+        return None;
+    }
+    let bound = crate::closure::clone_closure_rebind_this(bits, object);
+    Some(crate::closure::native_call_value_this(
+        f64::from_bits(bound),
+        crate::closure::JsThis::from_f64(object),
+        args_ptr,
+        args_len,
+    ))
+}
+
+/// The native method `method_name` of the handle `raw_ptr` (the method its
+/// prototype supplies), never an own property of the handle.
+unsafe fn dispatch_handle_native_method(
+    raw_ptr: usize,
+    object: f64,
+    method_name: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    // This is a handle, not a real memory pointer - dispatch to stdlib
+    if let Some(dispatch) = handle_method_dispatch() {
+        let r = dispatch(
+            raw_ptr as i64,
+            method_name.as_ptr(),
+            method_name.len(),
+            args_ptr,
+            args_len,
+        );
+        // Wall 10 — when the native handle dispatch doesn't recognise the
+        // method (returns `undefined`), the call may target a method that
+        // a framework attached via `Object.setPrototypeOf(handle, proto)`
+        // (Express's `res.send` / `req.accepts`, …). Walk the recorded
+        // handle prototype; if it yields a callable, invoke it with
+        // `this` bound to the handle so the method's internal
+        // `this.end(...)` / `this.statusCode = …` route back to us.
+        if r.to_bits() == crate::value::TAG_UNDEFINED {
+            if let Some(v) =
+                dispatch_handle_proto_method(raw_ptr, object, method_name, args_ptr, args_len)
+            {
+                return v;
+            }
+        }
+        return r;
+    }
+    // No dispatcher registered: still try a setPrototypeOf'd method.
+    if let Some(v) = dispatch_handle_proto_method(raw_ptr, object, method_name, args_ptr, args_len)
+    {
+        return v;
+    }
+    // Return JS `undefined`. Must be TAG_UNDEFINED (0x7FFC_..._0001); the
+    // bit pattern 0x7FF8_..._0001 a prior copy used is a signaling NaN (a
+    // JS number), which leaks out as a non-object and trips
+    // `js_iterator_result_validate`.
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// Bound-method VALUE dispatch on a native handle (`const orig = res.writeHead;
+/// res.writeHead = hook; orig.apply(res, a)`): the value read names the
+/// handle's native method, so invoking it runs that method and never
+/// re-resolves the name against the handle's own properties (which would
+/// find `hook` again). `None` for a receiver that is not a handle.
+pub(crate) unsafe fn try_dispatch_handle_method_value(
+    receiver: f64,
+    method_name_ptr: *const i8,
+    method_name_len: usize,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    let jsval = JSValue::from_bits(receiver.to_bits());
+    if method_name_ptr.is_null() || method_name_len == 0 || !jsval.is_handle() {
+        return None;
+    }
+    let name = std::str::from_utf8(std::slice::from_raw_parts(
+        method_name_ptr as *const u8,
+        method_name_len,
+    ))
+    .ok()?;
+    let raw_ptr = (jsval.bits() & crate::value::POINTER_MASK) as usize;
+    Some(dispatch_handle_native_method(
+        raw_ptr, receiver, name, args_ptr, args_len,
+    ))
+}
+
 pub(super) unsafe fn dispatch_handle(
     root_scope: &crate::gc::RuntimeHandleScope,
     object_handle: &crate::gc::RuntimeHandle,
@@ -75,46 +180,21 @@ pub(super) unsafe fn dispatch_handle(
     if jsval.is_reference() {
         let raw_ptr = (jsval.bits() & crate::value::POINTER_MASK) as usize;
         if jsval.is_handle() {
-            // This is a handle, not a real memory pointer - dispatch to stdlib
-            if let Some(dispatch) = handle_method_dispatch() {
-                let r = dispatch(
-                    raw_ptr as i64,
-                    method_name.as_ptr(),
-                    method_name.len(),
-                    args_ptr,
-                    args_len,
-                );
-                // Wall 10 — when the native handle dispatch doesn't recognise the
-                // method (returns `undefined`), the call may target a method that
-                // a framework attached via `Object.setPrototypeOf(handle, proto)`
-                // (Express's `res.send` / `req.accepts`, …). Walk the recorded
-                // handle prototype; if it yields a callable, invoke it with
-                // `this` bound to the handle so the method's internal
-                // `this.end(...)` / `this.statusCode = …` route back to us.
-                if r.to_bits() == crate::value::TAG_UNDEFINED {
-                    if let Some(v) = dispatch_handle_proto_method(
-                        raw_ptr,
-                        object,
-                        method_name,
-                        args_ptr,
-                        args_len,
-                    ) {
-                        return Some(v);
-                    }
-                }
-                return Some(r);
-            }
-            // No dispatcher registered: still try a setPrototypeOf'd method.
+            // `handle.name(args)` is [[Get]] then [[Call]]: an own callable in
+            // the handle's bag (`res.writeHead = hook`) shadows the native
+            // method, called with `this` = the handle.
             if let Some(v) =
-                dispatch_handle_proto_method(raw_ptr, object, method_name, args_ptr, args_len)
+                dispatch_handle_own_method(object, raw_ptr, method_name, args_ptr, args_len)
             {
                 return Some(v);
             }
-            // Return JS `undefined`. Must be TAG_UNDEFINED (0x7FFC_..._0001); the
-            // bit pattern 0x7FF8_..._0001 a prior copy used is a signaling NaN (a
-            // JS number), which leaks out as a non-object and trips
-            // `js_iterator_result_validate`.
-            return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
+            return Some(dispatch_handle_native_method(
+                raw_ptr,
+                object,
+                method_name,
+                args_ptr,
+                args_len,
+            ));
         }
 
         // Guard: null pointer (raw_ptr == 0) means null POINTER_TAG (0x7FFD_0000_0000_0000)

@@ -99,6 +99,17 @@ impl Model {
                     }
                 }
             }
+            Cons::CallerValue { dst, reason } => {
+                self.add_prim(dst, prim);
+                for &t in toks {
+                    if self.is_marker(t) {
+                        self.add_top(dst, |m| m.reasons[reason as usize].clone());
+                        self.add_prim(dst, prim::ALL);
+                    } else {
+                        self.add_tok(dst, t);
+                    }
+                }
+            }
             Cons::HandOver { reason, ctor, arg } => {
                 for &t in toks {
                     if self.is_marker(t) {
@@ -966,8 +977,15 @@ impl Model {
                 }
                 // ToPropertyKey of a Number or BigInt is a numeric string: the
                 // own fields a number key may name (DECISIONS 217); the chain
-                // is `plain_key`'s.
-                if prim & (prim::NUM | prim::BIGINT) != 0
+                // is `plain_key`'s. A marker has no own fields (`Model::field`:
+                // its fields are its reach markers): what a number key reads
+                // from it is its `[]` path step, which `IdxLoad` edged in
+                // under the path's loop collapse (DECISIONS 158). An own-field
+                // node of a marker stands outside that collapse: in
+                // `x = x.next[0]` per unit it made a marker per iteration
+                // (CHB11: 27k markers and 25 GB on tssrc).
+                if !self.is_marker(obj)
+                    && prim & (prim::NUM | prim::BIGINT) != 0
                     && self
                         .idx_done
                         .insert((n, obj, dst, crate::model::IDX_NUM_OWN))
