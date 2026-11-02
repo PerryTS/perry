@@ -1076,9 +1076,9 @@ pub fn run_with_parse_cache(
         // DCE layer 2: modules only unreachable `import()` sites load.
         let mut roots = vec![entry_canonical.clone()];
         roots.extend(
-            ctx.worker_url_entries
-                .iter()
-                .flat_map(|(l, c)| [l.clone(), c.clone()]),
+            super::program_facts::module_roots(&ctx)
+                .into_iter()
+                .map(PathBuf::from),
         );
         if let Some(ext_dir) = &args.bundle_extensions {
             for (entry_path, _) in super::resolve::discover_extension_entries(ext_dir)? {
