@@ -1756,6 +1756,8 @@ mod helper_protocols;
 mod host_helpers;
 mod native_push;
 mod proto_own_call;
+mod receiver_param_call;
+mod method_this_escape;
 mod string_methods;
 mod typed_array_methods;
 mod web_timer_methods;

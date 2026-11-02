@@ -613,6 +613,21 @@ pub(super) fn fn_contract_of(
                 describe_nodes(g, templates, f, vec![a], top, layouts_out, open_tm)
             })
             .collect();
+        // The receiver the body called it on (`o.k()`, `o` this unit's
+        // value with the marker under `k`), described as the arguments are;
+        // a bare call has none.
+        let this = match g.m.calls[call as usize].this {
+            model::ThisArg::Node(n) if key.is_none() && path.is_none() => Some(describe_nodes(
+                g,
+                templates,
+                f,
+                vec![n],
+                g.call_arg_top.contains(&n),
+                layouts_out,
+                open_tm,
+            )),
+            _ => None,
+        };
         let key = key.map(|a| g.m.atoms[a as usize].clone());
         let path = path.map(|a| g.m.atoms[a as usize].clone());
         units::join_param_calls(
@@ -621,6 +636,7 @@ pub(super) fn fn_contract_of(
                 param: i,
                 path,
                 key,
+                this,
                 args,
             }],
         );

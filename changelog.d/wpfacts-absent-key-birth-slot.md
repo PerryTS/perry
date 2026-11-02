@@ -1,0 +1,1 @@
+A class field whose key may be absent from the instance (a parent constructor stored a later key first) keeps its birth slot only when no later key can be present first, so a key defined after it is no longer proven to sit in a slot that is a hole. Programs that read such a field through a proven slot now match node.
