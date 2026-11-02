@@ -343,7 +343,7 @@ pub(crate) fn ptr_array_cache_fields(class: &Class, method: &Function) -> Vec<(S
         .collect()
 }
 
-fn stmts_contain_loop(stmts: &[Stmt]) -> bool {
+pub(crate) fn stmts_contain_loop(stmts: &[Stmt]) -> bool {
     stmts.iter().any(|stmt| match stmt {
         Stmt::While { .. } | Stmt::DoWhile { .. } | Stmt::For { .. } => true,
         Stmt::If {

@@ -37,6 +37,8 @@ mod element_shape_loop;
 #[cfg(test)]
 mod element_shape_loop_tests;
 mod element_shape_native;
+#[cfg(test)]
+mod if_loop_hint_tests;
 mod if_stmt;
 pub(crate) mod indexed_owner_loop;
 mod let_buffer_views;
