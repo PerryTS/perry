@@ -333,10 +333,14 @@ pub struct HmacPayload {
     state: Option<HmacState>,
 }
 
+/// `crypto.Hash` / `crypto.Hmac` are node's deprecate() wrappers; the real
+/// constructors are the internal `Hash` / `Hmac` (`#Hash` / `#Hmac`), whose
+/// prototype the wrappers share. Instances are born on that prototype, so
+/// `h.constructor` is the internal constructor, as in node.
 pub(super) static HASH_FAMILY: NativePayloadFamily = NativePayloadFamily {
     class_id: CRYPTO_HASH,
     name: "Hash",
-    constructor_export: None,
+    constructor_export: Some(("crypto", "#Hash")),
     constructor_length: 2,
     links_owner: false,
     install_prototype: install_hash_prototype,
@@ -345,7 +349,7 @@ pub(super) static HASH_FAMILY: NativePayloadFamily = NativePayloadFamily {
 pub(super) static HMAC_FAMILY: NativePayloadFamily = NativePayloadFamily {
     class_id: CRYPTO_HMAC,
     name: "Hmac",
-    constructor_export: None,
+    constructor_export: Some(("crypto", "#Hmac")),
     constructor_length: 3,
     links_owner: false,
     install_prototype: install_hmac_prototype,
@@ -1001,4 +1005,21 @@ unsafe fn forward_method(dest: f64, name: &[u8], args: &[f64]) {
         return;
     }
     js_native_call_method_str_key(dest, key as i64, args.as_ptr(), args.len());
+}
+
+/// The internal `Hash` / `Hmac` constructor export was created: install the
+/// family methods on its prototype now, so `crypto.Hash.prototype.update`
+/// exists before the first `createHash`.
+pub(super) fn adopt_digest_prototype(hmac: bool, proto: f64) {
+    let family = if hmac { &HMAC_FAMILY } else { &HASH_FAMILY };
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let proto = scope.root_nanbox_f64(proto);
+    if !JSValue::from_bits(proto.get_nanbox_u64()).is_pointer() {
+        return;
+    }
+    native_payload::adopt_prototype(
+        family,
+        perry_runtime::value::js_nanbox_get_pointer(proto.get_nanbox_f64())
+            as *mut perry_runtime::object::ObjectHeader,
+    );
 }
