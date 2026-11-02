@@ -20,8 +20,8 @@ pub(crate) use collections::{WK_ITERATOR, WK_PREFIX};
 use members::{Family, Mem};
 pub use native_protocol::{
     global_field, global_user_key, is_builtin_module, native_parent_ctor, native_parent_keys,
-    native_parent_summarized, native_proto, native_written, note_global_in_top, note_native_write,
-    require_parts, settle_native_given,
+    native_parent_summarized, native_proto, native_written, native_written_by, note_global_in_top,
+    note_native_write, require_parts, settle_native_given,
 };
 use native_protocol::{native_method, native_skips};
 
@@ -51,8 +51,10 @@ fn ns_by_name(name: &str) -> Option<BuiltinNs> {
         "String" => BuiltinNs::String,
         "Boolean" => BuiltinNs::Boolean,
         "Function" => BuiltinNs::Function,
-        "Map" | "WeakMap" => BuiltinNs::Map,
-        "Set" | "WeakSet" => BuiltinNs::Set,
+        "Map" => BuiltinNs::Map,
+        "Set" => BuiltinNs::Set,
+        "WeakMap" => BuiltinNs::WeakMap,
+        "WeakSet" => BuiltinNs::WeakSet,
         _ => return None,
     })
 }
@@ -374,6 +376,35 @@ pub fn adopt(m: &mut Model, by: CallId, v: NodeId, dst: NodeId) {
 
 // ------------------------------------------------ intrinsic members
 
+/// A family of builtin receivers a NativeMember verdict is over
+/// (`derive::native_member`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NativeFamily {
+    /// Primitive Strings.
+    Str,
+    /// Array exotic objects (`derive::exact_array`).
+    Array,
+    /// Collections of one kind (`Map`, `Set`, `WeakMap`, `WeakSet`).
+    Collection(&'static str),
+}
+
+/// Does the intrinsic chain of every value of `fam` define `name` before
+/// the program writes anything (`members`): a function for a call (`call`),
+/// a function or a data member for a read? `constructor` and `__proto__`
+/// are no member here (their value is no builtin function or primitive).
+pub(crate) fn native_described(fam: NativeFamily, name: &str, call: bool) -> bool {
+    let mem = match fam {
+        NativeFamily::Str => members::intrinsic_member(Family::Str, name),
+        NativeFamily::Array => members::intrinsic_member(Family::Array, name),
+        NativeFamily::Collection(what) => members::collection_member(what, name),
+    };
+    match mem {
+        Some(Mem::Fn) => true,
+        Some(Mem::Prim(_)) => !call,
+        _ => false,
+    }
+}
+
 /// May key `a` have been written onto a builtin prototype (`Object.prototype`
 /// stands for every one of them here): a store, an accessor, a delete or a
 /// reach into unmodeled code on it, another unit's such write, or a store
@@ -464,7 +495,12 @@ fn family_ctor(m: &mut Model, fam: Family, dst: NodeId) {
         Family::Num | Family::BigInt => &[BuiltinNs::Number],
         Family::Bool => &[BuiltinNs::Boolean],
         Family::Sym => &[BuiltinNs::Symbol],
-        Family::Collection => &[BuiltinNs::Map, BuiltinNs::Set],
+        Family::Collection => &[
+            BuiltinNs::Map,
+            BuiltinNs::Set,
+            BuiltinNs::WeakMap,
+            BuiltinNs::WeakSet,
+        ],
         Family::Promise => &[BuiltinNs::Promise],
         Family::Error => &[BuiltinNs::Error],
         Family::Box => &[BuiltinNs::Object, BuiltinNs::Array],

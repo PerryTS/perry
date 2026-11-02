@@ -21,12 +21,19 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
         return new_builtin_ns(m, ns, c2);
     }
     match ns {
-        BuiltinNs::Map | BuiltinNs::Set => {
-            let c = site_tmpl(m, call, "Collection");
+        BuiltinNs::Map | BuiltinNs::Set | BuiltinNs::WeakMap | BuiltinNs::WeakSet => {
+            // The template names its collection kind (`members::collection_member`).
+            let what = match ns {
+                BuiltinNs::Map => "Map",
+                BuiltinNs::Set => "Set",
+                BuiltinNs::WeakMap => "WeakMap",
+                _ => "WeakSet",
+            };
+            let c = site_tmpl(m, call, what);
             let fa = m.field_any(c);
             if let Some(src) = arg(m, call, 0) {
                 let vals = iterate(m, call, src);
-                if ns == BuiltinNs::Map {
+                if matches!(ns, BuiltinNs::Map | BuiltinNs::WeakMap) {
                     // Entries `[key, value]`: the collection holds both.
                     let ek = m.elem_key();
                     m.cons(vals, Cons::Load { key: ek, dst: fa });

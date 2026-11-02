@@ -344,10 +344,96 @@ pub(super) fn prim_member(p: u16, name: &str) -> Option<Mem> {
     out
 }
 
+/// The keys of each collection kind's own prototype (ECMA-262 24.1-24.4,
+/// the Set methods of ES2025): `COLLECTION` is their union, which the
+/// solve's lookups take (a template knows its kind, a lookup through
+/// `ObjectProto` does not).
+const MAP_KEYS: &[&str] = &[
+    "clear",
+    "constructor",
+    "delete",
+    "entries",
+    "forEach",
+    "get",
+    "has",
+    "keys",
+    "set",
+    "size",
+    "values",
+    super::WK_ITERATOR,
+    "@@__perry_wk_toStringTag",
+];
+const SET_KEYS: &[&str] = &[
+    "add",
+    "clear",
+    "constructor",
+    "delete",
+    "difference",
+    "entries",
+    "forEach",
+    "has",
+    "intersection",
+    "isDisjointFrom",
+    "isSubsetOf",
+    "isSupersetOf",
+    "keys",
+    "size",
+    "symmetricDifference",
+    "union",
+    "values",
+    super::WK_ITERATOR,
+    "@@__perry_wk_toStringTag",
+];
+const WEAKMAP_KEYS: &[&str] = &[
+    "constructor",
+    "delete",
+    "get",
+    "has",
+    "set",
+    "@@__perry_wk_toStringTag",
+];
+const WEAKSET_KEYS: &[&str] = &[
+    "add",
+    "constructor",
+    "delete",
+    "has",
+    "@@__perry_wk_toStringTag",
+];
+
+/// The member `name` on the chain of a collection of kind `what` (`Map`,
+/// `Set`, `WeakMap`, `WeakSet`): its own prototype's, then
+/// `Object.prototype`'s. `None`: absent, or no collection kind.
+pub(super) fn collection_member(what: &str, name: &str) -> Option<Mem> {
+    let keys = match what {
+        "Map" => MAP_KEYS,
+        "Set" => SET_KEYS,
+        "WeakMap" => WEAKMAP_KEYS,
+        "WeakSet" => WEAKSET_KEYS,
+        _ => return None,
+    };
+    if keys.contains(&name) {
+        return find(COLLECTION, name);
+    }
+    // Another kind's member is absent here; `Object.prototype` is on every chain.
+    match find(COLLECTION, name) {
+        Some(_) => None,
+        None => find(OBJECT, name),
+    }
+}
+
+/// `derive`'s NativeMember lookup: the member `name` on the chain of every
+/// value of family `fam` (an exact Array or a primitive String).
+pub(super) fn intrinsic_member(fam: Family, name: &str) -> Option<Mem> {
+    match fam {
+        Family::Array | Family::Str => member(fam, name),
+        _ => None,
+    }
+}
+
 /// The family of a builtin object template kind (`TmplKind::BObj::what`).
 pub(super) fn bobj_family(what: &str) -> Family {
     match what {
-        "Collection" => Family::Collection,
+        "Map" | "Set" | "WeakMap" | "WeakSet" => Family::Collection,
         "Iterator" => Family::Iterator,
         "Promise" => Family::Promise,
         "Error" => Family::Error,
@@ -355,9 +441,7 @@ pub(super) fn bobj_family(what: &str) -> Family {
             Family::Object
         }
         "primbox" | "arraybox" | "keys" | "json" | "descriptor" | "descriptors" | "groups"
-        | "fromEntries" => {
-            Family::Box
-        }
+        | "fromEntries" => Family::Box,
         "Object()" | "Object(prim)" | "BoxedPrimitive" => Family::Wrapper,
         _ => Family::Opaque,
     }
@@ -553,9 +637,10 @@ fn ns_statics(ns: BuiltinNs) -> Option<&'static [(&'static str, Mem)]> {
         | BuiltinNs::Function
         | BuiltinNs::ObjectProtoMethod
         | BuiltinNs::ObjectProtoOwn(_) => &[],
-        // Map/WeakMap and Set/WeakSet.
         BuiltinNs::Map => &[("groupBy", FN), ("@@__perry_wk_species", Mem::Ctor)],
         BuiltinNs::Set => &[("@@__perry_wk_species", Mem::Ctor)],
+        // No statics, no `@@species`.
+        BuiltinNs::WeakMap | BuiltinNs::WeakSet => &[],
         BuiltinNs::Console
         | BuiltinNs::GlobalThis
         | BuiltinNs::Process

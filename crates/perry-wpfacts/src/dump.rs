@@ -174,6 +174,7 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
     for st in &pf.sites {
         let v = match &st.verdict {
             Verdict::OwnLength => "native:own-length".to_string(),
+            Verdict::NativeMember => "native:member".to_string(),
             Verdict::T0Mono => "T0".to_string(),
             Verdict::T0Set => "T0set".to_string(),
             Verdict::E0 => "E0".to_string(),
