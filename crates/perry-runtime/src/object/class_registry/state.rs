@@ -1127,19 +1127,27 @@ fn decl_prototype_class_id(ptr: usize) -> Option<u32> {
     // SAFETY: the header names an ordinary object at `ptr`; its first word
     // is the class id.
     let class_id = unsafe { (*(ptr as *const ObjectHeader)).class_id };
-    if class_id == 0 {
-        return None;
-    }
-    // The link of a class that is not `ptr`'s observes nothing: the compare
-    // fails whatever the link holds. Only a match reads it (the SNAP census
-    // counts that read as the init's; the miss is bookkeeping).
+    (class_id != 0 && decl_prototype_link_observed(class_id, ptr) == ptr).then_some(class_id)
+}
+
+/// `class_id`'s declared-prototype link, as `decl_prototype_class_id`
+/// compares it with `ptr`. The link of a class that is not `ptr`'s observes
+/// nothing: the compare fails whatever the link holds. In instrumented
+/// builds the SNAP census counts the read as the init's only on a match (it
+/// reads the link again outside the bookkeeping scope); a production build
+/// reads it once.
+#[inline(always)]
+fn decl_prototype_link_observed(class_id: u32, ptr: usize) -> usize {
     let link = {
         let _census = crate::snap_census::bookkeeping();
         crate::object::class_value::class_decl_prototype_link(class_id) as usize
     };
-    (link == ptr
-        && crate::object::class_value::class_decl_prototype_link(class_id) as usize == ptr)
-        .then_some(class_id)
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    if link == ptr {
+        return crate::object::class_value::class_decl_prototype_link(class_id) as usize;
+    }
+    let _ = ptr;
+    link
 }
 
 /// #7757: a monomorphized specialization (`Gen$num`) must present the GENERIC's

@@ -441,11 +441,13 @@ pub(super) unsafe fn map(kind: Kind, mapped: usize) -> *mut u8 {
 }
 /// `[base, base + len)` of the reservation's payload (empty before it
 /// exists). The SNAP census sizes its page map with it.
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
 pub(crate) fn payload_bounds() -> (usize, usize) {
     initialized().map_or((0, 0), |r| (r.base, r.base + r.len))
 }
 
 /// Every mapped region, `[base, end)`, once each.
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
 pub(crate) fn for_each_mapped(mut f: impl FnMut(usize, usize)) {
     let Some(r) = existing() else {
         return;

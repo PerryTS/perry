@@ -572,6 +572,7 @@ pub(super) fn register_global_root(root: *mut u64) {
 }
 
 /// Every registered module-global root slot (the SNAP census tracks them).
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
 pub(crate) fn for_each_global_root_slot(mut f: impl FnMut(usize)) {
     GLOBAL_ROOTS.with(|roots| {
         for &root in roots.borrow().iter() {

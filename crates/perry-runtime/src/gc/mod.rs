@@ -92,6 +92,7 @@ pub use malloc::*;
 mod hot_tls;
 pub(crate) use hot_tls::*;
 mod roots;
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
 pub(crate) use roots::for_each_global_root_slot;
 pub use roots::*;
 mod full_trace;

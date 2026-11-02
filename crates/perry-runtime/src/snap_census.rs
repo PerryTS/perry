@@ -348,6 +348,7 @@ impl Drop for RuntimeScope {
 /// Codegen calls this where the entry module's own body starts (after its
 /// eager imports), in instrumented compiles only (`PERRY_SNAP_CENSUS` set
 /// while compiling). The census boundary of an ESM entry.
+#[cfg(perry_gc_instruments)]
 #[no_mangle]
 pub extern "C" fn js_snap_entry_body() {
     crate::effect!(pure);
@@ -432,6 +433,7 @@ pub(crate) fn env_has(name: &str, present: bool) {
 /// when the read's value is stored straight into a module global, a
 /// property, an element or a literal; 0 otherwise. Kept for the frame's
 /// next `js_getenv`.
+#[cfg(perry_gc_instruments)]
 #[no_mangle]
 pub extern "C" fn js_snap_env_site(kind: i32) {
     crate::effect!(pure);
@@ -448,6 +450,7 @@ pub extern "C" fn js_snap_env_site(kind: i32) {
 /// after. The evaluation the guard starts was reached by `require` (a static
 /// edge), not by `import()`: it is no member of a dynamic subgraph (design
 /// §2.10.7). A missing mark costs precision, never soundness.
+#[cfg(perry_gc_instruments)]
 #[no_mangle]
 pub extern "C" fn js_snap_require_edge(on: i32) {
     crate::effect!(pure);
