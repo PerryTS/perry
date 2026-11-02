@@ -79,9 +79,10 @@ fn a_private_map_field_initializer_reaches_its_reads() {
         let v = verdicts(&pf, key, false);
         assert!(all(&v, |v| matches!(v, Verdict::T0Mono)), "{key}: {v:?}\n{}", dump());
     }
-    // Per unit is never stronger than whole, and in both modes the private
-    // key is no public layout key: the public field keeps its slot and the
-    // class its fixed layout.
+    // Per unit is never stronger than whole, and in both modes the class
+    // keeps its fixed layout. The private field's entry is claimed where it is
+    // declared (#8969, `perry_hir::private_names::construction_entries`): the
+    // public field defined after it is at slot 1, as the runtime builds it.
     let pu = modules(&[("a", TABLE), ("m", MAIN)], true);
     for s in &pu.sites {
         if matches!(s.verdict, Verdict::No(_)) {
@@ -108,7 +109,7 @@ fn a_private_map_field_initializer_reaches_its_reads() {
             .expect("E");
         assert!(e.prefix_stable && e.fixed_layout, "{}", p.dump_text());
         let n = e.fields.iter().find(|f| f.key == "n").expect("n");
-        assert_eq!(n.slot, Some(0), "{}", p.dump_text());
+        assert_eq!(n.slot, Some(1), "{}", p.dump_text());
     }
 }
 

@@ -225,11 +225,13 @@ console.log(e.search("a"));"#
     }
 }
 
-/// The completed layout codegen gives the instance (#11791,
-/// `perry_hir::private_names::claimed_private_chain`): the birth keys, then
-/// each private field at the next inline slot in declaration order. A read
-/// of a private field proves as a read of a definite birth field does.
-/// Before: no private field had a slot, its reads stayed unproven.
+/// The layout the runtime builds (#11791, #8969,
+/// `perry_hir::private_names::construction_entries`): each field at the next
+/// slot in declaration order, a private one where it is declared. A read of
+/// a private field proves as a read of a definite birth field does.
+/// Before: no private field had a slot, its reads stayed unproven; then the
+/// private fields were put after every public key (`b` at 1, `#t` at 2),
+/// while the runtime defines `b` after claiming `#t`.
 #[test]
 fn a_private_field_is_read_at_its_claimed_slot() {
     let e = r#"export class Eng {
@@ -259,9 +261,15 @@ console.log(e.run("q"), e.run("r"), Object.keys(e).length);"#;
                 .find(|f| f.private && f.key.ends_with(&format!(":{name}>")))
                 .and_then(|f| f.slot)
         };
+        let public = |name: &str| {
+            eng.fields
+                .iter()
+                .find(|f| !f.private && f.key == name)
+                .and_then(|f| f.slot)
+        };
         assert_eq!(
-            (slot("#t"), slot("#n")),
-            (Some(2), Some(3)),
+            (public("a"), slot("#t"), public("b"), slot("#n")),
+            (Some(0), Some(1), Some(2), Some(3)),
             "{}",
             pf.dump_text()
         );
@@ -281,10 +289,11 @@ console.log(e.run("q"), e.run("r"), Object.keys(e).length);"#;
     }
 }
 
-/// A constructor that adds a key of its own: codegen has no completed
-/// private layout (a claim's slot is not known), so neither has the facts.
+/// A constructor that adds a key of its own: the field definitions run
+/// before the constructor body, so the private field's entry is claimed
+/// first, at slot 0, and the constructor's key comes after it.
 #[test]
-fn a_constructor_adding_keys_leaves_private_fields_without_a_slot() {
+fn a_constructor_adding_keys_comes_after_the_private_claim() {
     let e = r#"export class Eng {
     #t = new Map<string, number>();
     constructor(on: boolean) { if (on) (this as any).extra = 1; }
@@ -300,11 +309,55 @@ console.log(new Eng(true).run("q"), new Eng(false).run("r"));"#;
             .iter()
             .find(|t| t.display == "e.ts:Eng")
             .expect("Eng");
+        let private: Vec<_> = eng.fields.iter().filter(|f| f.private).collect();
         assert!(
-            eng.fields
+            private.len() == 1 && private[0].slot == Some(0),
+            "{}",
+            pf.dump_text()
+        );
+    }
+}
+
+/// #8969: a parent's private field is claimed before the subclass defines
+/// its fields, so the subclass's public field is past it. The runtime builds
+/// `[parent, #ps, child]` (the class family layout lists the same); a fact
+/// that put `child` at slot 1 made an elided read return `#ps`'s value.
+#[test]
+fn a_parents_private_field_comes_before_the_subclass_fields() {
+    let e = r#"export class P {
+    parent = 1;
+    #ps = 2;
+    pt(): number { return this.parent + this.#ps; }
+}
+export class C extends P { child = 3; }"#;
+    let m = r#"import { C } from "./e";
+const m = new C();
+console.log(m.child, m.parent, m.pt());"#;
+    let mods = [("e", e), ("m", m)];
+    let (u, w) = units_and_whole(&mods);
+    for pf in [u, w] {
+        let c = pf
+            .templates
+            .iter()
+            .find(|t| t.display == "e.ts:C")
+            .expect("C");
+        let slot = |private: bool, name: &str| {
+            c.fields
                 .iter()
-                .filter(|f| f.private)
-                .all(|f| f.slot.is_none()),
+                .find(|f| {
+                    // Per unit, the parent is another unit: its private
+                    // entry arrives by spelling in the published birth keys.
+                    if private {
+                            f.key.ends_with(&format!(":{name}>"))
+                        } else {
+                            f.key == name
+                        }
+                })
+                .and_then(|f| f.slot)
+        };
+        assert_eq!(
+            (slot(false, "parent"), slot(true, "#ps"), slot(false, "child")),
+            (Some(0), Some(1), Some(2)),
             "{}",
             pf.dump_text()
         );
