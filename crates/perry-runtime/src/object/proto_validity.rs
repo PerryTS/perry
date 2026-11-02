@@ -52,6 +52,11 @@ pub(crate) fn any_prototype_marked() -> bool {
 /// re-reading through a pointer the allocation may have moved.
 #[inline]
 pub(crate) unsafe fn mark_object_as_prototype(obj: usize) -> Option<u64> {
+    // SNAP census: the whole prototype mark (the record, its flag, the
+    // serial, the private lineage, never-move) is representation (design
+    // §2.10.11); the image re-applies it lazily on first use.
+    #[cfg(perry_gc_instruments)]
+    let _census = crate::snap_census::representation();
     if let Some(meta) = ensure_meta_for_mark(obj, crate::object::OBJECT_META_FLAG_IS_PROTOTYPE) {
         ANY_PROTOTYPE_MARKED.store(true, Ordering::Relaxed);
         // GC_STORE_AUDIT(POINTER_FREE): scalar classification bit in the meta
@@ -172,6 +177,11 @@ pub(crate) fn next_prototype_serial() -> u64 {
 /// As [`mark_object_as_prototype`]: allocates, and may move the owner.
 pub(crate) unsafe fn mark_object_as_prototype_with_serial(obj: usize, serial: u64) -> Option<u64> {
     debug_assert!(serial >= FIRST_DYNAMIC_PROTOTYPE_SERIAL);
+    // SNAP census: the whole prototype mark (the record, its flag, the
+    // serial, the private lineage, never-move) is representation (design
+    // §2.10.11); the image re-applies it lazily on first use.
+    #[cfg(perry_gc_instruments)]
+    let _census = crate::snap_census::representation();
     let meta = ensure_meta_for_mark(obj, crate::object::OBJECT_META_FLAG_IS_PROTOTYPE)?;
     ANY_PROTOTYPE_MARKED.store(true, Ordering::Relaxed);
     // GC_STORE_AUDIT(POINTER_FREE): scalar classification bit.
