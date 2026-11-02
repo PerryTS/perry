@@ -65,6 +65,9 @@ impl RealmReach {
                 .extend(entries.iter().map(|e| e.name.to_string()));
             return;
         }
+        // Every program has the global cell: its births (the layout it is born
+        // on) are reached whatever the program names.
+        self.names.insert("%Global%".to_string());
         let by_name: BTreeMap<_, _> = entries.iter().map(|e| (e.name, e)).collect();
         let mut pending: Vec<_> = self.names.iter().cloned().collect();
         while let Some(name) = pending.pop() {

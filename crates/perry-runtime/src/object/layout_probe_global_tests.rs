@@ -122,11 +122,16 @@ fn global_object_is_born_on_its_static_layout_and_population_keeps_it() {
                 (*desc).key_count as usize,
                 "entries {entries:?}"
             );
-            assert_eq!(
-                keys.arr(),
-                (*desc).image_keys,
-                "the global left its image key list"
-            );
+            // A program's descriptor carries the image key list; the test
+            // definition (DESIGN §3.2 item 10) has none, and its births take
+            // the heap-list path.
+            if !(*desc).image_keys.is_null() {
+                assert_eq!(
+                    keys.arr(),
+                    (*desc).image_keys,
+                    "the global left its image key list"
+                );
+            }
             assert_eq!(
                 family,
                 Some(2),

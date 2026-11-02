@@ -1094,7 +1094,7 @@ runtime_layout!(GLOBAL_OBJECT, 0x5254_0012, 0, crate::object::layout_desc::LAYOU
     GA125 => 7,
     GA126 => 7,
     REGEXP_PROTOTYPE => 66,
-]);
+], realm = ["%Global%"]);
 
 /// The global object's own key named `name` (FNV-1a `hash`), found through
 /// the index of its layout descriptor (the program's definition; `desc()`):
