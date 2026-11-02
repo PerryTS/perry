@@ -698,6 +698,14 @@ pub unsafe extern "C" fn perry_probe_get_binding(
     key_bits: u64,
     hash: u64,
 ) -> f64 {
+    // Census builds: a global binding's read names its key (§2.10.13).
+    #[cfg(perry_gc_instruments)]
+    let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
+    #[cfg(perry_gc_instruments)]
+    let _gkey = crate::snap_census::global_key(
+        (obj_biased as usize).wrapping_add(perry_abi::RECEIVER_HANDLE_FLOOR),
+        || crate::string::js_string_key_bytes(crate::JSValue::from_bits(key_bits), &mut scratch),
+    );
     probe_get::<false>(dir, obj_biased, key_bits, hash)
 }
 

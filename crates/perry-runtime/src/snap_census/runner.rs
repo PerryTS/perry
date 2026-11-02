@@ -97,6 +97,30 @@ unsafe fn map_zeroed<T>(count: usize) -> *mut T {
 /// A removed [`WordSet`] slot (no word is all ones).
 const TOMBSTONE: u64 = u64::MAX;
 
+/// Location ids of the realm global's keys (§2.10.13). Real words are user
+/// addresses below 2^47; these ids have the top bit set. `GKEY_ANY`: the
+/// global's key set (every add writes it, an unkeyed read reads it: key
+/// order and enumeration); `GKEY_UNKEYED`: an unkeyed write (it may change
+/// any key: every keyed read reads it); `gkey_loc`: key K.
+const GKEY_ANY: u64 = 0x8000_0000_0000_0001;
+const GKEY_UNKEYED: u64 = 0x8000_0000_0000_0002;
+pub(super) const GKEY_NAME: usize = 40;
+const GKEY_CONFLICTS_MAX: usize = 1 << 16;
+
+fn gkey_loc(key: &[u8]) -> u64 {
+    // FNV-1a over the key's bytes; the top two bits tag a key id.
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in key {
+        h = (h ^ b as u64).wrapping_mul(0x0100_0000_01b3);
+    }
+    let id = (h >> 2) | 0xC000_0000_0000_0000;
+    if id == TOMBSTONE {
+        id - 1
+    } else {
+        id
+    }
+}
+
 /// Open-addressing set of nonzero words.
 struct WordSet {
     slots: *mut u64,
@@ -495,6 +519,23 @@ struct State {
     /// Meta installs seen; records of pre-existing owners added to rule 4's
     /// pre-existing set; classification marks (representation scopes).
     meta_installs: u64,
+    /// Key-granular globalThis (design §2.10.13; `PERRY_SNAP_GKEY=0` turns
+    /// it off): the realm global's shape word is no location by itself; a
+    /// keyed operation on the global (a lookup of key X, the add or store of
+    /// key K) names the key it accesses, and an unkeyed access stands for
+    /// every key. `gshape`: the global's shape word (0 until it exists).
+    gkey_rule: bool,
+    gshape: usize,
+    /// The key the running keyed operation on the global names (a location
+    /// id, 0: none) and its name for the report.
+    gkey: u64,
+    gkey_name: [u8; GKEY_NAME],
+    gkey_len: u8,
+    /// Shape-word accesses: keyed reads, keyed writes, unkeyed reads,
+    /// unkeyed writes.
+    gkey_counts: [u64; 4],
+    /// The key names of keyed conflicts, per init (filled at the conflict).
+    gkey_conflicts: Vec<(u32, u64, [u8; GKEY_NAME], u8)>,
     meta_owned: u64,
     marks: u64,
     /// `js_snap_entry_module`: the next evaluation is the entry module's own
@@ -694,6 +735,13 @@ unsafe fn start(out: String) {
         meta_rule: !std::env::var("PERRY_SNAP_META").is_ok_and(|v| v == "0"),
         meta_slot: 0,
         meta_installs: 0,
+        gkey_rule: !std::env::var("PERRY_SNAP_GKEY").is_ok_and(|v| v == "0"),
+        gshape: 0,
+        gkey: 0,
+        gkey_name: [0; GKEY_NAME],
+        gkey_len: 0,
+        gkey_counts: [0; 4],
+        gkey_conflicts: Vec::with_capacity(GKEY_CONFLICTS_MAX),
         meta_owned: 0,
         marks: 0,
         entry_module_next: false,
@@ -1236,6 +1284,44 @@ pub(super) fn meta_installed(slot: usize, meta: usize) {
 /// read receiver flag, its empty record, the private shape lineage) starts
 /// (`delta` 1) or ends (-1): representation, not program state. Returns
 /// whether the scope is active (the meta rule is on).
+/// A keyed operation on `obj` names `key` (§2.10.13): when `obj` is the
+/// realm global, the census takes accesses of its shape word as accesses of
+/// `key` until [`global_key_end`]. Returns the previous key to restore.
+pub(super) fn global_key<'a>(
+    obj: usize,
+    key: impl FnOnce() -> Option<&'a [u8]>,
+) -> Option<(u64, [u8; GKEY_NAME], u8)> {
+    let st = state();
+    if !st.gkey_rule {
+        return None;
+    }
+    if st.gshape == 0 {
+        st.gshape = crate::object::global_this::thread_realm_global_addr();
+    }
+    if obj == 0 || obj != st.gshape {
+        return None;
+    }
+    let prev = (st.gkey, st.gkey_name, st.gkey_len);
+    // The key's bytes may sit on a tracked page: reading them is census
+    // bookkeeping, not an access of the running init.
+    st.bookkeeping += 1;
+    let named = key().map(|key| {
+        st.gkey = gkey_loc(key);
+        let n = key.len().min(GKEY_NAME);
+        st.gkey_name[..n].copy_from_slice(&key[..n]);
+        st.gkey_len = n as u8;
+    });
+    st.bookkeeping -= 1;
+    // A key the operation cannot name leaves the access unkeyed.
+    named.map(|()| prev)
+}
+
+/// The keyed operation [`global_key`] opened is over.
+pub(super) fn global_key_end(prev: (u64, [u8; GKEY_NAME], u8)) {
+    let st = state();
+    (st.gkey, st.gkey_name, st.gkey_len) = prev;
+}
+
 pub(super) fn representation(delta: i32) -> bool {
     let st = state();
     if !st.meta_rule {
@@ -1989,7 +2075,36 @@ fn note_access(st: &mut State, word: usize, write: bool, pc: usize) {
     }
     let top = st.frames.last().map_or(0, |f| f.init) as usize;
     st.inits[top].faults += 1;
-    let w = word as u64;
+    if st.gkey_rule && st.gshape == 0 {
+        st.gshape = crate::object::global_this::thread_realm_global_addr();
+    }
+    if st.gkey_rule && word == st.gshape && st.gshape != 0 {
+        // §2.10.13: the realm global's shape word is the global's key set.
+        let key = st.gkey;
+        let (kind, locs): (usize, [(u64, bool); 2]) = match (key != 0, write) {
+            (true, false) => (0, [(key, false), (GKEY_UNKEYED, false)]),
+            (true, true) => (1, [(key, true), (GKEY_ANY, true)]),
+            (false, false) => (2, [(GKEY_ANY, false), (GKEY_ANY, false)]),
+            (false, true) => (3, [(GKEY_ANY, true), (GKEY_UNKEYED, true)]),
+        };
+        st.gkey_counts[kind] += 1;
+        let had = st.inits[top].conflict.is_some();
+        for (loc, w) in locs {
+            note_loc(st, top, word, loc, w, pc);
+        }
+        if !had && key != 0 && st.inits[top].conflict.is_some() && st.gkey_conflicts.len() < GKEY_CONFLICTS_MAX {
+            // Capacity is reserved: no allocation in the fault handler.
+            let e = (top as u32, key, st.gkey_name, st.gkey_len);
+            st.gkey_conflicts.push(e);
+        }
+        return;
+    }
+    note_loc(st, top, word, word as u64, write, pc);
+}
+
+/// One access of location `w` (a word, or a key id of the realm global whose
+/// shape word is `word`) by init `top`: rules 2-4.
+fn note_loc(st: &mut State, top: usize, word: usize, w: u64, write: bool, pc: usize) {
     if st.top_mode {
         if st.d_mode || top == 0 || !top_pre_existing(st, word) {
             return;
@@ -2352,6 +2467,24 @@ fn write_report(st: &mut State) {
         "#meta\trule={}\tinstalls={}\towned={}\tmarks={}",
         st.meta_rule as u8, st.meta_installs, st.meta_owned, st.marks
     );
+    let _ = writeln!(
+        f,
+        "#gkey\trule={}\tglobal={:x}\tkeyed_reads={}\tkeyed_writes={}\tunkeyed_reads={}\tunkeyed_writes={}\tkeyed_conflicts={}",
+        st.gkey_rule as u8,
+        st.gshape,
+        st.gkey_counts[0],
+        st.gkey_counts[1],
+        st.gkey_counts[2],
+        st.gkey_counts[3],
+        st.gkey_conflicts.len()
+    );
+    for (init, key, name, len) in st.gkey_conflicts.iter() {
+        let _ = writeln!(
+            f,
+            "#gkeyconflict\t{init}\t{key:x}\t{}",
+            tsv_text(&String::from_utf8_lossy(&name[..*len as usize]))
+        );
+    }
     let _ = writeln!(
         f,
         "#id\taddr\tparent\treach\tdynamic\tfrom_entry_body\tenter\texit\topen\tthrew\tseeded\tin_d\tir\tbirths\tbirth_bytes\tfaults\thost_count\thost_class\thost_what\thost_pcs\tconflict_rule\tconflict_word\tconflict_write\tconflict_pc\tconflict_owner\tconflict_cause\tconflict_cause_pc\tdyn_fns\tevals"

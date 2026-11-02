@@ -111,6 +111,8 @@ pub(crate) use ctor_thunks::{
 #[cfg(test)]
 pub(crate) use fetch_globals::collect_before_global_this_alloc_for_test;
 pub(crate) use fetch_globals::init_fetch_backed_receiver;
+#[cfg(perry_gc_instruments)]
+pub(crate) use fetch_globals::thread_realm_global_addr;
 #[cfg(feature = "temporal")]
 pub(crate) use fetch_globals::temporal_subclass_super;
 pub(crate) use fetch_globals::{

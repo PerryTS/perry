@@ -48,6 +48,12 @@ pub extern "C" fn js_object_set_field_by_name(
     key: *const crate::StringHeader,
     value: f64,
 ) {
+    // Census builds: a store on the realm global names its key (§2.10.13).
+    #[cfg(perry_gc_instruments)]
+    let _gkey = crate::snap_census::global_key(
+        (obj as u64 & crate::value::POINTER_MASK) as usize,
+        || (!key.is_null()).then(|| crate::regex::string_as_bytes(key)),
+    );
     #[cfg(perry_contract_checks)]
     crate::contracts::generic_store(obj, key, value);
     // Case 2c: a family object's late key and a key outside its layout

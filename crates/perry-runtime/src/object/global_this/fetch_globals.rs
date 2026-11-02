@@ -86,6 +86,13 @@ pub(crate) fn global_this_is_materialized() -> bool {
     THREAD_GLOBAL_THIS.with(|c| c.get()) != 0
 }
 
+/// This thread's realm global's address, 0 before it exists: the census's
+/// key-granular container (design §2.10.13). Census builds only.
+#[cfg(perry_gc_instruments)]
+pub(crate) fn thread_realm_global_addr() -> usize {
+    (THREAD_GLOBAL_THIS.with(|c| c.get()) & crate::value::POINTER_MASK) as usize
+}
+
 /// Whether `obj` is THIS thread's realm global, as opposed to the global of a
 /// `vm` context or an eval realm that `populate_global_this_builtins` also
 /// fills (each of those gets its own intrinsics).

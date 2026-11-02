@@ -149,6 +149,44 @@ pub(crate) fn representation() -> Bookkeeping {
     Bookkeeping { active: false }
 }
 
+/// A keyed operation on `obj` (a global lookup of key X, the add or store
+/// of key K) names `key` for the scope's extent: on the realm global, the
+/// census takes the global's shape word as the location of that key
+/// (design §2.10.13); any other object is untouched. Census builds only.
+#[cfg(perry_gc_instruments)]
+#[inline(always)]
+pub(crate) fn global_key<'a>(obj: usize, key: impl FnOnce() -> Option<&'a [u8]>) -> GlobalKey {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    if runner::on() {
+        return GlobalKey {
+            prev: runner::global_key(obj, key),
+        };
+    }
+    let _ = (obj, key);
+    GlobalKey { prev: None }
+}
+
+#[cfg(perry_gc_instruments)]
+pub(crate) struct GlobalKey {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    prev: Option<(u64, [u8; runner::GKEY_NAME], u8)>,
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    prev: Option<()>,
+}
+
+#[cfg(perry_gc_instruments)]
+impl Drop for GlobalKey {
+    #[inline(always)]
+    fn drop(&mut self) {
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        if let Some(prev) = self.prev.take() {
+            runner::global_key_end(prev);
+        }
+        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+        let _ = self.prev;
+    }
+}
+
 /// `cells` (an object's metadata record, its overflow table) now belong to
 /// `obj`: the cells of a transparent object are transparent too.
 #[inline(always)]
