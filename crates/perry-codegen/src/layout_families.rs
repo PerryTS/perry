@@ -622,7 +622,8 @@ fn own_keys(class: &Class, has_parent: bool, fresh: bool) -> Result<OwnKeys, Str
     // still an initialization (it defines; the chain is not consulted).
     let mut defined_open = true;
     let mut unobserved = true;
-    let receiver_free_init = |f: &perry_hir::ClassField| f.init.as_ref().is_none_or(|e| !mentions_receiver(e));
+    let receiver_free_init =
+        |f: &perry_hir::ClassField| f.init.as_ref().is_none_or(|e| !mentions_receiver(e));
     for f in &class.fields {
         // A class capture (`__perry_cap_*`) is never defined by the
         // field-initialisation phase (`field_init` skips it): the

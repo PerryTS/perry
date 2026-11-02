@@ -166,7 +166,6 @@ pub(super) unsafe fn attach(name: &str, constructor: f64) -> f64 {
     constructor.get_nanbox_f64()
 }
 
-
 #[cfg(test)]
 mod attach_reach_tests {
     use super::*;
@@ -188,7 +187,11 @@ mod attach_reach_tests {
                 "fixture: the method must not exist yet"
             );
             let returned = attach("Serializer", ctor);
-            assert_eq!(returned.to_bits(), ctor.to_bits(), "attach returns its constructor");
+            assert_eq!(
+                returned.to_bits(),
+                ctor.to_bits(),
+                "attach returns its constructor"
+            );
             let after = crate::object::method_call::spec_get_value(proto, b"writeHeader");
             assert_ne!(
                 after.to_bits(),

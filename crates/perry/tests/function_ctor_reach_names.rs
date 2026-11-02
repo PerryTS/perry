@@ -56,7 +56,11 @@ fn build(dir: &Path, files: &[(&str, &str)], whole: bool) -> (String, String) {
     );
     let mut run = Command::new(&exe);
     let ran = clean(&mut run).output().expect("run");
-    assert!(ran.status.success(), "run failed (whole={whole}): {:?}", ran.status);
+    assert!(
+        ran.status.success(),
+        "run failed (whole={whole}): {:?}",
+        ran.status
+    );
     let facts = std::fs::read_to_string(&dump).expect("facts dump");
     let guard = facts
         .lines()

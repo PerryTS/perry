@@ -132,7 +132,11 @@ fn one_memo_shared_with_a_top_callback_stays_unproven() {
         {}",
         FACTORY_ONE.replace("const getPrimary = MAKE((kind: number) => () => ({ kind }));", "const getPrimary = shared;")
     );
-    assert_eq!(whole(&src).0, false, "whole: the shared memo stays unproven");
+    assert_eq!(
+        whole(&src).0,
+        false,
+        "whole: the shared memo stays unproven"
+    );
     assert!(!per_unit(&src), "per unit: the shared memo stays unproven");
 }
 
@@ -149,7 +153,11 @@ fn one_site_in_a_loop_merges_its_memos() {
         {}",
         FACTORY_ONE.replace("const getPrimary = MAKE((kind: number) => () => ({ kind }));", "const getPrimary = memos[1];")
     );
-    assert_eq!(whole(&src).0, false, "whole: the merged memos stay unproven");
+    assert_eq!(
+        whole(&src).0,
+        false,
+        "whole: the merged memos stay unproven"
+    );
     assert!(!per_unit(&src), "per unit: the merged memos stay unproven");
 }
 

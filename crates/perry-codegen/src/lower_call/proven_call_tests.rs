@@ -300,9 +300,15 @@ fn the_facts_witness_is_emitted_only_by_the_verification_build() {
             2,
             "each proven call is checked:\n{twice}"
         );
-        assert!(with.contains("pc:?") || with.contains("pc:@"), "site names:\n{with}");
+        assert!(
+            with.contains("pc:?") || with.contains("pc:@"),
+            "site names:\n{with}"
+        );
     } else {
         assert!(!twice.contains("perry_wpfacts_check"), "{twice}");
-        assert!(!with.contains("proven call bodies="), "no site string:\n{with}");
+        assert!(
+            !with.contains("proven call bodies="),
+            "no site string:\n{with}"
+        );
     }
 }

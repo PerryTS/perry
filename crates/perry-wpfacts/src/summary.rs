@@ -280,7 +280,10 @@ pub fn map_cons(
         TopSink { reason } => TopSink { reason },
         HandOver { reason, ctor, arg } => HandOver { reason, ctor, arg },
         OwnOnly { f, dst } => OwnOnly { f, dst: n(dst) },
-        CallerValue { dst, reason } => CallerValue { dst: n(dst), reason },
+        CallerValue { dst, reason } => CallerValue {
+            dst: n(dst),
+            reason,
+        },
         StoreOut {
             f,
             dst,

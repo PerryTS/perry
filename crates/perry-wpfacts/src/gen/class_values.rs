@@ -671,12 +671,12 @@ impl<'a> Gen<'a> {
         crate::gen::push_unique(&mut self.m.tmpls[tm as usize].accessor_keys, a);
         match acc {
             OwnAccessor::SetterOnly => None,
-            OwnAccessor::Getter(n) => Some(
-                match self.stand_in_contract_getter(mi, tm, inst, a, n) {
+            OwnAccessor::Getter(n) => {
+                Some(match self.stand_in_contract_getter(mi, tm, inst, a, n) {
                     Some(t) => t,
                     None => self.stand_in_getter(mi, tm, inst, key, n, c, r),
-                },
-            ),
+                })
+            }
             OwnAccessor::Unknown => {
                 Some(self.stand_in_getter(mi, tm, inst, key, &format!("get {key}"), c, r))
             }
@@ -803,7 +803,7 @@ impl<'a> Gen<'a> {
                 }
                 FieldView::Fns(fcs) => {
                     for fc in fcs {
-        let v = self.stand_in_fn_of(mi, fc, Some((tm, false)));
+                        let v = self.stand_in_fn_of(mi, fc, Some((tm, false)));
                         self.m.edge(v, n);
                     }
                 }
@@ -1180,7 +1180,7 @@ impl<'a> Gen<'a> {
         // (DECISIONS 78).
         for (fnode, fcs) in fn_fields {
             for fc in fcs {
-        let v = self.stand_in_fn_of(mi, fc, Some((tm, false)));
+                let v = self.stand_in_fn_of(mi, fc, Some((tm, false)));
                 self.m.edge(v, fnode);
             }
         }
@@ -1245,7 +1245,7 @@ impl<'a> Gen<'a> {
         // stand-ins pass arguments by their marks and admit a subclass
         // instance as receiver (DECISIONS 57).
         for (field, fc) in method_fns {
-        let v = self.stand_in_fn_of(mi, fc, Some((tm, false)));
+            let v = self.stand_in_fn_of(mi, fc, Some((tm, false)));
             self.m.edge(v, field);
             let t = self.stand_in_fns[&(fc.name.clone(), Some((tm, false)))].1;
             if let Some(e) = self.stand_ins.get_mut(&c.display) {

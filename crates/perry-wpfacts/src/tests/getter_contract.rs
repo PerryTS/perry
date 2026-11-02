@@ -148,7 +148,11 @@ fn g2_a_getter_returning_a_fresh_literal_is_proven_as_whole() {
 fn g9_a_getter_through_a_barrel_is_proven_as_whole() {
     let b = READ_ITEM.replace("./a", "./c");
     positive(
-        &[("a", FRESH), ("c", r#"export { lib } from "./a";"#), ("b", &b)],
+        &[
+            ("a", FRESH),
+            ("c", r#"export { lib } from "./a";"#),
+            ("b", &b),
+        ],
         "kind",
         false,
     );
@@ -167,7 +171,11 @@ export const lib = {{
 }};
 "#
     );
-    negative(&[("a", &a), ("b", CALL_AFTER_ITEM)], "createIdentifier", true);
+    negative(
+        &[("a", &a), ("b", CALL_AFTER_ITEM)],
+        "createIdentifier",
+        true,
+    );
 }
 
 /// G4b: the getter returns the literal itself; the reader rewrites the
@@ -250,4 +258,3 @@ console.log(n);
     let (w, u) = verdicts(&[("a", FRESH), ("b", b)], "kind", false);
     assert!(unproven(&u), "per unit: {u:?} (whole {w:?})");
 }
-

@@ -145,7 +145,10 @@ fn describe(bits: u64) -> String {
             return format!("pointer {addr:#x}, not an ordinary object");
         }
         let h = &*(addr as *const ObjectHeader);
-        format!("object {addr:#x} class_id {} shape_id {}", h.class_id, h.parent_class_id)
+        format!(
+            "object {addr:#x} class_id {} shape_id {}",
+            h.class_id, h.parent_class_id
+        )
     }
 }
 
