@@ -102,6 +102,11 @@ pub(crate) unsafe fn nm_dispatch_assert(ctx: &NmCtx, module_name: &str, method_n
             js_assert_does_not_reject(arg(0), arg(1), arg(2))
         }
         ("assert", "ifError") | ("assert/strict", "ifError") => js_assert_if_error(arg(0)),
+        ("assert", "AssertionError") | ("assert/strict", "AssertionError") => {
+            crate::collection_iter::throw_type_error(
+                "Class constructor AssertionError cannot be invoked without 'new'",
+            )
+        }
         ("assert", "Assert") | ("assert/strict", "Assert") => {
             crate::fs::validate::throw_type_error_with_code(
                 "Class constructor Assert cannot be invoked without 'new'",
