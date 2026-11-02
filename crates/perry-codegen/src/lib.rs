@@ -20,13 +20,13 @@ pub(crate) mod eh_mode;
 pub mod expr;
 pub mod ext_registry;
 pub mod facts_consumed;
-pub mod verify_facts;
 pub mod fallback_diag;
 pub(crate) mod fn_info;
 pub(crate) mod fn_record;
 pub mod function;
 pub mod function_order;
 pub(crate) mod gc_call_effects;
+pub mod verify_facts;
 pub use gc_call_effects::GcEffects;
 pub mod gc_map;
 #[cfg(feature = "llvm-inprocess")]
