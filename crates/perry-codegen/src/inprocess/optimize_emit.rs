@@ -15,6 +15,17 @@ fn reloc_mode_for(effective_target: &str, wasm_static_opt_in: bool) -> RelocMode
     }
 }
 
+/// Whether `effective_target`'s thread-locals are emulated: Android and
+/// OpenHarmony, where rustc builds the runtime archive with
+/// `tls-model = emulated` (its target specs), so the runtime's own
+/// thread-locals exist only as `__emutls_v.<name>` control variables. Emitted
+/// code that names one of them natively finds no TLS symbol to bind to, and
+/// the program's own thread-locals (module state of a program that starts a
+/// Worker) take the same model as the runtime it is linked with.
+pub(crate) fn emulated_tls(effective_target: &str) -> bool {
+    effective_target.contains("android") || effective_target.contains("ohos")
+}
+
 pub(super) fn optimize_and_emit(
     module: &inkwell::module::Module<'_>,
     effective_target: &str,
@@ -95,6 +106,14 @@ pub(super) fn optimize_and_emit(
         }
         unsafe {
             perry_llvm_unique_sections(tm.as_mut_ptr().cast());
+        }
+    }
+    if emulated_tls(effective_target) {
+        extern "C" {
+            fn perry_llvm_emulated_tls(machine: *mut core::ffi::c_void);
+        }
+        unsafe {
+            perry_llvm_emulated_tls(tm.as_mut_ptr().cast());
         }
     }
 
@@ -275,6 +294,73 @@ fn copy_emission_bytes(buffer: inkwell::memory_buffer::MemoryBuffer<'_>) -> Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A thread-local the module names, emitted for `triple` (assembly).
+    fn tls_access_asm(triple: &str) -> String {
+        let ir = r#"
+@PERRY_AGENT_PTRS = external thread_local global [8 x ptr]
+@module_state = thread_local global i64 0
+
+define ptr @agent_slot() {
+entry:
+  %p = getelementptr inbounds [8 x ptr], ptr @PERRY_AGENT_PTRS, i64 0, i64 2
+  %v = load ptr, ptr %p
+  ret ptr %v
+}
+
+define i64 @state() {
+entry:
+  %v = load i64, ptr @module_state
+  ret i64 %v
+}
+"#;
+        let asm = crate::inprocess::single_piece(
+            crate::inprocess::compile_ll_to_object_inprocess(
+                ir,
+                triple,
+                &["-O2".to_string(), "-S".to_string()],
+                "tls_model_probe",
+                false,
+            )
+            .expect("emit"),
+        );
+        String::from_utf8(asm).expect("utf-8 assembly")
+    }
+
+    /// Android and OpenHarmony thread-locals take the model rustc builds
+    /// their runtime archives with (`tls-model = emulated`): every access goes
+    /// through `__emutls_get_address` on the `__emutls_v.<name>` control
+    /// variable the runtime defines, and no native TLS relocation is left
+    /// for a `-shared` link to reject. Linux keeps native TLS.
+    #[test]
+    fn emulated_tls_matches_the_runtime_archive_model() {
+        for triple in [
+            "aarch64-linux-android",
+            "x86_64-linux-android",
+            "aarch64-unknown-linux-ohos",
+            "x86_64-unknown-linux-ohos",
+        ] {
+            assert!(emulated_tls(triple), "{triple}");
+            let asm = tls_access_asm(triple);
+            assert!(asm.contains("__emutls_get_address"), "{triple}:\n{asm}");
+            assert!(
+                asm.contains("__emutls_v.PERRY_AGENT_PTRS"),
+                "{triple}:\n{asm}"
+            );
+            assert!(asm.contains("__emutls_v.module_state"), "{triple}:\n{asm}");
+            for native in ["tprel", "tpoff", "tlsdesc", "tlsgd", "gottprel"] {
+                assert!(
+                    !asm.to_ascii_lowercase().contains(native),
+                    "{triple}: native TLS `{native}` left:\n{asm}"
+                );
+            }
+        }
+        for triple in ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"] {
+            assert!(!emulated_tls(triple), "{triple}");
+            let asm = tls_access_asm(triple);
+            assert!(!asm.contains("__emutls"), "{triple}:\n{asm}");
+        }
+    }
 
     #[test]
     fn static_reloc_is_opt_in_and_wasm32_only() {
