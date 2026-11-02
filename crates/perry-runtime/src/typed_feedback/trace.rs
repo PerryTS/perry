@@ -223,7 +223,7 @@ pub fn typed_feedback_snapshot() -> TypedFeedbackSnapshot {
             })
             .add_site(site);
     }
-    crate::cold_sort::sort_by_u64_key(&mut rows, |row| u64::from(row.site_id));
+    crate::cold_sort::sort_by_u64_key(&mut rows, |row| row.site_id);
     snapshot.sites = rows;
     snapshot
 }
