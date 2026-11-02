@@ -77,8 +77,20 @@ trap cleanup EXIT INT TERM
 # stdlib linker builds the runtime provider from the EXACT runtime rlib selected
 # by this Cargo graph, then excludes that archive from the stdlib image. Merely
 # preempting C exports leaves private Rust dispatch/TLS state duplicated.
-git -C "$repo_root" worktree add --detach "$provider_source" HEAD >/dev/null
-worktree_added=true
+if [[ -n "${PERRY_PROVIDER_GC_SOURCE_DIR:-}" ]]; then
+  provider_source=$(cd "$PERRY_PROVIDER_GC_SOURCE_DIR" && pwd)
+  if [[ "$(git -C "$provider_source" rev-parse HEAD)" != "$(git -C "$repo_root" rev-parse HEAD)" ]]; then
+    echo "Provider source must match the compiler checkout revision" >&2
+    exit 1
+  fi
+  git -C "$provider_source" diff --quiet HEAD -- || {
+    echo "Provider source has tracked changes" >&2
+    exit 1
+  }
+else
+  git -C "$repo_root" worktree add --detach "$provider_source" HEAD >/dev/null
+  worktree_added=true
+fi
 provider_dir="$scratch/providers"
 mkdir -p "$provider_dir"
 runtime_library="$provider_dir/$runtime_filename"
