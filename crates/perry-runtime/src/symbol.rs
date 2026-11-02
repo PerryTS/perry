@@ -703,37 +703,6 @@ pub(crate) fn note_symbol_key_installed(sym_key: usize) {
     }
 }
 
-/// #10510: has a symbol-keyed property (data or accessor) EVER been stored
-/// against a small-native-handle owner key? The #5437 `_req` fallback in
-/// `js_object_get_symbol_property` can only return a value the handle holds
-/// in these side tables, so while this is `false` it is a guaranteed miss —
-/// and it is not free: it interns a `"_req"` key and runs a by-name `[[Get]]`
-/// over the receiver's whole prototype chain on EVERY symbol read that misses
-/// the receiver's own table (every implicit `ToPrimitive`'s
-/// `Symbol.toPrimitive` probe, every `[Symbol.iterator]` behind a spread).
-/// Monotonic, like [`CONCAT_SPREADABLE_EVER`]. GC owner rekeys need no note:
-/// they only move heap-object owners, which the fallback rejects.
-static SMALL_HANDLE_SYMBOL_OWNER_EVER: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
-pub(crate) fn small_handle_symbol_owner_ever() -> bool {
-    SMALL_HANDLE_SYMBOL_OWNER_EVER.load(std::sync::atomic::Ordering::Acquire)
-}
-
-/// Note a symbol-keyed install on `obj_key`. Must be called BEFORE the table
-/// insert in every install funnel (same ordering argument as
-/// [`note_symbol_key_installed`]).
-pub(crate) fn note_symbol_owner_installed(obj_key: usize) {
-    // Arrays carry own-key/prototype identity in their existing receiver-local
-    // shape word. Publish the transition before the side-table entry so array
-    // fast paths never need a symbol-name lookup to prove the canonical shape.
-    if crate::value::addr_class::is_small_handle(obj_key)
-        && !SMALL_HANDLE_SYMBOL_OWNER_EVER.load(std::sync::atomic::Ordering::Relaxed)
-    {
-        SMALL_HANDLE_SYMBOL_OWNER_EVER.store(true, std::sync::atomic::Ordering::Release);
-    }
-}
-
 /// The cached well-known symbol pointer if `short_name` was ever
 /// materialized, else null. Unlike [`well_known_symbol`], never allocates.
 pub(crate) fn well_known_symbol_if_cached(short_name: &str) -> *mut SymbolHeader {
@@ -750,7 +719,6 @@ pub(crate) fn store_object_symbol_property_root(
     value_bits: u64,
 ) -> bool {
     note_symbol_key_installed(sym_key);
-    note_symbol_owner_installed(obj_key);
     let _holder_edit = crate::object::descriptor_state::HolderEdit::new(obj_key);
     if unsafe { crate::object::shaped_symbols::owner(obj_key).is_some() } {
         let existed = unsafe { crate::object::shaped_symbols::entry(obj_key, sym_key) };
