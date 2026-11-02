@@ -371,6 +371,8 @@ struct Init {
     /// `new Function` bodies and eval scripts made while this init ran.
     dyn_fns: u32,
     evals: u32,
+    /// The check run skipped this member's body parts.
+    skipped: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -399,6 +401,11 @@ const PF_R: u8 = 2;
 const PF_PRE: u8 = 4;
 const PF_LISTED: u8 = 8;
 const PF_TRACKED: u8 = 16;
+/// The page holds watched env words (`env_words`): closed whatever runs.
+const PF_ENV: u8 = 32;
+
+/// The evaluation address of the entry body's pseudo-init (design §2.10.7).
+const ENTRY_BODY_ADDR: usize = 1;
 
 struct PageMap {
     lo: usize,
@@ -523,8 +530,34 @@ struct State {
     live_by: std::collections::HashMap<(u32, u8), [u64; 2]>,
     live_unattributed: [u64; 2],
     boundary_done: bool,
-    /// Ground truth: every `getenv` by any code while an init runs.
-    env_reads: Vec<(u32, String)>,
+    /// Ground truth: every `getenv` by any code while the census runs
+    /// (init 0 included), with the value it found.
+    env_reads: Vec<(u32, String, Option<String>)>,
+    /// SNAP3 (b): env reads are cells or guard members, not rule 1
+    /// (`PERRY_SNAP_ENV=0`: rule 1 as before).
+    env_rule: bool,
+    /// SNAP3 (a): write containment for the `import()` subgraph
+    /// (`PERRY_SNAP_Q7=0`: every init of the subgraph defers).
+    q7: bool,
+    /// The kind `js_snap_env_site` left for the frame's next `js_getenv`.
+    env_site: Option<(u32, u8)>,
+    env_obj: u64,
+    env_obj_last: u32,
+    env_obs: Vec<EnvObs>,
+    /// Watched words: the env block (`ENV_BLOCK`), store-site string bodies
+    /// (their `env_obs` index), poisoned slots (`POISON`).
+    env_words: SizeMap,
+    env_storage: Vec<(usize, usize)>,
+    /// The init that registered each `globals_log` slot.
+    slot_owner: Vec<u32>,
+    /// The check run (`PERRY_SNAP_SKIP=<D file>`): D's evaluation addresses
+    /// (sorted), whose bodies are skipped.
+    skip: Vec<usize>,
+    check_fail: Vec<(u32, usize, usize, bool)>,
+    /// The check run's digest leaves out the words the census pass's D wrote
+    /// (`PERRY_SNAP_WD`, by logical name).
+    wd_names: std::collections::HashSet<(u64, usize)>,
+    entry_init: u32,
     mark: bool,
     /// R5 (`PERRY_SNAP_RSET=1`): after the boundary, the imaged cells stay
     /// write-protected and their writes are counted until exit.
@@ -594,7 +627,7 @@ unsafe fn start(out: String) {
         frames: Vec::with_capacity(256),
         seq: 0,
         seeded,
-        rule4: std::env::var("PERRY_SNAP_RULE4").is_ok_and(|v| v == "1"),
+        rule4: !std::env::var("PERRY_SNAP_Q7").is_ok_and(|v| v == "0"),
         sabotage_env: std::env::var("PERRY_SNAP_SABOTAGE").is_ok_and(|v| v == "env"),
         dyn_defer: std::env::var("PERRY_SNAP_DYN").is_ok_and(|v| v == "defer"),
         transparent: std::env::var("PERRY_SNAP_TRANSPARENT")
@@ -661,6 +694,34 @@ unsafe fn start(out: String) {
         live_unattributed: [0; 2],
         boundary_done: false,
         env_reads: Vec::new(),
+        env_rule: !std::env::var("PERRY_SNAP_ENV").is_ok_and(|v| v == "0"),
+        q7: !std::env::var("PERRY_SNAP_Q7").is_ok_and(|v| v == "0"),
+        env_site: None,
+        env_obj: 0,
+        env_obj_last: 0,
+        env_obs: Vec::new(),
+        env_words: SizeMap::new(20),
+        env_storage: Vec::new(),
+        slot_owner: Vec::new(),
+        skip: {
+            let mut v = std::env::var("PERRY_SNAP_SKIP").map(|p| read_hex_lines(&p)).unwrap_or_default();
+            v.sort_unstable();
+            v
+        },
+        check_fail: Vec::new(),
+        wd_names: std::env::var("PERRY_SNAP_WD")
+            .ok()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .map(|t| {
+                t.lines()
+                    .filter_map(|l| {
+                        let (n, o) = l.split_once('\t')?;
+                        Some((u64::from_str_radix(n, 16).ok()?, o.parse().ok()?))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        entry_init: 0,
         mark: std::env::var("PERRY_SNAP_MARK").is_ok_and(|v| v == "1"),
         rset: std::env::var("PERRY_SNAP_RSET").is_ok_and(|v| v == "1"),
         rset_active: false,
@@ -702,9 +763,20 @@ unsafe fn start(out: String) {
         }
         st.globals.insert(slot as u64);
         st.globals_log.push(slot);
+        st.slot_owner.push(0);
         mark_tracked(slot, slot + 8);
     }
     walk_realm_cells(st);
+    // The check run: the global slots the census pass's D registered are
+    // poisoned (any access is a check failure).
+    if let Ok(p) = std::env::var("PERRY_SNAP_POISON") {
+        for slot in read_hex_lines(&p) {
+            if page_flags(st, slot).is_some() {
+                mark_tracked(slot, slot + 8);
+                watch_env_words(st, slot, slot + 8, POISON);
+            }
+        }
+    }
     install_handlers();
     ANCHOR.on.store(true, Relaxed);
     crate::arena::refresh_inline_allocation_limit();
@@ -773,6 +845,7 @@ fn blank_init(addr: usize, parent: u32, reach: Reach) -> Init {
         evals: 0,
         in_d: false,
         faults: 0,
+        skipped: false,
     }
 }
 
@@ -901,7 +974,11 @@ pub(super) fn init_enter(addr: usize) {
     let parent_in_body = match parent {
         None => st.entry_body_seq != 0,
         Some(f) if f.kind == FrameKind::Job => true,
-        Some(f) => st.inits[f.init as usize].parts >= 2 || st.inits[f.init as usize].addr == 0,
+        Some(f) => {
+            st.inits[f.init as usize].parts >= 2
+                || st.inits[f.init as usize].addr == 0
+                || st.inits[f.init as usize].addr == ENTRY_BODY_ADDR
+        }
     };
     let reach = if st.require_depth > 0 {
         Reach::Require
@@ -922,11 +999,21 @@ pub(super) fn init_enter(addr: usize) {
     init.open = true;
     let parent_dynamic = parent_id != 0 && st.inits[parent_id as usize].dynamic;
     init.dynamic = reach == Reach::DynImport || parent_dynamic;
+    if init.dynamic && !st.q7 {
+        // Without write containment an init of the `import()` subgraph has
+        // no proof of its own: it runs at the import, after the entry body.
+        init.in_d = true;
+        init.host = Some(Hit {
+            class: Effect::HostWrite as u8,
+            what: "dyn_import",
+            pcs: [0; 6],
+        });
+    }
     init.from_entry_body = (parent.is_none() && st.entry_body_seq != 0)
         || (parent_id != 0 && st.inits[parent_id as usize].from_entry_body);
     init.seeded = st.seeded.contains(&addr);
     init.transparent = st.transparent.contains(&addr);
-    init.in_d = init.seeded;
+    init.in_d = init.seeded || init.in_d;
     if st.top_mode && init.in_d {
         unsafe { extend_top(st) };
     }
@@ -1000,6 +1087,28 @@ pub(super) fn entry_body() {
     if st.entry_body_seq == 0 {
         st.seq += 1;
         st.entry_body_seq = st.seq;
+        // The entry's own body runs at startup in every run: a pseudo-init in
+        // D (design §2.10.7), so what it writes and reads is D's, and the
+        // inits it reaches (its `import()`) are checked against it.
+        charge(st);
+        let id = st.inits.len() as u32;
+        let mut init = blank_init(ENTRY_BODY_ADDR, 0, Reach::EntryEager);
+        init.enter_seq = st.seq;
+        init.open = true;
+        init.in_d = true;
+        init.from_entry_body = true;
+        init.host = Some(Hit {
+            class: Effect::HostRead as u8,
+            what: "entry_body",
+            pcs: [0; 6],
+        });
+        st.inits.push(init);
+        st.entry_init = id;
+        st.frames.push(Frame {
+            init: id,
+            kind: FrameKind::Init,
+        });
+        set_mode_for_top(st);
     }
 }
 
@@ -1167,6 +1276,7 @@ pub(super) fn global_root(slot: usize) {
     }
     st.globals.insert(slot as u64);
     st.globals_log.push(slot);
+    st.slot_owner.push(st.frames.last().map_or(0, |f| f.init));
     if st.inits[st.frames.last().map_or(0, |f| f.init) as usize].transparent {
         st.transp_globals.insert(slot as u64);
     }
@@ -1211,6 +1321,9 @@ fn policy(st: &State, page: usize) -> i32 {
     let f = unsafe { *f };
     if f & PF_TRACKED == 0 {
         return libc::PROT_READ | libc::PROT_WRITE;
+    }
+    if f & PF_ENV != 0 && !st.noprotect {
+        return libc::PROT_NONE;
     }
     if st.top_mode {
         return if !st.d_mode && f & PF_PRE != 0 {
@@ -1659,6 +1772,12 @@ fn note_access(st: &mut State, word: usize, write: bool, pc: usize) {
         st.faults_ignored += 1;
         return;
     }
+    if st.env_words.len > 0 {
+        if let Some(v) = st.env_words.get(word as u64) {
+            env_word_access(st, v, word, write, pc);
+            return;
+        }
+    }
     // Words of the binary range count only as global slots or realm cells.
     if (st.bin.slot(word).is_some() || st.tls.slot(word).is_some())
         && !(word >= st.realm.0 && word < st.realm.1)
@@ -1857,8 +1976,10 @@ pub unsafe extern "C" fn getenv(name: *const libc::c_char) -> *mut libc::c_char 
     if on() {
         let st = state();
         let top = st.frames.last().map_or(0, |f| f.init);
-        if top != 0 && st.env_reads.len() < 1 << 20 {
-            st.env_reads.push((top, String::from_utf8_lossy(key).into_owned()));
+        if st.env_reads.len() < 1 << 20 {
+            let value = (!found.is_null())
+                .then(|| std::ffi::CStr::from_ptr(found).to_string_lossy().into_owned());
+            st.env_reads.push((top, String::from_utf8_lossy(key).into_owned(), value));
         }
     }
     found
@@ -2154,12 +2275,29 @@ fn write_report(st: &mut State) {
         let log = st.births.as_slice();
         let mut rank: std::collections::HashMap<u32, u64> = std::collections::HashMap::new();
         let mut names: Vec<(usize, usize, u64)> = Vec::with_capacity(log.len());
+        let mut ranks: Vec<u64> = Vec::with_capacity(log.len());
         for b in log {
             let k = rank.entry(b.init).or_insert(0);
             let a = st.inits[b.init as usize].addr as u64;
-            names.push((b.addr, b.addr + b.size as usize, a.wrapping_mul(0x100000001B3) ^ *k));
+            // The runtime's births (init 0) happen when an init first uses a
+            // runtime object, so their order depends on D: they are named by
+            // type and size only.
+            let name = if b.init == 0 {
+                let ty = unsafe { (*(b.addr as *const crate::gc::GcHeader)).obj_type } as u64;
+                0x5254_0000_0000_0000 ^ (ty << 32) ^ b.size as u64
+            } else {
+                a.wrapping_mul(0x100000001B3) ^ *k
+            };
+            names.push((b.addr, b.addr + b.size as usize, name));
+            ranks.push(*k);
             *k += 1;
         }
+        let birth_names: Vec<u64> = names.iter().map(|n| n.2).collect();
+        let mut wd_out = if st.skip.is_empty() {
+            std::fs::File::create(format!("{}.wd", st.out)).ok()
+        } else {
+            None
+        };
         names.sort_unstable();
         let name_of = |v: usize| -> Option<(u64, usize)> {
             let i = names.partition_point(|&(a, _, _)| a <= v);
@@ -2170,19 +2308,28 @@ fn write_report(st: &mut State) {
             *h ^= x;
             *h = h.wrapping_mul(0x100000001B3);
         };
-        for b in log {
+        for (bk, b) in log.iter().enumerate() {
             if b.init != 0 && st.inits[b.init as usize].in_d {
                 continue;
             }
+            let bname = birth_names[bk];
             let e = per
                 .entry(st.inits[b.init as usize].addr)
                 .or_insert((0xcbf29ce484222325, 0, 0));
             e.1 += 1;
-            let mut off = 0;
+            // The GC header (mark and move-request bits) is no JS state.
+            let mut off = crate::gc::GC_HEADER_SIZE;
             while off + 8 <= b.size as usize {
                 let word = b.addr + off;
                 off += 8;
                 if st.w.contains(word as u64) {
+                    if let Some(o) = wd_out.as_mut() {
+                        use std::io::Write;
+                        let _ = writeln!(o, "{bname:x}\t{}", off - 8);
+                    }
+                    continue;
+                }
+                if st.wd_names.contains(&(bname, off - 8)) {
                     continue;
                 }
                 let v = unsafe { *(word as *const u64) };
@@ -2199,12 +2346,35 @@ fn write_report(st: &mut State) {
                 mix(&mut e.0, v);
             }
         }
+        // The module-global slots each imaged init registered.
+        for (k, &slot) in st.globals_log.iter().enumerate() {
+            let owner = st.slot_owner.get(k).copied().unwrap_or(0);
+            if owner == 0 || st.inits[owner as usize].in_d || st.w.contains(slot as u64) {
+                continue;
+            }
+            let e = per
+                .entry(st.inits[owner as usize].addr)
+                .or_insert((0xcbf29ce484222325, 0, 0));
+            let v = unsafe { *(slot as *const u64) };
+            e.2 += 1;
+            let hi = v >> 48;
+            if hi == 0 || hi >= 0x7FF9 {
+                if let Some((n, o)) = name_of((v & 0xFFFF_FFFF_FFFF) as usize) {
+                    mix(&mut e.0, hi ^ 0xA5A5);
+                    mix(&mut e.0, n);
+                    mix(&mut e.0, o as u64);
+                    continue;
+                }
+            }
+            mix(&mut e.0, v);
+        }
         let mut total = 0xcbf29ce484222325u64;
         for (addr, (h, objs, words)) in &per {
             mix(&mut total, *h);
             let _ = writeln!(f, "#digest\t{addr:x}\t{h:016x}\t{objs}\t{words}");
         }
         let _ = writeln!(f, "#digest_total\t{total:016x}\t{}", per.len());
+        write_env_report(st, &mut f, &ranks);
     }
     let _ = writeln!(f, "#excluded\t{}", st.excluded);
     let _ = writeln!(f, "#free_space\t{}", st.free_space);
@@ -2217,7 +2387,7 @@ fn write_report(st: &mut State) {
         let pcs: Vec<String> = pcs.iter().map(|p| format!("{p:x}")).collect();
         let _ = writeln!(f, "#realm_host\t{what}\t{}", pcs.join(","));
     }
-    for (init, name) in &st.env_reads {
+    for (init, name, _) in &st.env_reads {
         let _ = writeln!(f, "#getenv\t{init}\t{name}");
     }
     // The next pass's seed.
@@ -2225,6 +2395,399 @@ fn write_report(st: &mut State) {
         for i in st.inits.iter().skip(1) {
             if i.in_d {
                 let _ = writeln!(d, "{:x}", i.addr);
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SNAP3: env cells, the image guard (design §2.10.3-§2.10.4)
+// ---------------------------------------------------------------------------
+
+/// What an env observation was (`EnvObs::kind`).
+const OBS_OBJECT: u8 = 0;
+/// A store-site read of a set var: a cell while no imaged init reads the
+/// string's body.
+const OBS_STORE: u8 = 1;
+const OBS_OBSERVE: u8 = 2;
+const OBS_HAS: u8 = 3;
+/// A store-site read of an unset var (no pointer to find: a guard member).
+const OBS_STORE_UNSET: u8 = 4;
+/// A store-site string whose body an imaged init read.
+const OBS_STORE_READ: u8 = 5;
+
+/// `env_words` value of an env block word (the env object's storage).
+const ENV_BLOCK: u32 = u32::MAX;
+/// `env_words` value of a module-global slot a member of D registered in the
+/// census pass (the check run poisons it).
+const POISON: u32 = u32::MAX - 1;
+
+struct EnvObs {
+    init: u32,
+    kind: u8,
+    name: String,
+    value: Option<String>,
+    /// The string a store-site read returned (header address).
+    ptr: usize,
+    /// The imaged init that read a store-site string's body.
+    by: u32,
+}
+
+fn top_init(st: &State) -> u32 {
+    st.frames.last().map_or(0, |f| f.init)
+}
+
+/// Watch `[lo, hi)` as env words with value `v`: their pages stay closed
+/// whatever runs.
+fn watch_env_words(st: &mut State, lo: usize, hi: usize, v: u32) {
+    let mut w = lo & !7;
+    while w < hi {
+        st.env_words.insert(w as u64, v);
+        w += 8;
+    }
+    let mut p = lo & !(PAGE - 1);
+    while p < hi {
+        flag_page(st, p, PF_ENV);
+        if !st.noprotect {
+            unsafe { libc::mprotect(p as *mut _, PAGE, libc::PROT_NONE) };
+        }
+        p += PAGE;
+    }
+}
+
+pub(super) fn births_len() -> usize {
+    state().births.len
+}
+
+pub(super) fn env_site(kind: i32) {
+    let st = state();
+    st.env_site = Some((top_init(st), kind as u8));
+}
+
+pub(super) fn env_object(bits: u64) {
+    let st = state();
+    if !st.env_rule {
+        return host(Effect::HostRead, "env");
+    }
+    st.env_obj = bits;
+    let top = top_init(st);
+    if top != 0 && st.env_obj_last != top {
+        st.env_obj_last = top;
+        st.env_obs.push(EnvObs {
+            init: top,
+            kind: OBS_OBJECT,
+            name: String::new(),
+            value: None,
+            ptr: 0,
+            by: 0,
+        });
+    }
+}
+
+pub(super) fn env_storage(begin: usize, obj: usize) {
+    let st = state();
+    let h = obj - crate::gc::GC_HEADER_SIZE;
+    let new: Vec<(usize, usize)> = st.births.as_slice()[begin.min(st.births.len)..]
+        .iter()
+        .map(|b| (b.addr, b.addr + b.size as usize))
+        .collect();
+    for (a, e) in new {
+        st.env_storage.push((a, e));
+        // The env object's header (class, shape, meta) is what dispatch and
+        // identity read; its slots are the env block.
+        let lo = if a == h {
+            obj + std::mem::size_of::<crate::object::ObjectHeader>()
+        } else {
+            a + crate::gc::GC_HEADER_SIZE
+        };
+        watch_env_words(st, lo, e, ENV_BLOCK);
+    }
+}
+
+pub(super) fn env_var(name: &str, value: Option<&str>, ptr: usize) {
+    let st = state();
+    let top = top_init(st);
+    let site = st.env_site.take().filter(|s| s.0 == top).map(|s| s.1);
+    if !st.env_rule {
+        return host(Effect::HostRead, "env");
+    }
+    let mut kind = match (site, ptr) {
+        (Some(1), 0) => OBS_STORE_UNSET,
+        (Some(1), _) => OBS_STORE,
+        _ => OBS_OBSERVE,
+    };
+    let idx = st.env_obs.len() as u32;
+    if kind == OBS_STORE {
+        let h = ptr - crate::gc::GC_HEADER_SIZE;
+        match st.sizes.get(h as u64) {
+            Some(size) => watch_env_words(st, ptr, h + size as usize, idx),
+            // Not a logged birth: nothing to watch, so the value is observed.
+            None => kind = OBS_OBSERVE,
+        }
+    }
+    st.env_obs.push(EnvObs {
+        init: top,
+        kind,
+        name: name.to_owned(),
+        value: value.map(str::to_owned),
+        ptr,
+        by: 0,
+    });
+}
+
+pub(super) fn env_has(name: &str, present: bool) {
+    let st = state();
+    if !st.env_rule {
+        return host(Effect::HostRead, "env");
+    }
+    let top = top_init(st);
+    st.env_obs.push(EnvObs {
+        init: top,
+        kind: OBS_HAS,
+        name: name.to_owned(),
+        value: present.then(|| "<set>".to_owned()),
+        ptr: 0,
+        by: 0,
+    });
+}
+
+/// An access to a watched env word (`note_access`, signal context: no
+/// allocation).
+fn env_word_access(st: &mut State, v: u32, word: usize, write: bool, pc: usize) {
+    let top = top_init(st);
+    if v == POISON {
+        if st.check_fail.len() < 4096 {
+            st.check_fail.push((top, word, pc, write));
+        }
+        return;
+    }
+    if top == 0 || st.inits[top as usize].in_d {
+        return;
+    }
+    if v == ENV_BLOCK {
+        // Enumeration or a write of the env block: rule 1.
+        let i = &mut st.inits[top as usize];
+        i.host_count += 1;
+        i.in_d = true;
+        if i.host.is_none_or(|h| h.class == Effect::TargetFact as u8) {
+            i.host = Some(Hit {
+                class: Effect::HostRead as u8,
+                what: if write { "env_write" } else { "env_enum" },
+                pcs: [pc, 0, 0, 0, 0, 0],
+            });
+        }
+        if st.top_mode {
+            unsafe { extend_top(st) };
+        }
+        set_mode_for_top(st);
+        return;
+    }
+    if let Some(o) = st.env_obs.get_mut(v as usize) {
+        if o.kind == OBS_STORE {
+            o.kind = OBS_STORE_READ;
+            o.by = top;
+        }
+    }
+}
+
+/// The check run: the evaluation now on top is a member of D.
+pub(super) fn skip_body() -> bool {
+    let st = state();
+    if st.skip.is_empty() {
+        return false;
+    }
+    match st.frames.last() {
+        Some(f) if f.kind == FrameKind::Init => {
+            let i = &mut st.inits[f.init as usize];
+            if st.skip.binary_search(&i.addr).is_ok() {
+                i.skipped = true;
+                return true;
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+fn read_hex_lines(path: &str) -> Vec<usize> {
+    std::fs::read_to_string(path)
+        .map(|t| {
+            t.lines()
+                .filter_map(|l| {
+                    usize::from_str_radix(l.split('\t').next()?.trim().trim_start_matches("0x"), 16)
+                        .ok()
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// A logical name for a module-global slot: its symbol (or the image
+/// offset) from `dladdr`, never its address.
+fn slot_name(slot: usize) -> String {
+    unsafe {
+        let mut info: libc::Dl_info = std::mem::zeroed();
+        if libc::dladdr(slot as *const _, &mut info) != 0 {
+            let base = info.dli_fbase as usize;
+            if !info.dli_sname.is_null() && !info.dli_saddr.is_null() {
+                let s = std::ffi::CStr::from_ptr(info.dli_sname).to_string_lossy();
+                return format!("g:{s}+{}", slot - info.dli_saddr as usize);
+            }
+            return format!("g:+{:x}", slot - base);
+        }
+    }
+    format!("g:?{slot:x}")
+}
+
+fn tsv_text(s: &str) -> String {
+    s.chars()
+        .map(|c| if c == '\t' || c == '\n' || c == '\r' { ' ' } else { c })
+        .collect()
+}
+
+/// The `#cell`, `#guard`, `#knob` lines (design §2.10.8) and the per-init
+/// slot owners for the check run.
+fn write_env_report(st: &State, f: &mut std::fs::File, rank: &[u64]) {
+    use std::io::Write;
+    let in_d = |i: u32| st.inits[i as usize].in_d;
+    let addr_of = |i: u32| st.inits[i as usize].addr;
+    // Cells: every image word that holds the env object or a store-site
+    // string. The image is the births of inits outside D and the global
+    // slots they registered; the env block itself and words a member of D
+    // wrote are not image words.
+    let mut targets: std::collections::HashMap<u64, Vec<i64>> = Default::default();
+    if st.env_obj != 0 {
+        targets.entry(st.env_obj & 0xFFFF_FFFF_FFFF).or_default().push(-1);
+    }
+    for (k, o) in st.env_obs.iter().enumerate() {
+        if o.kind == OBS_STORE && !in_d(o.init) {
+            targets.entry(o.ptr as u64 & 0xFFFF_FFFF_FFFF).or_default().push(k as i64);
+        }
+    }
+    let mut found = vec![0u32; st.env_obs.len()];
+    let mut env_obj_cells = 0u32;
+    let mut cell = |what: &[i64], name: String, f: &mut std::fs::File| {
+        for &t in what {
+            if t < 0 {
+                env_obj_cells += 1;
+                let _ = writeln!(f, "#cell\tenv_object\t{name}\t\t");
+            } else {
+                let o = &st.env_obs[t as usize];
+                found[t as usize] += 1;
+                let _ = writeln!(f, "#cell\tenv_var\t{name}\t{}\t{}", o.name, o.init);
+            }
+        }
+    };
+    let probe = |v: u64| -> Option<&Vec<i64>> {
+        let hi = v >> 48;
+        if hi == 0 || hi >= 0x7FF9 {
+            targets.get(&(v & 0xFFFF_FFFF_FFFF))
+        } else {
+            None
+        }
+    };
+    if !targets.is_empty() {
+        let mut storage = st.env_storage.clone();
+        storage.sort_unstable();
+        let log = st.births.as_slice();
+        for (k, b) in log.iter().enumerate() {
+            if (b.init != 0 && in_d(b.init))
+                || storage.binary_search_by_key(&b.addr, |r| r.0).is_ok()
+            {
+                continue;
+            }
+            let mut off = crate::gc::GC_HEADER_SIZE;
+            while off + 8 <= b.size as usize {
+                let word = b.addr + off;
+                if !st.w.contains(word as u64) {
+                    let v = unsafe { *(word as *const u64) };
+                    if let Some(t) = probe(v) {
+                        let t = t.clone();
+                        cell(
+                            &t,
+                            format!("b:{:x}#{}+{}", addr_of(b.init), rank[k], off),
+                            f,
+                        );
+                    }
+                }
+                off += 8;
+            }
+        }
+        for (k, &slot) in st.globals_log.iter().enumerate() {
+            let owner = st.slot_owner.get(k).copied().unwrap_or(0);
+            if (owner != 0 && in_d(owner)) || st.w.contains(slot as u64) {
+                continue;
+            }
+            let v = unsafe { *(slot as *const u64) };
+            if let Some(t) = probe(v) {
+                let t = t.clone();
+                cell(&t, slot_name(slot), f);
+            }
+        }
+    }
+    let _ = writeln!(f, "#env_object_cells\t{env_obj_cells}");
+    // The guard: every other observation by an imaged init (the runtime's
+    // own, init 0, included: the IPC probe decides the process object).
+    let mut seen: std::collections::HashSet<(String, u32, &'static str)> = Default::default();
+    let mut guard = |name: &str, value: Option<&str>, init: u32, consumer: &'static str, f: &mut std::fs::File| {
+        if init != 0 && in_d(init) {
+            return;
+        }
+        if seen.insert((name.to_owned(), init, consumer)) {
+            let _ = writeln!(
+                f,
+                "#guard\t{}\t{}\t{init}\t{:x}\t{consumer}",
+                tsv_text(name),
+                value.map_or("<unset>".to_owned(), tsv_text),
+                addr_of(init)
+            );
+        }
+    };
+    for (k, o) in st.env_obs.iter().enumerate() {
+        match o.kind {
+            OBS_OBSERVE => guard(&o.name, o.value.as_deref(), o.init, "observe", f),
+            OBS_HAS => guard(&o.name, o.value.as_deref(), o.init, "has", f),
+            OBS_STORE_UNSET => guard(&o.name, None, o.init, "store_unset", f),
+            OBS_STORE_READ => guard(&o.name, o.value.as_deref(), o.init, "store_read", f),
+            OBS_STORE if found[k] == 0 && !in_d(o.init) => {
+                let _ = writeln!(f, "#cell_unstored\t{}\t{}", o.name, o.init);
+            }
+            _ => {}
+        }
+    }
+    for (init, name, value) in &st.env_reads {
+        if name.starts_with("PERRY_") || name.starts_with("RUST_") {
+            let _ = writeln!(f, "#knob\t{name}\t{init}");
+            continue;
+        }
+        let explained = st
+            .env_obs
+            .iter()
+            .any(|o| o.init == *init && o.kind != OBS_OBJECT && o.name == *name);
+        if !explained {
+            guard(name, value.as_deref(), *init, "libc", f);
+        }
+    }
+    let takers = st.env_obs.iter().filter(|o| o.kind == OBS_OBJECT).count();
+    let _ = writeln!(f, "#env\trule={}\tq7={}\tobs={}\tobject_takers={takers}\tcheck={}", st.env_rule as u8, st.q7 as u8, st.env_obs.len(), !st.skip.is_empty() as u8);
+    for &(init, word, pc, write) in &st.check_fail {
+        let _ = writeln!(f, "#checkfail\tpoison\t{init}\t{:x}\t{}\t{pc:x}\t{}", addr_of(init), slot_name(word), write as u8);
+    }
+    if !st.skip.is_empty() {
+        for (id, i) in st.inits.iter().enumerate().skip(1) {
+            if i.in_d && !i.skipped && i.addr != ENTRY_BODY_ADDR {
+                let _ = writeln!(f, "#checkfail\tjoined_d\t{id}\t{:x}", i.addr);
+            }
+        }
+    }
+    // The next check run's poison: the global slots members of D registered.
+    if st.skip.is_empty() {
+        if let Ok(mut d) = std::fs::File::create(format!("{}.dslots", st.out)) {
+            for (k, &slot) in st.globals_log.iter().enumerate() {
+                let owner = st.slot_owner.get(k).copied().unwrap_or(0);
+                if owner != 0 && in_d(owner) {
+                    let _ = writeln!(d, "{slot:x}\t{owner}");
+                }
             }
         }
     }

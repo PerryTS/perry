@@ -94,6 +94,7 @@ pub(crate) fn note_site(kind: &str) {
     }
 }
 pub(crate) mod array_length;
+pub(crate) mod snap_env_site;
 mod array_literal;
 pub(crate) mod array_proto_guard;
 mod bitset_test;

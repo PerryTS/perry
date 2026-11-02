@@ -1234,6 +1234,9 @@ pub extern "C" fn js_register_path_module(path_value: f64, exports: f64) {
 #[no_mangle]
 pub unsafe extern "C" fn js_run_module_init_catching(init_addr: i64) {
     crate::snap_census::init_part();
+    if crate::snap_census::skip_body() {
+        return;
+    }
     let init_fn: extern "C" fn() = std::mem::transmute::<usize, _>(init_addr as usize);
     let boundary = MODULE_PATH_REGISTRY.with(|r| r.begin_module_boundary());
     let outcome = crate::exception::js_call_catching(|| {

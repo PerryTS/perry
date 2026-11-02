@@ -354,3 +354,98 @@ pub extern "C" fn js_snap_entry_body() {
         runner::entry_body();
     }
 }
+
+// ---------------------------------------------------------------------------
+// SNAP3: env reads as startup-filled cells and one image guard (design
+// §2.10). The three env funnels call these instead of declaring
+// `host_read env`; an init that reads the env through them keeps its image
+// and the runner records a cell or a guard member.
+// ---------------------------------------------------------------------------
+
+/// The env object (`process.env` as a value) was handed to the program:
+/// `boxed` is its NaN-boxed bits. Taking it is not an observation; its words
+/// in the image are `env_object` cells.
+#[inline(always)]
+pub(crate) fn env_object(boxed: f64) {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    if runner::on() {
+        runner::env_object(boxed.to_bits());
+    }
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    let _ = boxed;
+}
+
+/// The env object's storage is about to be populated (the birth-log mark for
+/// [`env_storage_end`]).
+#[inline(always)]
+pub(crate) fn env_storage_begin() -> usize {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    if runner::on() {
+        return runner::births_len();
+    }
+    0
+}
+
+/// The env object `obj` was populated: what was born since `begin` (its key
+/// and value strings, key lists, overflow) and the object's slots are the
+/// env block's words. An init that reads or writes one enumerates or writes
+/// the env (rule 1).
+#[inline(always)]
+pub(crate) fn env_storage_end(begin: usize, obj: usize) {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    if runner::on() {
+        runner::env_storage(begin, obj);
+    }
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    let _ = (begin, obj);
+}
+
+/// One var read by name (`js_getenv`): `value` is its text and `ptr` the
+/// string `js_getenv` returned (0 when the var is unset).
+#[inline(always)]
+pub(crate) fn env_var(name: &str, value: Option<&str>, ptr: usize) {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    if runner::on() {
+        runner::env_var(name, value, ptr);
+    }
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    let _ = (name, value, ptr);
+}
+
+/// A presence test of one var (`"X" in env`, `hasOwnProperty`, `Reflect.has`).
+#[inline(always)]
+pub(crate) fn env_has(name: &str, present: bool) {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    if runner::on() {
+        runner::env_has(name, present);
+    }
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    let _ = (name, present);
+}
+
+/// Codegen calls this right before a `process.env.X` / `process.env[k]`
+/// read, in instrumented compiles only (`expr/snap_env_site.rs`): `kind` 1
+/// when the read's value is stored straight into a module global, a
+/// property, an element or a literal; 0 otherwise. Kept for the frame's
+/// next `js_getenv`.
+#[no_mangle]
+pub extern "C" fn js_snap_env_site(kind: i32) {
+    crate::effect!(pure);
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    if runner::on() {
+        runner::env_site(kind);
+    }
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    let _ = kind;
+}
+
+/// The check run (`PERRY_SNAP_SKIP=<D file>`): true when the evaluation now
+/// running is a member of D, whose body parts are skipped.
+#[inline(always)]
+pub(crate) fn skip_body() -> bool {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    if runner::on() {
+        return runner::skip_body();
+    }
+    false
+}
