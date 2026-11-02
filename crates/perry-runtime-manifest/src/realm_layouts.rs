@@ -489,6 +489,7 @@ pub fn read(runtime_src: &Path) -> Result<Vec<Value>, String> {
     let expected: BTreeSet<_> = perry_abi::NATIVE_LAYOUT_DESCRIPTORS
         .iter()
         .copied()
+        .filter(|name| !perry_abi::NATIVE_LAYOUT_RESERVED.contains(name))
         .collect();
     let mut layouts: BTreeMap<String, Value> = BTreeMap::new();
     for ((path, source), ts) in paths.iter().zip(&sources).zip(&parsed) {
@@ -713,7 +714,11 @@ mod tests {
     fn actual_runtime_layouts_have_one_complete_source_projection() {
         let runtime = Path::new(env!("CARGO_MANIFEST_DIR")).join("../perry-runtime/src");
         let layouts = read(&runtime).unwrap();
-        assert_eq!(layouts.len(), perry_abi::NATIVE_LAYOUT_DESCRIPTORS.len());
+        // A reserved native row (CJS_MODULE_RECORD) keeps its word but has no layout.
+        assert_eq!(
+            layouts.len(),
+            perry_abi::NATIVE_LAYOUT_DESCRIPTORS.len() - perry_abi::NATIVE_LAYOUT_RESERVED.len()
+        );
         assert!(layouts.iter().any(
             |d| d.get("name").and_then(Value::string) == Some("%Layout:ARRAY_PROTOTYPE_NAMED%")
         ));

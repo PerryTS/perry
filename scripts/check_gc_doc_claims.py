@@ -73,9 +73,10 @@ PATH_ROOTS = (
     ".github/",
 )
 
-# `changelog.d/` fragments are deleted at tag time by design, so their absence
-# is not drift.  Globs are patterns, not paths.
-PATH_EXEMPT_PREFIXES = ("changelog.d/",)
+# Released `changelog.d/` fragments are archived under `changelog/vX.Y.Z/` at
+# tag time, so their absence from the pending queue is not drift.  Globs are
+# patterns, not paths.
+PATH_EXEMPT_PREFIXES = ("changelog.d/", "changelog/v")
 
 INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
 LINE_CITATION_RE = re.compile(r"^(?P<path>[^\s:]+):(?P<line>\d+)$")

@@ -119,10 +119,10 @@ impl StackMapIndex {
         // the tool that exists to give confidence must mean a real difference.
         for side in [&mut actual, &mut expected] {
             for entry in side.iter_mut() {
-                entry.1.sort_unstable();
-                entry.2.sort_unstable();
+                crate::cold_sort::sort_by(&mut entry.1, |a, b| a.cmp(b));
+                crate::cold_sort::sort_by(&mut entry.2, |a, b| a.cmp(b));
             }
-            side.sort_unstable_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+            crate::cold_sort::sort_by(side, |a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
         }
         if actual != expected {
             panic!(
