@@ -74,8 +74,8 @@ on:
         default: full
       update_gap_snapshot:
         description: >-
-          Re-baseline test-parity/gap_snapshot.json: run the whole gap suite as
-          ONE shard with UPDATE_SNAPSHOT=1 and upload the resulting snapshot as
+          Re-baseline test-parity/snapshots/linux-fast/test-files.json: run the
+          whole gap suite as ONE shard with --update and upload the resulting snapshot as
           an artifact (`gap-snapshot-update`) for you to commit. Nothing else
           about the run changes.
         type: boolean
@@ -3642,10 +3642,13 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$GAP_MODE" = "fast" ]; then
-            export PERRY_SKIP_BUILD=1
             export PERRY_BIN="$PWD/target/release/perry"
             export PERRY_RUNTIME_DIR="$PWD/target/release"
+            args=(run --suite test-files --filter test_gap_ --mode fast --shard "$GAP_SHARD/$GAP_TOTAL")
+            if [ "$UPDATE_SNAPSHOT" = "1" ]; then args+=(--update); fi
+            exec python3 scripts/parity.py "${args[@]}"
           fi
+          # Auto-optimize mode stays on the old runner until its snapshot is seeded.
           if [ "$GAP_TOTAL" = "1" ]; then
             ./scripts/run_gap_tests.sh
           else
@@ -3653,14 +3656,14 @@ jobs:
           fi
 
       # Only produced by a `workflow_dispatch` with update_gap_snapshot=true
-      # (one shard, whole suite). Download it and commit test-parity/
-      # gap_snapshot.json -- see docs/src/testing/ci-tiers.md "Re-baselining".
+      # (one shard, whole suite). Download it and commit test-parity/snapshots/
+      # linux-fast/test-files.json -- see docs/src/testing/ci-tiers.md "Re-baselining".
       - name: Upload re-baselined gap snapshot
         if: fromJSON(needs.plan.outputs.plan).gap.update_snapshot
         uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
           name: gap-snapshot-update
-          path: test-parity/gap_snapshot.json
+          path: test-parity/snapshots/linux-fast/test-files.json
 
       - name: Upload gap report
         if: always()

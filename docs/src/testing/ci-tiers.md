@@ -226,21 +226,26 @@ window (`previous sweep SHA .. this sweep SHA`), exactly as for the six-hourly g
 
 ## Re-baselining the gap snapshot
 
-`test-parity/gap_snapshot.json` is a both-direction snapshot: any divergence — a
-test that started failing OR started passing — is red. When `main` has legitimately
-moved (a triaged regression, an oracle change), regenerate it **from CI**, not from
-a laptop (the required baseline is Linux, `fast` mode):
+The pull-request gap lane runs `scripts/parity.py run --suite test-files
+--filter test_gap_ --mode fast` and is judged by
+`test-parity/snapshots/linux-fast/test-files.json`, a both-direction snapshot:
+any divergence — a case that started failing OR started passing — is red. When
+`main` has legitimately moved (a triaged regression, an oracle change),
+regenerate it **from CI**, not from a laptop (the required baseline is Linux,
+`fast` mode):
 
 ```bash
 gh workflow run test.yml --ref <branch> -f tier=pr -f update_gap_snapshot=true
 # wait for the run, then:
 gh run download <run-id> -n gap-snapshot-update -D /tmp/snap
-cp /tmp/snap/gap_snapshot.json test-parity/gap_snapshot.json
+cp /tmp/snap/test-files.json test-parity/snapshots/linux-fast/test-files.json
 # fill in `issue` / `reason` for every new entry, then commit
 ```
 
 New entries land as `category: untriaged`; give each an issue and a reason before
-merging. A crash may never be parked in the snapshot (`run_gap_tests.sh` refuses).
+merging. A crash is never accepted into a snapshot (`parity.py` refuses).
+The auto-optimize gap lane of the `full` tier still runs `run_gap_tests.sh`
+against `test-parity/gap_snapshot.json` until its own snapshot is seeded.
 
 ## Branch protection
 
