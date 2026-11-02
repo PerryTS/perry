@@ -791,7 +791,7 @@ fn chain_ends_in_explicit_null_before<const STOP_AT_OBJECT_PROTOTYPE: bool>(
 /// cannot answer about a hop the read never visits.
 #[inline]
 unsafe fn class_link_prototype(obj_ptr: usize) -> usize {
-    if obj_ptr == 0 || !crate::object::is_valid_obj_ptr(obj_ptr as *const u8) {
+    if !crate::value::addr_class::is_plausible_heap_addr(obj_ptr) {
         return 0;
     }
     let Some(header) = crate::value::addr_class::try_read_gc_header(obj_ptr) else {
@@ -812,7 +812,7 @@ unsafe fn class_link_prototype(obj_ptr: usize) -> usize {
 /// question [`chain_ends_in_explicit_null_before`] asks (#1175).
 #[inline]
 unsafe fn cell_is_born_null_proto(obj_ptr: usize) -> bool {
-    if obj_ptr == 0 || !crate::object::is_valid_obj_ptr(obj_ptr as *const u8) {
+    if !crate::value::addr_class::is_plausible_heap_addr(obj_ptr) {
         return false;
     }
     super::shapes::cell_prototype_is_null(obj_ptr)

@@ -165,7 +165,7 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
                 // are that default's answer).
                 let intrinsic = linked && {
                     let fp = crate::object::builtin_prototype_value("Function");
-                    crate::JSValue::from_bits(fp.to_bits()).is_pointer()
+                    crate::JSValue::from_bits(fp.to_bits()).is_reference()
                         && unsafe { crate::symbol::js_object_get_symbol_property(fp, hi_f64) }
                             .to_bits()
                             == cb.to_bits()
