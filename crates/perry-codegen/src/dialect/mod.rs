@@ -725,10 +725,18 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
         let ty = basic_type(self.ctx, parts[0].trim())?;
         let (pty, pval) = ty_and_val(&parts[1])?;
         // An atomic load's ordering keyword trails the pointer operand
-        // (`ptr @g seq_cst`), measured in the corpus census.
-        let mut ptoks = pval.split_whitespace();
-        let ptok = ptoks.next().ok_or_else(|| anyhow!("bad load pointer"))?;
-        let ordering = ptoks.next();
+        // (`ptr @g seq_cst`), measured in the corpus census. The pointer
+        // itself can contain spaces: a constant expression such as the
+        // Windows TEB read `inttoptr (i64 88 to ptr addrspace(256))`.
+        let (ptok, ordering) = match pval.rsplit_once(char::is_whitespace) {
+            Some((pointer, ordering)) if atomic && !pointer.trim().is_empty() => {
+                (pointer.trim(), Some(ordering))
+            }
+            _ => (pval, None),
+        };
+        if ptok.is_empty() {
+            bail!("bad load pointer");
+        }
         let p = self.val(basic_type(self.ctx, pty)?, ptok)?;
         let v = self
             .builder
