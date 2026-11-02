@@ -2013,6 +2013,11 @@ pub(super) fn boundary(at: &'static str) {
     }
     crate::arena::refresh_inline_allocation_limit();
     write_report(st);
+    // The check run proves the image at the boundary; what runs after it
+    // reads bindings of the skipped members of D, so the run ends here.
+    if !st.skip.is_empty() {
+        unsafe { libc::_exit(0) };
+    }
     if st.rset {
         unsafe { arm_rset(st) };
         return;
@@ -2276,13 +2281,20 @@ fn write_report(st: &mut State) {
         let mut rank: std::collections::HashMap<u32, u64> = std::collections::HashMap::new();
         let mut names: Vec<(usize, usize, u64)> = Vec::with_capacity(log.len());
         let mut ranks: Vec<u64> = Vec::with_capacity(log.len());
+        // The env object and its storage are the env block, filled at
+        // startup (an `env_object` cell): one name, never hashed by value.
+        let mut env_store = st.env_storage.clone();
+        env_store.sort_unstable();
+        let is_env = |a: usize| env_store.binary_search_by_key(&a, |r| r.0).is_ok();
         for b in log {
             let k = rank.entry(b.init).or_insert(0);
             let a = st.inits[b.init as usize].addr as u64;
             // The runtime's births (init 0) happen when an init first uses a
             // runtime object, so their order depends on D: they are named by
             // type and size only.
-            let name = if b.init == 0 {
+            let name = if is_env(b.addr) {
+                ENV_NAME
+            } else if b.init == 0 {
                 let ty = unsafe { (*(b.addr as *const crate::gc::GcHeader)).obj_type } as u64;
                 0x5254_0000_0000_0000 ^ (ty << 32) ^ b.size as u64
             } else {
@@ -2304,12 +2316,33 @@ fn write_report(st: &mut State) {
             (i > 0 && v < names[i - 1].1).then(|| (names[i - 1].2, v - names[i - 1].0))
         };
         let mut per: std::collections::BTreeMap<usize, (u64, u64, u64)> = Default::default();
+        // Diagnostic: `PERRY_SNAP_DIGEST_DUMP=1` writes every hashed word
+        // (`<out>.dig`: init, birth name, offset, token) to diff two runs.
+        let mut dig_out = std::env::var_os("PERRY_SNAP_DIGEST_DUMP")
+            .and_then(|_| std::fs::File::create(format!("{}.dig", st.out)).ok());
+        let mut dump = |init: usize, bname: u64, off: usize, tok: String| {
+            if let Some(o) = dig_out.as_mut() {
+                use std::io::Write;
+                let _ = writeln!(o, "{init:x}\t{bname:x}\t{off}\t{tok}");
+            }
+        };
         let mix = |h: &mut u64, x: u64| {
             *h ^= x;
             *h = h.wrapping_mul(0x100000001B3);
         };
+        // A pointer outside the reservation and the binary points into
+        // malloc memory (mimalloc picks randomized arena hints, so its
+        // addresses differ per run even with ASLR off): it hashes as its tag.
+        let foreign = |v: u64| -> bool {
+            let a = (v & 0xFFFF_FFFF_FFFF) as usize;
+            let hi = v >> 48;
+            (hi == 0x7FFD || hi == 0x7FFC || hi == 0x7FFF || hi == 0x7FFE)
+                && st.heap.slot(a).is_none()
+                && st.bin.slot(a).is_none()
+                && st.tls.slot(a).is_none()
+        };
         for (bk, b) in log.iter().enumerate() {
-            if b.init != 0 && st.inits[b.init as usize].in_d {
+            if (b.init != 0 && st.inits[b.init as usize].in_d) || is_env(b.addr) {
                 continue;
             }
             let bname = birth_names[bk];
@@ -2340,10 +2373,17 @@ fn write_report(st: &mut State) {
                         mix(&mut e.0, hi ^ 0xA5A5);
                         mix(&mut e.0, n);
                         mix(&mut e.0, o as u64);
+                        dump(st.inits[b.init as usize].addr, bname, off - 8, format!("p{hi:x}:{n:x}+{o}"));
                         continue;
                     }
                 }
+                if foreign(v) {
+                    mix(&mut e.0, v >> 48);
+                    dump(st.inits[b.init as usize].addr, bname, off - 8, format!("f{:x}", v >> 48));
+                    continue;
+                }
                 mix(&mut e.0, v);
+                dump(st.inits[b.init as usize].addr, bname, off - 8, format!("v{v:x}"));
             }
         }
         // The module-global slots each imaged init registered.
@@ -2363,10 +2403,17 @@ fn write_report(st: &mut State) {
                     mix(&mut e.0, hi ^ 0xA5A5);
                     mix(&mut e.0, n);
                     mix(&mut e.0, o as u64);
+                    dump(st.inits[owner as usize].addr, 0, slot, format!("p{hi:x}:{n:x}+{o}"));
                     continue;
                 }
             }
+            if foreign(v) {
+                mix(&mut e.0, v >> 48);
+                dump(st.inits[owner as usize].addr, 0, slot, format!("f{:x}", v >> 48));
+                continue;
+            }
             mix(&mut e.0, v);
+            dump(st.inits[owner as usize].addr, 0, slot, format!("v{v:x}"));
         }
         let mut total = 0xcbf29ce484222325u64;
         for (addr, (h, objs, words)) in &per {
@@ -2429,8 +2476,9 @@ struct EnvObs {
     value: Option<String>,
     /// The string a store-site read returned (header address).
     ptr: usize,
-    /// The imaged init that read a store-site string's body.
+    /// The imaged init that read a store-site string's body, and where.
     by: u32,
+    by_pc: usize,
 }
 
 fn top_init(st: &State) -> u32 {
@@ -2480,6 +2528,7 @@ pub(super) fn env_object(bits: u64) {
             value: None,
             ptr: 0,
             by: 0,
+            by_pc: 0,
         });
     }
 }
@@ -2532,6 +2581,7 @@ pub(super) fn env_var(name: &str, value: Option<&str>, ptr: usize) {
         value: value.map(str::to_owned),
         ptr,
         by: 0,
+        by_pc: 0,
     });
 }
 
@@ -2548,6 +2598,7 @@ pub(super) fn env_has(name: &str, present: bool) {
         value: present.then(|| "<set>".to_owned()),
         ptr: 0,
         by: 0,
+        by_pc: 0,
     });
 }
 
@@ -2586,6 +2637,7 @@ fn env_word_access(st: &mut State, v: u32, word: usize, write: bool, pc: usize) 
         if o.kind == OBS_STORE {
             o.kind = OBS_STORE_READ;
             o.by = top;
+            o.by_pc = pc;
         }
     }
 }
@@ -2647,6 +2699,9 @@ fn tsv_text(s: &str) -> String {
 
 /// The `#cell`, `#guard`, `#knob` lines (design §2.10.8) and the per-init
 /// slot owners for the check run.
+/// The digest name of the env object and its storage.
+const ENV_NAME: u64 = 0x454E_5600_0000_0000;
+
 fn write_env_report(st: &State, f: &mut std::fs::File, rank: &[u64]) {
     use std::io::Write;
     let in_d = |i: u32| st.inits[i as usize].in_d;
@@ -2659,8 +2714,19 @@ fn write_env_report(st: &State, f: &mut std::fs::File, rank: &[u64]) {
     if st.env_obj != 0 {
         targets.entry(st.env_obj & 0xFFFF_FFFF_FFFF).or_default().push(-1);
     }
+    // A var some imaged init observes is a guard member: the guard makes
+    // every imaged string of it right, so its store-site reads need no cell.
+    let guarded: std::collections::HashSet<&str> = st
+        .env_obs
+        .iter()
+        .filter(|o| {
+            matches!(o.kind, OBS_OBSERVE | OBS_HAS | OBS_STORE_UNSET | OBS_STORE_READ)
+                && (o.init == 0 || !in_d(o.init))
+        })
+        .map(|o| o.name.as_str())
+        .collect();
     for (k, o) in st.env_obs.iter().enumerate() {
-        if o.kind == OBS_STORE && !in_d(o.init) {
+        if o.kind == OBS_STORE && !in_d(o.init) && !guarded.contains(o.name.as_str()) {
             targets.entry(o.ptr as u64 & 0xFFFF_FFFF_FFFF).or_default().push(k as i64);
         }
     }
@@ -2729,27 +2795,29 @@ fn write_env_report(st: &State, f: &mut std::fs::File, rank: &[u64]) {
     // The guard: every other observation by an imaged init (the runtime's
     // own, init 0, included: the IPC probe decides the process object).
     let mut seen: std::collections::HashSet<(String, u32, &'static str)> = Default::default();
-    let mut guard = |name: &str, value: Option<&str>, init: u32, consumer: &'static str, f: &mut std::fs::File| {
+    let mut guard = |name: &str, value: Option<&str>, init: u32, consumer: &'static str, by: (u32, usize), f: &mut std::fs::File| {
         if init != 0 && in_d(init) {
             return;
         }
         if seen.insert((name.to_owned(), init, consumer)) {
             let _ = writeln!(
                 f,
-                "#guard\t{}\t{}\t{init}\t{:x}\t{consumer}",
+                "#guard\t{}\t{}\t{init}\t{:x}\t{consumer}\t{}\t{:x}",
                 tsv_text(name),
                 value.map_or("<unset>".to_owned(), tsv_text),
-                addr_of(init)
+                addr_of(init),
+                by.0,
+                by.1
             );
         }
     };
     for (k, o) in st.env_obs.iter().enumerate() {
         match o.kind {
-            OBS_OBSERVE => guard(&o.name, o.value.as_deref(), o.init, "observe", f),
-            OBS_HAS => guard(&o.name, o.value.as_deref(), o.init, "has", f),
-            OBS_STORE_UNSET => guard(&o.name, None, o.init, "store_unset", f),
-            OBS_STORE_READ => guard(&o.name, o.value.as_deref(), o.init, "store_read", f),
-            OBS_STORE if found[k] == 0 && !in_d(o.init) => {
+            OBS_OBSERVE => guard(&o.name, o.value.as_deref(), o.init, "observe", (0, 0), f),
+            OBS_HAS => guard(&o.name, o.value.as_deref(), o.init, "has", (0, 0), f),
+            OBS_STORE_UNSET => guard(&o.name, None, o.init, "store_unset", (0, 0), f),
+            OBS_STORE_READ => guard(&o.name, o.value.as_deref(), o.init, "store_read", (o.by, o.by_pc), f),
+            OBS_STORE if found[k] == 0 && !in_d(o.init) && !guarded.contains(o.name.as_str()) => {
                 let _ = writeln!(f, "#cell_unstored\t{}\t{}", o.name, o.init);
             }
             _ => {}
@@ -2765,7 +2833,7 @@ fn write_env_report(st: &State, f: &mut std::fs::File, rank: &[u64]) {
             .iter()
             .any(|o| o.init == *init && o.kind != OBS_OBJECT && o.name == *name);
         if !explained {
-            guard(name, value.as_deref(), *init, "libc", f);
+            guard(name, value.as_deref(), *init, "libc", (0, 0), f);
         }
     }
     let takers = st.env_obs.iter().filter(|o| o.kind == OBS_OBJECT).count();

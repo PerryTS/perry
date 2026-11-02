@@ -183,6 +183,7 @@ impl Drop for RequireScope {
 
 /// The init a job enqueued now belongs to (0: none).
 #[inline(always)]
+#[cfg_attr(not(perry_gc_instruments), allow(dead_code))]
 pub(crate) fn job_owner() -> u32 {
     #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
     if runner::on() {
@@ -193,6 +194,7 @@ pub(crate) fn job_owner() -> u32 {
 
 /// A job owned by `owner` (from [`job_owner`] at its enqueue) starts.
 #[inline(always)]
+#[cfg_attr(not(perry_gc_instruments), allow(dead_code))]
 pub(crate) fn job_enter(owner: u32) {
     #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
     if runner::on() {
@@ -366,6 +368,7 @@ pub extern "C" fn js_snap_entry_body() {
 /// `boxed` is its NaN-boxed bits. Taking it is not an observation; its words
 /// in the image are `env_object` cells.
 #[inline(always)]
+#[cfg_attr(not(perry_gc_instruments), allow(dead_code))]
 pub(crate) fn env_object(boxed: f64) {
     #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
     if runner::on() {
@@ -414,6 +417,7 @@ pub(crate) fn env_var(name: &str, value: Option<&str>, ptr: usize) {
 
 /// A presence test of one var (`"X" in env`, `hasOwnProperty`, `Reflect.has`).
 #[inline(always)]
+#[cfg_attr(not(perry_gc_instruments), allow(dead_code))]
 pub(crate) fn env_has(name: &str, present: bool) {
     #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
     if runner::on() {

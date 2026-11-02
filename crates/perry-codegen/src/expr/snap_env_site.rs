@@ -60,6 +60,17 @@ pub(crate) fn note_store_parent(ctx: &FnCtx<'_>, expr: &Expr) {
             note(std::iter::once(&**value))
         }
         Expr::Object(fields) => note(fields.iter().map(|(_, v)| v)),
+        // A plain object literal lowers to `new __AnonShape_*(values...)`:
+        // the literal shape has no constructor, its values are its fields.
+        Expr::New {
+            class_name, args, ..
+        } if ctx
+            .classes
+            .get(class_name)
+            .is_some_and(|c| c.is_literal_shape()) =>
+        {
+            note(args.iter())
+        }
         Expr::Array(elems, _) => note(elems.iter()),
         _ => {}
     }
