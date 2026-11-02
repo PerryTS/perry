@@ -1,10 +1,9 @@
-//! CHB2: a private instance field's initializer is the construction-phase
-//! store of the field's storage key (`#<perry:private-value:{class}:#x>`),
-//! the key every `this.#x` read and write names. Dropping it left the reads
-//! holding only the absent field's `undefined`: calls on the value were
-//! "primitive receiver", what they return never flowed, and a field copied
-//! from the private one missed its object (a wrong kind fact). The private
-//! key is no public layout key: slots and the fixed layout are unchanged.
+//! CHB2: a class private field read is brand-guarded (`PrivateGuard`): a
+//! receiver without the element throws first, so the read never sees the key
+//! absent (no `undefined` for absence), and it consults no prototype. The
+//! guard's value is its receiver's. Before, the read of a private Map field
+//! held `undefined` beside the Map: calls on it were "primitive receiver"
+//! or never NativeMember, and the entries a `get` returns did not flow.
 use super::*;
 
 fn modules(mods: &[(&str, &str)], per_unit: bool) -> ProgramFacts {

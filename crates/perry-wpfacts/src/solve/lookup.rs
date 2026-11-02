@@ -364,7 +364,12 @@ impl Model {
             }
             _ => false,
         };
-        if !present {
+        // A class private field read is guarded by its brand: a receiver
+        // without the element throws first, so the read never sees the key
+        // absent (no `undefined` for absence), and the element is the
+        // object's own (ECMA-262 PrivateGet): no prototype is consulted.
+        let private = matches!(key, Key::Named(a) if self.is_private_atom(a));
+        if !present && !private {
             self.add_prim(dst, prim::UNDEF);
         }
         match key {
@@ -390,6 +395,9 @@ impl Model {
                 let all = self.all_fields(t);
                 self.edge(all, dst);
             }
+        }
+        if private {
+            return;
         }
         // A marker is use tracking, not a value (DECISIONS 111): a load from
         // it reads its fields only. A parameter marker has no prototype here
