@@ -1,0 +1,1 @@
+A symbol-keyed write on a class (`C[S] = v`) runs the class own or inherited `static set [S]` with `this` set to the class written to, instead of storing a data member that shadows the accessor; a getter-only static symbol accessor stores nothing (a strict write throws). A ClassBody static symbol accessor is now an own accessor property of the class function object.

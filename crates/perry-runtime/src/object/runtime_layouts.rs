@@ -387,7 +387,11 @@ pub unsafe extern "C" fn perry_build_runtime_record(
     object.get_raw_mut_ptr()
 }
 
-#[used(linker)]
+// These C ABI symbols are also referenced by generated code and native UI
+// libraries, outside Rust's call graph. Preserve their emission through
+// bitcode linking, but let the final linker discard genuinely unused APIs.
+// Unlike image/layout section records, these pointers are never enumerated.
+#[used(compiler)]
 static KEEP_RUNTIME_RECORD_BUILD: unsafe extern "C" fn(
     *const PerryLayoutDesc,
     *mut f64,
@@ -456,7 +460,7 @@ pub fn init_runtime_field(object: &crate::gc::RuntimeHandle<'_>, slot: u32, valu
     super::js_object_set_field(object.get_raw_mut_ptr::<super::ObjectHeader>(), slot, value);
 }
 
-#[used(linker)]
+#[used(compiler)]
 static KEEP_RUNTIME_RECORD_ALLOC: unsafe extern "C" fn(
     *const PerryLayoutDesc,
 ) -> *mut super::ObjectHeader = perry_alloc_runtime_record;
@@ -473,7 +477,7 @@ pub extern "C" fn perry_runtime_image_result(handle: i64, width: f64, height: f6
         as i64
 }
 
-#[used(linker)]
+#[used(compiler)]
 static KEEP_IMAGE_RESULT: extern "C" fn(i64, f64, f64) -> i64 = perry_runtime_image_result;
 
 /// The same object codegen emits for a program literal of this spelling

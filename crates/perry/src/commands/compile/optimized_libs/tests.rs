@@ -861,25 +861,39 @@ fn the_instrumented_variant_names_its_archives_with_an_instr_suffix() {
     assert_eq!(name("perry", true), "perry");
 }
 
+/// Run this module's test `name` alone in a child test process and report
+/// whether this call was the parent (`true`: the child ran it and passed, the
+/// caller returns) or the child (`false`: the caller runs the test body).
+///
+/// Lowering records dynamic-code reach (`perry_hir::has_deferred_dynamic_code_sites`)
+/// in process-global state that the driver drains once per compile. Every
+/// other test in this binary that lowers a program can leave it set, so a test
+/// asserting what a plain program does NOT install must not share their
+/// process. The child sees only its own test, without draining anyone's state.
+fn ran_in_isolated_child(name: &str) -> bool {
+    const CHILD: &str = "PERRY_TEST_ISOLATED_FEATURES_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        return false;
+    }
+    let module = module_path!().split_once("::").unwrap().1;
+    let name = format!("{module}::{name}");
+    let child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", &name, "--test-threads=1", "--nocapture"])
+        .env(CHILD, "1")
+        .output()
+        .expect("run isolated feature test");
+    assert!(
+        child.status.success() && String::from_utf8_lossy(&child.stdout).contains("1 passed;"),
+        "isolated feature test {name} failed or did not run\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&child.stdout),
+        String::from_utf8_lossy(&child.stderr)
+    );
+    true
+}
+
 #[test]
 fn deserializers_install_regex_without_a_regex_literal() {
-    // Other lowering tests share dynamic-code reach. A child keeps this
-    // plain-program negative check independent without draining their state.
-    const CHILD: &str = "PERRY_TEST_DESERIALIZER_FEATURES_CHILD";
-    if std::env::var_os(CHILD).is_none() {
-        let module = module_path!().split_once("::").unwrap().1;
-        let name = format!("{module}::deserializers_install_regex_without_a_regex_literal");
-        let child = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", &name, "--test-threads=1", "--nocapture"])
-            .env(CHILD, "1")
-            .output()
-            .expect("run isolated deserializer feature test");
-        assert!(
-            child.status.success() && String::from_utf8_lossy(&child.stdout).contains("1 passed;"),
-            "isolated feature test failed or did not run\nstdout: {}\nstderr: {}",
-            String::from_utf8_lossy(&child.stdout),
-            String::from_utf8_lossy(&child.stderr)
-        );
+    if ran_in_isolated_child("deserializers_install_regex_without_a_regex_literal") {
         return;
     }
     assert!(!perry_hir::has_deferred_dynamic_code_sites());
@@ -911,9 +925,14 @@ fn deserializers_install_regex_without_a_regex_literal() {
 /// while compiling, as for the instrument knobs. Without the compile-time arm a
 /// WASI program run with `PERRY_GC_LOG=1` printed nothing, and the image
 /// selftest's moving/full-collection gate could not see its collections.
+/// Its "nothing installs" arm reads dynamic-code reach, so it runs alone.
 #[test]
 fn gc_diagnostic_knobs_set_while_compiling_install_the_gc_diagnostics() {
+    if ran_in_isolated_child("gc_diagnostic_knobs_set_while_compiling_install_the_gc_diagnostics") {
+        return;
+    }
     let _guard = env_lock();
+    assert!(!perry_hir::has_deferred_dynamic_code_sites());
     let knobs = [
         "PERRY_GC_DIAG",
         "PERRY_GC_LOG",

@@ -1,0 +1,1 @@
+Tests: the GC diagnostics install test checks its no-knob case in its own test process, as the deserializer feature test does: other tests in the binary leave the process-global dynamic-code reach set, which installs the diagnostics for any program.
