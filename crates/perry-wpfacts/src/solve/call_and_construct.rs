@@ -19,8 +19,14 @@ impl Model {
             // it reaches, DECISIONS 107) is described by them and adds no
             // callee of its own (DECISIONS 143): the values are called.
             let cs = &self.calls[call as usize];
-            let plain =
-                this_tok.is_none() && matches!(cs.this, ThisArg::Undef) && cs.spread.is_empty();
+            // A receiver node of this unit's (`o.k()` with the marker under
+            // `k`) travels to the caller's unit described as the call's
+            // `this` (`ParamCall::this`), as the arguments do; a receiver
+            // token given from outside the call (`this_tok`, `ThisArg::Tok`)
+            // is the escape below.
+            let plain = this_tok.is_none()
+                && matches!(cs.this, ThisArg::Undef | ThisArg::Node(_))
+                && cs.spread.is_empty();
             if let Some(own) = plain.then(|| self.own_param_members(t)).flatten() {
                 if self.bind_done.insert((call, t, u32::MAX - 3)) {
                     self.mark_use(t, crate::model::MARK_READ);
