@@ -37,7 +37,7 @@ pub(crate) fn throw_plain_type(message: &str) -> ! {
 
 pub(crate) fn throw_construct_required() -> ! {
     perry_runtime::fs::validate::throw_type_error_with_code(
-        "Class constructor DatabaseSync cannot be invoked without 'new'",
+        "Cannot call constructor without `new`",
         "ERR_CONSTRUCT_CALL_REQUIRED",
     )
 }

@@ -117,6 +117,7 @@ fn site_text(site: u64) -> String {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn violate(site: u64, what: &str, detail: String) -> ! {
     eprintln!(
@@ -144,7 +145,10 @@ fn describe(bits: u64) -> String {
             return format!("pointer {addr:#x}, not an ordinary object");
         }
         let h = &*(addr as *const ObjectHeader);
-        format!("object {addr:#x} class_id {} shape_id {}", h.class_id, h.parent_class_id)
+        format!(
+            "object {addr:#x} class_id {} shape_id {}",
+            h.class_id, h.parent_class_id
+        )
     }
 }
 

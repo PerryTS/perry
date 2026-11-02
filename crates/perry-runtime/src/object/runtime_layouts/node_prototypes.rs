@@ -424,14 +424,14 @@ const _: () = assert!(
 /// The hash of runtime symbol atom `n` (a fixed constant per number, like a
 /// well-known symbol's; the symbol itself is created when it is bound).
 const fn runtime_symbol_atom_hash(n: u32) -> u64 {
-    0x9e37_79b9_7f4a_7c15u64.wrapping_mul(n as u64 + 0x100)
+    perry_abi::runtime_symbol_atom_hash(n)
 }
 
 /// A symbol of node's own library as a layout key: a kind-2 atom (`string` its
 /// description, `index` its number among [`RUNTIME_SYMBOL_ATOMS`]), bound to
 /// its process-lifetime symbol by [`runtime_symbol_of_atom`].
 macro_rules! runtime_symbol_atom {
-    ($name:ident, $desc:literal, $n:expr) => {
+    ($name:ident, $desc:literal, $n:literal) => {
         #[allow(non_snake_case)]
         pub(crate) mod $name {
             use super::*;
@@ -439,6 +439,9 @@ macro_rules! runtime_symbol_atom {
             pub(super) static IMAGE: ImageString<{ $desc.len() + 1 }> =
                 image_bytes(concat!($desc, "\0").as_bytes());
         }
+        // Compiler-emitted descriptors name this atom by its number: the
+        // runtime binds a kind-2 atom by address (`runtime_symbol_of_atom`).
+        #[export_name = concat!("perry_runtime_symbol_atom_", $n)]
         pub(crate) static $name: StaticAtom = StaticAtom {
             hash: $name::HASH,
             string: std::ptr::addr_of!($name::IMAGE.string),

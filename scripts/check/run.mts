@@ -4,6 +4,7 @@
  *
  * Usage: pnpm run check
  */
+import { realpathSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { readdir } from 'node:fs/promises'
 import path from 'node:path'
@@ -34,5 +35,9 @@ export async function runChecks(): Promise<number> {
   return status
 }
 
-const isMain = process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url
+// Compare resolved paths: argv[1] keeps a symlinked prefix that import.meta.url
+// has resolved away.
+const isMain =
+  process.argv[1] !== undefined &&
+  pathToFileURL(realpathSync(process.argv[1])).href === import.meta.url
 if (isMain) runChecks().then((code) => { process.exitCode = code })

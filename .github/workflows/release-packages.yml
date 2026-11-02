@@ -206,8 +206,12 @@ jobs:
               echo "::error::tag $TAG already exists — the version in Cargo.toml was already released. Land a version bump or use existing_tag to re-publish."
               exit 1
             fi
-            if [ -z "$(find changelog.d -maxdepth 1 -type f -name '[0-9]*.md' -print -quit)" ]; then
-              echo "::error::no fragments in changelog.d/ — the release notes are cut from them; nothing to release."
+            # A release's notes come from its own archive when the fold already
+            # landed on the release branch, and from the pending queue when it
+            # has not. Keying this on changelog.d/ alone refused every release
+            # that folded first, which is now the documented order.
+            if ! ./scripts/release_notes_source.sh "$TAG" >/dev/null; then
+              echo "::error::no release-note entries for $TAG — neither changelog/$TAG/ nor the pending queue in changelog.d/ has any; nothing to release."
               exit 1
             fi
           elif [ -n "$EXISTING_TAG" ]; then
@@ -940,13 +944,36 @@ jobs:
           ${{ runner.os == 'Windows' && 'cargo' || 'mbx' }} build --profile prod --target ${{ matrix.target }} -p perry-runtime -p perry-runtime-static
           ${{ runner.os == 'Windows' && 'cargo' || 'mbx' }} build --profile prod --target ${{ matrix.target }} -p perry-stdlib -p perry-stdlib-static
 
-      - name: Build compiler + runtime + stdlib in one graph (Windows)
-        # On Unix the native ext step below builds this same package set (plus
-        # every extension) in its one invocation, which is the build that
-        # ships; doing it here too cost a full second compile of perry +
-        # runtime + stdlib under a different feature union.
+      - name: Build compiler + runtime + stdlib + native ext libraries in one graph (Windows)
+        # Same as the Unix step below: perry, the runtime and stdlib wrappers
+        # and every extension in ONE invocation share one feature union
+        # (#7358), and the combined build is best-effort per extension: if it
+        # fails the core builds alone and each extension is retried on its own.
+        # Packaging ships whatever `perry_ext_*.lib` was produced.
         if: runner.os == 'Windows' && matrix.old_glibc_image == '' && matrix.musl_image == ''
-        run: cargo build --profile prod --target ${{ matrix.target }} -p perry -p perry-runtime-static -p perry-stdlib-static ${{ matrix.wasi && needs.build-wasi.outputs.enabled == 'true' && '--features perry/target-wasi' || '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          governed_ext_packages=$(./scripts/release_ext_packages.sh)
+          ext_args=""
+          while IFS= read -r name; do
+            ext_args="$ext_args -p $name"
+          done <<< "$governed_ext_packages"
+          core_args="-p perry -p perry-runtime-static -p perry-stdlib-static ${{ matrix.wasi && needs.build-wasi.outputs.enabled == 'true' && '--features perry/target-wasi' || '' }}"
+          # shellcheck disable=SC2086 # word splitting is the point
+          if cargo build --keep-going --profile prod --target ${{ matrix.target }} $core_args $ext_args; then
+            exit 0
+          fi
+          echo "::warning::combined ext build failed; building the core alone, then each extension on its own"
+          # shellcheck disable=SC2086
+          cargo build --profile prod --target ${{ matrix.target }} $core_args
+          while IFS= read -r name; do
+            echo "::group::build $name"
+            # shellcheck disable=SC2086
+            cargo build --profile prod --target ${{ matrix.target }} $core_args -p "$name" \
+              || echo "  (skipped $name - failed to build on this host)"
+            echo "::endgroup::"
+          done <<< "$governed_ext_packages"
 
       - name: Build WebAssembly host archive
         # perry links it for a WebAssembly program and never builds it while
@@ -1161,6 +1188,11 @@ jobs:
               libperry_runtime.a.gc-effects libperry_wasm_host.a; do
             test -s "$src/$artifact"
             cp "$src/$artifact" "$dst/$artifact"
+          done
+          # The native-extension archives (best-effort, as on the other
+          # legs): the tarball and the ext package ship whatever was built.
+          for archive in "$src"/libperry_ext_*.a; do
+            [ -f "$archive" ] && cp "$archive" "$dst/"
           done
 
       - name: Build UI library (macOS)
@@ -1644,6 +1676,12 @@ jobs:
                 Copy-Item "$path.gc-effects" staging/
               }
             }
+          }
+          # #2532: the perry-ext-* archives (node:http, ws, net, zlib, ...),
+          # found like the runtime and stdlib libs
+          # (optimized_libs.rs::resolve_prebuilt_ext_libs).
+          foreach ($ext in Get-ChildItem "target/${{ matrix.target }}/prod/perry_ext_*.lib" -ErrorAction SilentlyContinue) {
+            Copy-Item $ext.FullName staging/
           }
           # #872: stage the Android cross-compiled archives next to the
           # Windows libs. perry's library_search.rs walks
@@ -2252,10 +2290,13 @@ jobs:
   # ---------------------------------------------------------------------------
   # Tag-last core (cut-release mode only): every build leg is green and
   # every exact npm tarball is public + registry-verified, so NOW create the
-  # tag + GitHub Release. Release notes are cut from changelog.d/
-  # fragments — same contract as scripts/cut_release_notes.sh, whose
-  # --notes-only mode this job calls. The fragment-removal commit stays a
-  # maintainer step afterwards (GITHUB_TOKEN can't push to protected main):
+  # tag + GitHub Release. Release notes are cut from changelog.d/ fragments —
+  # same contract as scripts/cut_release_notes.sh, whose --notes-only mode this
+  # job calls with --version $TAG: it reads the release's own archive
+  # changelog/vX.Y.Z/ when the fold already landed on the release branch, and
+  # the pending queue otherwise (warning that the fold is still owed). The fold
+  # itself is a release-branch step BEFORE the tag, so the archive is part of
+  # the reviewed commit:
   #   ./scripts/cut_release_notes.sh --fold vX.Y.Z
   # ---------------------------------------------------------------------------
   create-release:
@@ -2355,7 +2396,8 @@ jobs:
             reuse_tag=1
           fi
 
-          ./scripts/cut_release_notes.sh --notes-only > /tmp/release-notes-full.md
+          notes_dir=$(./scripts/release_notes_source.sh "$TAG")
+          ./scripts/cut_release_notes.sh --notes-only --version "$TAG" > /tmp/release-notes-full.md
           # GitHub rejects a release body over 125,000 characters with
           # `HTTP 422: body is too long`. v0.5.1519 carried 1505 changelog.d
           # fragments -- the first tag since v0.5.1220 on 2026-07-04 -- and
@@ -2363,7 +2405,9 @@ jobs:
           # created, which is the worst place for it to fail.
           LIMIT=120000
           if [ "$(wc -c < /tmp/release-notes-full.md)" -gt "$LIMIT" ]; then
-            frags=$(find changelog.d -name '*.md' ! -name 'README.md' ! -name 'HIGHLIGHTS.md' | wc -l | tr -d ' ')
+            # Count and link the set the notes actually came from, so the notice
+            # stays true after the fold empties changelog.d/.
+            frags=$(find "$notes_dir" -maxdepth 1 -type f -name '*.md' ! -name 'README.md' ! -name 'HIGHLIGHTS.md' | wc -l | tr -d ' ')
             # Cut on a line boundary so the body never ends mid-sentence.
             head -c "$LIMIT" /tmp/release-notes-full.md | sed '$d' > /tmp/release-notes.md
             {
@@ -2372,7 +2416,7 @@ jobs:
               echo
               echo "**These notes are truncated.** This release carries ${frags} changelog"
               echo "fragments and the full text exceeds GitHub's 125,000-character limit for a"
-              echo "release body. The complete set is in \`changelog.d/\` at [\`$TAG\`](https://github.com/$REPO/tree/$TAG/changelog.d)."
+              echo "release body. The complete set is in \`$notes_dir/\` at [\`$TAG\`](https://github.com/$REPO/tree/$TAG/$notes_dir)."
             } >> /tmp/release-notes.md
             echo "::notice::release notes truncated from $(wc -c < /tmp/release-notes-full.md) to $(wc -c < /tmp/release-notes.md) bytes (${frags} fragments)"
           else

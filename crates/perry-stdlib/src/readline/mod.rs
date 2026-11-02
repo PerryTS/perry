@@ -1620,9 +1620,9 @@ pub extern "C" fn js_readline_get_cursor_pos(handle: i64) -> i64 {
     let (cols, rows) =
         with_interface(handle, |state| (state.cursor_cols, state.cursor_rows)).unwrap_or((0, 0));
     let obj = unsafe {
-        perry_runtime::object::runtime_layouts::perry_alloc_runtime_record(std::ptr::addr_of!(
-            perry_runtime::object::runtime_layouts::RECORD_F568_0
-        ))
+        perry_runtime::object::runtime_layouts::perry_alloc_runtime_record(
+            perry_runtime::object::runtime_layouts::RECORD_F568_0::desc(),
+        )
     };
     js_object_set_field(obj, 0, JSValue::number(cols as f64));
     js_object_set_field(obj, 1, JSValue::number(rows as f64));

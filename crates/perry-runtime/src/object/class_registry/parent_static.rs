@@ -948,6 +948,14 @@ pub unsafe extern "C" fn js_register_class_computed_accessor(
                 entry.1 = setter_ptr as usize;
             }
         });
+        if is_static != 0 {
+            crate::object::class_value::install_declared_static_symbol_accessor(
+                class_id,
+                sym_key,
+                getter_ptr as usize,
+                setter_ptr as usize,
+            );
+        }
         if is_static == 0 {
             // The declared accessor half has no string name on this class.
             name_computed_instance_member(

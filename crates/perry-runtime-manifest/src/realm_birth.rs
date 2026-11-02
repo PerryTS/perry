@@ -364,9 +364,9 @@ pub(super) fn birth_at(
     source: &str,
 ) -> Result<Value, String> {
     let expression = info::text(expression);
-    if expression
-        .starts_with("crate::object::layout_desc::alloc_layout_prototype(std::ptr::addr_of!(")
-    {
+    if expression.starts_with(
+        "crate::object::layout_desc::alloc_layout_prototype(crate::object::runtime_layouts::",
+    ) {
         return super::layout_birth::prototype(&expression, entry);
     }
     if expression.starts_with("module_set_value(") && expression.ends_with(')') {
@@ -387,8 +387,8 @@ pub(super) fn birth_at(
             }
             let layout = info::text(args[0]);
             let layout = layout
-                .strip_prefix("std::ptr::addr_of!(crate::object::runtime_layouts::")
-                .and_then(|s| s.strip_suffix(')'))
+                .strip_prefix("crate::object::runtime_layouts::")
+                .and_then(|s| s.strip_suffix("::desc()"))
                 .ok_or("runtime record requires its declared layout")?;
             return super::record::birth(&super::tokens(&format!("builder,{layout}"))?, entry);
         }
@@ -397,7 +397,7 @@ pub(super) fn birth_at(
         return super::module_namespace::birth(entry);
     }
     if expression.starts_with(
-        "crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(crate::object::runtime_layouts::",
+        "crate::object::layout_desc::perry_alloc_layout(crate::object::runtime_layouts::",
     ) {
         return super::layout_birth::ordinary(&expression, entry);
     }

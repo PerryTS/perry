@@ -136,6 +136,7 @@ pub(crate) fn emit_accessor_pair(
             dense_prefix: 0,
             named: None,
             slots: &slots,
+            owner: None,
         },
     )
 }

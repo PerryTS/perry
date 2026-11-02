@@ -109,6 +109,9 @@ pub(crate) fn collect_number_by_construction_locals(
     module_globals: &HashMap<u32, String>,
     binding_types: &HashMap<u32, HirType>,
     spec_ta_lens: &HashMap<u32, i64>,
+    // #13740: every spec-ABI `TaPtr` parameter, with or without a proven
+    // `const_len`; `spec_ta_lens` holds only the length-proven subset.
+    spec_ta_params: &HashSet<u32>,
     spec_numeric_params: &HashSet<u32>,
     not_bigint_locals: &HashSet<u32>,
     module_global_proven_types: &HashMap<u32, HirType>,
@@ -122,7 +125,7 @@ pub(crate) fn collect_number_by_construction_locals(
         return HashSet::new();
     }
     // #8619: spec-ABI `TaPtr` parameters are proven to permanently hold one
-    // specific NUMERIC-kind, non-view typed array — `spec_ta_lens` is keyed
+    // specific NUMERIC-kind, non-view typed array — `spec_ta_params` is keyed
     // exactly by those params (its only source is `SpecParamRep::TaPtr`, which
     // `collectors::spec_abi_sites` admits only for `spec_ta_kind_is_numeric`
     // kinds; the BigInt kinds are never TaPtr). A read `arr[numeric_index]` off
@@ -130,7 +133,12 @@ pub(crate) fn collect_number_by_construction_locals(
     // pointer/string, so the fixpoint may treat it like a compiler-visible
     // local typed-view constructor on one side of `+` (where `undefined`
     // becomes the Number NaN rather than selecting string concatenation).
-    let mut numeric_ta_views: HashSet<u32> = spec_ta_lens.keys().copied().collect();
+    //
+    // #13740: the argument never uses the length, so the set is every `TaPtr`
+    // parameter, not only the ones with a literal `const_len`. Keying it off
+    // `spec_ta_lens` dropped `new Int32Array(1 << 20)` and kept
+    // `new Int32Array(1048576)`, a 4x gap on `s += a[i]`.
+    let mut numeric_ta_views: HashSet<u32> = spec_ta_params.clone();
     // #9363: a MODULE-GLOBAL typed array carries the same construction proof a
     // body-local `const view = new Uint8Array(n)` does, and for the same
     // reason: `module_global_proven_types` is derived from the initializer

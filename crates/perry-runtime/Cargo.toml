@@ -16,6 +16,11 @@ workspace = true
 crate-type = ["rlib"]
 
 [features]
+# DESIGN 3.2 item 10: test-only definitions of the runtime layouts, expanded
+# from their runtime_layout! declarations, for test crates that link the
+# runtime without a compiled program. Enable ONLY from [dev-dependencies];
+# the realm link-graph gate asserts a release program never carries them.
+test-layout-descriptors = []
 # Phase A acceptance census and fault hooks. Scalar counts only; compiled out
 # of shipped builds. Ext-net's dev dependency enables the binding witnesses.
 native-payload-test-census = []

@@ -152,8 +152,13 @@ LEDGER = Path("scripts/native_result_ledger.tsv")
 # Resynced to the native table after the net/http/tui providers moved to ordinary
 # NaN-boxed objects (payload_abi, raw_owner): 214 -> 180 rows, 193 -> 168 providers,
 # as the script reports on the resolved tree.
-EXPECTED_ROWS = 180
-EXPECTED_PROVIDERS = 168
+# +2 rows / +2 providers (better-sqlite3 Statement#columns()/safeIntegers()):
+# `js_sqlite_stmt_columns` always returns a fresh `js_array_alloc` array
+# (empty for a dead handle), so NR_GCPTR; `js_sqlite_stmt_safe_integers`
+# returns its `stmt_handle` argument unchanged so the call chains, a registry
+# id, so NR_HANDLE_ID. 180 -> 182 rows, 168 -> 170 providers.
+EXPECTED_ROWS = 182
+EXPECTED_PROVIDERS = 170
 KINDS = {
     "NR_GCPTR",
     "NR_NULLABLE_GCPTR",

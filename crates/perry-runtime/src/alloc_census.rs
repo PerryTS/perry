@@ -413,7 +413,9 @@ pub(crate) fn alloc_census_dump(label: &str) {
     if let Ok(guard) = SITES.lock() {
         if let Some(s) = guard.as_ref() {
             let mut order: Vec<usize> = (0..s.stats.len()).collect();
-            order.sort_by_key(|&i| -(s.stats[i].live_bytes.max(s.stats[i].alloc_bytes as i64)));
+            crate::cold_sort::sort_by_key(&mut order, |&i| {
+                -(s.stats[i].live_bytes.max(s.stats[i].alloc_bytes as i64))
+            });
             for i in order.into_iter().take(400) {
                 let st = &s.stats[i];
                 if !out.ends_with('[') {

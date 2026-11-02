@@ -1280,8 +1280,10 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         // The table lives beside crypto's value-resolution in `constants.rs`.
         "crypto" => Some(super::constants::CRYPTO_NAMESPACE_KEYS),
         "sqlite" => Some(&[
+            b"Database",
             b"DatabaseSync",
             b"Session",
+            b"Statement",
             b"StatementSync",
             b"backup",
             b"constants",

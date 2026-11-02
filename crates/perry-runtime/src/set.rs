@@ -1303,6 +1303,7 @@ pub unsafe extern "C-unwind" fn js_readonly_set_has(receiver: f64, value: f64) -
 /// so the genuine-`Set` arm above is a leaf: with the handle scope inlined,
 /// every `componentTypeSet.has(type)` paid the fallback's full frame.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn readonly_set_has_structural(receiver: f64, value: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -1314,7 +1315,12 @@ unsafe fn readonly_set_has_structural(receiver: f64, value: f64) -> f64 {
     // calling the selected value, including a borrowed builtin method.
     let refreshed_receiver = receiver_handle.get_nanbox_f64();
     let refreshed_value = value_handle.get_nanbox_f64();
-    crate::object::method_call::js_method_call_value(method, refreshed_receiver, &refreshed_value, 1)
+    crate::object::method_call::js_method_call_value(
+        method,
+        refreshed_receiver,
+        &refreshed_value,
+        1,
+    )
 }
 
 #[no_mangle]

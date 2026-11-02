@@ -153,7 +153,7 @@ fn build_object_intrinsics() -> Option<ObjectPair> {
     // SAFETY: a registered runtime descriptor with a null prototype.
     let proto_obj = unsafe {
         crate::realm_decl! { birth crate::object::layout_desc::alloc_layout_prototype(
-            std::ptr::addr_of!(crate::object::runtime_layouts::OBJECT_PROTOTYPE),
+            crate::object::runtime_layouts::OBJECT_PROTOTYPE::desc(),
             0,
         ); realm { Object.prototype, members = { constructor; __defineGetter__; __defineSetter__; hasOwnProperty; __lookupGetter__; __lookupSetter__; isPrototypeOf; propertyIsEnumerable; toString; valueOf; __proto__ = accessor(get = "Object.prototype.__proto__.<get>", set = "Object.prototype.__proto__.<set>"); toLocaleString; }; } }
     };

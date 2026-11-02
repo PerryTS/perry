@@ -156,6 +156,7 @@ _CODEGEN_SUITES = [
     "release_boxes_lowering",
     "scalar_replaced_slot_roots",
     "spec_abi_typed_array_local_length",
+    "spec_abi_typed_array_nonliteral_len_13740",
     "static_symbol_hygiene",
     "string_array_length_9160",
     "temp_root_operand_temporaries",

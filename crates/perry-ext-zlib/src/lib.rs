@@ -792,9 +792,9 @@ mod static_record_layout_tests {
         perry_ffi::initialize_runtime_fixture();
         let roots = perry_ffi::TransientRootScope::enter();
         let record = roots.root_addr(unsafe {
-            perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
-                perry_ffi::runtime_layouts::RECORD_PCHECKED031
-            ))
+            perry_ffi::runtime_layouts::alloc_runtime_record(
+                perry_ffi::runtime_layouts::RECORD_PCHECKED031::desc(),
+            )
         } as i64);
         let pointer = record.get() as *const perry_ffi::ObjectHeader;
         assert!(!pointer.is_null());

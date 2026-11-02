@@ -57,6 +57,7 @@ pub(crate) unsafe fn bound_method_source_func_ptr(closure: *const ClosureHeader)
 /// The immutable constructor-info branch is uncommon in method dispatch.
 /// Preserve its receiver/header/class checks outside the common inline body.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn init_bound_native_receiver(
     closure: *const ClosureHeader,

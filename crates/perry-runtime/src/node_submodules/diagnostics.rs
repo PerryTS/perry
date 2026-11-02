@@ -855,7 +855,7 @@ fn evict_inactive_diag_channels_if_needed() {
             .filter(|(_, s)| s.subscribers.is_empty() && s.stores.is_empty())
             .map(|(id, s)| (*id, s.name))
             .collect();
-        v.sort_unstable_by_key(|(id, _)| *id);
+        crate::cold_sort::sort_by_key(&mut v, |(id, _)| *id);
         v
     });
     victims.truncate(DIAG_CHANNEL_EVICT_BATCH);

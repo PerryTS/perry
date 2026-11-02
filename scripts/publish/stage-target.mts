@@ -15,6 +15,7 @@
  *   names its own version, source revision and triple.
  */
 
+import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
   copyFileSync,
@@ -61,6 +62,27 @@ export interface StageTargetOptions {
   revision?: string
   /** Repo root holding npm/perry-target/package.json.tmpl and LICENSE. */
   repoRoot?: string
+  /**
+   * Strips the std bitcode out of one staged archive in place (default:
+   * scripts/strip-archive-members.py). Tests inject a stub.
+   */
+  stripArchive?: (archive: string) => void
+}
+
+/**
+ * The UI archives of a target bundle: the ones that bundle rustup's
+ * precompiled std rlibs with their LLVM bitcode (.llvmbc/.llvmcmd), which a
+ * native link never reads. Apple targets are skipped: their archives are
+ * BSD/Mach-O layout, which strip-archive-members.py does not handle.
+ */
+export function isStrippableUiArchive(triple: string, name: string): boolean {
+  return !triple.includes('-apple-') && /^(lib)?perry_ui_[a-z0-9_]+\.(a|lib)$/.test(name)
+}
+
+function stripWithScript(archive: string, repoRoot: string): void {
+  execFileSync('python3', [path.join(repoRoot, 'scripts', 'strip-archive-members.py'), archive], {
+    stdio: ['ignore', 'inherit', 'inherit'],
+  })
 }
 
 const REVISION = /^[0-9a-f]{40}$/
@@ -149,6 +171,7 @@ export function stageTarget(options: StageTargetOptions): TargetJson {
     revision,
     files: checked,
     repoRoot,
+    stripArchive: options.stripArchive ?? (archive => stripWithScript(archive, repoRoot)),
   })
 }
 
@@ -205,6 +228,8 @@ interface WritePackage {
   /** Checked files of `sourceDir`, by plain name. */
   files: TargetFile[]
   repoRoot: string
+  /** Target packages: strips a staged UI archive in place, before it is hashed. */
+  stripArchive?: (archive: string) => void
 }
 
 /** The package both kinds share: lib/, target.json, package.json, README, LICENSE. */
@@ -213,7 +238,15 @@ function writePackage(p: WritePackage): TargetJson {
   rmSync(p.packageDir, { recursive: true, force: true })
   mkdirSync(path.join(p.packageDir, 'lib'), { recursive: true })
   for (const file of p.files) {
-    copyFileSync(path.join(p.sourceDir, file.path), path.join(p.packageDir, 'lib', file.path))
+    const staged = path.join(p.packageDir, 'lib', file.path)
+    copyFileSync(path.join(p.sourceDir, file.path), staged)
+    // Strip the copy (the bundle was verified as shipped), then record the
+    // hash and size of what the package really contains: perry verifies them.
+    if (p.kind === 'target' && p.stripArchive && isStrippableUiArchive(p.triple, file.path)) {
+      p.stripArchive(staged)
+      file.sha256 = sha256(staged)
+      file.size = statSync(staged).size
+    }
   }
 
   const targetJson: TargetJson = {

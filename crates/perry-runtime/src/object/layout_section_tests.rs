@@ -20,21 +20,24 @@ static mut WRITABLE_ATOM: StaticAtom = StaticAtom {
 
 #[test]
 #[cfg(not(target_family = "wasm"))]
-fn linked_layout_section_contains_runtime_prototypes() {
-    let descriptor = std::ptr::addr_of!(crate::object::runtime_layouts::OBJECT_PROTOTYPE);
+fn a_runtime_descriptor_is_never_in_the_scanned_section() {
+    // A runtime layout is reached through its symbol, never through a
+    // position (DESIGN 3.2 item 9): the startup walk must not see it.
+    let descriptor = crate::object::runtime_layouts::OBJECT_PROTOTYPE::desc();
+    assert!(!descriptor.is_null());
     let matches = image_layouts()
         .filter(|p| p.cast_const() == descriptor)
         .count();
     assert_eq!(
-        matches, 1,
-        "runtime prototype must be inside the scanned section exactly once"
+        matches, 0,
+        "a runtime descriptor must not be inside the scanned layout section"
     );
 }
 
 #[test]
 #[cfg(not(target_family = "wasm"))]
 fn linked_atom_sections_include_readonly_and_writable_records() {
-    let descriptor = std::ptr::addr_of!(crate::object::runtime_layouts::OBJECT_PROTOTYPE);
+    let descriptor = crate::object::runtime_layouts::OBJECT_PROTOTYPE::desc();
     unsafe extern "C" {
         #[link_name = "perry_atom_636f6e7374727563746f72"]
         static CONSTRUCTOR_ATOM: StaticAtom;

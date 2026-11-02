@@ -1702,6 +1702,7 @@ pub(super) fn compile_method(
             method.body.len(),
         ) {
             lowered.pre_statepoint_inline = true;
+            lowered.guarded_preinline = true;
         }
     }
     // The primary body of an ordinary method joins the early inliner when the
