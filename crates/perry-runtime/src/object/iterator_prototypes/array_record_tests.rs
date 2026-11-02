@@ -499,7 +499,8 @@ fn array_record_stack_entry_preserves_sparse_elements() {
             "sparse elements cannot take the counted dense path"
         );
         assert_eq!(source.to_bits(), value.to_bits());
-        let source = crate::value::js_nanbox_get_pointer(source) as *const crate::array::ArrayHeader;
+        let source =
+            crate::value::js_nanbox_get_pointer(source) as *const crate::array::ArrayHeader;
         assert_eq!(crate::array::js_array_length(source), 5_000_001);
         assert_eq!(crate::array::js_array_get_f64(source, 0), 7.0);
         assert_eq!(crate::array::js_array_get_f64(source, 5_000_000), 9.0);
