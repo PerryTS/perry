@@ -1636,9 +1636,10 @@ jobs:
               # The batches above are the dev profile. Release builds drop the
               # debug-only GC instruments and change inlining, so a unit test
               # can pass in dev and fail in release (59 did, unseen for weeks).
-              # Default thread count on purpose: a test that needs exclusive
-              # process state must serialize itself (`test_isolation`).
-              MBX_BLAZE=0 cargo test --locked --release -p perry-runtime --lib
+              # Runtime arenas, hooks and teardown share process state in
+              # both profiles. Keep the release arm serial too, so another
+              # test cannot invalidate a moving-GC fixture's preconditions.
+              MBX_BLAZE=0 RUST_TEST_THREADS=1 cargo test --locked --release -p perry-runtime --lib -- --test-threads=1
             fi
             # `cargo test` only builds lib/bin/test targets — NOT the `staticlib`
             # crate-type — so libperry_runtime.a / libperry_stdlib.a are never
