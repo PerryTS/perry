@@ -1760,7 +1760,7 @@ pub(crate) const OBJ_FLAG_ARGUMENTS: u16 = 0x1000;
 /// | 0..2 | FROZEN / SEALED / NO_EXTEND | no proxy-specific writer | integrity flags |
 /// | 3..4 | survival age | survival age | GC_COPY_SURVIVAL_AGE_MASK, all kinds |
 /// | 5 | GC_OBJECT_CALLABLE | GC_OBJECT_CALLABLE | unused |
-/// | 6 | NULL_PROTO | unused | array: CUSTOM_PROTO |
+/// | 6 | free (was NULL_PROTO; a null [[Prototype]] is the shape identity `PROTO_ID_NULL`) | unused | array: CUSTOM_PROTO |
 /// | 7 | NEVER_MOVE | unused | array: RAW_F64_LAYOUT; closure: NON_CONSTRUCTABLE; byte owner: FOREIGN_DATA; byte view: LENGTH_TRACKING |
 /// | 8 | TYPED_ARRAY_PROTO | unused | array: KEY_ATTRS; byte owner: RESIZABLE |
 /// | 9 | PLAIN_ORDINARY | unused | array: ARGUMENTS_OBJECT |
