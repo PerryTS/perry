@@ -103,7 +103,7 @@ pub(crate) fn sort_property_names_ecma(names: &mut Vec<String>) {
             rest.push(name);
         }
     }
-    indexed.sort_by_key(|(index, _)| *index);
+    crate::cold_sort::sort_by_u64_key(&mut indexed, |(index, _)| u64::from(*index));
     names.extend(indexed.into_iter().map(|(_, name)| name));
     names.extend(rest);
 }
@@ -121,7 +121,7 @@ fn sort_property_name_bytes_ecma(names: &mut Vec<Vec<u8>>) {
             rest.push(name);
         }
     }
-    indexed.sort_by_key(|(index, _)| *index);
+    crate::cold_sort::sort_by_u64_key(&mut indexed, |(index, _)| u64::from(*index));
     names.extend(indexed.into_iter().map(|(_, name)| name));
     names.extend(rest);
 }

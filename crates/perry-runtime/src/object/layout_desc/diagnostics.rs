@@ -119,7 +119,7 @@ pub(super) fn family_diag_report() {
     if family_diag_pairs_on() {
         if let Ok(map) = OUT_OF_ORDER_PAIRS.lock() {
             let mut pairs: Vec<_> = map.iter().flatten().collect();
-            pairs.sort_by(|a, b| b.1.cmp(a.1));
+            crate::cold_sort::sort_by(&mut pairs, |a, b| b.1.cmp(a.1));
             for ((class_id, key, later), n) in pairs.into_iter().take(40) {
                 eprintln!(
                     "PERRY_FAMILY_DIAG out_of_order class={class_id} key={key} after={later} n={n}"
@@ -241,14 +241,14 @@ pub(super) fn family_diag_other_report() {
             e.2 += 1;
         }
         let mut classes: Vec<_> = by_class.into_iter().collect();
-        classes.sort_by(|a, b| b.1 .1.cmp(&a.1 .1));
+        crate::cold_sort::sort_by(&mut classes, |a, b| b.1 .1.cmp(&a.1 .1));
         for (c, (f, t, n)) in classes.into_iter().take(20) {
             let name = super::super::class_name_for_id(c).unwrap_or_default();
             eprintln!(
                 "PERRY_FAMILY_DIAG other_class class={c} name={name} first={f} stores={t} keys={n}"
             );
         }
-        rows.sort_by(|a, b| b.1 .0.cmp(&a.1 .0).then(b.1 .1.cmp(&a.1 .1)));
+        crate::cold_sort::sort_by(&mut rows, |a, b| b.1 .0.cmp(&a.1 .0).then(b.1 .1.cmp(&a.1 .1)));
         for ((c, k), (f, t)) in rows.into_iter().take(80) {
             eprintln!("PERRY_FAMILY_DIAG other class={c} key={k} first={f} stores={t}");
         }

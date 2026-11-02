@@ -110,7 +110,7 @@ pub extern "C" fn js_object_final_shape_id_for_class_keys_static_private(
         // SAFETY: compiler-owned rodata of `brand_count` words.
         unsafe { std::slice::from_raw_parts(brands, brand_count as usize) }.to_vec()
     };
-    brand_list.sort_unstable();
+    crate::cold_sort::sort_by(&mut brand_list, |a, b| a.cmp(b));
     brand_list.dedup();
     let scope = crate::gc::RuntimeHandleScope::new();
     let proof = super::canonical_keys::SharedLayout::shape_cache_entry();

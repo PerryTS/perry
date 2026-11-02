@@ -177,7 +177,7 @@ fn dump() {
         *by_event.entry(*event).or_insert(0) += *n;
     }
     let mut events: Vec<_> = by_event.into_iter().collect();
-    events.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+    crate::cold_sort::sort_by(&mut events, |a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
     let mut out = String::new();
     out.push_str("# perry attr census (charter step 3)\n## totals by event\n");
     for (event, n) in &events {
@@ -186,14 +186,14 @@ fn dump() {
     if let Ok(k) = kinds().lock() {
         out.push_str("## by event and owner kind\n");
         let mut rows: Vec<_> = k.iter().collect();
-        rows.sort_by(|a, b| a.0 .0.cmp(b.0 .0).then(b.1.cmp(a.1)));
+        crate::cold_sort::sort_by(&mut rows, |a, b| a.0 .0.cmp(b.0 .0).then(b.1.cmp(a.1)));
         for ((event, kind), n) in rows {
             out.push_str(&format!("{n:>12} {event} [{kind}]\n"));
         }
     }
     out.push_str("## by event and call site\n");
     let mut rows: Vec<_> = t.iter().collect();
-    rows.sort_by(|a, b| a.0 .0.cmp(b.0 .0).then(b.1.cmp(a.1)));
+    crate::cold_sort::sort_by(&mut rows, |a, b| a.0 .0.cmp(b.0 .0).then(b.1.cmp(a.1)));
     for ((event, file, line), n) in rows {
         out.push_str(&format!("{n:>12} {event} {file}:{line}\n"));
     }
