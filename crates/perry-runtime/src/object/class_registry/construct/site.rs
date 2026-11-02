@@ -228,10 +228,54 @@ pub unsafe extern "C-unwind" fn js_class_value_super_construct_site(
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(this);
-    let result =
-        crate::object::global_this::js_fetch_or_value_super(parent, this, args_ptr, args_len);
-    link_native_super_result(result, receiver.get_nanbox_f64());
-    result
+    let parent = scope.root_nanbox_f64(parent);
+    let result = scope.root_nanbox_f64(crate::object::global_this::js_fetch_or_value_super(
+        parent.get_nanbox_f64(),
+        this,
+        args_ptr,
+        args_len,
+    ));
+    link_native_super_result(result.get_nanbox_f64(), receiver.get_nanbox_f64());
+    link_native_super_object(
+        parent.get_nanbox_f64(),
+        result.get_nanbox_f64(),
+        receiver.get_nanbox_f64(),
+    );
+    result.get_nanbox_f64()
+}
+
+/// `super(...)` of a native constructor export (`class C extends
+/// zlib.Gzip`) runs the export, which births its object on the export's own
+/// prototype (`Gzip.prototype`). Construct(parent, args, newTarget) gives the
+/// object `newTarget.prototype` (OrdinaryCreateFromConstructor): the
+/// prototype the provisional receiver was born with. Relink the fresh object
+/// once, before any user code sees it. Only a native export: a user function
+/// returning its own object keeps the prototype it chose.
+fn link_native_super_object(parent: f64, result: f64, receiver: f64) {
+    if result.to_bits() == receiver.to_bits()
+        || !JSValue::from_bits(result.to_bits()).is_pointer()
+        || unsafe { crate::object::native_module::bound_native_parent(parent) }.is_none()
+    {
+        return;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let result = scope.root_nanbox_f64(result);
+    let receiver = scope.root_nanbox_f64(receiver);
+    let parent_proto = scope.root_nanbox_f64(
+        crate::object::js_function_prototype_value_for_read(parent),
+    );
+    let born = crate::object::js_object_get_prototype_of(result.get_nanbox_f64());
+    if !JSValue::from_bits(parent_proto.get_nanbox_u64()).is_pointer()
+        || born.to_bits() != parent_proto.get_nanbox_u64()
+    {
+        return;
+    }
+    let target = crate::object::js_object_get_prototype_of(receiver.get_nanbox_f64());
+    if JSValue::from_bits(target.to_bits()).is_pointer()
+        && target.to_bits() != parent_proto.get_nanbox_u64()
+    {
+        crate::object::js_object_set_prototype_of(result.get_nanbox_f64(), target);
+    }
 }
 
 /// `super(...)` of a native parent (`class X extends http.Agent`) returns a
