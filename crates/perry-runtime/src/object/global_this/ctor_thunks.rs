@@ -231,12 +231,34 @@ pub(crate) fn builtin_prototype_value(name: &str) -> f64 {
         return crate::object::native_module::buffer_original_prototype_value();
     }
     let addr = if name == "Object" {
-        crate::array::object_prototype_addr()
+        // `%Object.prototype%` exists without the realm global: the pair is
+        // built on first use, as for `%Object%` in [`builtin_constructor_value`].
+        // The cached row alone answers 0 before `globalThis` is materialized.
+        crate::object::ensure_object_intrinsics().1 as usize
     } else {
         match crate::object::BuiltinConstructorIdentity::for_name(name) {
             Some(identity) => crate::array::intrinsic_prototype_addr(identity),
             None => 0,
         }
+    };
+    if addr == 0 {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    crate::value::js_nanbox_pointer(addr as i64)
+}
+
+/// This realm's intrinsic constructor `%<name>%`, or `undefined` when `name`
+/// declares no builtin. The same realm entry as [`builtin_prototype_value`]:
+/// after `globalThis.Promise = X`, "is `C` the builtin Promise" and "what is
+/// a promise's inherited `constructor`" still answer `%Promise%`.
+pub(crate) fn builtin_constructor_value(name: &str) -> f64 {
+    let addr = match name {
+        "Buffer" => return crate::object::native_module::buffer_constructor_value(),
+        "Object" => crate::object::ensure_object_intrinsics().0 as usize,
+        _ => match crate::object::BuiltinConstructorIdentity::for_name(name) {
+            Some(identity) => crate::array::intrinsic_constructor_addr(identity),
+            None => 0,
+        },
     };
     if addr == 0 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);

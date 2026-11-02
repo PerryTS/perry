@@ -637,12 +637,13 @@ pub(super) unsafe fn instance_constructor_value(
     // fell through to `undefined`.
     if class_id == crate::weakref::CLASS_ID_WEAKMAP || class_id == crate::weakref::CLASS_ID_WEAKSET
     {
-        let name: &[u8] = if class_id == crate::weakref::CLASS_ID_WEAKMAP {
-            b"WeakMap"
-        } else {
-            b"WeakSet"
-        };
-        let v = js_get_global_this_builtin_value(name.as_ptr(), name.len());
+        let v = super::super::builtin_constructor_value(
+            if class_id == crate::weakref::CLASS_ID_WEAKMAP {
+                "WeakMap"
+            } else {
+                "WeakSet"
+            },
+        );
         return Some(JSValue::from_bits(v.to_bits()));
     }
     if class_id != 0 && class_has_own_method(class_id, "constructor") {

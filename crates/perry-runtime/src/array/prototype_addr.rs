@@ -165,9 +165,9 @@ static PROTOTYPE_ADDR_BUILTINS: [crate::object::BuiltinConstructorIdentity;
     crate::object::BuiltinConstructorIdentity::Map,
 ];
 
-/// How many intrinsic prototype cells a realm has: one per builtin
-/// declaration (`BuiltinConstructorIdentity`, 1-based).
-const INTRINSIC_PROTOTYPE_COUNT: usize = crate::object::GLOBAL_THIS_BUILTIN_CONSTRUCTORS.len();
+/// How many intrinsic entries a realm has: one per builtin declaration
+/// (`BuiltinConstructorIdentity`, 1-based).
+const INTRINSIC_ENTRY_COUNT: usize = crate::object::GLOBAL_THIS_BUILTIN_CONSTRUCTORS.len();
 
 /// The realm's [[Intrinsics]] for builtin prototypes: `%Date.prototype%`,
 /// `%TypeError.prototype%`, `%Set.prototype%`, … — the object each family's
@@ -176,30 +176,46 @@ const INTRINSIC_PROTOTYPE_COUNT: usize = crate::object::GLOBAL_THIS_BUILTIN_CONS
 /// the writable binding only; every "what does this builtin inherit from"
 /// question is answered here, never through that binding.
 ///
-/// One cell per [`crate::object::BuiltinConstructorIdentity`], all-zero
+/// The same entry holds the family's original constructor (`%Date%`,
+/// `%Array%`, …): every "is this the builtin itself" question
+/// (`C === %Promise%`, `Array.prototype`'s own `constructor`) and every
+/// inherited `<instance>.constructor` answer reads it, never the binding.
+///
+/// One entry per [`crate::object::BuiltinConstructorIdentity`], all-zero
 /// (unrecorded) at birth, so it lives in the zero-filled
 /// [`crate::state::RuntimeState`] and costs nothing before the realm exists.
 /// The cells hold raw addresses of movable objects and follow the same
 /// algebra as the hot rows above: healed through the forwarding chain on
 /// read, rewritten by [`scan_prototype_addr_cache_roots_mut`].
-pub(crate) struct IntrinsicPrototypes {
-    cells: [Cell<usize>; INTRINSIC_PROTOTYPE_COUNT],
+pub(crate) struct RealmIntrinsics {
+    entries: [IntrinsicEntry; INTRINSIC_ENTRY_COUNT],
 }
 
-fn intrinsic_prototype_cells() -> &'static [Cell<usize>; INTRINSIC_PROTOTYPE_COUNT] {
-    &crate::state::state().intrinsic_prototypes.cells
+/// One builtin's realm intrinsics: its constructor and its prototype.
+struct IntrinsicEntry {
+    prototype: Cell<usize>,
+    constructor: Cell<usize>,
 }
 
-/// Record `addr` as this realm's intrinsic prototype of `identity`. The
-/// first realm populated on a thread owns the cells, as it owns the hot rows
+fn intrinsic_entry(identity: crate::object::BuiltinConstructorIdentity) -> &'static IntrinsicEntry {
+    &crate::state::state().realm_intrinsics.entries[identity as usize - 1]
+}
+
+/// Record this realm's intrinsic prototype and constructor of `identity`
+/// (either may be 0: a builtin without a prototype object). The first realm
+/// populated on a thread owns the entries, as it owns the hot rows
 /// ([`prime_prototype_addr_cache`]).
-pub(crate) fn note_intrinsic_prototype(
+pub(crate) fn note_realm_intrinsic(
     identity: crate::object::BuiltinConstructorIdentity,
-    addr: usize,
+    prototype: usize,
+    constructor: usize,
 ) {
-    let cell = &intrinsic_prototype_cells()[identity as usize - 1];
-    if addr != 0 && cell.get() == 0 {
-        cell.set(addr);
+    let entry = intrinsic_entry(identity);
+    if prototype != 0 && entry.prototype.get() == 0 {
+        entry.prototype.set(prototype);
+    }
+    if constructor != 0 && entry.constructor.get() == 0 {
+        entry.constructor.set(constructor);
     }
 }
 
@@ -207,8 +223,22 @@ pub(crate) fn note_intrinsic_prototype(
 /// none (a builtin not yet bound while the realm is being populated). Builds
 /// the realm when this thread has none yet, exactly as the `globalThis`
 /// read it replaces did.
-pub(crate) fn intrinsic_prototype_addr(identity: crate::object::BuiltinConstructorIdentity) -> usize {
-    let cell = &intrinsic_prototype_cells()[identity as usize - 1];
+pub(crate) fn intrinsic_prototype_addr(
+    identity: crate::object::BuiltinConstructorIdentity,
+) -> usize {
+    realm_intrinsic_addr(&intrinsic_entry(identity).prototype)
+}
+
+/// This realm's original constructor of `identity` (`%Promise%`, …), or 0
+/// while the realm is being populated, under the same rule as
+/// [`intrinsic_prototype_addr`].
+pub(crate) fn intrinsic_constructor_addr(
+    identity: crate::object::BuiltinConstructorIdentity,
+) -> usize {
+    realm_intrinsic_addr(&intrinsic_entry(identity).constructor)
+}
+
+fn realm_intrinsic_addr(cell: &Cell<usize>) -> usize {
     let mut addr = cell.get();
     if addr == 0 && !crate::object::global_this_is_materialized() {
         crate::object::js_get_global_this();
@@ -239,8 +269,9 @@ pub fn scan_prototype_addr_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootV
     for cell in prototype_addrs() {
         rewrite_prototype_addr_slot(cell, visitor);
     }
-    for cell in intrinsic_prototype_cells() {
-        rewrite_prototype_addr_slot(cell, visitor);
+    for entry in &crate::state::state().realm_intrinsics.entries {
+        rewrite_prototype_addr_slot(&entry.prototype, visitor);
+        rewrite_prototype_addr_slot(&entry.constructor, visitor);
     }
 }
 
@@ -495,23 +526,33 @@ pub(crate) fn test_prototype_addr_cache_wiring() -> [(usize, &'static [u8]); 7] 
         ),
         (
             OBJECT_PROTO_CACHE,
-            PROTOTYPE_ADDR_BUILTINS[OBJECT_PROTO_CACHE].name().as_bytes(),
+            PROTOTYPE_ADDR_BUILTINS[OBJECT_PROTO_CACHE]
+                .name()
+                .as_bytes(),
         ),
         (
             FUNCTION_PROTO_CACHE,
-            PROTOTYPE_ADDR_BUILTINS[FUNCTION_PROTO_CACHE].name().as_bytes(),
+            PROTOTYPE_ADDR_BUILTINS[FUNCTION_PROTO_CACHE]
+                .name()
+                .as_bytes(),
         ),
         (
             STRING_PROTO_CACHE,
-            PROTOTYPE_ADDR_BUILTINS[STRING_PROTO_CACHE].name().as_bytes(),
+            PROTOTYPE_ADDR_BUILTINS[STRING_PROTO_CACHE]
+                .name()
+                .as_bytes(),
         ),
         (
             NUMBER_PROTO_CACHE,
-            PROTOTYPE_ADDR_BUILTINS[NUMBER_PROTO_CACHE].name().as_bytes(),
+            PROTOTYPE_ADDR_BUILTINS[NUMBER_PROTO_CACHE]
+                .name()
+                .as_bytes(),
         ),
         (
             BOOLEAN_PROTO_CACHE,
-            PROTOTYPE_ADDR_BUILTINS[BOOLEAN_PROTO_CACHE].name().as_bytes(),
+            PROTOTYPE_ADDR_BUILTINS[BOOLEAN_PROTO_CACHE]
+                .name()
+                .as_bytes(),
         ),
         (
             MAP_PROTO_CACHE,

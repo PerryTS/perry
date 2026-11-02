@@ -308,8 +308,11 @@ unsafe fn call_primitive_builtin_prototype_method(
     crate::gc::diag_primitive_dispatch(builtin_name, method_name, unsafe {
         primitive_receiver_utf16_len(receiver)
     });
-    let ctor =
-        crate::object::js_get_global_this_builtin_value(builtin_name.as_ptr(), builtin_name.len());
+    // The realm entry, not the current global binding: `ToObject(primitive)`
+    // reaches the intrinsic `%String.prototype%` (etc.) even after
+    // `globalThis.String = X`.
+    let name = std::str::from_utf8(builtin_name).ok()?;
+    let ctor = crate::object::builtin_constructor_value(name);
     let ctor_value = JSValue::from_bits(ctor.to_bits());
     if !ctor_value.is_pointer() {
         return None;
@@ -327,8 +330,7 @@ unsafe fn call_primitive_builtin_prototype_method(
     ) {
         return Some(result);
     }
-    let ctor_ptr = ctor_value.as_pointer::<crate::closure::ClosureHeader>() as usize;
-    let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
+    let proto = crate::object::builtin_prototype_value(name);
     let proto_value = JSValue::from_bits(proto.to_bits());
     if !proto_value.is_pointer() {
         return None;
@@ -1803,9 +1805,7 @@ pub(crate) unsafe fn native_call_method_tower(
             // what this call used to return.
             if method_name == "constructor" {
                 let ctor = crate::object::generator_function_constructor_of(raw_addr)
-                    .unwrap_or_else(|| {
-                        crate::object::js_get_global_this_builtin_value(b"Function".as_ptr(), 8)
-                    });
+                    .unwrap_or_else(|| crate::object::builtin_constructor_value("Function"));
                 let ctor = root_scope.root_nanbox_f64(ctor);
                 // The global lookup allocates; re-read the rooted arguments.
                 let call_args = refreshed_args();

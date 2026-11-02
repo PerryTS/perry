@@ -77,7 +77,7 @@ unsafe fn get_species(c: f64) -> f64 {
 
 /// The intrinsic `Array` constructor value (for the default fast-path check).
 fn intrinsic_array() -> f64 {
-    crate::object::js_get_global_this_builtin_value(b"Array".as_ptr(), 5)
+    crate::object::builtin_constructor_value("Array")
 }
 
 /// `SpeciesConstructor` portion of `ArraySpeciesCreate`: resolve the result

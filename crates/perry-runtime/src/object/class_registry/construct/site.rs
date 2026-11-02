@@ -261,9 +261,8 @@ fn link_native_super_object(parent: f64, result: f64, receiver: f64) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let result = scope.root_nanbox_f64(result);
     let receiver = scope.root_nanbox_f64(receiver);
-    let parent_proto = scope.root_nanbox_f64(
-        crate::object::js_function_prototype_value_for_read(parent),
-    );
+    let parent_proto =
+        scope.root_nanbox_f64(crate::object::js_function_prototype_value_for_read(parent));
     let born = crate::object::js_object_get_prototype_of(result.get_nanbox_f64());
     if !JSValue::from_bits(parent_proto.get_nanbox_u64()).is_pointer()
         || born.to_bits() != parent_proto.get_nanbox_u64()
