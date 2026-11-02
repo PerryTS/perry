@@ -6,3 +6,5 @@ cursor stays 0, so the proof holds when the array iterator protocol is
 patched. The loop update becomes `add i32` with `uitofp` only at boxed uses.
 Tests cover the collector (record loops, literal records, nested and
 break/continue loops, every disqualifying write) and the emitted update block.
+
+The cursor consumers take it as an integer: the indexed head compares it with the header length word (`icmp ult i32`; the Number compare only on the cold length read), record reads index with it directly, and `c++` materializes one Number view instead of two.

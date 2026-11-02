@@ -237,23 +237,53 @@ fn compile(source: &str) -> String {
     .unwrap()
 }
 
-/// The record's update block steps the cursor in its u32 slot: `add i32`,
-/// boxed views by `uitofp`, no `fadd double ..., 1.0`.
-#[test]
-fn record_update_steps_a_u32_slot() {
+fn walk_ir() -> String {
     let ir = compile(
         "class P { x: number; constructor(x: number) { this.x = x; } }
          export function walk(ps: P[]): number { let t = 0; for (const p of ps) { t += p.x; } return t; }",
     );
-    let walk = ir
-        .split("\ndefine ")
+    ir.split("\ndefine ")
         .find(|f| f.contains("walk") && f.contains("record.update"))
-        .unwrap_or_else(|| panic!("walk with a record loop:\n{ir}"));
-    let update = walk
-        .split("\nrecord.update")
+        .unwrap_or_else(|| panic!("walk with a record loop:\n{ir}"))
+        .to_owned()
+}
+
+/// The body of the first block whose label starts with `label.`.
+fn block<'a>(function: &'a str, label: &str) -> &'a str {
+    function
+        .split(&format!("\n{label}."))
         .nth(1)
         .and_then(|b| b.split("\n\n").next())
-        .expect("record.update block");
-    assert!(update.contains("add i32") && update.contains("uitofp i32"), "{update}");
+        .unwrap_or_else(|| panic!("no {label} block:\n{function}"))
+}
+
+/// The record's update block steps the cursor in its u32 slot: `add i32`,
+/// one boxed view by `uitofp` (the expression's own value), no
+/// `fadd double ..., 1.0`.
+#[test]
+fn record_update_steps_a_u32_slot() {
+    let walk = walk_ir();
+    let update = block(&walk, "record.update");
+    assert!(update.contains("add i32"), "{update}");
+    assert_eq!(update.matches("uitofp i32").count(), 1, "{update}");
     assert!(!update.contains("fadd double"), "{update}");
+}
+
+/// The indexed head consumes the u32 cursor as an integer: the bound is an
+/// `icmp ult i32` against the header's length word (the Number compare only
+/// on the cold length read), and the element read indexes with the cursor
+/// itself (no `fptoui` of a Number view).
+#[test]
+fn indexed_head_takes_the_u32_cursor() {
+    let walk = walk_ir();
+    let fast = block(&walk, "plen.fast");
+    assert!(fast.contains("icmp ult i32") && !fast.contains("uitofp"), "{fast}");
+    let merge = block(&walk, "plen.merge");
+    assert!(merge.contains("phi i1") && !merge.contains("fcmp"), "{merge}");
+    let indexed = block(&walk, "record.indexed");
+    assert!(!indexed.contains("uitofp"), "{indexed}");
+    let prefix = block(&walk, "record.read.prefix");
+    assert!(!prefix.contains("fptoui"), "{prefix}");
+    let get = block(&walk, "record.indexed.get");
+    assert!(!get.contains("uitofp"), "{get}");
 }

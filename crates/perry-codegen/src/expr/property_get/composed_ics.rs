@@ -41,6 +41,17 @@ fn emit_record_length_cold(
     (length, end)
 }
 
+/// What a guarded record length feeds. The hot arm holds the header's u32
+/// word; the cold arm holds the exact property value (a Number).
+#[derive(Clone, Copy)]
+pub(crate) enum LengthUse<'a> {
+    /// The length itself, as a JS Number.
+    Number,
+    /// `cursor < length` for a u32 cursor: an integer compare on the hot arm,
+    /// the Number compare on the cold arm. The result is an `i1`.
+    Below(&'a str),
+}
+
 /// Array length uses the same compact header guard for records and ordinary
 /// receivers. Every miss calls the existing generic property helper.
 pub(super) fn emit_record_length(
@@ -48,6 +59,18 @@ pub(super) fn emit_record_length(
     recv_box: &str,
     recv_bits: &str,
     recv_handle: &str,
+) -> String {
+    emit_record_length_use(ctx, recv_box, recv_bits, recv_handle, LengthUse::Number)
+}
+
+/// The compact length guard with its consumer folded into each arm, so a
+/// u32 consumer never converts the header word to a double.
+pub(crate) fn emit_record_length_use(
+    ctx: &mut FnCtx<'_>,
+    recv_box: &str,
+    recv_bits: &str,
+    recv_handle: &str,
+    consumer: LengthUse<'_>,
 ) -> String {
     // The ordinary Array arm needs only POINTER_TAG. Preserve strings and
     // every other receiver through the shared exact length helper.
@@ -80,11 +103,31 @@ pub(super) fn emit_record_length(
     ctx.current_block = fast;
     let ptr = ctx.block().inttoptr(I64, &handle);
     let length = ctx.block().load(I32, &ptr);
-    let length = ctx.block().uitofp(I32, &length, DOUBLE);
+    let hot = match consumer {
+        LengthUse::Number => ctx.block().uitofp(I32, &length, DOUBLE),
+        LengthUse::Below(cursor) => ctx.block().icmp_ult(I32, cursor, &length),
+    };
     let fp = ctx.block().label.clone();
     ctx.block().br(&ml);
     ctx.current_block = slow;
-    let (cold, sp) = emit_record_length_cold(ctx, recv_box, &ml);
+    let (cold, sp, ty) = match consumer {
+        LengthUse::Number => {
+            let (cold, sp) = emit_record_length_cold(ctx, recv_box, &ml);
+            (cold, sp, DOUBLE)
+        }
+        LengthUse::Below(cursor) => {
+            let length = ctx.block().call(
+                DOUBLE,
+                "js_value_length_property_f64",
+                &[(DOUBLE, recv_box)],
+            );
+            let cursor = ctx.block().uitofp(I32, cursor, DOUBLE);
+            let below = ctx.block().fcmp("olt", &cursor, &length);
+            let sp = ctx.block().label.clone();
+            ctx.block().br(&ml);
+            (below, sp, crate::types::I1)
+        }
+    };
     ctx.current_block = merge;
-    ctx.block().phi(DOUBLE, &[(&length, &fp), (&cold, &sp)])
+    ctx.block().phi(ty, &[(&hot, &fp), (&cold, &sp)])
 }

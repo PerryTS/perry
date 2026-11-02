@@ -1801,10 +1801,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 #[cfg(test)]
 mod array_record_tests;
 
+pub(crate) use guarded_array::RecordIndex;
+
 pub(crate) fn lower_record_index(
     ctx: &mut FnCtx<'_>,
     array: &str,
-    index: &str,
+    index: RecordIndex<'_>,
     record: &str,
     payload_slot: &str,
     index_slot: &str,
@@ -1815,7 +1817,7 @@ pub(crate) fn lower_record_index(
 pub(crate) fn lower_record_next(
     ctx: &mut FnCtx<'_>,
     array: &str,
-    index: &str,
+    index: RecordIndex<'_>,
     protocol: &str,
     record: &str,
     index_slot: &str,

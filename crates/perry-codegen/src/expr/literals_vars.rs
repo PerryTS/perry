@@ -1077,13 +1077,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 };
                 let new_i32 = blk.add(I32, &old_i32, delta);
                 blk.store(I32, &new_i32, &i32_slot);
-                let (old, new) = if matches!(rep, crate::expr::SlotRep::U32) {
-                    (blk.uitofp(I32, &old_i32, DOUBLE), blk.uitofp(I32, &new_i32, DOUBLE))
+                // Only the expression's own value is materialized: the new
+                // view for `++c`, the old one for `c++`.
+                let value = if *prefix { new_i32 } else { old_i32 };
+                let value = if matches!(rep, crate::expr::SlotRep::U32) {
+                    blk.uitofp(I32, &value, DOUBLE)
                 } else {
-                    (blk.sitofp(I32, &old_i32, DOUBLE), blk.sitofp(I32, &new_i32, DOUBLE))
+                    blk.sitofp(I32, &value, DOUBLE)
                 };
                 super::record_int_facts_for_update(ctx, *id, *op);
-                return Ok(if *prefix { new } else { old });
+                return Ok(value);
             }
             // Packed-clone integer accumulator: touch ONLY the i32 slot —
             // the double slot stays stale until the clone exits re-sync it

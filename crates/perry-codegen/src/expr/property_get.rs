@@ -50,6 +50,7 @@ mod helpers;
 
 mod composed_ics;
 use composed_ics::emit_array_subclass_length_ic;
+pub(crate) use composed_ics::{emit_record_length_use, LengthUse};
 #[cfg(test)]
 mod tests;
 
