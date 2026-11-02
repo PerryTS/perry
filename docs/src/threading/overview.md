@@ -238,6 +238,9 @@ listener sequence before closing. Repeated registrations preserve listener order
 and callback deduplication; non-callable callback values are ignored. This does
 not change queued-message flushing, endpoint close ordering or runtime-only
 fallback close-event support.
+Worker event-loop utilization and CPU usage share the existing perf-hooks and
+process result layouts. Worker ownership keeps those result births in sparse
+realms without retaining unrelated diagnostic layouts.
 Other worker API parity gaps remain.
 
 ## Next Steps
