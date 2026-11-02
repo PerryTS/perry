@@ -701,6 +701,7 @@ impl CanonicalTable {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn canonical_node_ids_exhausted() -> ! {
     eprintln!(

@@ -2634,6 +2634,7 @@ pub(crate) unsafe fn receiver_extra_summary(_obj: *const crate::object::ObjectHe
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn shape_id_exhausted_abort() -> ! {
     eprintln!("Perry ShapeId space exhausted; refusing to publish an untracked object shape");
@@ -2641,6 +2642,7 @@ fn shape_id_exhausted_abort() -> ! {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn invalid_shape_facts_abort() -> ! {
     eprintln!("Perry internal error: refusing to publish invalid object shape facts");

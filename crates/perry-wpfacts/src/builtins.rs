@@ -1537,8 +1537,20 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
         }
     }
 
+    // A computed key may name any member, one no rule describes included
+    // (the last arm); on the global object any host global (an unknown
+    // function) and `Function` (E14), as a read under it holds them.
     let Some(name) = name else {
-        return;
+        if ns == BuiltinNs::GlobalThis {
+            call_builtin_ns(m, BuiltinNs::Function, call);
+        }
+        return unknown_method_proto(
+            m,
+            call,
+            &format!("argument of builtin {ns:?}[computed]"),
+            None,
+            true,
+        );
     };
     match (ns, name) {
         (BuiltinNs::Other, n) if CONSOLE_METHODS.contains(&n) => {
@@ -2028,8 +2040,10 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
         BuiltinNs::Error | BuiltinNs::AggregateError | BuiltinNs::RegExp => {
             new_builtin_ns(m, ns, call);
             if ns == BuiltinNs::RegExp {
-                // `RegExp(re)` can return the existing regexp object.
+                // `RegExp(re)` can return the existing regexp object, after
+                // comparing `re.constructor` with the active function.
                 if let Some(src) = arg(m, call, 0) {
+                    string_methods::read_only(m, src, "constructor");
                     let ret = m.calls[call as usize].ret;
                     m.edge(src, ret);
                 }

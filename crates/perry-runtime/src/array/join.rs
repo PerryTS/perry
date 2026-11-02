@@ -31,6 +31,7 @@ fn throw_invalid_string_length() -> ! {
 /// Read one exotic element while keeping the receiver current across a getter
 /// or prototype lookup that can allocate and move it.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn exotic_element(arr: *const ArrayHeader, index: u32) -> Option<u64> {
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -48,6 +49,7 @@ fn exotic_element(arr: *const ArrayHeader, index: u32) -> Option<u64> {
 
 /// Run an allocating element conversion with the receiver and value rooted.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn element_to_string(arr: *const ArrayHeader, element_bits: u64) -> *const StringHeader {
     let scope = crate::gc::RuntimeHandleScope::new();

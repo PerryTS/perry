@@ -416,6 +416,7 @@ fn concat_parts_rooted_copy<const M: usize>(
 /// Every other value kind. The converted text of a value operand is a rooted
 /// heap string; a literal or a number is borrowed from rodata or the stack.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn concat_parts_general<const M: usize>(
     parts: *const ConcatPartSlot,

@@ -241,6 +241,20 @@ fn an_own_key_on_a_receiver_is_no_native_member() {
             "a.get(1)",
             "get",
         ),
+        // A key that is surely a string: any host global, or any member
+        // of a namespace (`Reflect.setPrototypeOf`).
+        (
+            arr,
+            "(globalThis as any)[String(process.argv[2])](a);",
+            "a.push(2)",
+            "push",
+        ),
+        (
+            arr,
+            "(Reflect as any)[String(process.argv[2])](a, { push() { return 0; } });",
+            "a.push(2)",
+            "push",
+        ),
     ] {
         control_and_negative(make, write, use_, key, true);
     }

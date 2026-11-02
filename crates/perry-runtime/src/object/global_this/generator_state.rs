@@ -209,6 +209,7 @@ fn birth_shape() -> LayoutWord {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn prepare_birth_shape() -> LayoutWord {
     let shape = record_birth_shape(GENERATOR_STATE_BRAND);
@@ -220,6 +221,7 @@ fn prepare_birth_shape() -> LayoutWord {
 /// `[[GeneratorState]]` private slot, the brand, extensible, prototype held
 /// by the record. Published once per agent per kind and kept for its life.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(super) fn record_birth_shape(brand: u64) -> LayoutWord {
     use crate::object::canonical_keys::{CanonicalKeys, SharedLayout};

@@ -665,6 +665,7 @@ pub(crate) unsafe fn born_instance(
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn mint_birth_record(
     class_id: u32,
@@ -1498,6 +1499,7 @@ pub unsafe fn call_from_link(link: OwnerLink, callee: f64, args: &[f64]) -> Resu
 /// The owner's first callback: create its pending slot (see
 /// [`ensure_pending_slot`]), then call.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn first_call_from_link(link: OwnerLink, callee: f64, args: &[f64]) -> Result<f64, ()> {
     let cell = link.0 as *mut NativeHandleHeader;

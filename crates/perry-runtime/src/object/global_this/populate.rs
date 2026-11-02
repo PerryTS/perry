@@ -896,21 +896,30 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
         super::super::PropertyAttrs::new(true, true, true),
     );
     // #2923: `globalThis.navigator` — Node's browser-compatible runtime
-    // metadata object. typeof is "object". Built once per process.
+    // metadata object. Node installs it as a lazy accessor (get only,
+    // enumerable, configurable); so does Perry. The getter builds the object
+    // on the first read and keeps it in its one capture, so `navigator.language`
+    // reads LC_ALL / LANG on first use, not while the realm is populated.
     {
-        let nname = b"navigator";
-        let nkey = crate::string::js_string_from_bytes(nname.as_ptr(), nname.len() as u32);
-        // Read the `Navigator` constructor we installed on the singleton above
-        // and hand it to the navigator builder directly. We must NOT call
-        // `js_navigator_object()` here: it re-fetches the constructor via
-        // `js_get_global_this_builtin_value` → `js_get_global_this`, which would
-        // re-enter this very lazy-init (GLOBAL_THIS_READY is still false until we
-        // return) and recurse/spin forever.
-        let nav_ctor_key = crate::string::js_string_from_bytes(b"Navigator".as_ptr(), 9);
-        let nav_ctor = js_object_get_field_by_name(singleton(), nav_ctor_key);
-        let nval =
-            crate::navigator::navigator_object_with_constructor(f64::from_bits(nav_ctor.bits()));
-        js_object_set_field_by_name(singleton(), nkey, nval);
+        let getter = crate::closure::js_closure_alloc(
+            crate::fn_info!(#[realm("navigator.<get>", provider = closure_alloc, capture = [undefined])] export crate::navigator::global_this_navigator_getter_thunk, 0; with_declared(0)),
+            1,
+        );
+        let getter_bits = if getter.is_null() {
+            0
+        } else {
+            crate::closure::js_closure_set_capture_bits(getter, 0, crate::value::TAG_UNDEFINED);
+            crate::value::js_nanbox_pointer(getter as i64).to_bits()
+        };
+        super::super::set_builtin_accessor_descriptor(
+            singleton() as usize,
+            "navigator".to_string(),
+            super::super::AccessorDescriptor {
+                get: getter_bits,
+                set: 0,
+            },
+            super::super::PropertyAttrs::new(true, true, true),
+        );
     }
     // ECMA-262 19.1/19.2/19.3: NaN, Infinity, and undefined are own data
     // properties of the global object with {writable:false, enumerable:false,
