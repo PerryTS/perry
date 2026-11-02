@@ -85,6 +85,7 @@ detail = "object disassembly contains the FNV multiply constant"
 
 [[workloads.image_convolution.named_regions]]
 name = "input_generation"
+loop_blocks_only = true
 required = true
 no_runtime_calls = true
 allowed_runtime_calls = ["js_gc_loop_safepoint"]
@@ -106,11 +107,15 @@ name = "named_region_input_generation_to_int32_conversion_budget"
 max = { fptosi = 1, sitofp = 1, inttoptr = 0, ptrtoint = 0 }
 detail = "input_generation JS division ToInt32 conversion budget"
 
+# These regions are unlabelled loops (a label makes several loop tiers decline
+# the loop), selected by block shape among loop blocks only (blocks on a CFG
+# cycle), so the straight-line module prologue never matches.
 # Native record requirements use these structural regions rather than LLVM's
 # ordinal block suffixes. The latter shift whenever an earlier lowering grows
 # its CFG even when these loops and their checked guarantees are unchanged.
 [[workloads.image_convolution.named_regions]]
 name = "input_gradient_native"
+loop_blocks_only = true
 exclusive = false
 
 [[workloads.image_convolution.named_regions.selectors]]
@@ -119,19 +124,22 @@ counter_equals = { load_i8 = 0 }
 
 [[workloads.image_convolution.named_regions]]
 name = "input_noise_native"
+loop_blocks_only = true
 exclusive = false
 
 [[workloads.image_convolution.named_regions.selectors]]
 counter_min = { load_i8 = 1, store_i8 = 1, xor_i32 = 1 }
 
+# The blur loop is the `blur:` labelled loop: resolved in optimized IR by the
+# loop ID codegen puts on its latch, with every block of its nest (the x, ky
+# and kx loops and the per-pixel stores). Its blocks are claimed: no selector
+# region below can take one.
 [[workloads.image_convolution.named_regions]]
 name = "blur"
+native_region_id = "image_conv_ts.module_init.blur"
 required = true
 no_runtime_calls = true
 allowed_runtime_calls = ["js_gc_loop_safepoint", "js_number_coerce"]
-
-[[workloads.image_convolution.named_regions.selectors]]
-counter_min = { load_i8 = 3, store_i8 = 1 }
 
 [[workloads.image_convolution.named_regions.checks]]
 name = "named_region_blur_byte_load_store"
@@ -145,6 +153,7 @@ detail = "blur JS division ToInt32 conversion budget"
 
 [[workloads.image_convolution.named_regions]]
 name = "fnv_hash"
+loop_blocks_only = true
 required = true
 no_runtime_calls = true
 no_conversions = true
@@ -511,9 +520,11 @@ counter = "buffer_slow_path_calls"
 equals = 0
 detail = "buffer_slow_path_calls"
 
-# Each region is resolved from the native records carrying its
-# native_region_id: the blocks codegen emitted for that loop, before LLVM
-# renames, inlines or vectorizes them (no ordinal label selectors).
+# Each region is its labelled loop, resolved in optimized IR by the loop ID
+# codegen puts on the loop latch (it survives renaming, inlining and
+# vectorization; no ordinal label selectors). The original copy of a
+# byte-view-versioned loop, which runs only behind the refused admission,
+# is not part of the region.
 [[workloads.h1_native_rep_equivalence.named_regions]]
 name = "direct_bounded"
 native_region_id = "h1_native_rep_equivalence_ts.module_init.direct_bounded"

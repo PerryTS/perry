@@ -198,6 +198,10 @@ def parse_vectorization_remarks(stderr_text: str) -> dict[str, Any]:
 
 def structural_counters(ir_before: str, ir_after: str, assembly: str) -> dict[str, Any]:
     after_calls = count_calls_by_name(ir_after)
+    # The original copy of a byte-view-versioned loop keeps the generic
+    # element accesses (a receiver the admission refused is not a byte view);
+    # those run only behind the admission and are reported apart.
+    behind_byte_view_version = buffer_slow_path_calls_behind_byte_view_version(ir_after)
     runtime_calls = {
         name: count
         for name, count in after_calls.items()
@@ -251,7 +255,9 @@ def structural_counters(ir_before: str, ir_after: str, assembly: str) -> dict[st
                 count
                 for name, count in after_calls.items()
                 if any(helper in name for helper in BUFFER_SLOW_PATH_HELPERS)
-            ),
+            )
+            - behind_byte_view_version,
+            "buffer_slow_path_calls_behind_byte_view_version": behind_byte_view_version,
             "array_slow_path_calls": sum(
                 count
                 for name, count in after_calls.items()
@@ -276,8 +282,13 @@ def structural_counters(ir_before: str, ir_after: str, assembly: str) -> dict[st
 
 def block_counter_summary(body: str) -> dict[str, Any]:
     calls = count_calls_by_name(body)
-    load_i8 = len(re.findall(r"\bload (?:i8|<\d+ x i8>), ptr\b", body))
-    store_i8 = len(re.findall(r"\bstore (?:i8\b|<\d+ x i8>)", body))
+    # A tail-folded vector loop moves bytes with masked intrinsics.
+    load_i8 = len(re.findall(r"\bload (?:i8|<\d+ x i8>), ptr\b", body)) + len(
+        re.findall(r"@llvm\.masked\.load\.v\d+i8\.", body)
+    )
+    store_i8 = len(re.findall(r"\bstore (?:i8\b|<\d+ x i8>)", body)) + len(
+        re.findall(r"@llvm\.masked\.store\.v\d+i8\.", body)
+    )
     load_f64 = len(re.findall(r"\bload double, ptr\b", body))
     store_f64 = len(re.findall(r"\bstore double\b", body))
     return {
@@ -393,11 +404,24 @@ def hot_region_counters(ir_after: str) -> dict[str, Any]:
     return {"hot_loops": regions}
 
 
-def named_hot_regions(workload_info: dict[str, Any], ir_after: str) -> dict[str, Any]:
+def named_hot_regions(
+    workload_info: dict[str, Any],
+    ir_after: str,
+    claimed: set[tuple[str, str]] | None = None,
+) -> dict[str, Any]:
+    """Selector-resolved regions. `claimed` blocks belong to a labelled
+    region's loop (see `native_loop_regions`) and match no selector: a
+    counter-shaped selector would otherwise also pick up a block of that
+    loop that happens to have the same shape."""
+    claimed = claimed or set()
     blocks = [
         (function, label, block_counter_summary(body))
         for function, label, body in extract_blocks_with_functions(ir_after)
+        if (function, label) not in claimed
     ]
+    looped: set[tuple[str, str]] | None = None
+    if any(region.get("loop_blocks_only") for region in workload_info.get("named_regions", []) or []):
+        looped = loop_block_keys(ir_after)
     selected: dict[str, list[tuple[str, str, dict[str, Any]]]] = {}
     assigned: set[tuple[str, str]] = set()
     for region in workload_info.get("named_regions", []) or []:
@@ -405,6 +429,8 @@ def named_hot_regions(workload_info: dict[str, Any], ir_after: str) -> dict[str,
         for function, label, counters in blocks:
             block_key = (function, label)
             if region.get("exclusive", True) and block_key in assigned:
+                continue
+            if region.get("loop_blocks_only") and block_key not in (looped or set()):
                 continue
             if any(
                 _selector_matches(function, label, counters, selector)
@@ -542,47 +568,6 @@ def loop_header_length_loads(ir: str) -> dict[str, list[str]]:
     return found
 
 
-def native_record_regions(
-    workload_info: dict[str, Any], ir_before: str, records: list[dict[str, Any]]
-) -> dict[str, Any]:
-    """Resolve each selector-less named region that names a `native_region_id`
-    from the compiler's own records for that region.
-
-    Codegen records every native access with the region id it belongs to and
-    the (function, block label) it emitted. Those labels are exact in the
-    pre-optimization IR; LLVM later inlines, renames and vectorizes the loop
-    (a tail-folded byte loop becomes an unnamed `vector.body`), so an ordinal
-    label in the optimized IR names whatever loop happens to land there. The
-    region is therefore the set of pre-optimization blocks its records name,
-    and its contract runs on their counters.
-    """
-    wanted: dict[str, str] = {}
-    for region in workload_info.get("named_regions", []) or []:
-        region_id = region.get("native_region_id")
-        if region_id and not region.get("selectors"):
-            wanted[str(region_id)] = str(region["name"])
-    if not wanted:
-        return {}
-    keys: dict[str, set[tuple[str, str]]] = {}
-    for record in records:
-        name = wanted.get(str(record.get("region_id") or ""))
-        if name:
-            keys.setdefault(name, set()).add(
-                (record.get("function") or "", record.get("block_label") or "")
-            )
-    selected: dict[str, list[tuple[str, str, dict[str, Any]]]] = {}
-    for function, label, body in extract_blocks_with_functions(ir_before):
-        for name, block_keys in keys.items():
-            if (function, label) in block_keys:
-                selected.setdefault(name, []).append(
-                    (function, label, block_counter_summary(body))
-                )
-    return {
-        name: merge_named_region_counters(region_blocks)
-        for name, region_blocks in selected.items()
-    }
-
-
 def region_counters(
     workload: str, ir_after: str, workloads: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -591,7 +576,15 @@ def region_counters(
 
         workloads = WORKLOADS
     regions = hot_region_counters(ir_after)
-    regions["named"] = named_hot_regions(workloads.get(workload, {}), ir_after)
+    workload_info = workloads.get(workload, {})
+    loop_regions = native_loop_regions(workload_info, ir_after)
+    claimed = {
+        (key["function"], key["label"])
+        for region in loop_regions.values()
+        for key in region.get("block_keys", [])
+    }
+    regions["named"] = named_hot_regions(workload_info, ir_after, claimed)
+    regions["named"].update(loop_regions)
     return regions
 
 
@@ -817,3 +810,374 @@ def disassemble_object(
         check=True,
     )
     return result.to_json()
+
+
+# ---------------------------------------------------------------------------
+# Loop identity in optimized IR.
+#
+# Codegen gives the latch of every labelled loop an `!llvm.loop` loop ID that
+# lists `!{!"perry.region", !"<region id>"}`, and the latch of the original
+# (fallback) copy of a byte-view-versioned loop `!{!"perry.byte_view.fallback"}`.
+# The admission branch that picks between the copies carries
+# `!perry.byte_view.version`. LLVM keeps unknown loop-ID operands through
+# rotation, unrolling and vectorization, so a region is found in optimized IR
+# by its loop ID, not by a block label. Anything that loses the ID loses the
+# loop: the region is then absent and a required region fails (fail closed).
+# ---------------------------------------------------------------------------
+
+_DEFINE_RE = re.compile(r"^define\b.*@(?:\"([^\"]+)\"|([A-Za-z0-9_.$-]+))\(")
+_TARGET_RE = re.compile(r"label %(?:\"([^\"]+)\"|([-\w.$]+))")
+_MD_DEF_RE = re.compile(r"^!(\d+) = (?:distinct )?!\{(.*)\}\s*$")
+_MD_REF_RE = re.compile(r"!(\d+)")
+_MD_STRING_RE = re.compile(r'!"((?:[^"\\]|\\[0-9A-Fa-f]{2})*)"')
+_LOOP_ATTACHMENT_RE = re.compile(r"!llvm\.loop !(\d+)")
+_BYTE_VIEW_VERSION_RE = re.compile(r"!perry\.byte_view\.version\b")
+_REGION_TAG = "perry.region"
+_FALLBACK_TAG = "perry.byte_view.fallback"
+
+
+def _md_string(text: str) -> str:
+    return re.sub(r"\\([0-9A-Fa-f]{2})", lambda m: chr(int(m.group(1), 16)), text)
+
+
+def _metadata_nodes(ir: str) -> dict[str, str]:
+    return {
+        match.group(1): match.group(2)
+        for match in (_MD_DEF_RE.match(line) for line in ir.splitlines())
+        if match
+    }
+
+
+def _loop_id_tags(nodes: dict[str, str], loop_id: str) -> tuple[set[str], bool]:
+    """(region ids, byte-view fallback?) a loop ID lists. The ID must be a
+    loop ID (first operand is itself); its operands are tuples whose first
+    string names the tag."""
+    body = nodes.get(loop_id)
+    if body is None:
+        return set(), False
+    refs = _MD_REF_RE.findall(body.split(",", 1)[0])
+    if refs != [loop_id]:
+        return set(), False
+    regions: set[str] = set()
+    fallback = False
+    for operand in _MD_REF_RE.findall(body)[1:]:
+        strings = [_md_string(s) for s in _MD_STRING_RE.findall(nodes.get(operand, ""))]
+        if len(strings) == 2 and strings[0] == _REGION_TAG:
+            regions.add(strings[1])
+        elif strings == [_FALLBACK_TAG]:
+            fallback = True
+    return regions, fallback
+
+
+def _ir_functions(ir: str) -> list[tuple[str, list[tuple[str, list[str]]]]]:
+    """Every defined function as (name, [(block label, lines)]). The entry
+    block keeps its implicit label as ""."""
+    label_re = re.compile(_LABEL_PATTERN)
+    functions: list[tuple[str, list[tuple[str, list[str]]]]] = []
+    blocks: list[tuple[str, list[str]]] | None = None
+    for line in ir.splitlines():
+        match = _DEFINE_RE.match(line)
+        if match:
+            blocks = [("", [])]
+            functions.append((match.group(1) or match.group(2), blocks))
+            continue
+        if blocks is None:
+            continue
+        if line.startswith("}"):
+            blocks = None
+            continue
+        label = label_re.match(line)
+        if label:
+            if blocks == [("", [])]:
+                blocks.clear()
+            blocks.append((label.group(1) or label.group(2), [line]))
+            continue
+        blocks[-1][1].append(line)
+    return functions
+
+
+def _terminator(lines: list[str]) -> str:
+    """The block's terminator text (a `switch` spans several lines)."""
+    for index in range(len(lines) - 1, -1, -1):
+        stripped = lines[index].strip()
+        if not stripped or stripped.startswith(";"):
+            continue
+        if stripped.startswith("]"):
+            start = index
+            while start > 0 and "switch " not in lines[start] and "indirectbr " not in lines[start]:
+                start -= 1
+            return "\n".join(lines[start : index + 1])
+        if stripped.startswith(("to label", "unwind ")):
+            return "\n".join(lines[max(index - 1, 0) : index + 1])
+        return stripped
+    return ""
+
+
+class _FunctionCfg:
+    def __init__(self, name: str, blocks: list[tuple[str, list[str]]]):
+        self.name = name
+        self.blocks = blocks
+        self.terminators = {label: _terminator(lines) for label, lines in blocks}
+        self.successors = {
+            label: list(
+                dict.fromkeys(
+                    m.group(1) or m.group(2) for m in _TARGET_RE.finditer(self.terminators[label])
+                )
+            )
+            for label, _ in blocks
+        }
+        self.predecessors: dict[str, list[str]] = {label: [] for label, _ in blocks}
+        for label, successors in self.successors.items():
+            for successor in successors:
+                if successor in self.predecessors:
+                    self.predecessors[successor].append(label)
+        self.idom = self._dominator_tree()
+
+    def _dominator_tree(self) -> dict[str, str]:
+        if not self.blocks:
+            return {}
+        entry = self.blocks[0][0]
+        order: list[str] = []
+        seen = {entry}
+        stack = [(entry, iter(self.successors.get(entry, [])))]
+        while stack:
+            node, children = stack[-1]
+            for child in children:
+                if child in self.successors and child not in seen:
+                    seen.add(child)
+                    stack.append((child, iter(self.successors[child])))
+                    break
+            else:
+                stack.pop()
+                order.append(node)
+        order.reverse()
+        rank = {label: index for index, label in enumerate(order)}
+        idom = {entry: entry}
+
+        def intersect(a: str, b: str) -> str:
+            while a != b:
+                while rank[a] > rank[b]:
+                    a = idom[a]
+                while rank[b] > rank[a]:
+                    b = idom[b]
+            return a
+
+        changed = True
+        while changed:
+            changed = False
+            for node in order[1:]:
+                done = [p for p in self.predecessors[node] if p in idom]
+                if not done:
+                    continue
+                new = done[0]
+                for pred in done[1:]:
+                    new = intersect(pred, new)
+                if idom.get(node) != new:
+                    idom[node] = new
+                    changed = True
+        return idom
+
+    def dominates(self, a: str, b: str) -> bool:
+        if b not in self.idom or a not in self.idom:
+            return False
+        while True:
+            if a == b:
+                return True
+            parent = self.idom[b]
+            if parent == b:
+                return False
+            b = parent
+
+    def natural_loop(self, latch: str, header: str) -> set[str]:
+        """Blocks of the loop of back edge latch -> header (header dominates
+        latch), or empty when the edge is not a back edge."""
+        if not self.dominates(header, latch):
+            return set()
+        body = {header, latch}
+        work = [latch]
+        while work:
+            node = work.pop()
+            if node == header:
+                continue
+            for pred in self.predecessors.get(node, []):
+                if pred not in body and pred in self.idom:
+                    body.add(pred)
+                    work.append(pred)
+        return body
+
+    def edge_dominated(self, source: str, target: str) -> set[str]:
+        """Blocks reached only through the edge source -> target: `target`
+        dominates them and every other way into `target` is a back edge from
+        inside it. Empty when the edge is not the only way in."""
+        if self.successors.get(source, []).count(target) != 1:
+            return set()
+        for pred in self.predecessors.get(target, []):
+            if pred != source and not self.dominates(target, pred):
+                return set()
+        return {label for label, _ in self.blocks if self.dominates(target, label)}
+
+
+def _tagged_loops(cfg: _FunctionCfg, nodes: dict[str, str]):
+    """(regions, fallback?, loop blocks) for every back edge whose latch
+    carries a perry loop ID."""
+    for latch, terminator in cfg.terminators.items():
+        attachment = _LOOP_ATTACHMENT_RE.search(terminator)
+        if not attachment:
+            continue
+        regions, fallback = _loop_id_tags(nodes, attachment.group(1))
+        if not regions and not fallback:
+            continue
+        for header in cfg.successors.get(latch, []):
+            body = cfg.natural_loop(latch, header)
+            if body:
+                yield regions, fallback, body
+
+
+def _byte_view_fallback_blocks(cfg: _FunctionCfg, nodes: dict[str, str]) -> set[str]:
+    """Blocks of the original copy of a byte-view-versioned loop that run only
+    behind its admission. For a branch V marked `!perry.byte_view.version`
+    with successors F and S: S is the fallback side when the blocks S
+    dominates hold a fallback-marked loop and the blocks F dominates hold
+    none, and no way into S starts inside F's blocks (the fast copy never
+    falls into the original copy). The excluded blocks are those S
+    dominates. A way into S other than V is the refused admission threaded
+    around V by LLVM (JumpThreading clones V's block where the admission is
+    known false); it still enters only S. Nothing is excluded without a
+    marked V, so removing the admission branch counts the whole original
+    copy, and a block of the fast copy is never excluded."""
+    fallback_loops = [body for _, fallback, body in _tagged_loops(cfg, nodes) if fallback]
+    if not fallback_loops:
+        return set()
+    labels = [label for label, _ in cfg.blocks]
+    excluded: set[str] = set()
+    for source, terminator in cfg.terminators.items():
+        if not _BYTE_VIEW_VERSION_RE.search(terminator) or not terminator.startswith("br i1 "):
+            continue
+        successors = cfg.successors.get(source, [])
+        if len(successors) != 2:
+            continue
+        sides = [
+            {label for label in labels if cfg.dominates(successor, label)}
+            for successor in successors
+        ]
+        holds = [any(loop <= side for loop in fallback_loops) for side in sides]
+        if holds.count(True) != 1:
+            continue
+        fallback = holds.index(True)
+        fast_side = sides[1 - fallback]
+        if any(loop & fast_side for loop in fallback_loops):
+            continue
+        if any(pred in fast_side for pred in cfg.predecessors.get(successors[fallback], [])):
+            continue
+        excluded |= sides[fallback]
+    return excluded
+
+
+def byte_view_fallback_blocks(ir: str) -> dict[str, set[str]]:
+    nodes = _metadata_nodes(ir)
+    found: dict[str, set[str]] = {}
+    for name, blocks in _ir_functions(ir):
+        if not any(_BYTE_VIEW_VERSION_RE.search(line) for _, lines in blocks for line in lines):
+            continue
+        excluded = _byte_view_fallback_blocks(_FunctionCfg(name, blocks), nodes)
+        if excluded:
+            found[name] = excluded
+    return found
+
+
+def buffer_slow_path_calls_behind_byte_view_version(ir: str) -> int:
+    """Buffer slow-path calls in the original copy of a byte-view-versioned
+    loop that only the refused admission reaches (see
+    `_byte_view_fallback_blocks`)."""
+    excluded = byte_view_fallback_blocks(ir)
+    if not excluded:
+        return 0
+    total = 0
+    for name, blocks in _ir_functions(ir):
+        labels = excluded.get(name)
+        if not labels:
+            continue
+        for label, lines in blocks:
+            if label in labels:
+                total += sum(
+                    1
+                    for callee in call_names("\n".join(lines))
+                    if any(helper in callee for helper in BUFFER_SLOW_PATH_HELPERS)
+                )
+    return total
+
+
+def loop_tagged_regions(ir: str) -> dict[str, list[tuple[str, str, str]]]:
+    """Region id -> the (function, label, body) blocks of every loop whose
+    loop ID names that region (all copies: versioned, specialized, inlined),
+    minus the original copy behind a byte-view admission (its generic
+    accesses are the semantic fallback, not the region)."""
+    nodes = _metadata_nodes(ir)
+    found: dict[str, list[tuple[str, str, str]]] = {}
+    for name, blocks in _ir_functions(ir):
+        if not any(_LOOP_ATTACHMENT_RE.search(line) for _, lines in blocks for line in lines):
+            continue
+        cfg = _FunctionCfg(name, blocks)
+        excluded = _byte_view_fallback_blocks(cfg, nodes)
+        members: dict[str, set[str]] = {}
+        for regions, _, body in _tagged_loops(cfg, nodes):
+            for region in regions:
+                members.setdefault(region, set()).update(body - excluded)
+        for region, labels in members.items():
+            for label, lines in blocks:
+                if label in labels:
+                    found.setdefault(region, []).append((name, label, "\n".join(lines)))
+    return found
+
+
+def native_loop_regions(workload_info: dict[str, Any], ir: str) -> dict[str, Any]:
+    """Resolve each selector-less named region that names a `native_region_id`
+    from the loop that region labels, by the loop ID codegen gave its latch
+    (see `loop_tagged_regions`). A region whose loop ID did not survive is
+    absent."""
+    wanted: dict[str, str] = {}
+    for region in workload_info.get("named_regions", []) or []:
+        region_id = region.get("native_region_id")
+        if region_id and not region.get("selectors"):
+            wanted[str(region_id)] = str(region["name"])
+    if not wanted:
+        return {}
+    tagged = loop_tagged_regions(ir)
+    return {
+        name: merge_named_region_counters(
+            [
+                (function, label, block_counter_summary(_without_poll_root_launders(body)))
+                for function, label, body in tagged[region_id]
+            ]
+        )
+        for region_id, name in wanted.items()
+        if tagged.get(region_id)
+    }
+
+
+_ROOT_LAUNDER_RE = re.compile(r'= (?:tail )?call i64 asm "", "=r,0"\(')
+
+
+def _without_poll_root_launders(body: str) -> str:
+    """A block that runs the loop's GC safepoint poll reloads the frame's
+    roots through launder asm (`asm "", "=r,0"`); LLVM folds a root it knows
+    is a constant (a not-yet-initialized local is `undefined`) into an
+    `inttoptr` constant operand. Those operands are the poll's root protocol,
+    which the region allows (`js_gc_loop_safepoint`), not a conversion of the
+    loop's own values."""
+    if "@js_gc_loop_safepoint(" not in body:
+        return body
+    return "\n".join(line for line in body.splitlines() if not _ROOT_LAUNDER_RE.search(line))
+
+
+def loop_block_keys(ir: str) -> set[tuple[str, str]]:
+    """(function, label) of every block on a CFG cycle: the blocks a loop
+    iteration can run."""
+    keys: set[tuple[str, str]] = set()
+    for name, blocks in _ir_functions(ir):
+        cfg_successors = {
+            label: [m.group(1) or m.group(2) for m in _TARGET_RE.finditer(_terminator(lines))]
+            for label, lines in blocks
+        }
+        keys.update((name, label) for label in _cycle_blocks(cfg_successors))
+    return keys
