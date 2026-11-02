@@ -552,8 +552,6 @@ pub(super) fn shallow(e: &Expr, n: &mut usize) -> Expr {
             options: Shallow::shallow(options, n),
             is_eval: is_eval.clone(),
         },
-        _ => unreachable!(
-            "internal compiler error: Expr::clone: no shallow arm for a variant of the walkers"
-        ),
+        _ => unreachable!("internal compiler error: Expr::clone: not a web variant"),
     }
 }

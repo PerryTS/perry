@@ -735,6 +735,6 @@ pub(super) fn shallow(e: &Expr, n: &mut usize) -> Expr {
             Expr::ChildProcessGetProcessStatus(Shallow::shallow(a0, n))
         }
         Expr::ChildProcessKillProcess(a0) => Expr::ChildProcessKillProcess(Shallow::shallow(a0, n)),
-        _ => super::shallow_collections::shallow(e, n),
+        _ => unreachable!("internal compiler error: Expr::clone: not a host variant"),
     }
 }

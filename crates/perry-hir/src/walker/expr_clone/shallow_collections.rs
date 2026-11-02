@@ -483,6 +483,6 @@ pub(super) fn shallow(e: &Expr, n: &mut usize) -> Expr {
             input: Shallow::shallow(input, n),
             base: Shallow::shallow(base, n),
         },
-        _ => super::shallow_web::shallow(e, n),
+        _ => unreachable!("internal compiler error: Expr::clone: not a collections variant"),
     }
 }

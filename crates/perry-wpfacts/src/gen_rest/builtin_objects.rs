@@ -695,7 +695,7 @@ impl<'a> Gen<'a> {
             Expr::StringMatchAll { string, regex } => {
                 self.string_method(fx, string, "matchAll", &[regex])
             }
-            _ => self.expr_rest_collections(fx, e),
+            _ => unreachable!("internal compiler error: expr_rest: not a builtin_objects variant"),
         }
     }
 }
