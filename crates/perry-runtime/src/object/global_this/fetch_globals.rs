@@ -839,6 +839,36 @@ pub unsafe extern "C-unwind" fn js_fetch_or_value_super(
             return dispatch(this_box);
         }
     }
+    // `class C extends Gzip` (any native module constructor whose state the
+    // instance carries): the state is attached to the receiver, the receiver
+    // is not replaced. The ordinary dispatch below constructed a FRESH native
+    // instance on the base prototype, which `super()` then bound as `this`, so
+    // the instance lost the subclass prototype and its overrides. Ask the
+    // native side for the constructor's in-place form first: the same
+    // `js_zlib_<codec>_init(owner, opts)` the static lowering emits when it can
+    // see the base, so an implicit constructor, an explicit `super(...args)`
+    // and a dynamic heritage all build the one instance. An export with no
+    // in-place form answers undefined and keeps the paths below.
+    if let Some((module, method)) = bound_native_parent.as_ref() {
+        let ptr = crate::value::JS_NATIVE_SUBCLASS_INIT.load(std::sync::atomic::Ordering::SeqCst);
+        if !ptr.is_null() && subclass_this_object_ptr(this_box).is_some() {
+            let init: crate::value::JsNativeSubclassInitFn = std::mem::transmute(ptr);
+            let module =
+                super::super::native_module::normalize_native_module_alias(module.as_str());
+            let initialized = init(
+                module.as_ptr(),
+                module.len(),
+                method.as_ptr(),
+                method.len(),
+                this_box,
+                args_ptr,
+                args_len,
+            );
+            if !crate::value::JSValue::from_bits(initialized.to_bits()).is_undefined() {
+                return undef;
+            }
+        }
+    }
     // #10448: `class X extends Transform` (and Readable/Writable/Duplex)
     // never called the subclass's `_transform`/`_write`/`_read` override
     // unless the heritage was a shape `is_genuine_node_stream_parent`

@@ -1,0 +1,1 @@
+`super()` into a node:zlib codec constructor (`class C extends Gzip`, `Deflate`, `Gunzip`, ...) now runs the codec's in-place constructor on the subclass instance, whether the class writes a constructor or not. It used to construct a fresh codec that replaced `this`, so the instance lost the subclass prototype and its `_transform`/`_flush` overrides.
