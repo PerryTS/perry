@@ -45,12 +45,23 @@ pub(crate) fn global_symbol_name(line: &str) -> Option<&str> {
     Some(&line[..end])
 }
 
-/// Collect every `@symbol` referenced in a chunk of IR text.
+/// Collect every `@symbol` referenced in a chunk of IR text, quoted names
+/// (`@"\01section$start$__TEXT$__perry_fnrec"`) included, spelled as written.
 pub(crate) fn collect_symbol_refs(text: &str, out: &mut HashSet<String>) {
     let b = text.as_bytes();
     let mut i = 0usize;
     while i < b.len() {
-        if b[i] == b'@' {
+        if b[i] == b'@' && b.get(i + 1) == Some(&b'"') {
+            // LLVM escapes a `"` inside a name as `\22`, so the next quote
+            // closes it. Scanning resumes inside the quotes rather than after
+            // them: a string initializer ending in `@` must not hide the
+            // references that follow it, and a spurious name only misses the
+            // symbol index.
+            if let Some(len) = text[i + 2..].find('"') {
+                out.insert(text[i..i + len + 3].to_string());
+            }
+            i += 2;
+        } else if b[i] == b'@' {
             let start = i;
             i += 1;
             while i < b.len()
