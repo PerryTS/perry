@@ -232,35 +232,98 @@ fn process_report_header_object(trigger: &str, filename: Option<&str>) -> f64 {
         10,
         JSValue::from_bits((module_string_value("v22.0.0")).to_bits()),
     );
+    // Node prints the glibc pair right after nodejsVersion on glibc Linux and
+    // omits it elsewhere; the layout differs by target the same way.
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    {
+        obj.set(
+            11,
+            JSValue::from_bits((module_string_value(&glibc_version_runtime())).to_bits()),
+        );
+        obj.set(
+            12,
+            JSValue::from_bits((module_string_value(&glibc_version_compiler())).to_bits()),
+        );
+    }
     obj.set(
-        11,
+        11 + GLIBC_SLOTS,
         JSValue::from_bits(((std::mem::size_of::<usize>() * 8) as f64).to_bits()),
     );
     obj.set(
-        12,
+        12 + GLIBC_SLOTS,
         JSValue::from_bits((module_string_value(node_arch_name())).to_bits()),
     );
     obj.set(
-        13,
+        13 + GLIBC_SLOTS,
         JSValue::from_bits((module_string_value(node_platform_name())).to_bits()),
     );
     obj.set(
-        14,
+        14 + GLIBC_SLOTS,
         JSValue::from_bits((process_report_component_versions()).to_bits()),
     );
-    obj.set(15, JSValue::from_bits((process_release_value()).to_bits()));
     obj.set(
-        16,
+        15 + GLIBC_SLOTS,
+        JSValue::from_bits((process_release_value()).to_bits()),
+    );
+    obj.set(
+        16 + GLIBC_SLOTS,
         JSValue::from_bits((module_string_value(std::env::consts::OS)).to_bits()),
     );
-    obj.set(17, JSValue::from_bits((module_string_value("")).to_bits()));
-    obj.set(18, JSValue::from_bits((module_string_value("")).to_bits()));
     obj.set(
-        19,
+        17 + GLIBC_SLOTS,
+        JSValue::from_bits((module_string_value("")).to_bits()),
+    );
+    obj.set(
+        18 + GLIBC_SLOTS,
+        JSValue::from_bits((module_string_value("")).to_bits()),
+    );
+    obj.set(
+        19 + GLIBC_SLOTS,
         JSValue::from_bits((module_string_value(std::env::consts::ARCH)).to_bits()),
     );
-    obj.set(20, JSValue::from_bits((module_string_value("")).to_bits()));
+    obj.set(
+        20 + GLIBC_SLOTS,
+        JSValue::from_bits((module_string_value("")).to_bits()),
+    );
     module_object_value(obj.finish())
+}
+
+/// Header slots Node adds on glibc Linux: `glibcVersionRuntime` and
+/// `glibcVersionCompiler`, right after `nodejsVersion`. Packages that ship
+/// glibc and musl builds read `header.glibcVersionRuntime` and take the musl
+/// build when it is absent (the `detect-libc` / napi-rs loader convention).
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+const GLIBC_SLOTS: u32 = 2;
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+const GLIBC_SLOTS: u32 = 0;
+
+/// The glibc the process runs on, as `major.minor`.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn glibc_version_runtime() -> String {
+    // SAFETY: glibc returns a pointer to a static NUL-terminated string.
+    unsafe { std::ffi::CStr::from_ptr(libc::gnu_get_libc_version()) }
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// The glibc the program was linked against, as `major.minor`: the compiler
+/// reads it from the link host and defines `perry_glibc_version_compiler` as
+/// the absolute symbol `major * 1000 + minor` at link time. A link that did
+/// not define it (a cross link, where the compiler cannot know the sysroot's
+/// glibc) reports the runtime's version, which is what the link resolved.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn glibc_version_compiler() -> String {
+    extern "C" {
+        #[linkage = "extern_weak"]
+        static perry_glibc_version_compiler: *const u8;
+    }
+    // SAFETY: an extern_weak static reads as the symbol's address, or null;
+    // the link defines this one as an absolute value.
+    let encoded = unsafe { perry_glibc_version_compiler as usize };
+    if encoded == 0 {
+        return glibc_version_runtime();
+    }
+    format!("{}.{}", encoded / 1000, encoded % 1000)
 }
 
 fn process_report_javascript_stack_object() -> f64 {
@@ -496,6 +559,25 @@ pub(crate) fn process_report_json_string(trigger: &str, filename: Option<&str>) 
         "sharedObjects": []
     });
 
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    {
+        let header = value["header"]
+            .as_object_mut()
+            .expect("header is an object");
+        let mut ordered = serde_json::Map::new();
+        for (key, item) in std::mem::take(header) {
+            let after_node = key == "nodejsVersion";
+            ordered.insert(key, item);
+            if after_node {
+                ordered.insert("glibcVersionRuntime".into(), glibc_version_runtime().into());
+                ordered.insert(
+                    "glibcVersionCompiler".into(),
+                    glibc_version_compiler().into(),
+                );
+            }
+        }
+        *header = ordered;
+    }
     #[cfg(windows)]
     if let Some(value) = value.as_object_mut() {
         value.remove("userLimits");

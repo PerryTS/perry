@@ -109,6 +109,19 @@ fn compile_foundation_models_bridge(
     )
 }
 
+/// The link host's glibc as `major * 1000 + minor`.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn host_glibc_version_encoded() -> Option<u32> {
+    // SAFETY: glibc returns a pointer to a static NUL-terminated string.
+    let version = unsafe { std::ffi::CStr::from_ptr(libc::gnu_get_libc_version()) }
+        .to_str()
+        .ok()?;
+    let mut parts = version.split('.');
+    let major: u32 = parts.next()?.parse().ok()?;
+    let minor: u32 = parts.next()?.parse().ok()?;
+    Some(major * 1000 + minor)
+}
+
 /// Construct the platform-specific linker `Command` and prime it with the
 /// toolchain/sysroot/triple flags that every per-platform branch needs
 /// before the orchestrator appends object files and libraries.
@@ -900,6 +913,15 @@ pub fn select_linker_command(
         // native module dispatch table restored, all expected symbols
         // are resolved; any remaining unresolved symbol is a real bug
         // that should fail the link rather than produce a broken binary.
+        //
+        // The program links against this host's glibc: record its version
+        // for process.report's header.glibcVersionCompiler.
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
+        if let Some(encoded) = host_glibc_version_encoded() {
+            c.arg(format!(
+                "-Wl,--defsym=perry_glibc_version_compiler={encoded}"
+            ));
+        }
         c
     } else if is_windows {
         // Windows target — two linker paths supported:
@@ -931,7 +953,9 @@ pub fn select_linker_command(
         } else if let Some(path) = find_msvc_link_exe(target) {
             path
         } else if is_cross_windows {
-            eprintln!("Warning: lld-link not found for cross-compilation. Install: rustup component add llvm-tools");
+            eprintln!(
+                "Warning: lld-link not found for cross-compilation. Install: rustup component add llvm-tools"
+            );
             PathBuf::from("link.exe")
         } else {
             // Native Windows: neither MSVC (via vswhere) nor the xwin'd sysroot
@@ -994,7 +1018,9 @@ pub fn select_linker_command(
             if let Some(lib_paths) = find_msvc_lib_paths(target) {
                 c.env("LIB", lib_paths);
             } else if is_cross_windows {
-                eprintln!("Warning: No Windows SDK library paths found. Set PERRY_WINDOWS_SYSROOT to your xwin sysroot.");
+                eprintln!(
+                    "Warning: No Windows SDK library paths found. Set PERRY_WINDOWS_SYSROOT to your xwin sysroot."
+                );
             }
         }
         c
