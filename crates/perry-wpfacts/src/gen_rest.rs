@@ -102,7 +102,9 @@ impl<'a> Gen<'a> {
                 } else if m0 == "module" && method == "createRequire" && object.is_none() {
                     let t = self.m.tok(TokKind::Builtin(BuiltinNs::Require));
                     self.tok_node(t)
-                } else if let (true, Some(o)) = (module == "array" && method == "push_field_single", o) {
+                } else if let (true, Some(o)) =
+                    (module == "array" && method == "push_field_single", o)
+                {
                     // `push_field_single` checks the receiver and runs its own
                     // `push` otherwise, which is the method call itself.
                     let push = self.m.atom("push");
@@ -484,33 +486,48 @@ impl<'a> Gen<'a> {
             Expr::DateToLocaleTimeString(..) => self.receiver_method(fx, e, "toLocaleTimeString"),
             Expr::DateToLocaleString(..) => self.receiver_method(fx, e, "toLocaleString"),
             Expr::DateToJSON(..) => self.receiver_method(fx, e, "toJSON"),
-            Expr::DateSetUtcFullYear{ .. } => self.receiver_method(fx, e, "setUTCFullYear"),
-            Expr::DateSetUtcMonth{ .. } => self.receiver_method(fx, e, "setUTCMonth"),
-            Expr::DateSetUtcDate{ .. } => self.receiver_method(fx, e, "setUTCDate"),
-            Expr::DateSetUtcHours{ .. } => self.receiver_method(fx, e, "setUTCHours"),
-            Expr::DateSetUtcMinutes{ .. } => self.receiver_method(fx, e, "setUTCMinutes"),
-            Expr::DateSetUtcSeconds{ .. } => self.receiver_method(fx, e, "setUTCSeconds"),
-            Expr::DateSetUtcMilliseconds{ .. } => self.receiver_method(fx, e, "setUTCMilliseconds"),
-            Expr::DateSetFullYear{ .. } => self.receiver_method(fx, e, "setFullYear"),
-            Expr::DateSetMonth{ .. } => self.receiver_method(fx, e, "setMonth"),
-            Expr::DateSetDate{ .. } => self.receiver_method(fx, e, "setDate"),
-            Expr::DateSetHours{ .. } => self.receiver_method(fx, e, "setHours"),
-            Expr::DateSetMinutes{ .. } => self.receiver_method(fx, e, "setMinutes"),
-            Expr::DateSetSeconds{ .. } => self.receiver_method(fx, e, "setSeconds"),
-            Expr::DateSetMilliseconds{ .. } => self.receiver_method(fx, e, "setMilliseconds"),
-            Expr::DateSetTime{ .. } => self.receiver_method(fx, e, "setTime"),
+            Expr::DateSetUtcFullYear { .. } => self.receiver_method(fx, e, "setUTCFullYear"),
+            Expr::DateSetUtcMonth { .. } => self.receiver_method(fx, e, "setUTCMonth"),
+            Expr::DateSetUtcDate { .. } => self.receiver_method(fx, e, "setUTCDate"),
+            Expr::DateSetUtcHours { .. } => self.receiver_method(fx, e, "setUTCHours"),
+            Expr::DateSetUtcMinutes { .. } => self.receiver_method(fx, e, "setUTCMinutes"),
+            Expr::DateSetUtcSeconds { .. } => self.receiver_method(fx, e, "setUTCSeconds"),
+            Expr::DateSetUtcMilliseconds { .. } => {
+                self.receiver_method(fx, e, "setUTCMilliseconds")
+            }
+            Expr::DateSetFullYear { .. } => self.receiver_method(fx, e, "setFullYear"),
+            Expr::DateSetMonth { .. } => self.receiver_method(fx, e, "setMonth"),
+            Expr::DateSetDate { .. } => self.receiver_method(fx, e, "setDate"),
+            Expr::DateSetHours { .. } => self.receiver_method(fx, e, "setHours"),
+            Expr::DateSetMinutes { .. } => self.receiver_method(fx, e, "setMinutes"),
+            Expr::DateSetSeconds { .. } => self.receiver_method(fx, e, "setSeconds"),
+            Expr::DateSetMilliseconds { .. } => self.receiver_method(fx, e, "setMilliseconds"),
+            Expr::DateSetTime { .. } => self.receiver_method(fx, e, "setTime"),
             // Static Date conversions do not read a receiver. parse
             // ToString's one operand; UTC ToNumber's at most 7 components.
             Expr::DateNow => self.prim_node(prim::NUM),
-            Expr::DateParse(x) => self.prim_op(fx, &[x], prim::NUM, "ToString of Date.parse text", Protocol::ToPrimitive),
-            Expr::DateUtc(xs) => self.prim_op(fx, &xs.iter().take(7).collect::<Vec<_>>(), prim::NUM, "ToNumber of Date.UTC component", Protocol::ToPrimitive),
+            Expr::DateParse(x) => self.prim_op(
+                fx,
+                &[x],
+                prim::NUM,
+                "ToString of Date.parse text",
+                Protocol::ToPrimitive,
+            ),
+            Expr::DateUtc(xs) => self.prim_op(
+                fx,
+                &xs.iter().take(7).collect::<Vec<_>>(),
+                prim::NUM,
+                "ToNumber of Date.UTC component",
+                Protocol::ToPrimitive,
+            ),
             // Set queries compare keys by SameValueZero; size reads an
             // internal slot and clear retains/calls no operand.
             Expr::SetHas { .. } => self.receiver_method(fx, e, "has"),
             Expr::SetDelete { .. } => self.receiver_method(fx, e, "delete"),
             Expr::SetClear(..) => self.receiver_method(fx, e, "clear"),
             Expr::SetSize(x) => {
-                let recv = self.expr(fx, x); let a = self.m.atom("size");
+                let recv = self.expr(fx, x);
+                let a = self.m.atom("size");
                 self.load(recv, Key::Named(a))
             }
             // Every Math function returns a Number (ECMA-262 Math).
@@ -571,7 +588,13 @@ impl<'a> Gen<'a> {
                 let s = self.expr(fx, s);
                 let it = self.iterate(s);
                 let r = self.m.reason("ToNumber of a spread Math operand");
-                self.m.cons(it, Cons::Implicit { reason: r, proto: Protocol::ToPrimitive });
+                self.m.cons(
+                    it,
+                    Cons::Implicit {
+                        reason: r,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
                 self.prim_node(prim::NUM)
             }
             // ECMA-262 23.1.3.16 / .17 / .20: the receiver's `length` and
@@ -597,9 +620,19 @@ impl<'a> Gen<'a> {
                 let _ = self.expr(fx, value);
                 let _ = self.elem_load(a);
                 if let Some(fi) = from_index {
-                    let _ = self.prim_op(fx, &[fi.as_ref()], prim::NUM, "fromIndex", Protocol::ToPrimitive);
+                    let _ = self.prim_op(
+                        fx,
+                        &[fi.as_ref()],
+                        prim::NUM,
+                        "fromIndex",
+                        Protocol::ToPrimitive,
+                    );
                 }
-                let p = if matches!(e, Expr::ArrayIncludes { .. }) { prim::BOOL } else { prim::NUM };
+                let p = if matches!(e, Expr::ArrayIncludes { .. }) {
+                    prim::BOOL
+                } else {
+                    prim::NUM
+                };
                 self.prim_node(p)
             }
             Expr::BigIntCoerce(..) => self.prim_kids(
@@ -622,11 +655,23 @@ impl<'a> Gen<'a> {
             Expr::ArrayJoin { array, separator } => {
                 let a = self.expr(fx, array);
                 if let Some(sep) = separator {
-                    let _ = self.prim_op(fx, &[sep.as_ref()], prim::STR, "array join operand", Protocol::ToPrimitive);
+                    let _ = self.prim_op(
+                        fx,
+                        &[sep.as_ref()],
+                        prim::STR,
+                        "array join operand",
+                        Protocol::ToPrimitive,
+                    );
                 }
                 let el = self.elem_load(a);
                 let r = self.m.reason("array join operand");
-                self.m.cons(el, Cons::Implicit { reason: r, proto: Protocol::ToPrimitive });
+                self.m.cons(
+                    el,
+                    Cons::Implicit {
+                        reason: r,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
                 self.prim_node(prim::STR)
             }
             Expr::ObjectIs(..)
@@ -934,21 +979,55 @@ impl<'a> Gen<'a> {
             | Expr::WebAssemblyInstantiate { .. }
             | Expr::WebAssemblyCallExport { .. } => self.fail_closed(fx, e, "WebAssembly"),
             // Web helper algorithms live beside this exhaustive routing match.
-            Expr::TextEncoderNew | Expr::TextDecoderNew { .. } | Expr::TextEncoderEncode(..)
-            | Expr::TextEncoderEncodeInto { .. } | Expr::TextDecoderDecode { .. } | Expr::TextDecoderEncoding(..) | Expr::TextDecoderFatal(..) | Expr::TextDecoderIgnoreBom(..)
-            | Expr::UrlInstanceToString(..) | Expr::UrlInstanceToJSON(..) | Expr::UrlSearchParamsGet { .. }
-            | Expr::UrlSearchParamsGetAll { .. } | Expr::UrlSearchParamsHas { .. } | Expr::UrlSearchParamsSet { .. }
-            | Expr::UrlSearchParamsAppend { .. } | Expr::UrlSearchParamsDelete { .. } | Expr::UrlSearchParamsToString(..)
-            | Expr::UrlSearchParamsSort(..) | Expr::UrlSearchParamsEntries(..) | Expr::UrlSearchParamsKeys(..)
-            | Expr::UrlSearchParamsValues(..) | Expr::UrlSearchParamsForEach { .. } | Expr::UrlSearchParamsMissingArgs { .. }
-            | Expr::UrlGetHref(..) | Expr::UrlGetPathname(..) | Expr::UrlGetProtocol(..)
-            | Expr::UrlGetHost(..) | Expr::UrlGetHostname(..) | Expr::UrlGetPort(..)
-            | Expr::UrlGetSearch(..) | Expr::UrlGetHash(..) | Expr::UrlGetOrigin(..)
-            | Expr::UrlGetSearchParams(..) | Expr::UrlSetPathname { .. } | Expr::UrlSetSearch { .. }
-            | Expr::UrlSetHash { .. } | Expr::UrlSetProtocol { .. } | Expr::UrlSetHostname { .. }
-            | Expr::UrlSetPort { .. } | Expr::UrlSetUsername { .. } | Expr::UrlSetPassword { .. }
-            | Expr::UrlSetHref { .. } | Expr::UrlNew { .. } | Expr::UrlSearchParamsNew(..) | Expr::UrlPatternNew { .. }
-            | Expr::UrlParse(..) | Expr::UrlParseWithBase { .. } | Expr::UrlCanParse(..) | Expr::UrlCanParseWithBase { .. } => self.web_expr(fx, e),
+            Expr::TextEncoderNew
+            | Expr::TextDecoderNew { .. }
+            | Expr::TextEncoderEncode(..)
+            | Expr::TextEncoderEncodeInto { .. }
+            | Expr::TextDecoderDecode { .. }
+            | Expr::TextDecoderEncoding(..)
+            | Expr::TextDecoderFatal(..)
+            | Expr::TextDecoderIgnoreBom(..)
+            | Expr::UrlInstanceToString(..)
+            | Expr::UrlInstanceToJSON(..)
+            | Expr::UrlSearchParamsGet { .. }
+            | Expr::UrlSearchParamsGetAll { .. }
+            | Expr::UrlSearchParamsHas { .. }
+            | Expr::UrlSearchParamsSet { .. }
+            | Expr::UrlSearchParamsAppend { .. }
+            | Expr::UrlSearchParamsDelete { .. }
+            | Expr::UrlSearchParamsToString(..)
+            | Expr::UrlSearchParamsSort(..)
+            | Expr::UrlSearchParamsEntries(..)
+            | Expr::UrlSearchParamsKeys(..)
+            | Expr::UrlSearchParamsValues(..)
+            | Expr::UrlSearchParamsForEach { .. }
+            | Expr::UrlSearchParamsMissingArgs { .. }
+            | Expr::UrlGetHref(..)
+            | Expr::UrlGetPathname(..)
+            | Expr::UrlGetProtocol(..)
+            | Expr::UrlGetHost(..)
+            | Expr::UrlGetHostname(..)
+            | Expr::UrlGetPort(..)
+            | Expr::UrlGetSearch(..)
+            | Expr::UrlGetHash(..)
+            | Expr::UrlGetOrigin(..)
+            | Expr::UrlGetSearchParams(..)
+            | Expr::UrlSetPathname { .. }
+            | Expr::UrlSetSearch { .. }
+            | Expr::UrlSetHash { .. }
+            | Expr::UrlSetProtocol { .. }
+            | Expr::UrlSetHostname { .. }
+            | Expr::UrlSetPort { .. }
+            | Expr::UrlSetUsername { .. }
+            | Expr::UrlSetPassword { .. }
+            | Expr::UrlSetHref { .. }
+            | Expr::UrlNew { .. }
+            | Expr::UrlSearchParamsNew(..)
+            | Expr::UrlPatternNew { .. }
+            | Expr::UrlParse(..)
+            | Expr::UrlParseWithBase { .. }
+            | Expr::UrlCanParse(..)
+            | Expr::UrlCanParseWithBase { .. } => self.web_expr(fx, e),
             Expr::BufferFrom { .. }
             | Expr::BufferAlloc { .. }
             | Expr::BufferAllocUnsafe(..)
@@ -979,7 +1058,9 @@ impl<'a> Gen<'a> {
                 self.m.add_prim(fa, prim::NUM);
                 n
             }
-            Expr::Uint8ArrayNew(..) | Expr::Uint8ArrayFrom(..) | Expr::TypedArrayNew { .. } => self.typed_array_new(fx, e),
+            Expr::Uint8ArrayNew(..) | Expr::Uint8ArrayFrom(..) | Expr::TypedArrayNew { .. } => {
+                self.typed_array_new(fx, e)
+            }
             Expr::BufferFromArrayBuffer { .. }
             | Expr::BufferSlice { .. }
             | Expr::BufferConcat(..)

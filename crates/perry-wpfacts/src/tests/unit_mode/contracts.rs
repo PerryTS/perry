@@ -326,8 +326,11 @@ pub(super) fn a_broken_namespace_field_function_resolves_only_the_units_that_see
     // node for that key (`virt_store`), which the marker's reads take as its
     // own field: two such nodes (two keys) in each of the three rounds that
     // solve `a` -> [765, 1105, 962, 42]. Helper protocols (builtin helper arms
-    // read their operands by protocol instead of escaping them) -> the pin.
-    assert_eq!(pf.round_work, [767, 1102, 959, 42], "{:?}", pf.units);
+    // read their operands by protocol instead of escaping them) -> [767,
+    // 1102, 959, 42]. A load from a closed receiver marker adds no absence
+    // `undefined` (+2 in each round) and takes what the marker gives through
+    // a `Cons::Defined` rule (+4) -> the pin.
+    assert_eq!(pf.round_work, [773, 1108, 965, 42], "{:?}", pf.units);
 }
 
 #[test]

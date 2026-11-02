@@ -65,7 +65,11 @@ impl Model {
     /// on a builtin prototype or through ⊤ (`reshaped_keys`), where a setter
     /// or a read-only value would intercept the store that makes the key.
     pub(crate) fn shadows(&self, t: Tok, a: Atom) -> bool {
-        if t == TOP || self.reshaped_any || self.reshaped_keys.contains(&a) || self.objproto_accessor {
+        if t == TOP
+            || self.reshaped_any
+            || self.reshaped_keys.contains(&a)
+            || self.objproto_accessor
+        {
             return false;
         }
         let top = self.top_reshaped_any || self.top_reshaped_keys.contains(&a);
@@ -76,9 +80,7 @@ impl Model {
             // Instances of these classes made in another unit may have
             // escaped there, unseen here: a delete or defineProperty
             // through ⊤ revokes the key on them.
-            return !top
-                && !classes.is_empty()
-                && classes.iter().all(|&p| self.class_holds(p, a));
+            return !top && !classes.is_empty() && classes.iter().all(|&p| self.class_holds(p, a));
         }
         match self.tmpl_of(t) {
             Some(tm) => {
@@ -351,51 +353,68 @@ impl Model {
             return;
         }
         // An absent key reads `undefined`: only a definite birth key of a
-        // fact unit is known to be present.
-        let present = match (key, self.tmpl_of(t)) {
-            (Key::Named(a), Some(tm)) => {
-                let sure = self.tmpls[tm as usize].kind.is_fact_unit()
-                    && !self.keys_unsure.contains(&tm)
-                    && (self.tmpls[tm as usize].definite.contains(&a) || self.spread_sure(tm, a));
-                if sure && self.present_seen.insert((tm, a, dst)) {
-                    self.present_reads.entry(tm).or_default().push((a, dst));
+        // fact unit is known to be present. A closed marker holds no value
+        // of its own: every value its parameter can hold is beside it, and
+        // each of those reads its own absence (CHB3), so the marker adds
+        // none (as `judge` skips it). Only a parameter marker's own
+        // closedness (`closed_param`): it settles nothing and never turns
+        // off, while an argument marker's depends on members that may still
+        // join after this load (CHB5).
+        let closed = self.closed_param(t);
+        let present = closed
+            || match (key, self.tmpl_of(t)) {
+                (Key::Named(a), Some(tm)) => {
+                    let sure = self.tmpls[tm as usize].kind.is_fact_unit()
+                        && !self.keys_unsure.contains(&tm)
+                        && (self.tmpls[tm as usize].definite.contains(&a)
+                            || self.spread_sure(tm, a));
+                    if sure && self.present_seen.insert((tm, a, dst)) {
+                        self.present_reads.entry(tm).or_default().push((a, dst));
+                    }
+                    sure
                 }
-                sure
-            }
-            _ => false,
-        };
-        // A class private field read is guarded by its brand: a receiver
-        // without the element throws first, so the read never sees the key
-        // absent (no `undefined` for absence), and the element is the
-        // object's own (ECMA-262 PrivateGet): no prototype is consulted.
+                _ => false,
+            };
+        // A class private field (`Model::private_atom`) is never read
+        // absent: its class's guard throws on an object without it first
+        // (ECMA-262 PrivateGet).
         let private = matches!(key, Key::Named(a) if self.is_private_atom(a));
         if !present && !private {
             self.add_prim(dst, prim::UNDEF);
         }
+        // What a closed marker's own load gives (its classes' chain through
+        // `virt_load`, its keyed reach) carries no `undefined` either: the
+        // values beside it read their own (CHB3).
+        let own = |m: &mut Self, src: NodeId| match closed {
+            true => m.defined_from(src, dst),
+            false => m.edge(src, dst),
+        };
         match key {
             // A method key on a published receiver finds the class chain's
             // value, not the receiver's unknown own field (DECISIONS 59).
             Key::Named(a) => match self.virt_load(t, a) {
                 Some(v) => {
-                    self.edge(v, dst);
+                    own(self, v);
                     // A key another unit's subclass defines: a read finds an
                     // unknown own value (only a call through the receiver
                     // is that subclass's method, `virt_call`, DECISIONS 97).
                     if !self.virt_overriders(t, a).is_empty() {
                         let f = self.field(t, a);
-                        self.edge(f, dst);
+                        own(self, f);
                     }
                 }
                 None => {
                     let f = self.field(t, a);
-                    self.edge(f, dst);
+                    own(self, f);
                 }
             },
             Key::Any => {
                 let all = self.all_fields(t);
-                self.edge(all, dst);
+                own(self, all);
             }
         }
+        // A private field is the object's own: its read consults no
+        // prototype and no accessor (ECMA-262 PrivateGet).
         if private {
             return;
         }
@@ -448,9 +467,7 @@ impl Model {
             // A rule on the chain node, not an edge into a relay: an
             // observation node feeds only observation nodes (`edge`), and
             // `sum_skip` applies that to this rule by its `dst`.
-            if self.defined_done.insert((cv, dst)) {
-                self.cons(cv, Cons::Defined { dst });
-            }
+            self.defined_from(cv, dst);
         } else {
             self.edge(cv, dst);
         }
@@ -728,8 +745,20 @@ impl Model {
     pub(crate) fn is_builtin_proto(&self, q: Tok) -> bool {
         matches!(
             self.toks[q as usize],
-            TokKind::ObjectProto | TokKind::NativeProto(_) | TokKind::Builtin(_) | TokKind::BuiltinFn
+            TokKind::ObjectProto
+                | TokKind::NativeProto(_)
+                | TokKind::Builtin(_)
+                | TokKind::BuiltinFn
         )
+    }
+
+    /// dst ⊇ `src`'s values without `undefined`: a rule on `src`, not an
+    /// edge into a relay (an observation node feeds only observation nodes,
+    /// `edge`; `sum_skip` applies that to this rule by its `dst`).
+    pub(crate) fn defined_from(&mut self, src: NodeId, dst: NodeId) {
+        if self.defined_done.insert((src, dst)) {
+            self.cons(src, Cons::Defined { dst });
+        }
     }
 
     /// The node whose values reach `dst` without `undefined` (`Cons::Defined`):

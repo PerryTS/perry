@@ -29,6 +29,11 @@ pub struct CtorPhase {
     pub assigned_order: Vec<String>,
     /// Keys definitely assigned before any observation.
     pub definite: Vec<String>,
+    /// Keys the constructor body itself stores on every exit path before
+    /// any observation. A declared field (`x: T;`) defines `undefined` at
+    /// field-init time: that makes its key present (`definite`), not its
+    /// `undefined` unobservable; only a store here does.
+    pub stored: Vec<String>,
     /// Named fields defined after `this` may have been observed (an earlier
     /// value, or their own, leaked it): an observer can find them absent.
     pub late_fields: Vec<String>,
@@ -60,10 +65,20 @@ pub fn analyze(c: &Class) -> CtorPhase {
         })
         .collect();
     let methods: BTreeSet<String> = c.methods.iter().map(|m| m.name.clone()).collect();
-    match &c.constructor {
-        Some(ctor) => analyze_body(&fields, methods, &ctor.params, &ctor.body),
-        None => analyze_body(&fields, methods, &[], &[]),
-    }
+    let (params, body): (&[perry_hir::Param], &[Stmt]) = match &c.constructor {
+        Some(ctor) => (&ctor.params, &ctor.body),
+        None => (&[], &[]),
+    };
+    let mut ph = analyze_body(&fields, methods.clone(), params, body);
+    // The same walk with only initialized fields holding a value: a key a
+    // path leaves at its declared `undefined` is no `stored` key (a read of
+    // it before the store closes the phase there: fewer keys, never more).
+    let valued: Vec<(&Option<Expr>, Option<&str>)> = fields
+        .iter()
+        .map(|&(init, named)| (init, named.filter(|_| init.is_some())))
+        .collect();
+    ph.stored = analyze_body(&valued, methods, params, body).definite;
+    ph
 }
 
 /// The construction phase of a constructor-function body (`new f()`).

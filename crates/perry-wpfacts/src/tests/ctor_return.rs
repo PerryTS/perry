@@ -25,7 +25,11 @@ fn proven(pf: &ProgramFacts, key: &str) -> usize {
 fn check(src: &str, instance: bool) {
     let (pu, pw) = (units(src), facts(src));
     let (u, w) = (proven(&pu, "x"), proven(&pw, "x"));
-    assert!(u <= w, "per unit proves {u} > whole {w}\n{}", pu.dump_text());
+    assert!(
+        u <= w,
+        "per unit proves {u} > whole {w}\n{}",
+        pu.dump_text()
+    );
     assert_eq!(u > 0, instance, "per unit: {u} proven\n{}", pu.dump_text());
 }
 
@@ -124,7 +128,10 @@ fn two(lib: &str, main: &str) -> (ProgramFacts, ProgramFacts) {
         .collect();
     let list: Vec<(String, &perry_hir::Module)> = h.iter().map(|(p, m)| (p.clone(), m)).collect();
     let cfg = FactsConfig::default();
-    (crate::compute_units(&list, &cfg), crate::compute(&list, &cfg))
+    (
+        crate::compute_units(&list, &cfg),
+        crate::compute(&list, &cfg),
+    )
 }
 
 /// The reader's `new` of another unit's constructor: per unit proves `x`
@@ -132,7 +139,11 @@ fn two(lib: &str, main: &str) -> (ProgramFacts, ProgramFacts) {
 fn check_two(lib: &str, main: &str, instance: bool) {
     let (pu, pw) = two(lib, main);
     let (u, w) = (proven(&pu, "x"), proven(&pw, "x"));
-    assert!(u <= w, "per unit proves {u} > whole {w}\n{}", pu.dump_text());
+    assert!(
+        u <= w,
+        "per unit proves {u} > whole {w}\n{}",
+        pu.dump_text()
+    );
     assert_eq!(u > 0, instance, "per unit: {u} proven\n{}", pu.dump_text());
 }
 

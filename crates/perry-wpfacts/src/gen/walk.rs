@@ -583,11 +583,14 @@ impl<'a> Gen<'a> {
             fn_ctor: false,
         };
         let inst = self.m.tok(TokKind::Obj(tm, NO_CTX));
+        // A declared field's `undefined` is unobservable only when the
+        // constructor body stores the key on every path first (`stored`; its
+        // key being present from birth, `definite`, is not enough).
         let ctor_definite: Vec<String> = self
             .ctor_phase
             .get(&tm)
             .filter(|ph| !ph.parent_leaks)
-            .map(|ph| ph.definite.clone())
+            .map(|ph| ph.stored.clone())
             .unwrap_or_default();
         for f in &c.fields {
             let site = self.store_site(mi, fi, format!("field {}", f.name), Some(tm), true);

@@ -50,7 +50,11 @@ fn a_field_array_push_of_an_unknown_value_refuses() {
     );
     for pf in [facts(&src), units(&src)] {
         for k in ["a", "b"] {
-            assert!(verdicts(&pf, k).iter().all(|v| !v.starts_with("T0")), "{k}\n{}", pf.dump_text());
+            assert!(
+                verdicts(&pf, k).iter().all(|v| !v.starts_with("T0")),
+                "{k}\n{}",
+                pf.dump_text()
+            );
         }
     }
 }

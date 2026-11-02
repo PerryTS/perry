@@ -152,7 +152,13 @@ impl<'a> Gen<'a> {
     /// conditional whose branches are such sets, or a constant binding
     /// initialized by one (`const k = w ? "a" : "b"`). Each is a named store.
     pub(crate) fn const_key_set(&mut self, mi: u32, e: &Expr) -> Option<Vec<String>> {
-        fn go(g: &mut crate::gen::Gen, mi: u32, e: &Expr, depth: u32, out: &mut Vec<String>) -> bool {
+        fn go(
+            g: &mut crate::gen::Gen,
+            mi: u32,
+            e: &Expr,
+            depth: u32,
+            out: &mut Vec<String>,
+        ) -> bool {
             if depth > 8 {
                 return false;
             }

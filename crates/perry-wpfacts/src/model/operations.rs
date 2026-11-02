@@ -98,7 +98,10 @@ impl Model {
             if matches!(name, None | Some("next" | "return")) {
                 first(&mut close, r);
             }
-            if matches!(name, None | Some(crate::builtins::WK_ITERATOR | "__proto__")) {
+            if matches!(
+                name,
+                None | Some(crate::builtins::WK_ITERATOR | "__proto__")
+            ) {
                 first(&mut member, r);
             }
         }
@@ -107,7 +110,8 @@ impl Model {
                 return Some(r);
             };
             let n = &self.nodes[k as usize];
-            (n.dropped || !n.pts.is_empty() || n.prim & (prim::STR | prim::SYMBOL) != 0).then_some(r)
+            (n.dropped || !n.pts.is_empty() || n.prim & (prim::STR | prim::SYMBOL) != 0)
+                .then_some(r)
         });
         let mut member = member
             .or(self.array_member_write)
@@ -1165,18 +1169,24 @@ impl Model {
     /// parameter of a run method (DECISIONS 148). The marker only records
     /// the uses for its contract.
     pub(crate) fn closed_marker(&self, t: Tok) -> bool {
-        self.is_marker(t)
-            && self.marker_members(t).iter().all(|x| {
-                self.param_marker.get(x).is_some_and(|&(f, i)| {
-                    self.closed_params.contains_key(&f)
-                        || (i == u32::MAX && self.this_args.contains_key(&f))
-                        || (i != u32::MAX
-                            && self
-                                .method_described(f)
-                                .and_then(|d| d.get(i as usize))
-                                .is_some_and(|&d| d))
-                })
-            })
+        self.is_marker(t) && self.marker_members(t).iter().all(|&x| self.closed_param(x))
+    }
+
+    /// A parameter marker (or its reach) standing for a parameter whose
+    /// callers' values are beside it (`closed_marker` for one member). It
+    /// asks only `t`'s own parameter, so it settles no member sets, and it
+    /// can only turn on during a solve (`published_this` grows): unlike an
+    /// argument marker's, whose later members may not be closed.
+    pub(crate) fn closed_param(&self, t: Tok) -> bool {
+        self.param_marker.get(&t).is_some_and(|&(f, i)| {
+            self.closed_params.contains_key(&f)
+                || (i == u32::MAX && self.this_args.contains_key(&f))
+                || (i != u32::MAX
+                    && self
+                        .method_described(f)
+                        .and_then(|d| d.get(i as usize))
+                        .is_some_and(|&d| d))
+        })
     }
 
     /// A parameter marker or an argument marker (DECISIONS 44).

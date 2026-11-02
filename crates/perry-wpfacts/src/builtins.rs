@@ -14,8 +14,8 @@ mod members;
 mod native_protocol;
 pub(crate) mod string_methods;
 pub(crate) mod typed_array_methods;
-use collections::{array_method, bobj_method, function_method, iterate};
 pub(crate) use collections::array_species;
+use collections::{array_method, bobj_method, function_method, iterate};
 pub(crate) use collections::{WK_ITERATOR, WK_PREFIX};
 use members::{Family, Mem};
 pub use native_protocol::{
@@ -774,10 +774,14 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             m.add_prim(dst, prim::UNDEF)
         }
         TokKind::Builtin(ns) => match name.as_deref() {
-            Some("@@__perry_wk_species") if matches!(ns, BuiltinNs::TypedArray | BuiltinNs::ArrayBuffer) => {
+            Some("@@__perry_wk_species")
+                if matches!(ns, BuiltinNs::TypedArray | BuiltinNs::ArrayBuffer) =>
+            {
                 m.add_tok(dst, t);
                 let Key::Named(a) = key else { unreachable!() };
-                if !intrinsic_miss(m, a, NativeMiss::Load(dst)) { opaque_member(m, dst); }
+                if !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
+                    opaque_member(m, dst);
+                }
             }
             Some("prototype") => {
                 let op = m.tok(TokKind::ObjectProto);
@@ -889,7 +893,9 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                         let ctor = m.tok(TokKind::Builtin(BuiltinNs::TypedArray));
                         m.add_tok(dst, ctor);
                         let Key::Named(a) = key else { unreachable!() };
-                        if !intrinsic_miss(m, a, NativeMiss::Load(dst)) { opaque_member(m, dst); }
+                        if !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
+                            opaque_member(m, dst);
+                        }
                     }
                     (_, Some("buffer")) if what == "TypedArray" => {
                         // B1: the backing buffer is observed (it can be
@@ -1024,6 +1030,10 @@ pub fn chain_load(m: &mut Model, of: Tok, q: Tok, key: Key, dst: NodeId) {
 /// f()`, `extends <value>`, `Object.create(p)`, whose seed is no prototype
 /// it has) or a class's. A builtin prototype given as a value later adds ⊤
 /// to the chain (`Cons::ProtoGiven`).
+pub(crate) fn is_collection(what: &str) -> bool {
+    members::bobj_family(what) == Family::Collection
+}
+
 fn seed_family(m: &Model, t: Tok) -> Option<Family> {
     match &m.toks[t as usize] {
         TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
@@ -1272,7 +1282,10 @@ fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
             TmplKind::Arr { .. } => true,
             TmplKind::BObj { what, .. } => {
                 members::bobj_family(what) != Family::Opaque
-                    || matches!(*what, "Date" | "TypedArray" | "URL" | "URLSearchParams" | "TextCodec" | "Timer")
+                    || matches!(
+                        *what,
+                        "Date" | "TypedArray" | "URL" | "URLSearchParams" | "TextCodec" | "Timer"
+                    )
                     || (*what == "RegExp"
                         && name.as_deref().is_some_and(|n| {
                             string_methods::regexp_described(n) || collections::regexp_species(n)
@@ -1396,7 +1409,13 @@ fn object_proto_own_call(m: &mut Model, own: crate::model::ProtoOwn, call: CallI
         let c = m.calls[call as usize].clone();
         let r = m.reason("ToPropertyKey");
         for &k in c.args.iter().take(1).chain(c.spread.iter()) {
-            m.cons(k, Cons::Implicit { reason: r, proto: Protocol::ToPrimitive });
+            m.cons(
+                k,
+                Cons::Implicit {
+                    reason: r,
+                    proto: Protocol::ToPrimitive,
+                },
+            );
         }
     }
     ret_prim(m, call, prim::BOOL);
@@ -1542,29 +1561,56 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
         }
         (BuiltinNs::Other, "setTimeout" | "setInterval" | "setImmediate" | "queueMicrotask") => {
             let c = m.calls[call as usize].clone();
-            if !c.spread.is_empty() { return unknown_method(m, call, "spread timer arguments"); }
+            if !c.spread.is_empty() {
+                return unknown_method(m, call, "spread timer arguments");
+            }
             // HTML timers: ToLong(timeout); callback receives precisely
             // extra arguments, with the global this. Node uses the Timeout
             // as this, so retain that host possibility beside the global.
             let timer = site_tmpl(m, call, "Timer");
-            let this = m.node_l("timer-this"); m.add_tok(this, timer);
-            let global = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis)); m.add_tok(this, global);
+            let this = m.node_l("timer-this");
+            m.add_tok(this, timer);
+            let global = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+            m.add_tok(this, global);
             let timed = matches!(name, "setTimeout" | "setInterval");
-            if timed { if let Some(&delay) = c.args.get(1) { string_methods::to_prim(m, delay, "timer timeout ToNumber"); } }
+            if timed {
+                if let Some(&delay) = c.args.get(1) {
+                    string_methods::to_prim(m, delay, "timer timeout ToNumber");
+                }
+            }
             if let Some(&cb) = c.args.first() {
-                let args = if name == "queueMicrotask" { vec![] } else { c.args.iter().skip(if timed { 2 } else { 1 }).copied().collect() };
-                let this_arg = if name == "queueMicrotask" { ThisArg::Undef } else { ThisArg::Node(this) };
+                let args = if name == "queueMicrotask" {
+                    vec![]
+                } else {
+                    c.args
+                        .iter()
+                        .skip(if timed { 2 } else { 1 })
+                        .copied()
+                        .collect()
+                };
+                let this_arg = if name == "queueMicrotask" {
+                    ThisArg::Undef
+                } else {
+                    ThisArg::Node(this)
+                };
                 let _ = collections::cb_call(m, call, cb, this_arg, args);
                 // HTML also accepts string handlers (ToString), which may
                 // run arbitrary script. Perry/Node only accept functions;
                 // no object handler is retained in either case.
             }
-            if name == "queueMicrotask" { ret_prim(m, call, prim::UNDEF); } else { ret_tok(m, call, timer); ret_prim(m, call, prim::NUM); }
+            if name == "queueMicrotask" {
+                ret_prim(m, call, prim::UNDEF);
+            } else {
+                ret_tok(m, call, timer);
+                ret_prim(m, call, prim::NUM);
+            }
         }
         (BuiltinNs::Other, "clearTimeout" | "clearInterval" | "clearImmediate") => {
             // HTML's long id conversion; Node's Timeout handle also has a
             // primitive id. Neither calls/retains surplus operands.
-            if let Some(id) = arg(m, call, 0) { string_methods::to_prim(m, id, "clear timer id ToNumber"); }
+            if let Some(id) = arg(m, call, 0) {
+                string_methods::to_prim(m, id, "clear timer id ToNumber");
+            }
             ret_prim(m, call, prim::UNDEF);
         }
         // The runtime's `gc([force])`: the argument is ignored.

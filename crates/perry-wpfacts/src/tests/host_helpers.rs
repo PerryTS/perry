@@ -24,12 +24,16 @@ fn proven(v: &Verdict) -> bool {
 
 #[test]
 fn path_parse_runs_to_string() {
-    let v = verdict("const o: any = new ValueOf(); try { path.parse(o); } catch (_e) {} console.log(g(o));");
+    let v = verdict(
+        "const o: any = new ValueOf(); try { path.parse(o); } catch (_e) {} console.log(g(o));",
+    );
     assert!(!proven(&v), "{v:?}");
 }
 
 #[test]
 fn random_bytes_of_a_plain_object_is_proven() {
-    let v = verdict("const o: any = new Svc(); try { crypto.randomBytes(o); } catch (_e) {} console.log(g(o));");
+    let v = verdict(
+        "const o: any = new Svc(); try { crypto.randomBytes(o); } catch (_e) {} console.log(g(o));",
+    );
     assert!(proven(&v), "{v:?}");
 }

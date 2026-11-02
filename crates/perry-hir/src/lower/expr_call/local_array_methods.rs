@@ -1115,7 +1115,10 @@ pub(super) fn try_local_array_methods(
                             .unwrap_or(false);
                         if is_text_encoder && matches!(method_name, "encode" | "encodeInto") {
                             return Ok(Ok(super::textencoder::encoder_call(
-                                Expr::LocalGet(array_id), method_name, args, call,
+                                Expr::LocalGet(array_id),
+                                method_name,
+                                args,
+                                call,
                             )));
                         }
 
