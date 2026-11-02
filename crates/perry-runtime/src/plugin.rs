@@ -500,7 +500,7 @@ pub extern "C" fn perry_plugin_register_hook_ex(
         let hooks = reg.hooks.entry(name).or_default();
         hooks.push(entry);
         // Keep sorted by priority (stable sort preserves registration order for equal priorities)
-        hooks.sort_by_key(|h| h.priority);
+        crate::cold_sort::sort_by_key(&mut hooks, |h| h.priority);
     }
     f64::from_bits(JSValue::undefined().bits())
 }
