@@ -1,0 +1,50 @@
+{
+  "date": "2026-11-02",
+  "platform": "Linux x86_64",
+  "checkSource": "5b6b69e811727408ecef71b2ffc6617cee048e24",
+  "nativeArtifactSource": "3a20cda3b54da93aeeb633a5dda491d226d20c16",
+  "witAndContractSource": "97f7991a023a8c4ef9c7a4788dd3bedc3712c3c7",
+  "installedPhasesPassed": 14,
+  "installedPlainP3Qualified": true,
+  "missingGuestRuntimeRejected": true,
+  "missingNativeComponentEngineRejected": true,
+  "installedGeneratedTypedPluginExecuted": true,
+  "installedCommandExecuted": true,
+  "outputPathContainsSpaces": true,
+  "buildFlagsEnvironmentUnmodified": true,
+  "actualP3Bundle": {
+    "files": [
+      {
+        "path": "libperry_runtime.a",
+        "sha256": "0fdcf3a13339e7a2902dc0b1d6df5674abb22746cdfd860fd9c836eec7481f06",
+        "size": 47748026
+      }
+    ],
+    "perry_version": "0.5.1663",
+    "schema_version": 1,
+    "source_revision": "3a20cda3b54da93aeeb633a5dda491d226d20c16",
+    "target_triple": "wasm32-wasip3"
+  },
+  "packageApiExecuted": true,
+  "packageCliExecuted": false,
+  "freshCurrentMainNativeBuildQualified": false,
+  "sourceBaseArchive": "wasi-030-v217-evidence.tar.gz",
+  "sourcePatchAppliesToThatArchiveSource": true,
+  "fullWasi030Qualified": false,
+  "evidence": {
+    "archive": {
+      "archive": "wasi-030-v220-evidence.tar.gz",
+      "indexedFiles": 97,
+      "bytes": 238839645,
+      "sha256": "1d8c1af5a7aae9e10d7d348da3cbb1d24fbcc9fec61d145f2b6eb61f7ffab07c"
+    },
+    "exactRegularFileSetVerified": true,
+    "allIndexedSizesAndHashesVerified": true,
+    "archiveExtracted": false
+  },
+  "limitations": [
+    "Frozen 3a20 native compiler/runtime archives, with 97f WIT tools and strict checker; current-main fresh platform builds have separate qualification",
+    "The runtime bundle package API executed; package CLI execution is assigned to the fresh platform/release jobs",
+    "macOS ARM64, Windows x64, actual release staging and complete current providers remain incomplete"
+  ]
+}
