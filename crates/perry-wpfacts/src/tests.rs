@@ -48,6 +48,7 @@ mod inherited_layout;
 mod interp_from_facts;
 mod layout_key;
 mod ledger;
+mod getter_contract;
 mod lit_accessor;
 mod named_accessors;
 mod native_fs;
