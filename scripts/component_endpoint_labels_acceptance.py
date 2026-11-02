@@ -15,6 +15,8 @@ def main():
     for name in ["perry", "wit", "native-runtime-dir", "plain-runtime", "runtime",
                  "wasi-sdk", "target-dir", "p3-contract", "output"]:
         parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument("--public-p3", action="store_true", help="use the public P3 generator and compose command")
+    parser.add_argument("--probe-dir", type=Path, help="reuse explicitly supplied independent probe binaries")
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
     out = args.output.resolve()
@@ -43,16 +45,21 @@ def main():
             print((out / (name + ".log")).read_text()[-5000:], flush=True)
             raise SystemExit(status or 1)
 
-    run("build-probes", ["cargo", "-Z", "checksum-freshness", "build", "--locked",
-        "--profile", "perry-dev", "-p", "perry-wit", "--example", "async_guest",
-        "--example", "actor_compose", "-p", "perry-component-host", "--example", "guest_endpoint_labels"])
+    if args.probe_dir is None:
+        command = ["cargo", "-Z", "checksum-freshness", "build", "--locked", "--profile", "perry-dev",
+                   "-p", "perry-component-host", "--example", "guest_endpoint_labels"]
+        if not args.public_p3:
+            command += ["-p", "perry-wit", "--example", "async_guest", "--example", "actor_compose"]
+        run("build-probes", command)
     binaries = out / "binaries"
     binaries.mkdir()
     suffix = ".exe" if os.name == "nt" else ""
     tools = {}
-    for name in ["async_guest", "actor_compose", "guest_endpoint_labels"]:
+    names = ["guest_endpoint_labels"] if args.public_p3 else ["async_guest", "actor_compose", "guest_endpoint_labels"]
+    source_binaries = args.probe_dir.resolve() if args.probe_dir else args.target_dir.resolve() / "perry-dev/examples"
+    for name in names:
         tools[name] = binaries / (name + suffix)
-        shutil.copy2(args.target_dir.resolve() / "perry-dev/examples" / (name + suffix), tools[name])
+        shutil.copy2(source_binaries / (name + suffix), tools[name])
     guest = out / "guest"
     guest.mkdir()
     fixture = root / "test-wasi/components/guest-endpoint-labels"
@@ -62,7 +69,9 @@ def main():
     run("public-guard", [args.wit.resolve(), "--guest-c", guest / "world.wit", out / "public"], expected=1)
     assert "future/stream guest values" in (out / "public-guard.log").read_text()
     assert not (out / "public").exists()
-    run("generate", [tools["async_guest"], guest / "world.wit", "plugin", generated])
+    generator = ([args.wit.resolve(), "--guest-c", "--target", "wasip3", guest / "world.wit", generated, "plugin"]
+                 if args.public_p3 else [tools["async_guest"], guest / "world.wit", "plugin", generated])
+    run("generate", generator)
     contract_line = next(line for line in (generated / "guest.ts").read_text().splitlines()
                          if line.startswith("const contract = "))
     manifest = json.loads(json.loads(contract_line.removeprefix("const contract = ").removesuffix(";")))
@@ -95,7 +104,8 @@ def main():
             "-Wl,--whole-archive", library, "-Wl,--no-whole-archive", archive, "-lsetjmp",
             "-Wl,--export=cabi_realloc", "-Wl,--stack-first", "-Wl,-z,stack-size=8388608",
             "-Wl,--fatal-warnings", "-o", producer])
-        run(kind + "-compose", [tools["actor_compose"], producer, facade,
+        composer = [args.wit.resolve(), "compose"] if args.public_p3 else [tools["actor_compose"]]
+        run(kind + "-compose", [*composer, producer, facade,
             generated / "perry_producer_facade.json", component])
         components.extend([producer, component])
         declaration = ["--interface-import=" + label for label in labels]
@@ -126,7 +136,8 @@ def main():
     (out / "artifact-identities.json").write_text(json.dumps(identities, indent=2) + "\n")
     (out / "result.json").write_text(json.dumps(dict(exitCode=0, fullWasi030Qualified=False,
         repeatedLabelInteropQualified=True, wrongOwnerRejectionsPerRun=32,
-        exactlyOnceDropsPerRun=12, source=subprocess.check_output(
+        exactlyOnceDropsPerRun=12, publicP3PipelineQualified=args.public_p3,
+        independentProbesReused=args.probe_dir is not None, source=subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()), indent=2) + "\n")
 
 

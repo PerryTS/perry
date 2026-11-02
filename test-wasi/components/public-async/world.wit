@@ -1,0 +1,5 @@
+package perry:public-async@1.0.0;
+
+world plugin {
+    export ping: async func(value: u32) -> u32;
+}
