@@ -332,7 +332,7 @@ DISPATCH_CHECKS = (
      r"crate::object::shapes::object_shape_record\(holder\)",
      "method holder resolves its current descriptor"),
     ("crates/perry-runtime/src/object/native_call_method/class_holder.rs", "chain_method_admitting",
-     r"key_position\(keys,\s*record\.logical_key_count\(\),\s*key\)",
+     r"key_position\((?:keys|record\.keys_view\(\)),\s*record\.logical_key_count\(\),\s*key\)",
      "method key lookup is bounded by descriptor count"),
     ("crates/perry-runtime/src/object/layout_probe.rs", "probe_get_at",
      r"let\s+word\s*=\s*\(\*obj\)\.parent_class_id;\s*let\s+r\s*=\s*record_of\(dir,\s*LayoutWord\(word\)\);",
@@ -612,7 +612,8 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     # body must emit the descriptor's keys edge without the deleted mirror.
     dispatch = function_body(layout_visit, "visit_gc_layout_slot_descriptors_inline")
     for callee in ("visit_object_layout_slots", "visit_gc_layout_slot_descriptors_generic"):
-        require_code(dispatch, rf"\b{callee}\s*\(header,\s*visit\)",
+        # A const-generic diagnostics turbofish is the same call.
+        require_code(dispatch, rf"\b{callee}\s*(?:::<[^>]*>\s*)?\(header,\s*visit\)",
                      f"layout dispatcher reaches {callee}")
     for body_name, body in (
         ("visit_gc_layout_slot_descriptors_generic",
@@ -678,7 +679,14 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     )
     # The structural publish body (charter step 5: `publish_object_shape_from`
     # delegates to it with an all-Any rep).
-    sync = function_body(shapes, "publish_object_shape_from_rep")
+    # `publish_object_shape_from_rep` now delegates to the newborn-aware
+    # `publish_object_shape_from_rep_born`, which owns the body.
+    require_code(
+        function_body(shapes, "publish_object_shape_from_rep"),
+        r"\bpublish_object_shape_from_rep_born\s*\(",
+        "publish_object_shape_from_rep delegates to its born body",
+    )
+    sync = function_body(shapes, "publish_object_shape_from_rep_born")
     # #9317 routed every post-birth ShapeId publication through
     # `stamp_object_shape_id_with_carrier_note`, which performs the header
     # write and then arms `old_carrier` for a promoted receiver. The header
@@ -725,11 +733,22 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     # keep the cache-carried versions an optimization cache can reinstall,
     # and must run AFTER the successor is stamped and armed (#9200's order).
     retirement = function_body(shapes, "retire_owned_shape_siblings")
+    # The family lookup is `ShapeTableInner::family_ids(node, keys)`: the
+    # canonical list's own family, else the owned-array index keyed by the
+    # array address. Either way it is scoped to this array.
     require_code(
         retirement,
-        r"families\s*\.\s*get\s*\(\s*&keys\s*\)",
+        r"\.\s*family_ids\s*\(\s*\w+\s*,\s*keys\s*\)",
         "keys-scoped descriptor lineage index",
     )
+    family_ids = function_body(shapes, "family_ids")
+    require_code(
+        family_ids,
+        r"families\s*\.\s*get\s*\(\s*&keys\s*\)",
+        "keys-scoped descriptor lineage index (family_ids)",
+    )
+    if re.search(r"slab\(\)\s*\.\s*for_each\s*\(", family_ids):
+        raise CensusError("descriptor family lookup scans the global descriptor table")
     if re.search(r"slab\(\)\s*\.\s*for_each\s*\(", retirement):
         raise CensusError("owned-history retirement scans the global descriptor table")
     require_code(
@@ -839,7 +858,13 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     # matcher points at a separately traced data cell, never an exotic receiver.
     for name in ("object_is_regular", "object_is_shaped"):
         body = function_body(object_mod, name)
-        require_code(body, r"obj_type\s*==\s*crate::gc::GC_TYPE_OBJECT", f"{name} GC kind")
+        # `gc_type_is_object!(t)` (perry-abi object_type.rs) expands to
+        # `t == GC_TYPE_OBJECT`, the same test.
+        require_code(
+            body,
+            r"obj_type\s*==\s*crate::gc::GC_TYPE_OBJECT|crate::gc_type_is_object!\(\s*\w+\.obj_type\s*\)",
+            f"{name} GC kind",
+        )
         if re.search(r"regex_header_has_magic|object_type", body):
             raise CensusError(f"{name} reintroduced an old payload discriminator")
     require_code(
