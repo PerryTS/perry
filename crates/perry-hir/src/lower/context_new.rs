@@ -231,6 +231,7 @@ impl LoweringContext {
             saw_global_this_expr: false,
             reassigned_top_level_identifiers: HashSet::new(),
             module_strict: false,
+            module_goal_is_module: false,
             strict_mode_stack: Vec::new(),
             is_external_module: false,
             assign_class_fields: false,

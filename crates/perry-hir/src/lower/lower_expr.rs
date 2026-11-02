@@ -252,27 +252,37 @@ fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> 
             // CommonJS, where top-level `this === module.exports === {}`).
             // Function/class/with bodies keep dynamic `Expr::This` semantics,
             // handled by codegen's ThisContext.
-            if ctx.scope_depth == 0
-                && ctx.current_class.is_none()
-                && ctx.with_env_stack.is_empty()
-                && !ctx.is_external_module
+            if ctx.scope_depth == 0 && ctx.current_class.is_none() && ctx.with_env_stack.is_empty()
             {
-                // Global-script mode (`PERRY_GLOBAL_SCRIPT_THIS`): a conforming
-                // Test262 host evaluates each assembled case as a *global
-                // script* (the Node oracle does this via
-                // `vm.runInThisContext`, #5346/#5511), where top-level `this`
-                // is `globalThis`, not a CJS exports object. Opt-in only: the
-                // default stays CJS-`{}` so standalone builds still match
-                // `node --experimental-strip-types`. (#5579 global prop-desc
-                // cluster — `verifyProperty(this, "decodeURI", ...)`.)
-                if global_script_this_enabled() {
-                    // #5833: a top-level `this` read is just as much a global-
-                    // object reference as the literal `globalThis` token — see
-                    // `saw_global_this_expr`'s doc comment.
-                    ctx.saw_global_this_expr = true;
-                    return Ok(Expr::GlobalThisExpr);
+                // #13558: an ES module's top-level `this` is `undefined`
+                // (ECMA-262 §16.2.1.6.4 — a Module Environment Record's
+                // [[ThisValue]] starts as undefined), not the CJS exports
+                // stand-in. Checked before the global-script opt-in below: a
+                // `.mjs`/`"type":"module"`/`import`-bearing source is a
+                // module whatever host evaluates it, so Test262's global-script
+                // mode must not turn its top-level `this` into `globalThis`
+                // (language/module-code/eval-this.js).
+                if ctx.module_goal_is_module {
+                    return Ok(Expr::Undefined);
                 }
-                return Ok(Expr::ModuleTopThis);
+                if !ctx.is_external_module {
+                    // Global-script mode (`PERRY_GLOBAL_SCRIPT_THIS`): a conforming
+                    // Test262 host evaluates each assembled case as a *global
+                    // script* (the Node oracle does this via
+                    // `vm.runInThisContext`, #5346/#5511), where top-level `this`
+                    // is `globalThis`, not a CJS exports object. Opt-in only: the
+                    // default stays CJS-`{}` so standalone builds still match
+                    // `node --experimental-strip-types`. (#5579 global prop-desc
+                    // cluster — `verifyProperty(this, "decodeURI", ...)`.)
+                    if global_script_this_enabled() {
+                        // #5833: a top-level `this` read is just as much a global-
+                        // object reference as the literal `globalThis` token — see
+                        // `saw_global_this_expr`'s doc comment.
+                        ctx.saw_global_this_expr = true;
+                        return Ok(Expr::GlobalThisExpr);
+                    }
+                    return Ok(Expr::ModuleTopThis);
+                }
             }
             Ok(Expr::This)
         }
