@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2027 entries across 112 modules
+// Coverage: 2026 entries across 112 modules
 
 type PerryI8 = number & { readonly __perryI8?: never };
 type PerryI16 = number & { readonly __perryI16?: never };
@@ -4263,8 +4263,6 @@ declare module "vm" {
 declare module "wasi" {
   /** stdlib */
   export class WASI { [key: string]: any; }
-  /** stdlib */
-  export const wasiImport: any;
   /** stdlib */
   export function WASI(...args: any[]): any;
 }

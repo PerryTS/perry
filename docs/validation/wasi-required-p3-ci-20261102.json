@@ -1,0 +1,33 @@
+{
+  "date": "2026-11-02",
+  "source": "e102ec1476ce36d1d9ef3780cf610d8278988884",
+  "workflowRun": "https://github.com/PerryTS/perry/actions/runs/41401094870",
+  "job": 125133086038,
+  "wasiExecutionConclusion": "success",
+  "overallWorkflowConclusion": "failure",
+  "jointNormalDevUnits": {
+    "runtimePassed": 6422,
+    "runtimeIgnored": 47,
+    "stdlibPassed": 299,
+    "stdlibIgnored": 1,
+    "testThreads": 1,
+    "debugAssertions": true
+  },
+  "extendedComponentStepPassed": true,
+  "componentStepCompletedUtc": "2026-11-02T09:16:27Z",
+  "qualifiedSteps": [
+    "P1/P2 standalone smoke, reference hosting, acceptance and Node probes",
+    "Complete assertion-enabled serial runtime/stdlib and host/WIT units",
+    "Typed P2 component interoperability",
+    "Fresh ordinary/instrumented P3 runtime graphs",
+    "Strict WASI 0.3.0 binary contract",
+    "Public P3 generation, composition, resource-future labels, typed native loading and moving GC",
+    "Compiled P3 commands"
+  ],
+  "fullWasi030Qualified": false,
+  "limitations": [
+    "The whole CI workflow is not green; other job outcomes retain their own classifications.",
+    "Subsequent module-export metadata and CRLF fixture corrections retain separate validation.",
+    "Windows platform qualification and shared-provider Response/ALS checks remain incomplete."
+  ]
+}

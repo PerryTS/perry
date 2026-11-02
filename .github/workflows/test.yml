@@ -6591,7 +6591,7 @@ jobs:
       - name: Execute both native host unit suites
         run: |
           set -euo pipefail
-          cargo test --locked -p perry-wasm-host -p perry-component-host --lib -- --test-threads=1 \
+          cargo test --locked -p perry-wasm-host -p perry-component-host --lib -- --test-threads=1 --nocapture \
             2>&1 | tee target/wasi-host-qualification/native-host-units.log
       - name: Qualify P1 parity and P2 component interoperability
         run: |

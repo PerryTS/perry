@@ -1,0 +1,43 @@
+{
+  "date": "2026-11-02",
+  "platform": "macOS ARM64",
+  "source": "5fd648816b4bed9bdc6bc89c3d1152ccd9ae3fcb",
+  "workflowRun": "https://github.com/PerryTS/perry/actions/runs/41387373853",
+  "nativeJob": 125097254333,
+  "artifactId": 13121142740,
+  "result": {
+    "exitCode": 0,
+    "installedPlainP3Qualified": true,
+    "generatedTypedNativeBindingsExecuted": true,
+    "runtimeSource": "5fd648816b4bed9bdc6bc89c3d1152ccd9ae3fcb",
+    "repositoryLibraryFallbackRejected": true,
+    "fullWasi030Qualified": false
+  },
+  "actualP3Bundle": {
+    "files": [
+      {
+        "path": "libperry_runtime.a",
+        "sha256": "cc41776dcaa37946d4ca76b8282987b8da0308393df6cdde57c0c6b216d4cb1a",
+        "size": 47763542
+      }
+    ],
+    "perry_version": "0.5.1663",
+    "schema_version": 1,
+    "source_revision": "5fd648816b4bed9bdc6bc89c3d1152ccd9ae3fcb",
+    "target_triple": "wasm32-wasip3"
+  },
+  "packageCliExecuted": true,
+  "installedCommandStdout": "installed P3 command\n",
+  "installedTypedPluginStdout": "PUBLIC ALL-ASYNC P3 PASS\n",
+  "localEvidence": {
+    "indexedFiles": 81,
+    "indexSha256": "8ff88fe49e77f08a6aea97768eafcdb1408e5314e6d45d396810d41c2f92bf41",
+    "guestArchiveSizeAndHashVerifiedAgainstBundleManifest": true
+  },
+  "fullWasi030Qualified": false,
+  "limitations": [
+    "Release staging only, at the recorded earlier source; current platform compatibility and full P3/provider runs retain separate results.",
+    "Windows x64 staging has not passed.",
+    "No publication or merge."
+  ]
+}

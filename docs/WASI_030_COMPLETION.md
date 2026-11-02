@@ -329,6 +329,13 @@ passed; macOS and Windows retain separate qualification outcomes. The first
 platform run exposed P1 warning/export/stdio gaps and a macOS legacy UDP send
 failure. Fixes are pushed and the three-platform rerun is in progress.
 
+The [extended required WASI job](validation/wasi-required-p3-ci-20261102.json)
+passes at `e102ec1476`, including the complete normal DEV joint units, public
+P3 components and compiled commands. The overall workflow remains red in
+other jobs. [macOS ARM64 release staging](validation/wasi-p3-release-stage-macos-20261102.json)
+also passes installed command/plugin execution at its recorded `5fd648816b`
+source. Windows and current shared-provider qualification remain open.
+
 | Requirement | Required evidence | Current state |
 | --- | --- | --- |
 | Canonical async imports and exports | Public generated components compose in both directions; overlapping calls, immediate/delayed completion, errors, post-return work and Store reuse | Recorded scalar/compound and synchronous-started import profiles qualify on Linux. The explicit public P3 CLI now qualifies repeated-label futures and an async-only component through typed native bindings. Broader public-profile and platform qualification remains |
@@ -339,8 +346,8 @@ failure. Fixes are pushed and the three-platform rerun is in progress.
 | Cross-language interoperability | Public Perry output composed with independent Rust and maintained-C components, including resources and future/stream payloads | Recorded scalar/compound, imported-resource and cross-export aliases execute on Linux. The maintained public P3 path now qualifies generated C/Perry/C resource futures with an independent Rust host, repeated labels and wrong-owner rejection. Wider value/platform coverage remains |
 | Runtime integration | Promise/nextTick task isolation, rejection identity, ALS, suspended-value tracing, teardown and positive moving-GC witnesses | Public ALS constructors/methods link from runtime alone; recorded Linux imports/exports and moving-GC profiles pass. Actual P3 libraries now preserve agent TLS across SDK tasks, including canonical WAIT/resume. The recorded synchronous-started import profile also qualifies ALS across interleaved native loans/exchanges and both moving modes. Shared-provider regression and wider platform/package coverage remain |
 | HTTP layouts | Current supported layouts and limitations explicitly tested; concurrent root handlers, nested/imported fallback, streaming bodies and cancellation | Linux supported layouts qualified; broader composition coverage open |
-| Platform and packaging | Current source-matched ordinary/instrumented artifacts and installed public tools run on Linux x86_64, macOS ARM64 and Windows x64 | Linux actual release staging now qualifies a fresh source-matched package CLI and installed P3 command/plugin execution, with missing-runtime/engine controls. macOS ARM64 and Windows x64 remain unqualified; the platform rerun includes the P1 and legacy UDP fixes |
-| Durable regression coverage | Required CI executes the advertised profiles and fails if the actual guest, cancellation or GC witness is absent | Required WASI wiring now includes public P3 components/commands and complete assertion-enabled serial runtime/stdlib units. The maintained public gate passes on Linux; actual execution of the extended required job is pending |
+| Platform and packaging | Current source-matched ordinary/instrumented artifacts and installed public tools run on Linux x86_64, macOS ARM64 and Windows x64 | Linux and macOS ARM64 release staging qualify source-matched package CLI and installed P3 command/plugin execution, with missing-runtime/engine controls. Windows x64 remains unqualified; current compatibility runs retain separate results |
+| Durable regression coverage | Required CI executes the advertised profiles and fails if the actual guest, cancellation or GC witness is absent | The extended required WASI job passes at e102ec1476, including public P3 components/commands and complete assertion-enabled serial runtime/stdlib units. Later namespace/CRLF fixture corrections require follow-up validation |
 | Dependency and compatibility invariants | No Tokio anywhere, existing P1/P2 profiles retained, coherent compiler/runtime/adapter ABI, no workspace version bump | Strict Tokio ban merged; verify every dependency and landing change |
 
 The finish line is every row verified on the current implementation, followed

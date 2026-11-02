@@ -1312,7 +1312,6 @@ pub(crate) const API_MANIFEST_PART_3: &[ApiEntry] = &[
     method("wasi", "start", true, Some("WASI")),
     method("wasi", "initialize", true, Some("WASI")),
     method("wasi", "finalizeBindings", true, Some("WASI")),
-    property("wasi", "wasiImport"),
     // --- node:vm ---
     // `vm.createContext([contextObject[, options]])` — the dispatch row in
     // `native_table/node_misc.rs` carries both, so the manifest must too or
