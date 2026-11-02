@@ -8,6 +8,8 @@ pub enum RuntimeLayoutTarget {
     Any,
     Windows,
     NonWindows,
+    LinuxGnu,
+    NonLinuxGnu,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -99,10 +101,13 @@ pub struct RuntimeLayoutFacts {
 impl RuntimeLayoutFacts {
     pub fn for_target(&self, triple: &str) -> Result<&RuntimeLayoutVariant, String> {
         let windows = triple.contains("windows");
+        let linux_gnu = triple.contains("linux-gnu");
         let mut variants = self.variants.iter().filter(|v| match v.target {
             RuntimeLayoutTarget::Any => true,
             RuntimeLayoutTarget::Windows => windows,
             RuntimeLayoutTarget::NonWindows => !windows,
+            RuntimeLayoutTarget::LinuxGnu => linux_gnu,
+            RuntimeLayoutTarget::NonLinuxGnu => !linux_gnu,
         });
         let value = variants
             .next()
@@ -122,6 +127,11 @@ impl RuntimeLayoutFacts {
                 != [
                     RuntimeLayoutTarget::Windows,
                     RuntimeLayoutTarget::NonWindows,
+                ]
+            && targets
+                != [
+                    RuntimeLayoutTarget::LinuxGnu,
+                    RuntimeLayoutTarget::NonLinuxGnu,
                 ]
         {
             return Err(format!(
