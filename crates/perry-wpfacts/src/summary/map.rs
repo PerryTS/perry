@@ -1,0 +1,393 @@
+//! Remapping a constraint or call site: the terms of a summary (slots, call templates) into nodes and back.
+
+use super::*;
+
+pub(super) fn is_slot(x: NodeId) -> bool {
+    x != NO_NODE && x & SLOT != 0
+}
+
+pub(super) fn act_map(
+    a: ChainAct,
+    n: &mut impl FnMut(NodeId) -> NodeId,
+    k: &mut impl FnMut(CallId) -> CallId,
+) -> ChainAct {
+    match a {
+        ChainAct::Load(x) => ChainAct::Load(n(x)),
+        ChainAct::Store(x) => ChainAct::Store(n(x)),
+        ChainAct::Call(c) => ChainAct::Call(k(c)),
+    }
+}
+
+/// Rename every node and call field of a constraint (every variant).
+pub fn map_cons(
+    c: &Cons,
+    mut n: impl FnMut(NodeId) -> NodeId,
+    mut k: impl FnMut(CallId) -> CallId,
+) -> Cons {
+    use Cons::*;
+    match *c {
+        Load { key, dst } => Load { key, dst: n(dst) },
+        OwnValues { dst } => OwnValues { dst: n(dst) },
+        CjsPublish { dst } => CjsPublish { dst: n(dst) },
+        Store { key, src, site } => Store {
+            key,
+            src: n(src),
+            site,
+        },
+        Call { call } => Call { call: k(call) },
+        CallThis { call, this } => CallThis {
+            call: k(call),
+            this,
+        },
+        New { call } => New { call: k(call) },
+        NewNamed { name, call } => NewNamed {
+            name,
+            call: k(call),
+        },
+        MCall { key, call } => MCall { key, call: k(call) },
+        Chain { origin, key, act } => Chain {
+            origin,
+            key,
+            act: act_map(act, &mut n, &mut k),
+        },
+        TopSink { reason } => TopSink { reason },
+        HandOver { reason, ctor, arg } => HandOver { reason, ctor, arg },
+        OwnOnly { f, dst } => OwnOnly { f, dst: n(dst) },
+        CallerValue { dst, reason } => CallerValue {
+            dst: n(dst),
+            reason,
+        },
+        StoreOut {
+            f,
+            dst,
+            reach,
+            via,
+            key,
+            reason,
+            at,
+            to,
+        } => StoreOut {
+            f,
+            dst,
+            reach,
+            via,
+            key,
+            reason,
+            at,
+            to,
+        },
+        ContractThis {
+            tmpl,
+            reason,
+            statics,
+            this,
+        } => ContractThis {
+            tmpl,
+            reason,
+            statics,
+            this,
+        },
+        OverrideThis { tmpl, key, reason } => OverrideThis { tmpl, key, reason },
+        Guard { test, from, dst } => Guard {
+            test,
+            from: n(from),
+            dst: n(dst),
+        },
+        Defined { dst } => Defined { dst: n(dst) },
+        NotNullish { dst } => NotNullish { dst: n(dst) },
+        TopIfAny { dst, from, reason } => TopIfAny {
+            dst: n(dst),
+            from: n(from),
+            reason,
+        },
+        Hard { kind, reason } => Hard { kind, reason },
+        DeleteKey { key, reason } => DeleteKey { key, reason },
+        AddsKeys => AddsKeys,
+        DefineKey { key, data, reason } => DefineKey { key, data, reason },
+        DefineAll {
+            o,
+            descs,
+            value,
+            site,
+            reason,
+        } => DefineAll {
+            o: n(o),
+            descs: n(descs),
+            value: n(value),
+            site,
+            reason,
+        },
+        DefineDesc {
+            o,
+            key,
+            site,
+            reason,
+        } => DefineDesc {
+            o: n(o),
+            key,
+            site,
+            reason,
+        },
+        Implicit { reason, proto } => Implicit { reason, proto },
+        CreateProto { reason } => CreateProto { reason },
+        ChainUnion {
+            key,
+            dst,
+            of,
+            builtin,
+        } => ChainUnion {
+            key,
+            dst: n(dst),
+            of,
+            builtin,
+        },
+        ProtoGiven { protos } => ProtoGiven { protos: n(protos) },
+        ParentGiven { of } => ParentGiven { of },
+        ProtoClosure { dst } => ProtoClosure { dst: n(dst) },
+        ProtoMethods { origin, key, call } => ProtoMethods {
+            origin,
+            key,
+            call: k(call),
+        },
+        AnyAccessors { origin, act } => AnyAccessors {
+            origin,
+            act: act_map(act, &mut n, &mut k),
+        },
+        PlainKey { origin, act } => PlainKey {
+            origin,
+            act: act_map(act, &mut n, &mut k),
+        },
+        StoreTopProto { origin, src } => StoreTopProto {
+            origin,
+            src: n(src),
+        },
+        Super { start, key, act } => Super {
+            start,
+            key,
+            act: act_map(act, &mut n, &mut k),
+        },
+        SuperCtor { class, call } => SuperCtor {
+            class,
+            call: k(call),
+        },
+        SuperCtorParent {
+            class,
+            call,
+            origin,
+        } => SuperCtorParent {
+            class,
+            call: k(call),
+            origin,
+        },
+        ThisFrom { recv } => ThisFrom { recv: n(recv) },
+        BirthField { key, src } => BirthField { key, src: n(src) },
+        Accessor {
+            holder,
+            key,
+            setter,
+        } => Accessor {
+            holder: n(holder),
+            key,
+            setter,
+        },
+        AccessorInstall { key, f, setter } => AccessorInstall { key, f, setter },
+        ProtoFrom { src } => ProtoFrom { src: n(src) },
+        ProtoOf { dst } => ProtoOf { dst: n(dst) },
+        ProtoValues { dst } => ProtoValues { dst: n(dst) },
+        IterNext { dst } => IterNext { dst: n(dst) },
+        NewTargetHard { reason } => NewTargetHard { reason },
+        IdxLoad { idx, dst } => IdxLoad {
+            idx: n(idx),
+            dst: n(dst),
+        },
+        IdxKey { obj, dst } => IdxKey { obj, dst: n(dst) },
+        IdxMCall { idx, call } => IdxMCall {
+            idx: n(idx),
+            call: k(call),
+        },
+        IdxKeyCall { obj, prim, call } => IdxKeyCall {
+            obj,
+            prim,
+            call: k(call),
+        },
+        ForInBody { obj, call } => ForInBody {
+            obj: n(obj),
+            call: k(call),
+        },
+        ForInKeys { ft, call } => ForInKeys { ft, call: k(call) },
+        DefineKeyed {
+            o,
+            reason,
+            accessor,
+        } => DefineKeyed {
+            o: n(o),
+            reason,
+            accessor,
+        },
+        StoreKeyed { o, src, site } => StoreKeyed {
+            o: n(o),
+            src: n(src),
+            site,
+        },
+        StoreIndexed { o, src, site } => StoreIndexed {
+            o: n(o),
+            src: n(src),
+            site,
+        },
+        AccessorKeyed { holder, f, setter } => AccessorKeyed {
+            holder: n(holder),
+            f: n(f),
+            setter,
+        },
+        Arith { dst } => Arith { dst: n(dst) },
+        Plus { str, num } => Plus {
+            str: n(str),
+            num: n(num),
+        },
+        ArrayLenArg { dst } => ArrayLenArg { dst: n(dst) },
+        ShareBuffer { ta } => ShareBuffer { ta },
+        ThisTo { origin } => ThisTo { origin },
+        CallArgs { call } => CallArgs { call: k(call) },
+        RetInto { call, run } => RetInto { call: k(call), run },
+        ArgInto { call, run, i } => ArgInto {
+            call: k(call),
+            run,
+            i,
+        },
+        Spread { into, site } => Spread {
+            into: n(into),
+            site,
+        },
+        SpreadFrom { src, site } => SpreadFrom { src, site },
+        ThisInst { call, ft } => ThisInst { call: k(call), ft },
+        BuiltinCallee => BuiltinCallee,
+        HolderStep { key, pass, stop } => HolderStep {
+            key,
+            pass: n(pass),
+            stop: n(stop),
+        },
+        VisitHolders { origin, key, act } => VisitHolders {
+            origin,
+            key,
+            act: act_map(act, &mut n, &mut k),
+        },
+        VisitStop { origin, key, act } => VisitStop {
+            origin,
+            key,
+            act: act_map(act, &mut n, &mut k),
+        },
+    }
+}
+
+pub fn map_call(c: &CallSite, mut n: impl FnMut(NodeId) -> NodeId) -> CallSite {
+    CallSite {
+        this: match c.this {
+            ThisArg::Node(x) => ThisArg::Node(n(x)),
+            ThisArg::Tok(t) => ThisArg::Tok(t),
+            ThisArg::Undef => ThisArg::Undef,
+        },
+        args: c.args.iter().map(|&x| n(x)).collect(),
+        spread: c.spread.iter().map(|&x| n(x)).collect(),
+        ret: n(c.ret),
+        site: c.site,
+    }
+}
+
+pub(super) fn cons_fields(c: &Cons) -> (Vec<NodeId>, Vec<CallId>) {
+    let mut ns = Vec::new();
+    let mut ks = Vec::new();
+    map_cons(
+        c,
+        |x| {
+            ns.push(x);
+            x
+        },
+        |k| {
+            ks.push(k);
+            k
+        },
+    );
+    (ns, ks)
+}
+
+pub(super) fn call_nodes(c: &CallSite) -> Vec<NodeId> {
+    let mut v = Vec::new();
+    map_call(c, |x| {
+        v.push(x);
+        x
+    });
+    v
+}
+
+/// The constraint kinds generation attaches to program nodes: the summary
+/// language. The solver's own relays are rebuilt by applying these.
+pub(super) fn gen_kind(c: &Cons) -> bool {
+    use Cons::*;
+    matches!(
+        c,
+        Load { .. }
+            | OwnValues { .. }
+            | CjsPublish { .. }
+            | Spread { .. }
+            | Store { .. }
+            | Call { .. }
+            | New { .. }
+            | NewNamed { .. }
+            | SuperCtor { .. }
+            | MCall { .. }
+            | TopSink { .. }
+            | HandOver { .. }
+            | ContractThis { .. }
+            | OverrideThis { .. }
+            | TopIfAny { .. }
+            | Guard { .. }
+            | NotNullish { .. }
+            | Hard { .. }
+            | DeleteKey { .. }
+            | DefineKey { .. }
+            | DefineAll { .. }
+            | AddsKeys
+            | Implicit { .. }
+            | IdxLoad { .. }
+            | IdxKey { .. }
+            | IdxMCall { .. }
+            | IdxKeyCall { .. }
+            | ForInBody { .. }
+            | DefineKeyed { .. }
+            | StoreKeyed { .. }
+            | StoreIndexed { .. }
+            | AccessorKeyed { .. }
+            | Arith { .. }
+            | Plus { .. }
+            | ArrayLenArg { .. }
+            | IterNext { .. }
+            | ProtoOf { .. }
+            | ThisFrom { .. }
+            | BirthField { .. }
+            | CreateProto { .. }
+            | NewTargetHard { .. }
+            | ShareBuffer { .. }
+            | Accessor { .. }
+            | ProtoFrom { .. }
+    )
+}
+
+/// Read rules: their only output is `dst`; per-token effects (getters,
+/// protocols) are the same for every call. (`Plus` has two outputs and is
+/// none here: it is never dropped as a dead read.)
+pub(super) fn read_dst(c: &Cons) -> Option<NodeId> {
+    use Cons::*;
+    match *c {
+        Load { dst, .. }
+        | OwnValues { dst }
+        | CjsPublish { dst }
+        | IdxLoad { dst, .. }
+        | IdxKey { dst, .. }
+        | Arith { dst }
+        | ArrayLenArg { dst }
+        | IterNext { dst }
+        | ProtoOf { dst }
+        | ProtoValues { dst } => Some(dst),
+        _ => None,
+    }
+}
