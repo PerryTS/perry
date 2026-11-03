@@ -84,6 +84,11 @@ const BUILTIN_NAMESPACES: &[&str] = &[
     "Symbol", "BigInt", "Atomics", "Intl", "Boolean",
 ];
 
+/// Pseudo-namespace of a store into the global object under a key that is not
+/// static (`globalThis[k] = v`, `Object.assign(globalThis, shims)`): it may
+/// rebind any namespace, so [`namespace_call_guarded`] holds (DEC 255).
+pub const GLOBAL_ANY_KEY: &str = "$global";
+
 /// Identifiers that name the global object.
 const GLOBAL_OBJECT_NAMES: &[&str] = &["globalThis", "global", "window", "self"];
 
@@ -287,11 +292,17 @@ impl Scanner<'_> {
         } else if is_global_object(target) {
             // `globalThis.console = {…}` replaces the whole namespace.
             // A dynamic key (`globalThis[k] = v`, `Object.assign(global,
-            // shims)`) is deliberately NOT read as "every namespace replaced":
-            // shim and bundle preludes install globals that way, and it would
-            // strip every Math/JSON/console fast path from those programs.
-            if let Some(n) = member.filter(|n| is_builtin_namespace(n)) {
-                self.add(n, None);
+            // shims)`) may name any namespace, but shim and bundle preludes
+            // install globals that way: reading it as "every namespace
+            // replaced" would strip every Math/JSON/console fast path. It
+            // records [`GLOBAL_ANY_KEY`] instead, and the namespace calls are
+            // GUARDED on `Pristine(ns)`, which the runtime's global-object
+            // store funnel sets for whichever writer rebinds the namespace
+            // (DEC 255).
+            match member {
+                Some(n) if is_builtin_namespace(&n) => self.add(n, None),
+                Some(_) => {}
+                None => self.add(GLOBAL_ANY_KEY.into(), None),
             }
         }
     }
@@ -568,12 +579,19 @@ pub fn namespace_member_patched(ns: &str, member: &str) -> bool {
     .unwrap_or(false)
 }
 
-/// May dynamic code replace a builtin namespace member or binding? Then a
+/// May something the scan cannot name replace a builtin namespace member or
+/// binding: dynamic code that reaches the global scope, or a program store
+/// into the global object under a non-static key ([`GLOBAL_ANY_KEY`])? Then a
 /// direct namespace call that binds its intrinsic is guarded by
 /// `Pristine(namespace)`, the shadow bit of the namespace's member holder
-/// (`Expr::NamespacePatched`), and takes the generic call when it is set.
+/// (`Expr::NamespacePatched`), and takes the generic call when it is set. The
+/// runtime sets the bit from the global object's store funnel, whoever writes.
 pub fn namespace_call_guarded() -> bool {
-    with_set(|s| s.dynamic_code_reach.disables_builtin_constants()).unwrap_or(false)
+    with_set(|s| {
+        s.dynamic_code_reach.disables_builtin_constants()
+            || s.contains(&(GLOBAL_ANY_KEY.to_string(), ANY_MEMBER.to_string()))
+    })
+    .unwrap_or(false)
 }
 
 /// Was a method named `member` written onto the prototype of a builtin whose
