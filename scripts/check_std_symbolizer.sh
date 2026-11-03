@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Fails if a runtime archive or a linked program defines any part of std's
-# symbolizer (std::backtrace_rs::symbolize::gimli on ELF/Mach-O, ::dbghelp on
-# Windows).
+# Fails if a runtime archive or a linked program defines std's DWARF
+# symbolizer (std::backtrace_rs::symbolize::gimli: gimli, addr2line,
+# miniz_oxide, object; the code std's `backtrace` feature adds).
 #
 # Every cargo build of this workspace compiles std from rust-src without its
 # `backtrace` feature (.cargo/config.toml [unstable]). The prebuilt std has
@@ -10,6 +10,12 @@
 # This check catches any build path that comes back to the prebuilt std: a
 # cargo invocation outside the workspace config, `--config` overrides, a
 # toolchain without rust-src that someone works around.
+#
+# Windows MSVC: std's symbolizer there is dbghelp (a system DLL), which std
+# compiles with or without the feature, in the prebuilt std and here alike;
+# the feature changes only whether a panic reaches it (here it cannot:
+# get_backtrace_style() is the constant None). So on MSVC this check reads
+# the archive (fail-closed) but has nothing to tell apart.
 #
 # Only std's own namespace is matched. perry-runtime uses gimli (eh_walker's
 # CFI reader), miniz_oxide and rustc-demangle itself, and wasmtime brings
@@ -29,7 +35,7 @@ if [ -z "$NM" ]; then
   echo "::error::check_std_symbolizer: llvm-nm not found (set LLVM_SYS_221_PREFIX)" >&2
   exit 2
 fi
-PATTERN='std::backtrace_rs::symbolize::(gimli|dbghelp)'
+PATTERN='std::backtrace_rs::symbolize::gimli'
 status=0
 for f in "$@"; do
   if [ ! -f "$f" ]; then
