@@ -238,8 +238,8 @@ pub(crate) use native_module_registry::nm_attach_lookup;
 pub(crate) use native_module_registry::nm_ctor_lookup;
 // Re-exported for submodule installers that delegate to a native module.
 pub(crate) use native_module_registry::{
-    js_install_global_value_surfaces, js_nm_install_module, js_nm_install_perf, js_nm_install_tls,
-    js_nm_install_util,
+    js_install_global_value_surfaces, js_nm_install_module, js_nm_install_perf,
+    js_nm_install_process, js_nm_install_tls, js_nm_install_util,
 };
 #[cfg(test)]
 pub(crate) use native_module_registry::{js_nm_install_events, js_nm_install_fs};
