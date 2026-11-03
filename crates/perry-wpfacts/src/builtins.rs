@@ -1078,6 +1078,26 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
                 ),
             }
         }
+        // Rule 12 as for `defineProperty`: `Object.defineProperties(o, map)`
+        // called as a value is the operation its intrinsic lowers to
+        // (`Expr::ObjectDefineProperties`): `Cons::DefineAll` of the map on
+        // the target, which it returns. The map is read, not handed over.
+        (BuiltinNs::Object, "defineProperties") => {
+            let c = m.calls[call as usize].clone();
+            match (c.args.first(), c.args.get(1)) {
+                (Some(&o), Some(&map)) if c.spread.is_empty() => {
+                    define_properties_value(m, o, map);
+                    m.edge(o, c.ret);
+                }
+                _ => unknown_method_proto(
+                    m,
+                    call,
+                    "argument of builtin Object.defineProperties",
+                    None,
+                    true,
+                ),
+            }
+        }
         (_, n) => unknown_method_proto(
             m,
             call,
@@ -1162,6 +1182,55 @@ fn define_property_value(m: &mut Model, o: NodeId, k: NodeId, d: NodeId, ns: Bui
             },
         );
     }
+}
+
+/// Rule 12: `Object.defineProperties(o, map)` called as a value, lowered
+/// as its intrinsic is (`Expr::ObjectDefineProperties`): a map of exactly
+/// known keys defines each key by its descriptor; any other map's own
+/// values are descriptors defined under a computed key (`Cons::DefineAll`).
+fn define_properties_value(m: &mut Model, o: NodeId, map: NodeId) {
+    let r = m.reason("E5 Object.defineProperties");
+    let descs = m.node_l("own-descriptors");
+    let va = m.atom("value");
+    let value = m.node_l("define-value");
+    m.cons(
+        descs,
+        Cons::Load {
+            key: Key::Named(va),
+            dst: value,
+        },
+    );
+    let site = m.anon_post_site("defineProperty");
+    let star = m.atom(crate::STAR_KEY);
+    for (name, setter) in [("get", false), ("set", true)] {
+        let a = m.atom(name);
+        let f = m.node_l("define-accessor");
+        m.cons(
+            descs,
+            Cons::Load {
+                key: Key::Named(a),
+                dst: f,
+            },
+        );
+        m.cons(
+            f,
+            Cons::Accessor {
+                holder: o,
+                key: star,
+                setter,
+            },
+        );
+    }
+    m.cons(
+        map,
+        Cons::DefineAll {
+            o,
+            descs,
+            value,
+            site,
+            reason: r,
+        },
+    );
 }
 
 pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
