@@ -1509,6 +1509,14 @@ pub(super) fn region_mapped(base: usize, len: usize) {
 
 pub(super) fn global_root(slot: usize) {
     let st = state();
+    // A slot registered again is one address linked into several modules
+    // (codegen registers a class-static global in its defining module and in
+    // every importer that names it). The registration is GC bookkeeping, not
+    // an access: the slot keeps its first owner, and the re-registering init
+    // neither initializes it (rule 2) nor owns it (the check run's poison).
+    if st.globals.contains(slot as u64) {
+        return;
+    }
     count_unwatched_root(st, slot);
     st.globals.insert(slot as u64);
     st.globals_log.push(slot);
