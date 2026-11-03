@@ -162,6 +162,13 @@ The importing module:
 {{#include ../../examples/language/modules/main.ts:imports}}
 ```
 
+Top-level `this` follows the module goal. In an ES module it is `undefined`,
+per ECMA-262 §16.2.1.6.4; Perry treats a file as an ES module when its extension
+or nearest `package.json` says so (`.mjs`, `.mts`, `"type": "module"`) or when
+the source itself has an `import`/`export` declaration. A CommonJS file keeps
+the CommonJS meaning: top-level `this` is the `module.exports` stand-in object
+(not `globalThis`).
+
 ## BigInt
 
 ```typescript

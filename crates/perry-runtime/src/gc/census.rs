@@ -234,7 +234,7 @@ fn census_pass1_if_armed_impl() {
             }
         }
     });
-    marked.sort_unstable();
+    crate::cold_sort::sort_by(&mut marked, |a, b| a.cmp(b));
     PASS1_MARKED.with(|p| *p.borrow_mut() = Some(marked));
 }
 
@@ -860,7 +860,7 @@ fn take_census(label: &str, pass1: Option<Vec<usize>>) {
         })
         .collect();
 
-    c.live_shape_ids.sort_unstable();
+    crate::cold_sort::sort_by(&mut c.live_shape_ids, |a, b| a.cmp(b));
     c.live_shape_ids.dedup();
     let mut side_rows = side_tables();
     side_rows.extend(crate::object::shapes::shape_table_liveness_census(

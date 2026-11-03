@@ -361,11 +361,9 @@ mod tests {
         // image walk and the per-image load-bias calculation.
         let sections = loaded_stack_map_sections().expect("inspect every loaded image");
         assert!(
-            sections
-                .iter()
-                .any(|section| section.len() >= 20
-                    && section[4..12] == map[4..12]
-                    && section[16..20] == map[16..20]),
+            sections.iter().any(|section| section.len() >= 20
+                && section[4..12] == map[4..12]
+                && section[16..20] == map[16..20]),
             "the later-loaded shared object's GC map was not discovered"
         );
         // v6: the decoded address is the section's mapped address plus the
@@ -569,8 +567,7 @@ mod tests {
     #[test]
     fn an_x19_base_round_trips_and_stays_fast_walkable() {
         let blob = super::super::lazy::test_blob(0x1000, 64, &[(0, vec![(19, -40)])]);
-        let index =
-            super::super::build_index_from_sections_lazy(vec![blob]);
+        let index = super::super::build_index_from_sections_lazy(vec![blob]);
         let matched = index.match_records(0x1000).expect("the record matches");
         let decoded = index.materialise(Some(&matched));
         assert_eq!(decoded.len(), 1);
@@ -600,8 +597,7 @@ mod tests {
     #[test]
     fn an_unsupported_base_register_is_not_fast_walkable() {
         let blob = super::super::lazy::test_blob(0x1000, 64, &[(0, vec![(5, -40)])]);
-        let index =
-            super::super::build_index_from_sections_lazy(vec![blob]);
+        let index = super::super::build_index_from_sections_lazy(vec![blob]);
         let matched = index.match_records(0x1000).expect("the record matches");
         let decoded = index.materialise(Some(&matched));
         assert_eq!(decoded[0].1[0].dwarf_reg, 5);
@@ -664,9 +660,11 @@ mod tests {
     #[test]
     fn zero_padding_between_entries_is_skipped() {
         let one = simple(0x1000, 0x10, -8);
-        let padded: &'static mut [u8] = Box::leak(vec![0u8; 2 * FUNCTION_ENTRY_BYTES].into_boxed_slice());
+        let padded: &'static mut [u8] =
+            Box::leak(vec![0u8; 2 * FUNCTION_ENTRY_BYTES].into_boxed_slice());
         padded[FUNCTION_ENTRY_BYTES..].copy_from_slice(one);
-        let shift = padded.as_ptr() as isize + FUNCTION_ENTRY_BYTES as isize - one.as_ptr() as isize;
+        let shift =
+            padded.as_ptr() as isize + FUNCTION_ENTRY_BYTES as isize - one.as_ptr() as isize;
         let at = FUNCTION_ENTRY_BYTES;
         let old = i32::from_le_bytes(padded[at + 12..at + 16].try_into().unwrap());
         padded[at + 12..at + 16]
@@ -699,8 +697,7 @@ mod tests {
             (0x1000, 32, vec![(0xffc, vec![(29, -8)])]),
             (0x2000, 32, vec![(0x40, vec![(29, -8)])]),
         ]);
-        let index =
-            super::super::build_index_from_sections_lazy(vec![blob]);
+        let index = super::super::build_index_from_sections_lazy(vec![blob]);
         // 0x2004 is 8 bytes past A's last safepoint but lives in B.
         assert!(
             index.match_records(0x2004).is_none(),
@@ -729,8 +726,7 @@ mod tests {
             (0x3000, 32, vec![(0x10, vec![(29, -8)])]),
             (0x3000, 32, vec![(0x10, vec![(29, -16)])]),
         ]);
-        let index =
-            super::super::build_index_from_sections_lazy(vec![blob]);
+        let index = super::super::build_index_from_sections_lazy(vec![blob]);
         let matched = index.match_records(0x3010).expect("both entries match");
         let mut offsets: Vec<i32> = index
             .materialise(Some(&matched))
@@ -758,8 +754,7 @@ mod tests {
             (0x4000, 32, vec![(0x100, vec![(29, -8)])]),
             (0x4080, 32, Vec::new()),
         ]);
-        let index =
-            super::super::build_index_from_sections_lazy(vec![blob]);
+        let index = super::super::build_index_from_sections_lazy(vec![blob]);
         assert_eq!(
             index.functions.len(),
             1,
@@ -822,12 +817,18 @@ mod tests {
             (0x1000, 32, vec![(0x00, vec![(29, -8)])]),
             (0x2000, 32, vec![(0x00, vec![(29, -8)])]),
         ]);
-        assert!(parse_gc_map(good, 0).is_some(), "the unmodified section must parse");
+        assert!(
+            parse_gc_map(good, 0).is_some(),
+            "the unmodified section must parse"
+        );
         let len = u32::from_le_bytes(good[16..20].try_into().unwrap());
         for wrong in [len + 1, len - 1] {
             let bytes = corruptible(good);
             bytes[16..20].copy_from_slice(&wrong.to_le_bytes());
-            assert!(parse_gc_map(bytes, 0).is_none(), "records_len {wrong} (true {len})");
+            assert!(
+                parse_gc_map(bytes, 0).is_none(),
+                "records_len {wrong} (true {len})"
+            );
         }
     }
 
@@ -1178,11 +1179,7 @@ mod cross_check_tests {
             (0x1000, 32, vec![(0x00, vec![(29, -8)])]),
             (0x2000, 48, vec![(0x00, vec![(31, 40), (31, 56)])]),
         ]);
-        build_index_from_sections(
-            vec![blob],
-            &[0],
-            IndexMode::CrossCheck,
-        )
+        build_index_from_sections(vec![blob], &[0], IndexMode::CrossCheck)
     }
 
     /// The oracle agrees with the lazy index on an unmodified map — otherwise

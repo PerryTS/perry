@@ -1243,7 +1243,7 @@ pub extern "C" fn js_os_cpus() -> *mut ArrayHeader {
         let mut values = [times.user, times.nice, times.sys, times.idle, times.irq];
         unsafe {
             crate::object::runtime_layouts::perry_build_runtime_record(
-                std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_F412_0),
+                crate::object::runtime_layouts::RECORD_F412_0::desc(),
                 values.as_mut_ptr(),
             )
         }

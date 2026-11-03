@@ -238,6 +238,9 @@ listener sequence before closing. Repeated registrations preserve listener order
 and callback deduplication; non-callable callback values are ignored. This does
 not change queued-message flushing, endpoint close ordering or runtime-only
 fallback close-event support.
+Worker event-loop utilization and CPU usage share the existing perf-hooks and
+process result layouts. Worker ownership keeps those result births in sparse
+realms without retaining unrelated diagnostic layouts.
 Other worker API parity gaps remain.
 
 ## Next Steps
@@ -245,3 +248,7 @@ Other worker API parity gaps remain.
 - [parallelMap Reference](parallel-map.md) — detailed API and performance tips
 - [parallelFilter Reference](parallel-filter.md) — parallel array filtering
 - [spawn Reference](spawn.md) — background threads and Promise integration
+
+Compiled file and eval Worker entries are independent module roots during both
+module pruning and activation analysis. Dynamic imports owned by those Worker
+entries remain reachable; unrelated dead dynamic imports are still pruned.

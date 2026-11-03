@@ -287,7 +287,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
             // SAFETY: a registered runtime descriptor with the default prototype.
             unsafe {
                 crate::realm_decl! { birth crate::object::layout_desc::alloc_layout_prototype(
-                    std::ptr::addr_of!(crate::object::runtime_layouts::FUNCTION_PROTOTYPE),
+                    crate::object::runtime_layouts::FUNCTION_PROTOTYPE::desc(),
                     0,
                 ); realm { Function.prototype, members = { length = 0.0, attrs = configurable; name = "", attrs = configurable; arguments = accessor(get = "Function.prototype.arguments.<get>", set = "Function.prototype.arguments.<get>"); caller = accessor(get = "Function.prototype.arguments.<get>", set = "Function.prototype.arguments.<get>"); constructor; apply; bind; call; toString; [Symbol.hasInstance], attrs = writable | enumerable | configurable; }; } }
             }

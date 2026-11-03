@@ -23,8 +23,6 @@ pub(crate) unsafe fn lazy_get_rooted(array: *mut LazyArrayHeader, index: u32) ->
 // enter these arms; their empty behavior keeps generic array dispatch inert.
 static LAZY_GET: Hook<unsafe fn(*mut LazyArrayHeader, u32) -> JSValue> = Hook::empty();
 static LAZY_SET: Hook<unsafe fn(*mut LazyArrayHeader, f64, f64, i32) -> f64> = Hook::empty();
-static RESOLVE_ARRAY: Hook<unsafe fn(*mut LazyArrayHeader) -> *mut crate::array::ArrayHeader> =
-    Hook::empty();
 
 pub(crate) unsafe fn lazy_get(array: *mut LazyArrayHeader, index: u32) -> JSValue {
     LAZY_GET
@@ -41,18 +39,9 @@ pub(crate) unsafe fn set_lazy_index(
         .get()
         .map_or(value, |set| set(array, index, value, strict))
 }
-pub(crate) unsafe fn resolve_materialized_array(
-    array: *mut LazyArrayHeader,
-) -> *mut crate::array::ArrayHeader {
-    RESOLVE_ARRAY
-        .get()
-        .map_or_else(std::ptr::null_mut, |resolve| resolve(array))
-}
 static PARSE_RESULT: Hook<unsafe fn(*const StringHeader) -> Result<JSValue, f64>> = Hook::empty();
 static PARSE: Hook<unsafe extern "C" fn(*const StringHeader) -> JSValue> = Hook::empty();
 static NOTE_CARRIERS: Hook<fn()> = Hook::empty();
-static UNMATERIALIZED: Hook<unsafe fn(usize) -> bool> = Hook::empty();
-static NOTE_MATERIALIZED: Hook<fn()> = Hook::empty();
 static AFTER_COLD_READ: Hook<unsafe fn(*mut LazyArrayHeader, bool, bool)> = Hook::empty();
 
 pub(crate) unsafe fn parse_result(text: *const StringHeader) -> Result<JSValue, f64> {
@@ -71,14 +60,6 @@ pub(crate) fn note_carriers() {
         note();
     }
 }
-pub(crate) unsafe fn unmaterialized(address: usize) -> bool {
-    UNMATERIALIZED.get().is_some_and(|probe| probe(address))
-}
-pub(crate) fn note_materialized() {
-    if let Some(note) = NOTE_MATERIALIZED.get() {
-        note();
-    }
-}
 pub(crate) unsafe fn after_cold_read(array: *mut LazyArrayHeader, flip: bool, completed: bool) {
     if let Some(note) = AFTER_COLD_READ.get() {
         note(array, flip, completed);
@@ -87,14 +68,11 @@ pub(crate) unsafe fn after_cold_read(array: *mut LazyArrayHeader, flip: bool, co
 pub(crate) fn install() {
     LAZY_GET.set(crate::json_tape::lazy_get);
     LAZY_SET.set(crate::json_tape::set_lazy_index);
-    RESOLVE_ARRAY.set(crate::json_tape::resolve_materialized_array);
     FORCE.set(crate::json_tape::force_materialize_lazy_impl);
     COLD_GET.set(crate::json_tape::lazy_get_rooted_impl);
     PARSE.set(crate::json::js_json_parse);
     PARSE_RESULT.set(crate::json::js_json_parse_result);
     NOTE_CARRIERS.set(crate::json::note_parse_shape_cache_carriers);
-    UNMATERIALIZED.set(crate::json::traversal_feedback::lazy_array_unmaterialized);
-    NOTE_MATERIALIZED.set(crate::json::traversal_feedback::note_compiled_materialization);
     AFTER_COLD_READ.set(crate::json::traversal_feedback::after_cold_read);
 }
 pub(crate) fn register_roots() {

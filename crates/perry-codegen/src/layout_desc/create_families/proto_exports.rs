@@ -2,8 +2,8 @@
 //! prototype images may read, installed by the driver before module codegen.
 //! Owns its own state (`PROGRAM_PROTO_EXPORTS`), so nothing outside this module
 //! locks or replaces it directly.
-use super::*;
 use super::models::exportable;
+use super::*;
 
 static PROGRAM_PROTO_EXPORTS: RwLock<Option<Arc<ProtoExports>>> = RwLock::new(None);
 

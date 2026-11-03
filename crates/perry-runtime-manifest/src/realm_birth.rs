@@ -364,9 +364,9 @@ pub(super) fn birth_at(
     source: &str,
 ) -> Result<Value, String> {
     let expression = info::text(expression);
-    if expression
-        .starts_with("crate::object::layout_desc::alloc_layout_prototype(std::ptr::addr_of!(")
-    {
+    if expression.starts_with(
+        "crate::object::layout_desc::alloc_layout_prototype(crate::object::runtime_layouts::",
+    ) {
         return super::layout_birth::prototype(&expression, entry);
     }
     if expression.starts_with("module_set_value(") && expression.ends_with(')') {
@@ -387,8 +387,8 @@ pub(super) fn birth_at(
             }
             let layout = info::text(args[0]);
             let layout = layout
-                .strip_prefix("std::ptr::addr_of!(crate::object::runtime_layouts::")
-                .and_then(|s| s.strip_suffix(')'))
+                .strip_prefix("crate::object::runtime_layouts::")
+                .and_then(|s| s.strip_suffix("::desc()"))
                 .ok_or("runtime record requires its declared layout")?;
             return super::record::birth(&super::tokens(&format!("builder,{layout}"))?, entry);
         }
@@ -397,7 +397,7 @@ pub(super) fn birth_at(
         return super::module_namespace::birth(entry);
     }
     if expression.starts_with(
-        "crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(crate::object::runtime_layouts::",
+        "crate::object::layout_desc::perry_alloc_layout(crate::object::runtime_layouts::",
     ) {
         return super::layout_birth::ordinary(&expression, entry);
     }
@@ -811,7 +811,29 @@ mod tests {
         .unwrap();
         assert!(d.get("prototype").is_none());
         assert_eq!(d.get("births").unwrap().encode(), "[]");
-        assert_eq!(d.get("header").unwrap().get("reserved"), Some(&number(64)));
+        // A null [[Prototype]] is the shape's identity (#13666): the birth
+        // records it, and the header word is the one an ordinary birth of
+        // the same members gets. No header bit stands for it.
+        let header = d.get("header").unwrap();
+        assert_eq!(
+            header.get("@birth").unwrap().get("null_prototype"),
+            Some(&Value::Bool(true))
+        );
+        let ordinary = birth(
+            &tokens("crate::object::js_object_alloc(0,0)").unwrap(),
+            &tokens(r#""node:module._cache", kind=namespace, members={}"#).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            ordinary.get("prototype").and_then(Value::string),
+            Some("Object.prototype")
+        );
+        let ordinary = ordinary.get("header").unwrap();
+        assert_eq!(
+            ordinary.get("@birth").unwrap().get("null_prototype"),
+            Some(&Value::Bool(false))
+        );
+        assert_eq!(header.get("reserved"), ordinary.get("reserved"));
         let d = birth(
             &tokens("js_object_alloc(0,limit)").unwrap(),
             &tokens("process.env, kind=exotic, members={}").unwrap(),

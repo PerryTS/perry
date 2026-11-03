@@ -309,8 +309,6 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         I64,
         &[I32, DOUBLE, DOUBLE],
     );
-    // `new assert.AssertionError({...})` — Expr::NewDynamic special-case.
-    module.declare_function("js_assert_assertion_error_ctor", DOUBLE, &[DOUBLE]);
     // `new assert.Assert(options)` — Expr::NewDynamic special-case.
     module.declare_function("js_assert_assert_ctor", DOUBLE, &[DOUBLE]);
     // Issue #462: thrown by PropertyGet codegen on undefined/null receiver.

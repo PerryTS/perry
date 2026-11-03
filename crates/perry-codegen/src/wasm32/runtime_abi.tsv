@@ -1913,7 +1913,6 @@ js_i32_box_get	i32s	ptr
 js_i32_box_release	void	ptr
 js_i32_box_scope_release	void	ptr
 js_i32_box_set	void	ptr,i32s
-js_ic_diag_note_hit	void	i64,i32s
 js_immediate_has_pending	i32s	
 js_import_meta_resolve	f64	f64,f64,f64
 js_import_meta_resolve_value	f64	f64

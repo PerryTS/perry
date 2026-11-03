@@ -307,7 +307,7 @@ fn base_name(p: &ParsedLocale) -> String {
         s.push_str(r);
     }
     let mut variants = p.variants.clone();
-    variants.sort();
+    crate::cold_sort::sort_by(&mut variants, |a, b| a.cmp(b));
     for v in variants {
         s.push('-');
         s.push_str(&v);
@@ -321,7 +321,7 @@ fn full_string(p: &ParsedLocale) -> String {
     if !p.attributes.is_empty() || !p.keywords.is_empty() {
         let mut unicode = String::new();
         let mut attrs = p.attributes.clone();
-        attrs.sort();
+        crate::cold_sort::sort_by(&mut attrs, |a, b| a.cmp(b));
         for a in attrs {
             if !unicode.is_empty() {
                 unicode.push('-');
@@ -343,7 +343,7 @@ fn full_string(p: &ParsedLocale) -> String {
     // All extensions are sorted by singleton with private-use (`x`) last. The
     // Unicode extension is not privileged: `en-a-bar-u-baz-x-private` keeps
     // `a` before `u` (Locale/constructor-tag.js).
-    extensions.sort_by_key(|(c, _)| if *c == 'x' { '{' } else { *c });
+    crate::cold_sort::sort_by_key(&mut extensions, |(c, _)| if *c == 'x' { '{' } else { *c });
     for (c, content) in extensions {
         s.push('-');
         s.push(c);

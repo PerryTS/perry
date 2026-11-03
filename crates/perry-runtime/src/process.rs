@@ -487,7 +487,7 @@ pub(crate) fn node_platform_name() -> &'static str {
 pub(crate) fn empty_object_value() -> f64 {
     module_object_value(unsafe {
         crate::realm_decl! { birth crate::object::runtime_layouts::perry_build_runtime_record(
-            std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_PCHECKED031),
+            crate::object::runtime_layouts::RECORD_PCHECKED031::desc(),
             std::ptr::NonNull::<f64>::dangling().as_ptr(),
         ); realm { process._events, kind = namespace, members = { }; "node:process._events", kind = namespace, members = { }; } }
     })

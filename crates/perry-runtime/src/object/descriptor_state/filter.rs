@@ -80,14 +80,9 @@ pub(super) unsafe fn descriptor_route(owner: usize) -> DescriptorRoute {
         {
             Some(crate::gc::GC_TYPE_OBJECT) => resolve_object_holder(owner) as *mut ObjectHeader,
             Some(crate::gc::GC_TYPE_ARRAY) => return array_route(owner as *const ArrayHeader),
-            Some(crate::gc::GC_TYPE_LAZY_ARRAY) => {
-                let array = (*(owner as *const crate::json_tape::LazyArrayHeader)).materialized;
-                if array.is_null() {
-                    std::ptr::null_mut()
-                } else {
-                    return array_route(array);
-                }
-            }
+            // Still lazy: no own properties (a write materializes it into
+            // the ordinary array first).
+            Some(crate::gc::GC_TYPE_LAZY_ARRAY) => std::ptr::null_mut(),
             Some(
                 crate::gc::GC_TYPE_ERROR
                 | crate::gc::GC_TYPE_MAP

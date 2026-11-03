@@ -257,10 +257,7 @@ mod tests {
     }
 
     fn read_navigator(getter: *mut crate::closure::ClosureHeader) -> f64 {
-        super::global_this_navigator_getter_thunk(
-            getter,
-            crate::closure::JsThis::UNDEFINED,
-        )
+        super::global_this_navigator_getter_thunk(getter, crate::closure::JsThis::UNDEFINED)
     }
 
     fn language_is(navigator: f64, expected: &str) -> bool {

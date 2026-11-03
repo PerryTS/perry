@@ -20,6 +20,7 @@ name = "perry"
 path = "src/main.rs"
 
 [dependencies]
+perry-abi.workspace = true
 perry-cli-support = { workspace = true, features = ["logger", "progress", "dotenv", "utc"] }
 perry-parser.workspace = true
 swc_common.workspace = true

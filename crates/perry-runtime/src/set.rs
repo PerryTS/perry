@@ -12,9 +12,19 @@ use std::ptr;
 mod index;
 #[cfg(test)]
 pub(crate) use index::{
-    test_erase_key_identity, test_index_buckets, test_key_identity,
+    test_erase_key_identity, test_has_index, test_index_buckets, test_key_identity,
     test_snapshot as test_index_snapshot,
 };
+
+#[cfg(test)]
+pub(crate) fn test_set_value(set: *mut SetHeader) -> f64 {
+    crate::value::js_nanbox_pointer(set as i64)
+}
+
+#[cfg(test)]
+pub(crate) fn test_string_value(string: *const StringHeader) -> f64 {
+    boxed_heap_string_value(string)
+}
 
 crate::perry_thread_local! {
     /// Backing Sets whose `forEach` raw-index walk is currently in flight.
@@ -1315,7 +1325,12 @@ unsafe fn readonly_set_has_structural(receiver: f64, value: f64) -> f64 {
     // calling the selected value, including a borrowed builtin method.
     let refreshed_receiver = receiver_handle.get_nanbox_f64();
     let refreshed_value = value_handle.get_nanbox_f64();
-    crate::object::method_call::js_method_call_value(method, refreshed_receiver, &refreshed_value, 1)
+    crate::object::method_call::js_method_call_value(
+        method,
+        refreshed_receiver,
+        &refreshed_value,
+        1,
+    )
 }
 
 #[no_mangle]

@@ -452,9 +452,15 @@ fn object_set_static_prototype_impl_with(
                 crate::object::builtin_proto::note_array_prototype_write(obj_ptr, "relink");
             }
         } else if obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
-            // A lazy JSON array's materialized storage is a SEPARATE
-            // `GC_TYPE_ARRAY` allocation that does not carry the owner's bit,
-            // so keep the conservative process-wide invalidation here.
+            // A lazy JSON array becomes the ordinary array in place, keeping
+            // `GC_ARRAY_CUSTOM_PROTO` (`flip_to_array`), so it carries the
+            // per-array bit like any array. The process-wide invalidation
+            // stays: the lazy value itself never takes the inline guards.
+            unsafe {
+                let header =
+                    crate::gc::header_from_trusted_user_ptr(obj_ptr as *const u8).cast_mut();
+                (*header)._reserved |= crate::gc::GC_ARRAY_CUSTOM_PROTO;
+            }
             ARRAY_TARGET_PROTO_RECORDED.store(true, Ordering::Relaxed);
             crate::array::invalidate_array_index_fast_path();
             crate::object::builtin_proto::note_array_custom_proto();
@@ -1281,41 +1287,40 @@ mod tests {
     }
 }
 
-
-    /// `default_object_prototype_for_owner` reads a receiver's header, so it is
-    /// only valid for a heap address. The guard it relies on (`main`'s
-    /// `is_plausible_heap_addr`, added in 9ae3fec0a1) is exactly this: every
-    /// small-handle id must be rejected *before* the header read, and an
-    /// ordinary object must still resolve the default prototype. Nothing in the
-    /// suite asserted the rejection until this test, because the fix for it
-    /// landed without a regression.
-    #[test]
-    fn default_owner_prototype_rejects_handles_and_keeps_ordinary_objects() {
-        use crate::value::addr_class::*;
-        for address in [
-            0,
-            1,
-            COMMON_HANDLE_BAND_END - 1,
-            FETCH_HANDLE_BAND_START,
-            FETCH_HANDLE_BAND_END - 1,
-            PROXY_ID_BAND_START,
-            STREAM_ID_BAND_START,
-            HANDLE_BAND_MAX - 1,
-        ] {
-            assert_eq!(
-                unsafe { default_object_prototype_for_owner(address) },
-                None,
-                "handle {address:#x} must not be read as an object header"
-            );
-        }
-        let _no_move = crate::gc::GcSuppressScope::new();
-        let expected = default_object_prototype_bits().expect("Object prototype");
-        let object = crate::object::js_object_alloc(0, 0);
+/// `default_object_prototype_for_owner` reads a receiver's header, so it is
+/// only valid for a heap address. The guard it relies on (`main`'s
+/// `is_plausible_heap_addr`, added in 9ae3fec0a1) is exactly this: every
+/// small-handle id must be rejected *before* the header read, and an
+/// ordinary object must still resolve the default prototype. Nothing in the
+/// suite asserted the rejection until this test, because the fix for it
+/// landed without a regression.
+#[test]
+fn default_owner_prototype_rejects_handles_and_keeps_ordinary_objects() {
+    use crate::value::addr_class::*;
+    for address in [
+        0,
+        1,
+        COMMON_HANDLE_BAND_END - 1,
+        FETCH_HANDLE_BAND_START,
+        FETCH_HANDLE_BAND_END - 1,
+        PROXY_ID_BAND_START,
+        STREAM_ID_BAND_START,
+        HANDLE_BAND_MAX - 1,
+    ] {
         assert_eq!(
-            unsafe { default_object_prototype_for_owner(object as usize) },
-            Some(expected)
+            unsafe { default_object_prototype_for_owner(address) },
+            None,
+            "handle {address:#x} must not be read as an object header"
         );
     }
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let expected = default_object_prototype_bits().expect("Object prototype");
+    let object = crate::object::js_object_alloc(0, 0);
+    assert_eq!(
+        unsafe { default_object_prototype_for_owner(object as usize) },
+        Some(expected)
+    );
+}
 
 #[cfg(test)]
 #[path = "proxy_reentry_tests.rs"]

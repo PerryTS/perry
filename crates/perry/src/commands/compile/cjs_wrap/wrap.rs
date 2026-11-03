@@ -1459,10 +1459,13 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
     // module itself assigns (`exports.X = ...`), each absent until assigned,
     // so every such read and the export snapshots are slots of its layout.
     // It is the contract of this object only: a module that replaces
-    // `module.exports` publishes whatever it assigned instead.
+    // `module.exports` publishes whatever it assigned instead. A name only
+    // `Object.defineProperty` writes is no slot of it
+    // (`extract_stored_exports_from_source`).
     let exports_init = {
+        let stored = extract_stored_exports_from_source(source);
         let mut keys: Vec<&str> = Vec::new();
-        for name in &plain_exports {
+        for name in plain_exports.iter().filter(|name| stored.contains(name)) {
             let ok = !name.is_empty()
                 && name.len() <= 64
                 && name != "__proto__"

@@ -267,7 +267,7 @@ mod layouts {
         unsafe {
             let arr = exec_result();
             let holder = (*arr).named;
-            let desc = std::ptr::addr_of!(crate::object::runtime_layouts::REGEX_EXEC_NAMED);
+            let desc = crate::object::runtime_layouts::REGEX_EXEC_NAMED::desc();
             assert_eq!((*holder).parent_class_id, (*desc).layout_id);
             assert_eq!(array_front_offset(arr), 0);
             assert_eq!(test_named_props_state(arr), (true, holder as usize, 3));
