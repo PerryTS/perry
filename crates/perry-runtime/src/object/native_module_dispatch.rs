@@ -364,12 +364,38 @@ pub(crate) unsafe fn dispatch_native_module_method(
             let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
             super::native_module_crypto_random::random_fill_sync(*args_ptr, undefined, undefined)
         }
+        // The same for the rest of the runtime-created `globalThis.crypto`:
+        // `crypto.subtle.digest(...)` / `crypto.randomUUID()` on the global
+        // before any `node:crypto` namespace site ran found no bucket and
+        // threw "crypto.subtle.digest is not supported". Both buckets arms
+        // only forward to the dispatchers perry-stdlib registers at start-up,
+        // so forward here too (a program without the stdlib has none: the
+        // throw below stays).
+        None if matches!(module_name, "crypto.subtle" | "crypto.webcrypto")
+            && !global_crypto_dispatcher(module_name).is_null() =>
+        {
+            let dispatch: unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64 =
+                std::mem::transmute(global_crypto_dispatcher(module_name));
+            dispatch(method_name.as_ptr(), method_name.len(), args_ptr, args_len)
+        }
         // No bucket and no registry export: answering `undefined` hid a missing
         // implementation behind a call that appeared to succeed.
         None => crate::collection_iter::throw_type_error(&format!(
             "{module_name}.{method_name} is not supported"
         )),
     }
+}
+
+/// The perry-stdlib dispatcher the crypto bucket forwards `module_name`'s
+/// methods to (`nm_dispatch_crypto`): WebCrypto for `crypto.subtle`, node
+/// crypto for `crypto.webcrypto`. Null when the stdlib is not linked.
+fn global_crypto_dispatcher(module_name: &str) -> *mut () {
+    let slot = if module_name == "crypto.subtle" {
+        &crate::value::JS_NATIVE_WEBCRYPTO_DISPATCH
+    } else {
+        &crate::value::JS_NATIVE_CRYPTO_DISPATCH
+    };
+    slot.load(std::sync::atomic::Ordering::SeqCst)
 }
 
 // ── per-module dispatch buckets, split out for file-size (pure relocation) ──
