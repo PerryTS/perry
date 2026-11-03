@@ -2683,7 +2683,15 @@ jobs:
     # publish-assets success implies: a tag exists, host builds are green, and
     # the bottles this job downloads from the release are actually there.
     needs: [preflight, publish-assets]
-    if: needs.preflight.outputs.mode != 'nightly'
+    # Explicit status check: the implicit success() also requires every
+    # transitive ancestor of publish-assets to have succeeded, and
+    # create-nightly is always skipped outside nightly mode (and
+    # create-release outside cut-release), so with the implicit check this
+    # job was skipped on every cut-release and republish run.
+    if: >
+      !cancelled() &&
+      needs.preflight.outputs.mode != 'nightly' &&
+      needs.publish-assets.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Get release info
@@ -3169,7 +3177,15 @@ jobs:
     # wingetcreate resolves the zip by its release-download URL, so the asset
     # must already be on the release — hence publish-assets, not build.
     needs: [preflight, publish-assets]
-    if: needs.preflight.outputs.mode != 'nightly'
+    # Explicit status check: the implicit success() also requires every
+    # transitive ancestor of publish-assets to have succeeded, and
+    # create-nightly is always skipped outside nightly mode (and
+    # create-release outside cut-release), so with the implicit check this
+    # job was skipped on every cut-release and republish run.
+    if: >
+      !cancelled() &&
+      needs.preflight.outputs.mode != 'nightly' &&
+      needs.publish-assets.result == 'success'
     runs-on: windows-latest
     steps:
       - name: Get release info
@@ -3224,7 +3240,15 @@ jobs:
     # Workers pull the new binaries off the GitHub Release, so only ping them
     # once the assets are actually up.
     needs: [preflight, publish-assets]
-    if: needs.preflight.outputs.mode != 'nightly'
+    # Explicit status check: the implicit success() also requires every
+    # transitive ancestor of publish-assets to have succeeded, and
+    # create-nightly is always skipped outside nightly mode (and
+    # create-release outside cut-release), so with the implicit check this
+    # job was skipped on every cut-release and republish run.
+    if: >
+      !cancelled() &&
+      needs.preflight.outputs.mode != 'nightly' &&
+      needs.publish-assets.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Get release version
