@@ -823,11 +823,6 @@ pub(crate) fn webcrypto_namespace() -> f64 {
     js_create_native_module_namespace(b"crypto.webcrypto".as_ptr(), "crypto.webcrypto".len())
 }
 
-pub(crate) fn install_global_webcrypto(singleton: *mut ObjectHeader) {
-    let key = crate::string::js_string_from_bytes(b"crypto".as_ptr(), "crypto".len() as u32);
-    js_object_set_field_by_name(singleton, key, webcrypto_namespace());
-}
-
 pub(crate) fn install_webcrypto_constructor_proto(proto_obj: *mut ObjectHeader, ctor_value: f64) {
     let constructor = "constructor";
     let key = crate::string::js_string_from_bytes(constructor.as_ptr(), constructor.len() as u32);

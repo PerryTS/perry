@@ -91,7 +91,16 @@ impl RealmPlan {
             symbols: BTreeSet::new(),
         };
         for (name, declaration) in &all {
-            if name == "%Global%" || (!reach.is_full() && !reach.names.contains(name)) {
+            // Every program has the global cell, so the layouts it declares as
+            // its own births (the one it is born on) are always reached.
+            let global_owned = matches!(
+                &declaration.storage,
+                Some(RealmStorageFacts::RuntimeLayout(layout))
+                    if layout.owners.iter().any(|owner| owner == "%Global%")
+            );
+            if name == "%Global%"
+                || (!reach.is_full() && !reach.names.contains(name) && !global_owned)
+            {
                 continue;
             }
             if let Some(RealmStorageFacts::RuntimeLayout(layout)) = &declaration.storage {
@@ -374,6 +383,8 @@ mod tests {
                 .contains_key(&format!("%Layout:{layout}%")));
         }
         let core = RealmPlan::from_reach(&reach("1 + 2;")).unwrap();
+        // The global object is born on its layout in every program.
+        assert!(core.runtime_layouts.contains_key("%Layout:GLOBAL_OBJECT%"));
         assert!(!core
             .runtime_layouts
             .contains_key("%Layout:REGEX_EXEC_NAMED%"));

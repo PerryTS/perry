@@ -540,16 +540,6 @@ pub(crate) unsafe fn runtime_symbol_of_atom(
     }
 }
 
-/// Is `ptr` one of the runtime symbols bound so far? Their immortal owner,
-/// the way the registry and the well-known cache own theirs
-/// (`symbol::is_persistent_symbol`).
-pub(crate) fn is_runtime_symbol(ptr: usize) -> bool {
-    ptr != 0
-        && RUNTIME_SYMBOLS
-            .iter()
-            .any(|bound| bound.load(std::sync::atomic::Ordering::Acquire) == ptr)
-}
-
 /// The NaN-boxed symbol runtime symbol atom `atom` names.
 pub(crate) fn runtime_symbol_value(atom: &'static StaticAtom) -> f64 {
     // SAFETY: a static atom.

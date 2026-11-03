@@ -729,6 +729,8 @@ runtime_layout!(
 
 pub(crate) const URL_CLASS_ID: u32 = 0xFFFF0063;
 
+mod global_atoms;
+pub(crate) use global_atoms::{builtin_global_atom, GLOBAL_OBJECT};
 mod stream_prototypes;
 pub(crate) use stream_prototypes::*;
 mod stream_instances;
@@ -1031,6 +1033,9 @@ const fn runtime_layout_word(name: &str) -> u32 {
     }
     if same(name, "NATIVE_CTOR_WRITABLE") {
         return crate::codegen_abi::native_layout_word("NATIVE_CTOR_WRITABLE", 2);
+    }
+    if same(name, "GLOBAL_OBJECT") {
+        return crate::codegen_abi::native_layout_word("GLOBAL_OBJECT", 0);
     }
     if same(name, "OBJECT_PROTOTYPE") {
         return crate::codegen_abi::native_layout_word("OBJECT_PROTOTYPE", 2);

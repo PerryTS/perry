@@ -282,6 +282,18 @@ fn next_request_meta_sym_key() -> usize {
 }
 
 unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64 {
+    // DEC 243(3): on an ordinary receiver a symbol store is the probe store,
+    // as a string key's is: an own plain entry in place, an absent key by the
+    // canonical key-add transition. Everything else takes the [[Set]] below.
+    if super::js_is_symbol(sym_f64) != 0
+        && crate::object::layout_probe::symbol_store(
+            obj_f64.to_bits(),
+            sym_f64.to_bits(),
+            value_f64,
+        )
+    {
+        return value_f64;
+    }
     if let Some(acc) = accessors::symbol_accessor_property(obj_f64, sym_f64) {
         // #10481: the setter runs with the object written to as `this`.
         return accessors::invoke_symbol_accessor_setter(acc.set, obj_f64, value_f64);
