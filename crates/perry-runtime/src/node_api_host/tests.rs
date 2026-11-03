@@ -1341,6 +1341,8 @@ fn external_buffer_arraybuffer_released_on_worker_retirement() {
         drop(Box::from_raw(data as *mut [u8; 3]));
         (*(hint as *const AtomicUsize)).fetch_add(1, Ordering::SeqCst);
     }
+    // Installed at program start, as perry does for an addon program.
+    crate::feature_hooks::js_runtime_install_node_api_host();
     let releases = std::sync::Arc::new(AtomicUsize::new(0));
     let worker_releases = releases.clone();
     std::thread::spawn(move || {

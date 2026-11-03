@@ -1392,30 +1392,18 @@ unsafe fn spawn_impl(closure_val: f64, literal_prepare: i64) -> *mut crate::prom
             ))
         };
 
-        // Call the function — catch panics to avoid aborting across FFI boundary
-        let call_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // Call the function. Every perry build is `panic = "abort"`: a panic in
+        // the body ends the process, so there is no unwind to catch here.
+        let result = {
             let code = unsafe { (*(info_usize as *const crate::closure::JsFunctionInfo)).code };
             let call_fn: ClosureCall0Fn = unsafe { crate::closure::body_call::js_body_fn!(code;) };
             let local_closure =
                 closure_handle.get_raw_mut_ptr::<ClosureHeader>() as *const ClosureHeader;
             call_fn(local_closure, crate::closure::plain_call_receiver())
-        }));
-
-        match call_result {
-            Ok(result) => {
-                // Serialize result for transfer back to the spawning agent.
-                let serialized_result = unsafe { serialize_nanbox_for_thread(result.to_bits()) };
-                queue_thread_result(owner_agent, promise_usize, serialized_result);
-            }
-            Err(_) => {
-                // Thread panicked — resolve with undefined to avoid hanging promise
-                queue_thread_result(
-                    owner_agent,
-                    promise_usize,
-                    SerializedValue::Inline(TAG_UNDEFINED),
-                );
-            }
-        }
+        };
+        // Serialize result for transfer back to the spawning agent.
+        let serialized_result = unsafe { serialize_nanbox_for_thread(result.to_bits()) };
+        queue_thread_result(owner_agent, promise_usize, serialized_result);
 
         // #6185: this worker's arena is about to be unmapped. Drop the shadow
         // scope first (the result is already serialized into owner-independent

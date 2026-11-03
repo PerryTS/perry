@@ -128,7 +128,8 @@ fn restore_coverage_diagnostic_matches_walk_and_off_arm() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
-            output.status.success() && stdout.contains("restore coverage witness completed"),
+            crate::test_support::passed(output.status)
+                && stdout.contains("restore coverage witness completed"),
             "witness failed (diag={enabled}): {}\n{stdout}\n{stderr}",
             output.status
         );

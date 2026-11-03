@@ -46,7 +46,7 @@ fn active_classifier_differential_accepts_fold_and_rejects_census_disagreement()
             .output()
             .expect("launch classifier differential control");
         assert!(
-            output.status.success(),
+            crate::test_support::passed(output.status),
             "classifier control failed: {}\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),

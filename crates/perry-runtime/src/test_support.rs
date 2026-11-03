@@ -131,8 +131,8 @@ impl Drop for ArrayPrototypeLatchGuard {
 // The workspace builds tests with `panic = "abort"`, so libtest runs EVERY test
 // in a fresh process of its own: the runner spawns the test binary with
 // `__RUST_TEST_INVOKE=<test name>` and no arguments; the child removes that
-// variable, runs exactly that one test on its main thread, exits 0 when it
-// passes and aborts when it panics. A panic therefore never returns to the test
+// variable, runs exactly that one test on its main thread, exits 50 (libtest's
+// `TR_OK`) when it passes and aborts when it panics. A panic therefore never returns to the test
 // (`catch_unwind` cannot see one), and a test that must observe a panic does it
 // from a second process: [`test_process`] starts this same test again and
 // [`expect_child_panic`] asserts on how that process died.
@@ -142,8 +142,17 @@ impl Drop for ArrayPrototypeLatchGuard {
 /// in the runner process itself.
 static TEST_NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
+/// The variable libtest's runner sets to name the one test a per-test process
+/// runs.
+pub(crate) const TEST_INVOKE: &str = "__RUST_TEST_INVOKE";
+
+/// The exit code of a per-test process whose test passed (libtest's `TR_OK`;
+/// `library/test/src/test_result.rs`). Not 0: libtest's runner reads 0 as a
+/// test that exited without reporting.
+pub(crate) const TEST_PASSED: i32 = 50;
+
 extern "C" fn capture_test_name() {
-    if let Some(name) = std::env::var_os("__RUST_TEST_INVOKE") {
+    if let Some(name) = std::env::var_os(TEST_INVOKE) {
         let _ = TEST_NAME.set(name.to_string_lossy().into_owned());
     }
 }
@@ -170,18 +179,24 @@ pub(crate) fn current_test_name() -> &'static str {
 }
 
 /// A command that runs the test `name` alone in a fresh process, exactly as
-/// libtest does: on that process's main thread, output not captured, exit 0 on
-/// a pass and SIGABRT on a panic. The caller adds its own env markers.
+/// libtest does: on that process's main thread, output not captured, exit
+/// [`TEST_PASSED`] on a pass and SIGABRT on a panic. The caller adds its own
+/// env markers.
 pub(crate) fn test_process(name: &str) -> std::process::Command {
     let mut command =
         std::process::Command::new(std::env::current_exe().expect("current test binary"));
-    command.env("__RUST_TEST_INVOKE", name);
+    command.env(TEST_INVOKE, name);
     command
 }
 
 /// [`test_process`] for the test this process runs.
 pub(crate) fn this_test_process() -> std::process::Command {
     test_process(current_test_name())
+}
+
+/// Did `status` end the way a passing test process ends ([`TEST_PASSED`])?
+pub(crate) fn passed(status: std::process::ExitStatus) -> bool {
+    status.code() == Some(TEST_PASSED)
 }
 
 /// Did `status` end the way a panicking test process ends (`process::abort`)?

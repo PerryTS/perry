@@ -75,7 +75,8 @@ fn evacuation_verifier_pass_line_counts_parents_and_slots() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        output.status.success() && stdout.contains("evacuation verifier pass-line child completed"),
+        crate::test_support::passed(output.status)
+            && stdout.contains("evacuation verifier pass-line child completed"),
         "diagnostic witness failed: {}\nstdout:\n{stdout}\nstderr:\n{stderr}",
         output.status
     );
