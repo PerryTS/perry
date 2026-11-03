@@ -88,6 +88,7 @@ extern "C" {
     fn js_v8_get_heap_statistics() -> f64;
     fn js_process_cpu_usage(prior: f64) -> f64;
     fn js_perf_event_loop_utilization(util1: f64, util2: f64) -> f64;
+    fn js_nm_install_process();
 }
 
 /// Handle for parentPort (always 1)
@@ -1396,6 +1397,20 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
 fn worker_new_prepared(
     entry_ptr: i64,
     options: f64,
+    options_state: WorkerOptions,
+    source: Option<String>,
+) -> f64 {
+    // Scheduling calls user code; finish owned preparation before entering it.
+    let worker = worker_new_started(entry_ptr, options, options_state, source);
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let worker = scope.root_nanbox_f64(worker);
+    worker_surface::queue_process_worker_event(worker.get_nanbox_f64());
+    worker.get_nanbox_f64()
+}
+
+fn worker_new_started(
+    entry_ptr: i64,
+    options: f64,
     mut options_state: WorkerOptions,
     source: Option<String>,
 ) -> f64 {
@@ -1421,8 +1436,8 @@ fn worker_new_prepared(
     let sender = WorkerSender::new(tx);
     let published_agent = sender.agent.clone();
     let termination = sender.termination.clone();
-    let worker_obj = worker_object(worker_id, &options_state);
     let resource_scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let worker_obj = resource_scope.root_raw_mut_ptr(worker_object(worker_id, &options_state));
     let mut async_resources = [perry_runtime::async_hook_slots::AsyncResourceIds {
         async_id: 0,
         trigger_async_id: 0,
@@ -1450,7 +1465,7 @@ fn worker_new_prepared(
     let mut record = WorkerRecord {
         owner_agent: perry_runtime::agent::current_agent(),
         sender: sender.clone(),
-        object_bits: object_value(worker_obj).to_bits(),
+        object_bits: object_value(worker_obj.get_raw_mut_ptr()).to_bits(),
         listeners: HashMap::new(),
         alive: false,
         refed: false,
@@ -1631,7 +1646,7 @@ fn worker_new_prepared(
         push_parent_event(parent_agent, WorkerEvent::Exit(worker_id, 1));
     }
 
-    object_value(worker_obj)
+    object_value(worker_obj.get_raw_mut_ptr())
 }
 
 pub use environment_data::{
