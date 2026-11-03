@@ -262,15 +262,6 @@ impl<T: 'static> LocalKey<T> {
                 State::Ready => {}
                 State::Vacant => {
                     (*entry).state = State::Initializing;
-                    struct Reset(*mut Entry);
-                    impl Drop for Reset {
-                        fn drop(&mut self) {
-                            unsafe {
-                                (*self.0).state = State::Vacant;
-                            }
-                        }
-                    }
-                    let reset = Reset(entry);
                     // Hold no reference or collection borrow across user code.
                     let value = alloc((self.initialize)());
                     (*entry).value = value.cast();
@@ -279,7 +270,6 @@ impl<T: 'static> LocalKey<T> {
                         (*entry).drop_next = (*pool).drops;
                         (*pool).drops = entry;
                     }
-                    std::mem::forget(reset);
                 }
             }
             Ok(f(&*(*entry).value.cast::<T>()))

@@ -956,9 +956,8 @@ fn take_primary_entries_from_store(
     freed: &crate::arena::thread_exit::FreedRanges,
 ) -> Vec<Entry> {
     let dead = {
-        let mut store = store
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Never poisoned: every build is `panic = "abort"`.
+        let mut store = store.lock().expect("timer store lock");
         let Some(timers) = store.agents.get_mut(&PRIMARY_AGENT) else {
             return Vec::new();
         };
