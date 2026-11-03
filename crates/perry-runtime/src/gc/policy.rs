@@ -1805,10 +1805,25 @@ impl GcSuppressScope {
     }
 }
 
+/// Tests only: the collection count when the last outermost
+/// [`GcSuppressScope`] closed, read BEFORE the check it owes runs. A window's
+/// test reads it to tell "collected inside the window" from "the owed check
+/// collected as the window closed".
+#[cfg(test)]
+pub(crate) mod window_exit_probe {
+    std::thread_local! {
+        pub(crate) static COLLECTIONS_AT_WINDOW_EXIT: std::cell::Cell<Option<u64>> =
+            const { std::cell::Cell::new(None) };
+    }
+}
+
 impl Drop for GcSuppressScope {
     #[inline]
     fn drop(&mut self) {
         if !self.was_suppressed {
+            #[cfg(test)]
+            window_exit_probe::COLLECTIONS_AT_WINDOW_EXIT
+                .with(|c| c.set(Some(super::progress::gc_total_collection_count())));
             let flags = GC_FLAGS.with(|f| {
                 let flags = f.get();
                 f.set(flags & !(GC_FLAG_SUPPRESSED | GC_FLAG_TRIGGER_OWED));
