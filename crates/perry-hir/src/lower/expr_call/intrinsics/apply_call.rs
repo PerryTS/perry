@@ -464,6 +464,17 @@ pub(crate) fn try_builtin_prototype_method_apply_call(
         },
         _ => return Ok(None),
     };
+    // #11394: the fold re-reads the method BY NAME on the new receiver. Once
+    // the program writes that name (or `call`/`apply` itself) onto a builtin
+    // prototype, the name no longer denotes the builtin: a binding captured
+    // before the patch (`const orig = Array.prototype.push; …
+    // orig.call(log, x)` inside the replacement) would re-enter the
+    // replacement. Keep the reflective call; it runs the value it names.
+    if crate::patched_builtins::prototype_method_patched(method_prop.sym.as_ref())
+        || crate::patched_builtins::prototype_method_patched(outer_prop.sym.as_ref())
+    {
+        return Ok(None);
+    }
 
     // `.call`/`.apply` need at least the `thisArg` (the new receiver). A
     // spread in the `thisArg` slot can't be statically resolved to a receiver.
