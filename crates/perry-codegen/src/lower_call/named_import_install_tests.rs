@@ -15,7 +15,7 @@ fn compile_lookup(module_name: &str, property: &str) -> String {
         body: vec![Stmt::Return(Some(Expr::Call {
             byte_end: 0,
             callee: Box::new(Expr::ExternFuncRef {
-                name: "js_native_module_named_esm_export_value".into(),
+                name: "js_native_module_named_esm_export_value_vt".into(),
                 param_types: vec![Type::String, Type::String],
                 return_type: Type::Any,
             }),

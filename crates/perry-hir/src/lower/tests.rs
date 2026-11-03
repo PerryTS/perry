@@ -629,7 +629,7 @@ fn test_native_module_binding_value_named_import() {
             if matches!(
                 callee.as_ref(),
                 crate::ir::Expr::ExternFuncRef { name, .. }
-                    if name == "js_native_module_named_esm_export_value"
+                    if name == "js_native_module_named_esm_export_value_vt"
             )
             && matches!(
                 args.as_slice(),

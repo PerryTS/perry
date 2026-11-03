@@ -627,7 +627,7 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
         // constructed a namespace or installed its prototype/static handlers.
         // Install only the named module before caching an undecorated callable
         // (e.g. AsyncResource without its own bind). Preserve module stripping.
-        if name == "js_native_module_named_esm_export_value"
+        if name == "js_native_module_named_esm_export_value_vt"
             && !ctx.import_function_prefixes.contains_key(name)
         {
             if let [Expr::String(module), Expr::String(property)] = args {
