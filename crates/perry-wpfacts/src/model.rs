@@ -1300,9 +1300,10 @@ pub struct Model {
     pub top_chain_node: Option<NodeId>,
     /// The chain marker token (`TokKind::TopChain`), once minted.
     pub top_chain_mark: Option<Tok>,
-    /// Which `Cons::ChainMark` `top_chain` holds (1: the write mark, 2: the
-    /// actor-set join), so each is installed once.
-    pub top_chain_marks: u8,
+    /// Which `Cons::ChainMark` `top_chain` holds, by key and join (the
+    /// write marks, one per constant key a store through the marker named;
+    /// the actor-set join), so each is installed once.
+    pub top_chain_marks: crate::pts::FxHashSet<(Option<Key>, bool)>,
     /// Explain: builtin function values minted, by the arm that minted them.
     pub bf_mints: FxHashMap<&'static str, u32>,
     /// Per unit (design §17.16 (b)): the global object's program-owned

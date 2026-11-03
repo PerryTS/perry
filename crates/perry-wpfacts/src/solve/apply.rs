@@ -81,18 +81,20 @@ impl Model {
             // Per unit the marker machinery is inert (DECISIONS 251): a
             // store into ⊤ writes every builtin prototype there.
             Cons::ChainMark { .. } if self.unit_mode => {}
-            Cons::ChainMark { reason, join } => {
+            Cons::ChainMark { reason, join, key } => {
                 let tc = self.top_chain();
                 if n == tc {
                     let what = self.reasons[reason as usize].clone();
                     for &t in toks {
-                        crate::builtins::note_native_write(self, t, None, &what);
+                        if let Some(key) = key {
+                            crate::builtins::note_native_write(self, t, Some(key), &what);
+                        }
                         if join {
                             crate::builtins::note_top_proto(self, t, reason);
                         }
                     }
                 } else if self.top_chain_mark.is_some_and(|mk| toks.iter().any(|&t| t == mk)) {
-                    self.chain_mark(reason, join);
+                    self.chain_mark(reason, join, key);
                 }
             }
             Cons::TopSink { reason } => {

@@ -762,7 +762,9 @@ pub(super) fn an_escaped_value_beside_top_is_that_top() {
         // protocol instead of escaping them): (1080, 2976, 9456) -> the pin.
         // DECISIONS 241: the published `f`s own properties hold what the units store
         // there (none), not top from its publication: one entry fewer at every n.
-        (1060, 2940, 9388),
+        // DECISIONS 254 (rule P): the chain marker token beside ⊤ in one
+        // shared set: one entry more at every n.
+        (1061, 2941, 9389),
         "entries {e8} {e16} {e32}"
     );
 }

@@ -688,9 +688,14 @@ impl Model {
     /// - `Mark`: a write through it (a member added, replaced, deleted or
     ///   defined, an accessor installed, the [[Prototype]] relinked, the
     ///   receiver handed to a writer) marks every prototype in `top_chain`,
-    ///   now and as the set grows, as written under an unknown key with ⊤
+    ///   now and as the set grows, as written with ⊤ under the write's
+    ///   constant key, or under an unknown key where it names none
     ///   (`Cons::ChainMark`): the opaque mark, never a value flow. DEC 250
-    ///   makes adds the only effect, so only a missing-member read sees it;
+    ///   makes adds the only effect, so only a missing-member read of that
+    ///   key sees it. A delete marks nothing: deleting a described member is
+    ///   a TypeError at the store (DEC 250), and an added key is opaque
+    ///   already. A `setPrototypeOf` writes no own key: the prototypes take
+    ///   the source as their [[Prototype]] (`ProtoFrom` on `top_chain`);
     /// - `Call`: a method or `super` call, or a receiver binding, with the
     ///   prototypes as `this`, for its effect only (`effect_only`): the
     ///   member resolves against each prototype's described members;
@@ -818,8 +823,39 @@ impl Model {
         match mode {
             Mk::Pass => return self.apply_tokens_body(n, c, toks, prim),
             Mk::Mark if here => {
-                let r = self.reason(&format!("a {} through the chain marker", c.kind_name()));
-                self.chain_mark(r, false);
+                let key = match c {
+                    Cons::Store { key, .. } | Cons::BirthField { key, .. } => Some(*key),
+                    Cons::Super {
+                        key,
+                        act: ChainAct::Store(_),
+                        ..
+                    } => Some(*key),
+                    Cons::DefineKey { key, .. } | Cons::AccessorInstall { key, .. } => {
+                        Some(Key::Named(*key))
+                    }
+                    Cons::DeleteKey { .. }
+                    | Cons::Hard {
+                        kind: Hard::E7Delete,
+                        ..
+                    } => None,
+                    // `setPrototypeOf` writes no own key: each prototype
+                    // takes the source as its [[Prototype]], as ⊤ does
+                    // (`native_given`), so its lookups reach the keys of the
+                    // source's chain and no other.
+                    Cons::Hard {
+                        kind: Hard::E6SetPrototypeOf,
+                        ..
+                    } => None,
+                    Cons::ProtoFrom { .. } => {
+                        self.cons(tc, *c);
+                        None
+                    }
+                    _ => Some(Key::Any),
+                };
+                if let Some(key) = key {
+                    let r = self.reason(&format!("a {} through the chain marker", c.kind_name()));
+                    self.chain_mark(r, false, Some(key));
+                }
             }
             Mk::Call if here => {
                 // DEC 250 (narrowed): only a prototype's own members other
@@ -835,7 +871,7 @@ impl Model {
                 };
                 if open {
                     let r = self.reason("a call of an unlocked member through the chain marker");
-                    self.chain_mark(r, false);
+                    self.chain_mark(r, false, Some(Key::Any));
                 }
                 let e = self.effect_only(c);
                 self.cons(tc, e);
@@ -847,16 +883,15 @@ impl Model {
     }
 
     /// DECISIONS 254: the opaque mark on every prototype in `top_chain`
-    /// (`Cons::ChainMark`), installed once (`join`: once more, for the actor
-    /// set): idempotent per prototype, one constraint, not one per write.
-    pub(crate) fn chain_mark(&mut self, reason: u32, join: bool) {
-        let bit = if join { 2 } else { 1 };
-        if self.unit_mode || self.top_chain_marks & bit != 0 {
+    /// (`Cons::ChainMark`), installed once per key (`join`: once more, for
+    /// the actor set): idempotent per prototype, one constraint per constant
+    /// key, not one per write.
+    pub(crate) fn chain_mark(&mut self, reason: u32, join: bool, key: Option<Key>) {
+        if self.unit_mode || !self.top_chain_marks.insert((key, join)) {
             return;
         }
-        self.top_chain_marks |= bit;
         let tc = self.top_chain();
-        self.cons(tc, Cons::ChainMark { reason, join });
+        self.cons(tc, Cons::ChainMark { reason, join, key });
     }
 
     /// DECISIONS 254: `c` copied onto `top_chain` for its effect only: a
@@ -1331,7 +1366,10 @@ impl Model {
                 format!("chain {n} {origin} {} {act:?}", self.key_name(*key))
             }
             Cons::TopSink { reason } => format!("top {n} {reason}"),
-            Cons::ChainMark { reason, join } => format!("chainmark {n} {reason} {join}"),
+            Cons::ChainMark { reason, join, key } => {
+                let k = key.map_or("-".to_string(), |k| self.key_name(k));
+                format!("chainmark {n} {reason} {join} {k}")
+            }
             Cons::HandOver { reason, ctor, arg } => format!("handover {n} {reason} {ctor} {arg}"),
             Cons::OwnOnly { f, dst } => format!("ownonly {n} {f} {dst}"),
             Cons::CallerValue { dst, reason } => format!("callervalue {n} {dst} {reason}"),

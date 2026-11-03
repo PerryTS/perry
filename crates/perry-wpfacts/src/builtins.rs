@@ -138,12 +138,12 @@ fn unknown_method_proto(m: &mut Model, call: CallId, why: &str, proto: Option<us
             m.edge(a, n);
         } else {
             m.sink_node(a, r);
-            m.cons(a, Cons::ChainMark { reason: r, join: true });
+            m.cons(a, Cons::ChainMark { reason: r, join: true, key: Some(Key::Any) });
         }
     }
     for &a in &c.spread {
         m.sink_node(a, r);
-        m.cons(a, Cons::ChainMark { reason: r, join: true });
+        m.cons(a, Cons::ChainMark { reason: r, join: true, key: Some(Key::Any) });
     }
     // A method run on one receiver token sees that token as `this`, not
     // every token of the receiver node.
@@ -153,7 +153,7 @@ fn unknown_method_proto(m: &mut Model, call: CallId, why: &str, proto: Option<us
         (Some(t), _) => m.escape(t, r),
         (None, ThisArg::Node(n)) => {
             m.sink_node(*n, r);
-            m.cons(*n, Cons::ChainMark { reason: r, join: true });
+            m.cons(*n, Cons::ChainMark { reason: r, join: true, key: Some(Key::Any) });
         }
         (None, ThisArg::Tok(t)) if kept(m, *t) => {}
         (None, ThisArg::Tok(t)) => m.escape(*t, r),

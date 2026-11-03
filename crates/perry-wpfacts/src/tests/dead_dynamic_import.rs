@@ -535,11 +535,14 @@ fn a_guarded_set_prototype_of_returns_its_target() {
     assert!(!imports_formatter_with_make("", MAKE_CALLED, false));
     // The fixture can fail: an unknown prototype written into `self` makes
     // the store an any-key write on ⊤ again.
-    assert!(imports_formatter_with_make(
-        "export function poke(v: any) { const s: any = Object.setPrototypeOf(v, (globalThis as any)[String(process.argv.length)]); Object.defineProperties(s.x, Object.getOwnPropertyDescriptors({ ...v })); }",
-        &format!("{MAKE_CALLED}\nimport {{ poke }} from \"./mk\";\npoke(process.argv);"),
-        true
-    ));
+    // Rule P (DECISIONS 254): an any-key write on ⊤ writes only the
+    // builtin prototypes that reached ⊤. None did: dead, interpreted code
+    // or not (what it writes is the guard word's, decision 150 (b)). Given
+    // `Object.prototype`, unknown code may hand it back as ⊤: live.
+    let poke = "export function poke(v: any) { const s: any = Object.setPrototypeOf(v, (globalThis as any)[String(process.argv.length)]); Object.defineProperties(s.x, Object.getOwnPropertyDescriptors({ ...v })); }";
+    let tail = format!("{MAKE_CALLED}\nimport {{ poke }} from \"./mk\";\npoke(process.argv);");
+    assert!(!imports_formatter_with_make(poke, &tail, true));
+    assert!(imports_formatter_with_make(poke, &format!("{tail}{HAND}"), true));
 }
 
 /// Rule 3: an operand of a construct the model does not follow (here the
@@ -743,8 +746,17 @@ fn a_guarded_object_create_is_a_fresh_object() {
         "Object.create(null)",
         "(globalThis as any)[String(process.argv.length)]",
     );
-    assert!(imports_formatter_with_make(&unknown, &tail, true));
+    // Rule P (DECISIONS 254): an any-key write on ⊤ writes only the
+    // builtin prototypes that reached ⊤. None did: dead, interpreted code
+    // or not (what it writes is the guard word's, decision 150 (b)). Given
+    // `Object.prototype`, unknown code may hand it back as ⊤: live.
+    assert!(!imports_formatter_with_make(&unknown, &tail, true));
+    assert!(imports_formatter_with_make(&unknown, &format!("{tail}{HAND}"), true));
 }
+
+/// Unknown code given `Object.prototype` (rule P's actor set, DECISIONS
+/// 254): a store or delete through ⊤ may write it.
+const HAND: &str = "\n(globalThis as any).hostFn(Object.prototype);";
 
 /// Rule 7 for a member `extends` (@effect/platform-node's
 /// `NodeHttpIncomingMessage extends Inspectable.Class`): the HIR keeps the
@@ -899,7 +911,13 @@ fn an_escaped_bound_method_keeps_its_bound_receiver() {
     // builtin chain an any-key delete through ⊤ leaves opaque: closed, the
     // formatter stays dead. With interpreted code the chain is opaque, so
     // the arm runs there.
-    assert!(imports_formatter_with_mods("", &tail, true, &[("cli", unknown.as_str())]));
+    // Rule P (DECISIONS 254): an any-key write on ⊤ writes only the
+    // builtin prototypes that reached ⊤. None did: dead, interpreted code
+    // or not (what it writes is the guard word's, decision 150 (b)). Given
+    // `Object.prototype`, unknown code may hand it back as ⊤: live.
+    assert!(!imports_formatter_with_mods("", &tail, true, &[("cli", unknown.as_str())]));
+    let handed = format!("{tail}{HAND}");
+    assert!(imports_formatter_with_mods("", &handed, true, &[("cli", unknown.as_str())]));
 }
 /// Rule 11: a described `EventEmitter.prototype` method called on a native
 /// subclass instance (`con.on(ev, f)`) is Node's protocol on that receiver
@@ -938,7 +956,13 @@ fn an_event_emitter_method_keeps_its_receiver() {
     // builtin chain an any-key delete through ⊤ leaves opaque: closed, the
     // formatter stays dead. With interpreted code the chain is opaque, so
     // the arm runs there.
-    assert!(imports_formatter_with_mods("", &tail, true, &[("cli", shadowed.as_str())]));
+    // Rule P (DECISIONS 254): an any-key write on ⊤ writes only the
+    // builtin prototypes that reached ⊤. None did: dead, interpreted code
+    // or not (what it writes is the guard word's, decision 150 (b)). Given
+    // `Object.prototype`, unknown code may hand it back as ⊤: live.
+    assert!(!imports_formatter_with_mods("", &tail, true, &[("cli", shadowed.as_str())]));
+    let handed = format!("{tail}{HAND}");
+    assert!(imports_formatter_with_mods("", &handed, true, &[("cli", shadowed.as_str())]));
 }
 
 /// Rule 11, soundness: `emit` through the chain calls the listeners `on`
@@ -961,10 +985,16 @@ export function go() {
     // builtin chain an any-key delete through ⊤ leaves opaque: closed, the
     // formatter stays dead. With interpreted code the chain is opaque, so
     // the arm runs there.
-    assert!(imports_formatter_with_mods("", &tail, true, &[("cli", src)]));
+    // Rule P (DECISIONS 254): an any-key write on ⊤ writes only the
+    // builtin prototypes that reached ⊤. None did: dead, interpreted code
+    // or not (what it writes is the guard word's, decision 150 (b)). Given
+    // `Object.prototype`, unknown code may hand it back as ⊤: live.
+    assert!(!imports_formatter_with_mods("", &tail, true, &[("cli", src)]));
+    let handed = format!("{tail}{HAND}");
+    assert!(imports_formatter_with_mods("", &handed, true, &[("cli", src)]));
     // Without the emit, the listener never runs.
     let quiet = src.replace("con.emit(", "void (");
-    assert!(!imports_formatter_with_mods("", &tail, true, &[("cli", quiet.as_str())]));
+    assert!(!imports_formatter_with_mods("", &handed, true, &[("cli", quiet.as_str())]));
 }
 
 /// Rule 12: tsc's CommonJS re-export, `Object.defineProperty(exports, "X",
@@ -1009,7 +1039,12 @@ fn a_guarded_define_property_re_export_keeps_its_getter() {
     // Closed, the program's own calls stay precise (#13684): dead. With
     // interpreted code the computed definition may redefine any key: live.
     assert!(!imports_formatter_with_make(&computed, &tail, false));
-    assert!(imports_formatter_with_make(&computed, &tail, true));
+    // Rule P (DECISIONS 254): an any-key write on ⊤ writes only the
+    // builtin prototypes that reached ⊤. None did: dead, interpreted code
+    // or not (what it writes is the guard word's, decision 150 (b)). Given
+    // `Object.prototype`, unknown code may hand it back as ⊤: live.
+    assert!(!imports_formatter_with_make(&computed, &tail, true));
+    assert!(imports_formatter_with_make(&computed, &format!("{tail}{HAND}"), true));
     // Reflect's form is the same operation.
     let reflect = REEXPORT.replace("Object.defineProperty(", "Reflect.defineProperty(");
     assert!(!imports_formatter_with_make(&reflect, &tail, true));
@@ -1022,7 +1057,12 @@ fn a_guarded_define_property_re_export_keeps_its_getter() {
         "const args: any = [reexp, \"pg\", { enumerable: true, get: function () { return pg; } }];\nObject.defineProperty(...args);",
     );
     assert_ne!(unknown, REEXPORT);
-    assert!(imports_formatter_with_make(&unknown, &tail, true));
+    // Rule P (DECISIONS 254): an any-key write on ⊤ writes only the
+    // builtin prototypes that reached ⊤. None did: dead, interpreted code
+    // or not (what it writes is the guard word's, decision 150 (b)). Given
+    // `Object.prototype`, unknown code may hand it back as ⊤: live.
+    assert!(!imports_formatter_with_make(&unknown, &tail, true));
+    assert!(imports_formatter_with_make(&unknown, &format!("{tail}{HAND}"), true));
 }
 
 /// Rule 12's cost (CJS14-DESIGN §4): a module re-exports 40 constant keys
@@ -1085,7 +1125,12 @@ fn forty_define_property_re_exports_keep_their_getters() {
     // The fixture can fail: `reexp.k7` read as an unknown value is a ⊤
     // callee, `pg` escapes through it, `PG`'s `Client` with it.
     let unknown = reexport_40("return (globalThis as any)[String(process.argv.length)];");
-    assert!(imports_formatter_with_make(&unknown, &tail, true));
+    // Rule P (DECISIONS 254): an any-key write on ⊤ writes only the
+    // builtin prototypes that reached ⊤. None did: dead, interpreted code
+    // or not (what it writes is the guard word's, decision 150 (b)). Given
+    // `Object.prototype`, unknown code may hand it back as ⊤: live.
+    assert!(!imports_formatter_with_make(&unknown, &tail, true));
+    assert!(imports_formatter_with_make(&unknown, &format!("{tail}{HAND}"), true));
     // A getter that reads its receiver keeps the accessor walk: its `this`
     // is the object read, here `reexp`, whose `u` is unknown. Taking it as
     // a receiver-free field would leave `this` empty and the formatter dead.
@@ -1096,9 +1141,14 @@ fn forty_define_property_re_exports_keep_their_getters() {
     // builtin chain an any-key delete through ⊤ leaves opaque: closed, the
     // formatter stays dead. With interpreted code the chain is opaque, so
     // the arm runs there.
+    // Rule P (DECISIONS 254): an any-key write on ⊤ writes only the
+    // builtin prototypes that reached ⊤. None did: dead, interpreted code
+    // or not (what it writes is the guard word's, decision 150 (b)). Given
+    // `Object.prototype`, unknown code may hand it back as ⊤: live.
+    assert!(!imports_formatter_with_make(&this_reader, &tail, true));
     for interp in [true] {
         assert!(
-            imports_formatter_with_make(&this_reader, &tail, interp),
+            imports_formatter_with_make(&this_reader, &format!("{tail}{HAND}"), interp),
             "interp={interp}: a getter reading `this` sees the receiver"
         );
         assert!(last_act().walked_keys.iter().any(|k| k == "k7"), "interp={interp}: k7 is walked");
@@ -1112,8 +1162,12 @@ fn forty_define_property_re_exports_keep_their_getters() {
         "const vals: any = { k7: (globalThis as any)[String(process.argv.length)] };",
     );
     // (As for `unknown`: with interpreted code the computed global is ⊤.)
+    // Rule P (DECISIONS 254): the any-key delete on ⊤ writes only the
+    // builtin prototypes that reached ⊤. None did: dead. Given
+    // `Object.prototype`, unknown code may hand it back as ⊤: live.
+    assert!(!imports_formatter_with_make(&escaping, &tail, true));
     assert!(
-        imports_formatter_with_make(&escaping, &tail, true),
+        imports_formatter_with_make(&escaping, &format!("{tail}{HAND}"), true),
         "the getter's result reaches the read"
     );
 }
@@ -1131,13 +1185,15 @@ fn an_argument_of_a_computed_global_escapes_and_the_default_stays_dead() {
         "const vals: any = { k7: id };",
         "function esc(x: any) { (globalThis as any)[String(process.argv.length)](x); return x; }\nconst vals: any = { k7: esc };",
     );
-    // With interpreted code the chain stays opaque and the formatter is
-    // live (fail-closed); the escape is the same.
+    // Rule P (DECISIONS 254): interpreted code adds no builtin prototype to
+    // the actor set (what it writes is the guard word's, decision 150 (b)),
+    // so the formatter stays dead with it too; the escape is the same.
+    // Given `Object.prototype`, unknown code may hand it back as ⊤: live
+    // (below).
     for interp in [false, true] {
-        assert_eq!(
-            imports_formatter_with_make(&src, &tail, interp),
-            interp,
-            "interp={interp}: closed, the formatter's default is never taken"
+        assert!(
+            !imports_formatter_with_make(&src, &tail, interp),
+            "interp={interp}: the formatter's default is never taken"
         );
         let esc = last_act().escaped;
         assert!(
@@ -1145,6 +1201,7 @@ fn an_argument_of_a_computed_global_escapes_and_the_default_stays_dead() {
             "interp={interp}: pg's Client escapes through the computed global: {esc:?}"
         );
     }
+    assert!(imports_formatter_with_make(&src, &format!("{tail}{HAND}"), true));
 }
 
 /// Rule P (CJS14-DESIGN §2, DEC 253): `put` is handed to ⊤ (`unknown`, a

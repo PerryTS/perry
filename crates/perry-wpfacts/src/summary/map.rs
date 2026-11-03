@@ -51,7 +51,7 @@ pub fn map_cons(
             act: act_map(act, &mut n, &mut k),
         },
         TopSink { reason } => TopSink { reason },
-        ChainMark { reason, join } => ChainMark { reason, join },
+        ChainMark { reason, join, key } => ChainMark { reason, join, key },
         HandOver { reason, ctor, arg } => HandOver { reason, ctor, arg },
         OwnOnly { f, dst } => OwnOnly { f, dst: n(dst) },
         CallerValue { dst, reason } => CallerValue {

@@ -37,14 +37,16 @@ impl Model {
         // (a ⊤ callee, which may be a compiled function whose parameters are
         // plain ⊤ without the marker; an escaped object; a return to ⊤) may
         // store through it as through ⊤, so every prototype in `top_chain`
-        // joins the actor set (`Cons::ChainMark { join }`). Interpreted code
+        // joins the actor set (`Cons::ChainMark { join }`); those stores are
+        // stores into ⊤, which then write it under their own keys (a getter
+        // installed under `k` writes no other key). Interpreted code
         // adds nothing: what it writes is the runtime guard word's (decision
         // 150 (b)), and `interpreted_code_runs` puts no prototype in the set.
         // Flowing to compiled code (a known callee, a field of a known
         // object, a return to a known caller) is no escape: the token flows,
         // and a write through it is the mark.
         if matches!(self.toks[t as usize], TokKind::TopChain) {
-            self.chain_mark(reason, true);
+            self.chain_mark(reason, true, None);
             return;
         }
         // DECISIONS 254 (rule P): a builtin prototype handed to unknown code

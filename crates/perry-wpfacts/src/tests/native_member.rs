@@ -325,6 +325,9 @@ fn a_program_write_onto_a_builtin_prototype_is_no_native_member() {
 fn a_store_into_top_is_no_native_member_while_it_holds() {
     for units in [false, true] {
         for store in ["ext.indexOf = 1;", "ext[process.argv[3]] = 1;"] {
+            // Whole program (rule P, DECISIONS 254) the store into ⊤ writes
+            // no builtin prototype until one reached ⊤ (the H arms below);
+            // per unit main's premise holds (DECISIONS 251).
             let src = |s: &str| {
                 format!(
                     r#"
@@ -344,11 +347,41 @@ fn a_store_into_top_is_no_native_member_while_it_holds() {
             assert!(native(&v), "control units={units}: {v:?}");
             let pf = one(&src(store), units);
             let v = verdicts_in(&pf, 0, "indexOf", true);
+            if !units {
+                assert!(native(&v), "units={units} {store}: {v:?}");
+                continue;
+            }
             assert!(
                 matches!(v.as_slice(), [Verdict::No(w), Verdict::No(_)] if w.starts_with("native member: a store into ⊤")),
                 "units={units} {store}: {v:?}"
             );
         }
+    }
+    // Hunk H (DECISIONS 254): a builtin constructor reaching ⊤ brings its
+    // `prototype` (collapsed into `Object.prototype`) into the chain of ⊤
+    // values, so the store through `ext.prototype` writes the builtin
+    // prototypes under its key (or every key).
+    for store in ["ext.prototype.indexOf = 1;", "ext.prototype[process.argv[3]] = 1;"] {
+        let src = format!(
+            r#"
+            declare const unknown: any;
+            unknown.take(Array);
+            const ext: any = unknown.value;
+            {store}
+            function main() {{
+                const s: any = process.argv.length > 0 ? "ab" : "c";
+                const a: any = [1, 2];
+                return s.indexOf("b") + a.indexOf(0);
+            }}
+            console.log(main());
+        "#
+        );
+        let pf = one(&src, false);
+        let v = verdicts_in(&pf, 0, "indexOf", true);
+        assert!(
+            matches!(v.as_slice(), [Verdict::No(_), Verdict::No(_)]),
+            "H {store}: {v:?}"
+        );
     }
 }
 
