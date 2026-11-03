@@ -48,6 +48,10 @@ PROGRAMS = ["hello", "lad-04-classes", "lad-07-json"]
 # The dump binary runs in one fixed environment on every arm and host.
 RUN_ENV = {"PATH": "/usr/bin:/bin", "HOME": "/root", "LANG": "C"}
 RUN_DIR = Path("/tmp/perry-realm-diff")
+# The dumper's source path is a realm value too (process.argv[1]): every arm
+# and host compiles it from this one path.
+DUMPER_SRC = Path("/tmp/perry-realm-diff-src") / "realm_dump.ts"
+NATIVE_IMPORT = re.compile(r'^import \* as (realm_native_\d+) from "([^"]+)";$', re.M)
 
 
 class GateError(Exception):
@@ -67,6 +71,25 @@ def compile_ts(perry, source, binary, extra_env):
     if run.returncode != 0:
         raise GateError(f"{source.name} failed to compile (see {binary}.compile.log)")
     return log
+
+
+def dumper_source(names=None):
+    """The dumper, written to DUMPER_SRC. Restricted to `names`, every
+    namespace import of a module outside R is bound to undefined: a static
+    import runs its module's init, which births all of the module's exports,
+    and a restricted dumper must not touch a root outside R."""
+    text = DUMPER.read_text()
+    imports = NATIVE_IMPORT.findall(text)
+    if not imports:
+        raise GateError(f"{DUMPER} has no native namespace imports (format changed?)")
+    if names is not None:
+        text = NATIVE_IMPORT.sub(
+            lambda m: m.group(0) if m.group(2) in names
+            else f"const {m.group(1)}: any = undefined; // {m.group(2)} is outside R", text)
+    shutil.rmtree(DUMPER_SRC.parent, ignore_errors=True)
+    DUMPER_SRC.parent.mkdir(parents=True)
+    DUMPER_SRC.write_text(text)
+    return DUMPER_SRC
 
 
 def reach_of(log):
@@ -152,7 +175,7 @@ def main():
                 # names is the reference.
                 names_file.write_text(json.dumps({"names": names}, indent=0) + "\n")
                 binary = out / f"dump-{program}" / "realm-dump"
-                compile_ts(args.perry, DUMPER, binary, {})
+                compile_ts(args.perry, dumper_source(), binary, {})
                 reference.write_text(dump(binary, set(names)))
                 print(f"realm_diff_gate: regenerated {program} ({len(names)} names)")
                 continue
@@ -164,12 +187,13 @@ def main():
                 ok = False
                 continue
             binary = out / f"dump-{program}" / "realm-dump"
-            log = compile_ts(args.perry, DUMPER, binary, {"PERRY_REALM_REACH_NAMES": str(names_file)})
+            log = compile_ts(args.perry, dumper_source(set(names)), binary,
+                             {"PERRY_REALM_REACH_NAMES": str(names_file)})
             check_restricted(log, names_file, names)
             ok &= compare(program, reference, dump(binary, set(names), walk=True), out)
         if "full" in wanted or args.self_test:
             binary = out / "dump-full" / "realm-dump"
-            log = compile_ts(args.perry, DUMPER, binary, {})
+            log = compile_ts(args.perry, dumper_source(), binary, {})
             if not reach_of(log)["top"]:
                 raise GateError("the plainly built dumper's R is not top")
             if args.regenerate:
