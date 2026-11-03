@@ -288,7 +288,9 @@ impl Module {
     ///
     /// Interfaces and type aliases stay in `exports` so cross-module type
     /// resolution can follow re-export chains; a declaration-merged name that
-    /// also has a value binding is a value.
+    /// also has a value binding is a value. It is the one predicate for "this
+    /// export is no runtime export": the facts (no value, no namespace key)
+    /// and codegen read it as the namespace builders do.
     pub fn is_type_only_export_binding(&self, name: &str) -> bool {
         let has_type_declaration = self.interfaces.iter().any(|i| i.name == name)
             || self.type_aliases.iter().any(|alias| alias.name == name);

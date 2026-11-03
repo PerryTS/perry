@@ -37,6 +37,8 @@ impl<'a> Gen<'a> {
             let mut names: Vec<&str> = Vec::new();
             for e in self.exports_of(mi) {
                 match e {
+                    // An erased type export binds nothing and shadows nothing.
+                    Export::Named { local, .. } if modules[mi].1.is_type_only_export_binding(local) => {}
                     Export::Named { exported, .. } | Export::ReExport { exported, .. } => {
                         names.push(exported)
                     }
@@ -72,6 +74,9 @@ impl<'a> Gen<'a> {
             let ns = self.mods[mi as usize].ns_tok;
             for e in self.exports_of(mi as usize) {
                 match e {
+                    // `export type T` / `export interface I` is no runtime
+                    // export: no value, no namespace key.
+                    Export::Named { local, .. } if module.is_type_only_export_binding(local) => {}
                     Export::Named { local, exported } => {
                         let a = self.m.atom(exported);
                         let en = self.export_node(mi, a);

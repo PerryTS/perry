@@ -37,10 +37,6 @@ fn resolved<'a>(ctx: &'a CompilationContext, from: &Path, source: &str) -> Optio
         })
 }
 
-fn type_only(module: &perry_hir::Module, name: &str) -> bool {
-    module.is_type_only_export_binding(name)
-}
-
 fn exports(
     ctx: &CompilationContext,
     path: &PathBuf,
@@ -59,7 +55,7 @@ fn exports(
         match e {
             perry_hir::Export::Named { local, exported } => {
                 n += usize::from(
-                    (include_default || exported != "default") && !type_only(module, local),
+                    (include_default || exported != "default") && !module.is_type_only_export_binding(local),
                 );
             }
             perry_hir::Export::ReExport { exported, .. } => {
