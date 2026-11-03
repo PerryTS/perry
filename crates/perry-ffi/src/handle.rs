@@ -70,8 +70,8 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
 use crate::{
-    NativeLeaseKind, NativeQuarantine, NativeRegistrationIdentity, NativeRegistrationKind,
-    NativeRegistrationLease, NativeRegistrationRegistry, NativeRegistryDomain,
+    NativeLeaseKind, NativeRegistrationIdentity, NativeRegistrationKind, NativeRegistrationLease,
+    NativeRegistrationRegistry, NativeRegistryDomain,
 };
 use dashmap::DashMap;
 use std::sync::LazyLock as Lazy;
@@ -483,6 +483,7 @@ impl<'a> GcRootVisitor<'a> {
 pub fn register_handle<T: 'static + Send + Sync>(value: T) -> Handle {
     crate::event_pump::ensure_handle_tick_hook_registered();
     ensure_handle_exists_probe_registered();
+    crate::handle_lifecycle::note_registration();
     let identity = match REGISTRATIONS.begin_registration(NativeRegistrationKind::Payload) {
         Ok(identity) => identity,
         Err(error) => {
@@ -506,9 +507,11 @@ pub fn register_handle<T: 'static + Send + Sync>(value: T) -> Handle {
 /// True exhaustion of the shared band — every id live, quarantined, or still
 /// named by a reachable JS value — is a catchable `Error` with code
 /// `ERR_PERRY_HANDLE_IDS_EXHAUSTED` rather than a process-aborting panic
-/// (#11453). Steady-state churn cannot reach it: FFI ids recycle through the
-/// tick quarantine and common ids through the collector.
+/// (#11453). Steady-state churn cannot reach it: retired ids recycle through
+/// the collector, and reclamation is requested first so a later registration
+/// can succeed.
 fn throw_handle_ids_exhausted(error: crate::NativeRegistrationError) -> ! {
+    crate::handle_lifecycle::request_full_trace();
     let message = format!(
         "Perry native handle ids exhausted ({error:?}): all {} ids of the shared handle \
          band are live or still referenced",
@@ -532,6 +535,7 @@ pub fn reserve_handle_id() -> Handle {
 /// before handing the numeric id to its clients.
 pub fn reserve_handle_id_in_domain(domain: NativeRegistryDomain) -> Handle {
     crate::event_pump::ensure_handle_tick_hook_registered();
+    crate::handle_lifecycle::note_registration();
     let Ok(identity) =
         REGISTRATIONS.begin_registration_in_domain(domain, NativeRegistrationKind::Reserved)
     else {
@@ -544,19 +548,31 @@ pub fn reserve_handle_id_in_domain(domain: NativeRegistryDomain) -> Handle {
 /// Retire a reserved id after its owner removed the payload. Duplicate frees,
 /// zero, and attempts to free ordinary payload ids leave the queues unchanged.
 pub fn free_handle_id(id: Handle) {
-    free_reserved_id(id, NativeQuarantine::NextDrain);
+    free_reserved_id(id, None);
 }
 
 /// Retire a reserved id after its owner removes the payload, delaying reuse
 /// until a later drain at or after `deadline` with both lease counts at zero.
 /// Zero, duplicate retirement, and ordinary payload ids leave queues unchanged.
 pub fn free_handle_id_until(id: Handle, deadline: Instant) {
-    free_reserved_id(id, NativeQuarantine::Until(deadline));
+    free_reserved_id(id, Some(deadline));
 }
 
-fn free_reserved_id(id: Handle, quarantine: NativeQuarantine) {
+/// A reserved id reached JS through its owner's map, so it parks like a
+/// payload id: reusable once a full trace proves no value names it.
+fn free_reserved_id(id: Handle, deadline: Option<Instant>) {
     if let Some(identity) = REGISTRATIONS.begin_retirement(id, NativeRegistrationKind::Reserved) {
-        assert!(REGISTRATIONS.finish_retirement(identity, quarantine));
+        park(identity, deadline);
+    }
+}
+
+/// Every retirement in the shared band waits for the collector's proof
+/// (`handle_lifecycle`): a JS value copies an id with no hook, so no tick
+/// quarantine or lease can tell when the last copy died.
+fn park(identity: crate::NativeRegistrationIdentity, deadline: Option<Instant>) {
+    match deadline {
+        Some(deadline) => crate::handle_lifecycle::park_retired_until(identity, deadline),
+        None => crate::handle_lifecycle::park_retired(identity),
     }
 }
 
@@ -610,27 +626,24 @@ pub fn get_handle_mut<T: 'static + Send + Sync>(handle: Handle) -> Option<&'stat
 /// Remove the handle from the registry and return its value if
 /// the type matches. After this, the handle is no longer valid.
 pub fn take_handle<T: 'static + Send + Sync>(handle: Handle) -> Option<T> {
-    remove_payload(handle, NativeQuarantine::NextDrain)
+    remove_payload(handle, None)
         .and_then(|boxed| boxed.downcast::<T>().ok())
         .map(|boxed| *boxed)
 }
 
 /// Remove the current payload; its native identity outlives retained leases.
 pub fn drop_handle(handle: Handle) -> bool {
-    remove_payload(handle, NativeQuarantine::NextDrain).is_some()
+    remove_payload(handle, None).is_some()
 }
 
 /// Remove the current payload and return whether a payload was removed.
-/// Its id can be reused only after a later drain at or after `deadline` with
-/// both lease counts at zero; retained leases do not retain the removed payload.
+/// Its id is reused only after a full trace that began at or after `deadline`
+/// proves no value names it; retained leases do not retain the removed payload.
 pub fn drop_handle_until(handle: Handle, deadline: Instant) -> bool {
-    remove_payload(handle, NativeQuarantine::Until(deadline)).is_some()
+    remove_payload(handle, Some(deadline)).is_some()
 }
 
-fn remove_payload(
-    handle: Handle,
-    quarantine: NativeQuarantine,
-) -> Option<Box<dyn Any + Send + Sync>> {
+fn remove_payload(handle: Handle, deadline: Option<Instant>) -> Option<Box<dyn Any + Send + Sync>> {
     let identity = REGISTRATIONS.begin_retirement(handle, NativeRegistrationKind::Payload)?;
     // Retiring blocks acquisition/reuse. Neither payload removal nor its later
     // destructor runs under the registration-state mutex.
@@ -639,7 +652,7 @@ fn remove_payload(
     if let Some(payload) = removed.as_deref() {
         index_note_removed(payload, handle);
     }
-    assert!(REGISTRATIONS.finish_retirement(identity, quarantine));
+    park(identity, deadline);
     removed
 }
 
@@ -943,7 +956,7 @@ mod tests {
 
     #[test]
     fn round_trip_simple_value() {
-        let _serial = RECYCLE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _serial = recycle_serial();
         let h = register_handle(42_i64);
         assert_ne!(h, INVALID_HANDLE);
         assert!(h < FFI_HANDLE_ID_END);
@@ -955,7 +968,7 @@ mod tests {
 
     #[test]
     fn mutable_access_persists() {
-        let _serial = RECYCLE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _serial = recycle_serial();
         struct Counter(u32);
         let h = register_handle(Counter(0));
         with_handle_mut::<Counter, _, _>(h, |c| c.0 += 1).expect("present");
@@ -967,7 +980,7 @@ mod tests {
 
     #[test]
     fn iter_handles_of_mut_updates_matching_values() {
-        let _serial = RECYCLE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _serial = recycle_serial();
         struct Counter(u32);
         let a = register_handle(Counter(1));
         let b = register_handle(Counter(10));
@@ -987,7 +1000,7 @@ mod tests {
 
     #[test]
     fn indexed_type_iterates_only_its_live_ids_including_backfill() {
-        let _serial = RECYCLE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _serial = recycle_serial();
         struct Indexed(u32);
         // Registered before the declaration: must be backfilled.
         let early = register_handle(Indexed(1));
@@ -1033,7 +1046,7 @@ mod tests {
 
     #[test]
     fn type_mismatch_returns_none() {
-        let _serial = RECYCLE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _serial = recycle_serial();
         let h = register_handle(42_i64);
         // Same handle, wrong type — no value comes back.
         let r = with_handle::<String, _, _>(h, |s| s.clone());
@@ -1043,7 +1056,7 @@ mod tests {
 
     #[test]
     fn handles_are_unique() {
-        let _serial = RECYCLE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _serial = recycle_serial();
         let a = register_handle(1_i32);
         let b = register_handle(2_i32);
         assert_ne!(a, b);
@@ -1068,6 +1081,167 @@ mod tests {
     // Every fixture that drains or observes post-removal ids shares this lock,
     // including the sibling registration_tests module and its worker lifetime.
     pub(super) static RECYCLE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Recycling tests run one at a time, each on a thread that owns a heap
+    /// (with the runtime linked), so the ids it retires are its own to decide.
+    pub(super) fn recycle_serial() -> std::sync::MutexGuard<'static, ()> {
+        let serial = RECYCLE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        #[cfg(feature = "runtime-link")]
+        perry_runtime::gc::gc_init();
+        serial
+    }
+
+    /// One tick drain, then two full traces in which no word names any id:
+    /// the first ages every parked id past its young epoch, the second
+    /// releases it. Ids are reissued only through that proof.
+    pub(super) fn collect_unobserved() {
+        drain_quarantined_handles();
+        for _ in 0..2 {
+            crate::handle_lifecycle::trace_phase_for_tests(0);
+            crate::handle_lifecycle::trace_phase_for_tests(1);
+        }
+    }
+
+    /// One full trace whose heap holds `held` as `HANDLE_TAG` words.
+    fn trace_observing(held: &[Handle]) {
+        crate::handle_lifecycle::trace_phase_for_tests(0);
+        for &id in held {
+            assert!(crate::handle_lifecycle::observe_for_tests(boxed(id)));
+        }
+        crate::handle_lifecycle::trace_phase_for_tests(1);
+    }
+
+    fn boxed(id: Handle) -> u64 {
+        0xFFF9_0000_0000_0000 | id as u64
+    }
+
+    /// Whether `id` could be registered again right now (registers and retires
+    /// it reusably when it can, leaving the pool as it found it).
+    fn reissuable(id: Handle) -> bool {
+        let Ok(identity) =
+            REGISTRATIONS.begin_registration_with_id(id, NativeRegistrationKind::Payload)
+        else {
+            return false;
+        };
+        assert!(REGISTRATIONS.publish(identity));
+        assert!(REGISTRATIONS.begin_retirement_of(identity));
+        assert!(REGISTRATIONS.finish_retirement_reusable(identity));
+        true
+    }
+
+    #[test]
+    fn a_dropped_id_is_not_reissued_by_tick_drains() {
+        let _serial = recycle_serial();
+        let h = register_handle(1_u8);
+        assert!(drop_handle(h));
+        for _ in 0..5 {
+            drain_quarantined_handles();
+        }
+        assert!(!reissuable(h), "a tick drain must not recycle a retired id");
+        collect_unobserved();
+        assert!(reissuable(h), "two traces naming nothing release the id");
+    }
+
+    #[test]
+    fn young_survivors_do_not_raise_the_trace_trigger() {
+        use crate::handle_lifecycle::{trace_trigger_for_tests, MIN_TRIGGER};
+        let _serial = recycle_serial();
+        collect_unobserved();
+        let ids: Vec<Handle> = (0..3 * MIN_TRIGGER)
+            .map(|i| {
+                let h = register_handle(i as u32);
+                assert!(drop_handle(h));
+                h
+            })
+            .collect();
+        // One trace keeps every id as young: they say nothing about what the
+        // program holds, so the trigger must not grow on them (it used to
+        // become twice the survivors and doubled every trace).
+        trace_observing(&[]);
+        assert!(ids.iter().all(|&h| !reissuable(h)));
+        assert_eq!(trace_trigger_for_tests(), (MIN_TRIGGER, 0));
+        // The next trace decides them: the ids a word names are the live
+        // ones, and the trigger is twice those, never below the floor.
+        let held = &ids[..MIN_TRIGGER];
+        trace_observing(held);
+        assert_eq!(trace_trigger_for_tests(), (2 * MIN_TRIGGER, MIN_TRIGGER));
+        assert!(ids[MIN_TRIGGER..].iter().all(|&h| reissuable(h)));
+        collect_unobserved();
+        assert_eq!(trace_trigger_for_tests(), (MIN_TRIGGER, 0));
+    }
+
+    #[test]
+    fn an_id_named_by_a_traced_word_is_never_reissued() {
+        let _serial = recycle_serial();
+        let h = register_handle(2_u8);
+        assert!(drop_handle(h));
+        for _ in 0..4 {
+            trace_observing(&[h]);
+            assert!(!reissuable(h), "a JS value still holds the id");
+        }
+        collect_unobserved();
+        assert!(reissuable(h));
+    }
+
+    #[test]
+    fn weak_key_verdict_agrees_with_the_release() {
+        let _serial = recycle_serial();
+        let h = register_handle(3_u8);
+        assert!(drop_handle(h));
+        crate::handle_lifecycle::trace_phase_for_tests(0);
+        assert!(
+            crate::handle_lifecycle::is_live_for_tests(boxed(h)),
+            "a young parked id keeps its weak entries"
+        );
+        crate::handle_lifecycle::trace_phase_for_tests(1);
+        assert!(!reissuable(h));
+        crate::handle_lifecycle::trace_phase_for_tests(0);
+        assert!(!crate::handle_lifecycle::is_live_for_tests(boxed(h)));
+        crate::handle_lifecycle::trace_phase_for_tests(1);
+        assert!(
+            reissuable(h),
+            "the trace that deleted its weak entries releases it"
+        );
+        assert!(crate::handle_lifecycle::is_live_for_tests(boxed(h)));
+    }
+
+    #[test]
+    fn a_weak_key_named_by_a_traced_word_stays_live() {
+        let _serial = recycle_serial();
+        let h = register_handle(4_u8);
+        assert!(drop_handle(h));
+        collect_unobserved();
+        let h = register_handle(5_u8);
+        assert!(drop_handle(h));
+        trace_observing(&[]);
+        crate::handle_lifecycle::trace_phase_for_tests(0);
+        assert!(!crate::handle_lifecycle::is_live_for_tests(boxed(h)));
+        assert!(crate::handle_lifecycle::observe_for_tests(boxed(h)));
+        assert!(crate::handle_lifecycle::is_live_for_tests(boxed(h)));
+        crate::handle_lifecycle::trace_phase_for_tests(1);
+        assert!(!reissuable(h));
+        collect_unobserved();
+        assert!(reissuable(h));
+    }
+
+    #[test]
+    fn a_grace_deadline_outlives_unobserved_traces() {
+        let _serial = recycle_serial();
+        let h = register_handle(6_u8);
+        assert!(drop_handle_until(
+            h,
+            Instant::now() + Duration::from_secs(3600)
+        ));
+        collect_unobserved();
+        crate::handle_lifecycle::trace_phase_for_tests(0);
+        assert!(crate::handle_lifecycle::is_live_for_tests(boxed(h)));
+        crate::handle_lifecycle::trace_phase_for_tests(1);
+        assert!(!reissuable(h));
+        let r = reserve_handle_id();
+        free_handle_id_until(r, Instant::now() - Duration::from_secs(1));
+        collect_unobserved();
+        assert!(reissuable(r), "an elapsed deadline adds no hold");
+    }
 
     /// Register `value`, reporting whether `register_handle` REUSED a parked
     /// id rather than minting a fresh one (the recycling contract). A pop
@@ -1105,7 +1279,7 @@ mod tests {
         for _ in 0..10_000 {
             // Promote prior-tick quarantined ids to the freelist (the host
             // pump's per-tick drain), then observe whether register reuses one.
-            drain_quarantined_handles();
+            collect_unobserved();
             let (handle, reused) = register_observing_reuse(value.clone());
             if reused {
                 return handle;
@@ -1125,7 +1299,7 @@ mod tests {
         // than minting a second fresh one. A no-reclaim `drop_handle` parks
         // nothing, so `register_handle` would always mint fresh and
         // `drop_then_register_reusing` would never observe reuse — a hard fail.
-        let _serial = RECYCLE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _serial = recycle_serial();
 
         let h1 = register_handle(7_i64);
         let h2 = drop_then_register_reusing(h1, 9_i64);
@@ -1135,7 +1309,7 @@ mod tests {
 
     #[test]
     fn reused_id_carries_no_stale_state() {
-        let _serial = RECYCLE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _serial = recycle_serial();
 
         // Register a String, drop it, then register a different type under the
         // RECYCLED id. The recycled id must resolve to the NEW value with the
@@ -1175,7 +1349,7 @@ mod tests {
         // handler's microtasks — and thus any stale writes — have drained). So
         // within the tick `h` resolves to NOTHING, and the stale write no-ops
         // against the empty slot exactly as it did before the freelist existed.
-        let _serial = RECYCLE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _serial = recycle_serial();
 
         // A `ServerResponse`-shaped stand-in: the field a bleed would corrupt.
         #[derive(Clone)]
@@ -1229,7 +1403,7 @@ mod tests {
 
         // After a tick boundary (drain), `h` is safely reusable again — and a
         // fresh registration under it carries no stale R1 state.
-        drain_quarantined_handles();
+        collect_unobserved();
         let h3 = drop_then_register_reusing(
             h2,
             Response {
@@ -1263,7 +1437,7 @@ mod tests {
         // passes, so the stale write no-ops against an empty slot for the whole
         // window — then `h` recycles cleanly once the request is definitively
         // dead.
-        let _serial = RECYCLE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _serial = recycle_serial();
 
         #[derive(Clone)]
         struct Response {
@@ -1285,7 +1459,7 @@ mod tests {
         // (Fail-before: a one-tick quarantine promotes `h` on the first drain,
         // making the assertion below fail.)
         for _ in 0..5 {
-            drain_quarantined_handles();
+            collect_unobserved();
             let probe = register_handle(0_i64);
             assert_ne!(
                 probe, h,
@@ -1314,7 +1488,7 @@ mod tests {
         // promoted by the very next drain and reused cleanly, carrying no stale
         // state. This is the post-grace tick, modeled deterministically (no
         // sleep) with an id we fully control.
-        drain_quarantined_handles();
+        collect_unobserved();
         let dead = register_handle(Response {
             buffered_body: b"to-be-finalized".to_vec(),
         });
@@ -1327,7 +1501,7 @@ mod tests {
         // `drop_then_register_reusing`).
         let mut recycled = None;
         for _ in 0..10_000 {
-            drain_quarantined_handles();
+            collect_unobserved();
             let candidate = register_handle(Response {
                 buffered_body: b"request-2-body".to_vec(),
             });
@@ -1355,7 +1529,7 @@ mod tests {
     fn live_handles_never_share_an_id() {
         // Serialized: this test drains the quarantine, which mutates the shared
         // recycle state the other recycle-sensitive tests depend on.
-        let _serial = RECYCLE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _serial = recycle_serial();
 
         // Recycling must never hand the same id to two live handles. Hold a
         // batch live (none dropped) and assert every id is distinct, then
@@ -1379,7 +1553,7 @@ mod tests {
         }
         // Promote the just-quarantined ids so the next batch reuses them (the
         // host pump's per-tick drain); they must still all be mutually distinct.
-        drain_quarantined_handles();
+        collect_unobserved();
         let second = batch_all_distinct();
         for h in &second {
             drop_handle(*h);
@@ -1400,7 +1574,7 @@ mod tests {
             .collect();
         for identity in ids {
             assert!(registry.begin_retirement_of(identity));
-            assert!(registry.finish_retirement(identity, NativeQuarantine::NextDrain));
+            assert!(registry.finish_retirement(identity, crate::NativeQuarantine::NextDrain));
         }
         assert_eq!(
             registry.drain(Instant::now()),
@@ -1411,7 +1585,7 @@ mod tests {
 
     #[test]
     fn churn_does_not_exhaust_the_id_band() {
-        let _serial = RECYCLE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _serial = recycle_serial();
 
         // Register/drop churn past the id band size while never holding more
         // than one handle live. With recycling the fresh counter barely
@@ -1435,7 +1609,7 @@ mod tests {
             // register reuses it rather than minting fresh and exhausting the
             // band. A no-reclaim build quarantines nothing, so this drain is a
             // no-op and the counter still runs away.
-            drain_quarantined_handles();
+            collect_unobserved();
         }
         let after = REGISTRATIONS.next_fresh_id_for_tests();
         let fresh_minted = (after - before) as usize;
@@ -1479,7 +1653,7 @@ mod tests {
 
     #[test]
     fn reserve_free_reserve_recycles_the_id() {
-        let _serial = RECYCLE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _serial = recycle_serial();
 
         // Reserve/free churn far past the band size while holding at most one
         // id live. With `free_handle_id` recycling each id through the
@@ -1502,7 +1676,7 @@ mod tests {
             free_handle_id(id);
             // Promote the just-quarantined id back to the freelist (the host
             // pump's per-tick drain) so the next reserve reuses it.
-            drain_quarantined_handles();
+            collect_unobserved();
         }
         let fresh_minted = (REGISTRATIONS.next_fresh_id_for_tests() - before) as usize;
         assert!(
@@ -1521,7 +1695,7 @@ mod tests {
         // before the next drain would alias the new socket (the exact aliasing
         // class #6407 fixes). While quarantined the id maps to nothing, so the
         // stale dispatch spends against an empty slot.
-        let _serial = RECYCLE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _serial = recycle_serial();
 
         let h = reserve_handle_id();
         assert_ne!(h, INVALID_HANDLE);
@@ -1547,7 +1721,7 @@ mod tests {
         let reused = drop_then_register_reusing(other_registered, 55_i64);
         assert_eq!(with_handle::<i64, _, _>(reused, |v| *v), Some(55));
         drop_handle(reused);
-        drain_quarantined_handles();
+        collect_unobserved();
     }
 
     #[test]
@@ -1556,14 +1730,14 @@ mod tests {
         // path in handle-registry terms): a reserved id freed with a future
         // grace deadline stays parked across EVERY drain until the deadline
         // elapses, then recycles cleanly.
-        let _serial = RECYCLE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _serial = recycle_serial();
 
         let h = reserve_handle_id();
         assert_ne!(h, INVALID_HANDLE);
         free_handle_id_until(h, Instant::now() + Duration::from_secs(3600));
 
         for _ in 0..5 {
-            drain_quarantined_handles();
+            collect_unobserved();
             let probe = reserve_handle_id();
             assert_ne!(
                 probe, h,
@@ -1580,7 +1754,7 @@ mod tests {
         free_handle_id_until(dead, Instant::now() - Duration::from_secs(1));
         let mut recycled = false;
         for _ in 0..10_000 {
-            drain_quarantined_handles();
+            collect_unobserved();
             let candidate = reserve_handle_id();
             if candidate == dead {
                 recycled = true;
@@ -1595,18 +1769,18 @@ mod tests {
         );
         // `h`'s far-future entry stays parked — the point of the test. The
         // freelist is bounded, so a single held id leaks nothing that matters.
-        drain_quarantined_handles();
+        collect_unobserved();
     }
 
     #[test]
     fn free_handle_id_ignores_invalid_handle() {
-        let _serial = RECYCLE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _serial = recycle_serial();
         // `reserve_handle_id` returns `INVALID_HANDLE` on exhaustion, so callers
         // free its result unconditionally; freeing the sentinel must be a no-op
         // (never park `0` for reuse — it is the "no handle" value).
         free_handle_id(INVALID_HANDLE);
         free_handle_id_until(INVALID_HANDLE, Instant::now());
-        drain_quarantined_handles();
+        collect_unobserved();
         // `register_handle` never returns `INVALID_HANDLE`, so if `0` had been
         // parked and handed back this would fail its own non-null invariant.
         let h = register_handle(1_i64);

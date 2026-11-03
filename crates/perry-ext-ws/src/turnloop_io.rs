@@ -333,7 +333,9 @@ fn adopt(id: i64, leftover: Vec<u8>) {
     }
     let token = with_client(id, |client| client.token.take()).flatten();
     if let Some(token) = token {
-        token.resolve_number(ws_id as f64);
+        // A boxed handle, not a Number: the collector proves an id dead only
+        // when every JS copy of it is a handle word it can see.
+        token.resolve_bits(perry_ffi::JsValue::from_handle(ws_id as u64).bits());
     }
 }
 

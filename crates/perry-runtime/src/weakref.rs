@@ -309,6 +309,11 @@ pub(crate) fn weak_target_should_clear(
     if target_bits == TAG_UNDEFINED {
         return false;
     }
+    // A shared-pool handle id is not a heap address: the pool decides it, and
+    // only a full trace can release one (minors keep it).
+    if let Some(dead) = crate::gc::pool_handle_key_is_dead(target_bits) {
+        return dead && !minor_only;
+    }
     let target = f64::from_bits(target_bits);
     if crate::value::is_js_handle(target) {
         return false;

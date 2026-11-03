@@ -29,13 +29,21 @@
 //! last trace that reached it; no side sets.
 //!
 //! **Pacing.** The collector's own full traces decide parked ids for free. A
-//! trace is *requested* only when both hold: the parked count reached
-//! `trigger_at` (twice the survivors, never below [`MIN_TRIGGER`]), and the
+//! trace is *requested* only when both hold: the parked ids the last trace did
+//! not prove live reached `trigger_at` (twice the ids it proved live, never
+//! below [`MIN_TRIGGER`]; young ids it merely kept are not live), and the
 //! mutator has run at least [`AMORTIZE`] times as long as the last requested
 //! trace took since it ended. The second condition caps what reclamation can
 //! add to a handle-churning program at about 1/[`AMORTIZE`] of its run time,
 //! however small its heap. Two things override that budget so memory stays
-//! bounded: [`MAX_PARKED`] parked ids, and a shared band running low.
+//! bounded: [`MAX_PARKED`] unproven ids, and the band reserve.
+//!
+//! **Band reserve.** A release needs two traces to begin after the park (the
+//! first keeps the id as young). So when fewer than `max(BAND_RESERVE, 2 x
+//! span + 2 x stride)` shared ids are obtainable, `span` being the ids this
+//! mutator registered across its last trace (request to finish), registration
+//! requests a trace without the time budget. The band then runs out only if
+//! the program itself names nearly all of it.
 //!
 //! **Threads.** Parking is per mutator: each thread's trace decides only the
 //! ids that thread parked. A thread that exits hands its parked ids to the
@@ -45,6 +53,7 @@ use crate::NativeRegistrationIdentity;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::c_void;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -60,6 +69,8 @@ extern "C" {
         phase: extern "C" fn(u32) -> bool,
         observe: extern "C" fn(u64, Mark, *mut c_void) -> bool,
     );
+    fn perry_ffi_gc_register_pool_handle_liveness(is_live: extern "C" fn(u64) -> bool);
+    fn perry_ffi_gc_thread_is_mutator() -> bool;
 }
 
 #[cfg(all(test, not(feature = "runtime-link")))]
@@ -74,16 +85,31 @@ unsafe extern "C" fn perry_ffi_gc_register_pool_handle_trace(
 ) {
 }
 
-/// Parked-id count below which parking alone never requests a full trace.
+#[cfg(all(test, not(feature = "runtime-link")))]
+#[no_mangle]
+unsafe extern "C" fn perry_ffi_gc_register_pool_handle_liveness(
+    _is_live: extern "C" fn(u64) -> bool,
+) {
+}
+
+// The unit tests drive the provider on their own thread as its mutator.
+#[cfg(all(test, not(feature = "runtime-link")))]
+#[no_mangle]
+unsafe extern "C" fn perry_ffi_gc_thread_is_mutator() -> bool {
+    true
+}
+
+/// Unproven parked ids below which parking alone never requests a full trace.
 pub const MIN_TRIGGER: usize = 4096;
 /// A requested trace waits until the mutator has run this many times as long
 /// as the previous requested trace took (see the module doc).
 pub const AMORTIZE: u32 = 32;
-/// Parked ids at which a trace is requested regardless of the time budget, so
+/// Unproven parked ids at which a trace is requested regardless of the time budget, so
 /// parked payloads (a digest is ~600 bytes) stay a bounded share of RSS.
 pub const MAX_PARKED: usize = 64 * 1024;
-/// Shared-band ids still obtainable below which registration keeps asking
-/// for traces (checked every [`BAND_CHECK_STRIDE`] registrations).
+/// Floor of the band reserve: shared-band ids still obtainable below which
+/// registration requests traces (checked every [`BAND_CHECK_STRIDE`]
+/// registrations; the reserve grows with the observed per-trace consumption).
 pub const BAND_RESERVE: usize = 32 * 1024;
 const BAND_CHECK_STRIDE: u32 = 256;
 
@@ -116,6 +142,9 @@ struct Parked {
     epoch: u64,
     /// Epoch of the last trace that observed a word naming the id.
     reached: u64,
+    /// A retirement with a grace deadline (`drop_handle_until`) is not
+    /// released by a trace that began before it.
+    not_before: Option<Instant>,
 }
 
 struct Epoch {
@@ -123,9 +152,22 @@ struct Epoch {
     current: u64,
     /// A trace armed by `phase(0)` is running.
     tracing: bool,
+    /// When the armed trace began: the one clock its deadline checks read,
+    /// so its weak-key verdicts and its releases agree.
+    trace_began: Option<Instant>,
+    /// Unproven parked ids (`parked - live`) at which parking requests a trace.
     trigger_at: usize,
+    /// Parked ids the last finished trace could decide and found named: what
+    /// the program holds. Young ids it only kept are not counted.
+    live: usize,
     hooked: bool,
     registrations: u32,
+    /// Registration count when the next trace was requested (or, when the
+    /// collector began it unasked, when it began): the start of `span`.
+    span_from: Option<u32>,
+    /// Ids this mutator registered from the request to the finish of its last
+    /// trace: the consumption the band reserve must cover, twice.
+    span: usize,
     /// When the in-flight requested trace began, until the mutator next parks.
     requested_started: Option<Instant>,
     requested_pending: bool,
@@ -160,9 +202,13 @@ thread_local! {
     static EPOCH: RefCell<Epoch> = const { RefCell::new(Epoch {
         current: 0,
         tracing: false,
+        trace_began: None,
         trigger_at: MIN_TRIGGER,
+        live: 0,
         hooked: false,
         registrations: 0,
+        span_from: None,
+        span: 0,
         requested_started: None,
         requested_pending: false,
         last_cost: Duration::ZERO,
@@ -171,7 +217,23 @@ thread_local! {
     }) };
 }
 
-fn park(id: Handle, kind: Kind, identity: NativeRegistrationIdentity) {
+fn park(id: Handle, kind: Kind, identity: NativeRegistrationIdentity, not_before: Option<Instant>) {
+    // Only a mutator's full traces see the values that can name the id. A
+    // retirement elsewhere (a worker pool thread) has no heap to decide it.
+    if !unsafe { perry_ffi_gc_thread_is_mutator() } {
+        note_off_mutator_retirement(id);
+        orphan(
+            id,
+            Parked {
+                kind,
+                identity,
+                epoch: 0,
+                reached: 0,
+                not_before,
+            },
+        );
+        return;
+    }
     let Ok((hooked, epoch)) = EPOCH.try_with(|epoch| {
         let mut epoch = epoch.borrow_mut();
         let hooked = std::mem::replace(&mut epoch.hooked, true);
@@ -192,18 +254,23 @@ fn park(id: Handle, kind: Kind, identity: NativeRegistrationIdentity) {
                 identity,
                 epoch: 0,
                 reached: 0,
+                not_before,
             },
         );
         return;
     };
     if !hooked {
-        unsafe { perry_ffi_gc_register_pool_handle_trace(phase, observe) };
+        unsafe {
+            perry_ffi_gc_register_pool_handle_trace(phase, observe);
+            perry_ffi_gc_register_pool_handle_liveness(is_live);
+        }
     }
     let parked = Parked {
         kind,
         identity,
         epoch,
         reached: 0,
+        not_before,
     };
     let Ok(count) = PARKED.try_with(|map| {
         let mut map = map.borrow_mut();
@@ -216,23 +283,52 @@ fn park(id: Handle, kind: Kind, identity: NativeRegistrationIdentity) {
     let request = EPOCH
         .try_with(|epoch| {
             let mut epoch = epoch.borrow_mut();
-            if count < epoch.trigger_at || epoch.requested_pending {
+            let unproven = count.saturating_sub(epoch.live);
+            if unproven < epoch.trigger_at || epoch.requested_pending {
                 return false;
             }
-            if count < MAX_PARKED {
+            if unproven < MAX_PARKED {
                 if let Some(end) = epoch.last_end {
                     if end.elapsed() < epoch.last_cost * AMORTIZE {
                         return false;
                     }
                 }
             }
-            epoch.requested_pending = true;
+            epoch.note_request();
             true
         })
         .unwrap_or(false);
     if request {
         request_full_trace();
     }
+}
+
+static OFF_MUTATOR_RETIREMENTS: AtomicUsize = AtomicUsize::new(0);
+
+/// An id retired on a thread with no heap of its own is adopted by the next
+/// mutator to trace, which is sound only while the value cannot live in
+/// another agent's heap. Debug builds report the first such site with its
+/// backtrace (unit-test threads that never start a collector retire ids too,
+/// so this reports instead of aborting); every build counts them.
+fn note_off_mutator_retirement(id: Handle) {
+    // Tests make the case fatal; the knob is read only on this path.
+    if std::env::var_os("PERRY_HANDLE_OFF_MUTATOR_FATAL").is_some() {
+        eprintln!("perry-ffi: handle id {id} retired off a mutator thread (PERRY_HANDLE_OFF_MUTATOR_FATAL)");
+        std::process::abort();
+    }
+    let first = OFF_MUTATOR_RETIREMENTS.fetch_add(1, Ordering::Relaxed) == 0;
+    if cfg!(debug_assertions) && first {
+        eprintln!(
+            "perry-ffi: handle id {id} retired off a mutator thread; retire ids on the owning agent\n{}",
+            std::backtrace::Backtrace::force_capture()
+        );
+    }
+}
+
+/// Ids retired on a thread that runs no collector (diagnostics, tests).
+#[doc(hidden)]
+pub fn off_mutator_retirements() -> usize {
+    OFF_MUTATOR_RETIREMENTS.load(Ordering::Relaxed)
 }
 
 fn orphan(id: Handle, parked: Parked) {
@@ -247,13 +343,29 @@ pub fn park_reclaimable(
     identity: NativeRegistrationIdentity,
     owner: &'static dyn ParkedPayloadOwner,
 ) {
-    park(identity.numeric_id(), Kind::Reclaimable(owner), identity);
+    park(
+        identity.numeric_id(),
+        Kind::Reclaimable(owner),
+        identity,
+        None,
+    );
 }
 
 /// A removed payload's id, still `Retiring` in the pool: reusable once a full
 /// trace proves no JS value still holds the number.
 pub fn park_retired(identity: NativeRegistrationIdentity) {
-    park(identity.numeric_id(), Kind::Retired, identity);
+    park(identity.numeric_id(), Kind::Retired, identity, None);
+}
+
+/// [`park_retired`] that also holds the id until `deadline`: no trace that
+/// began before it releases the id, whatever it proves.
+pub fn park_retired_until(identity: NativeRegistrationIdentity, deadline: Instant) {
+    park(
+        identity.numeric_id(),
+        Kind::Retired,
+        identity,
+        Some(deadline),
+    );
 }
 
 /// Stop treating `id` as reclaimable: native state now refers to it (a
@@ -273,19 +385,53 @@ pub fn retain_strongly(id: Handle) -> bool {
         .unwrap_or(false)
 }
 
+impl Epoch {
+    fn note_request(&mut self) {
+        self.requested_pending = true;
+        self.span_from = Some(self.registrations);
+    }
+
+    /// Obtainable shared ids below which registration requests a trace: room
+    /// for what this mutator consumes across the two traces a release needs,
+    /// plus the stride before the check sees the band low (design 2.5).
+    fn band_reserve(&self) -> usize {
+        BAND_RESERVE.max(
+            self.span
+                .saturating_mul(2)
+                .saturating_add(2 * BAND_CHECK_STRIDE as usize),
+        )
+    }
+}
+
 /// Called on every registration in the shared band: keeps traces coming while
 /// the band is running low, whoever is consuming it.
 pub fn note_registration() {
-    let check = EPOCH
+    let reserve = EPOCH
         .try_with(|epoch| {
             let mut epoch = epoch.borrow_mut();
             epoch.registrations = epoch.registrations.wrapping_add(1);
-            epoch.registrations % BAND_CHECK_STRIDE == 0
+            (epoch.registrations % BAND_CHECK_STRIDE == 0 && !epoch.requested_pending)
+                .then(|| epoch.band_reserve())
         })
-        .unwrap_or(false);
-    if check && REGISTRATIONS.available_ids() < BAND_RESERVE {
-        request_full_trace();
+        .ok()
+        .flatten();
+    let Some(reserve) = reserve else {
+        return;
+    };
+    if REGISTRATIONS.available_ids() >= reserve {
+        return;
     }
+    let unproven = PARKED
+        .try_with(|map| map.borrow().0.len())
+        .unwrap_or(0)
+        .saturating_sub(EPOCH.with(|epoch| epoch.borrow().live));
+    // Nothing parked here is unproven: a trace could free nothing for this
+    // mutator, and the program holds what it registered.
+    if unproven == 0 && ORPHANS.lock().map_or(true, |orphans| orphans.is_empty()) {
+        return;
+    }
+    EPOCH.with(|epoch| epoch.borrow_mut().note_request());
+    request_full_trace();
 }
 
 /// Ask for a full trace at the next safe poll. Never collects synchronously.
@@ -324,6 +470,15 @@ pub fn finished_full_traces() -> usize {
         .unwrap_or(0)
 }
 
+/// The paced trigger and the live count it derives from (tests).
+#[doc(hidden)]
+pub fn trace_trigger_for_tests() -> (usize, usize) {
+    EPOCH.with(|epoch| {
+        let epoch = epoch.borrow();
+        (epoch.trigger_at, epoch.live)
+    })
+}
+
 /// Drive the provider's trace phase directly (tests).
 #[doc(hidden)]
 pub fn trace_phase_for_tests(phase_id: u32) -> bool {
@@ -348,8 +503,12 @@ extern "C" fn phase(phase: u32) -> bool {
                 .try_with(|epoch| {
                     let mut epoch = epoch.borrow_mut();
                     epoch.current += 1;
+                    epoch.trace_began = Some(Instant::now());
                     if std::mem::take(&mut epoch.requested_pending) {
                         epoch.requested_started = Some(Instant::now());
+                    }
+                    if epoch.span_from.is_none() {
+                        epoch.span_from = Some(epoch.registrations);
                     }
                     epoch.current
                 })
@@ -382,6 +541,7 @@ extern "C" fn phase(phase: u32) -> bool {
             let _ = EPOCH.try_with(|epoch| {
                 let mut epoch = epoch.borrow_mut();
                 epoch.tracing = false;
+                epoch.trace_began = None;
                 epoch.current = epoch.current.saturating_sub(1);
             });
             true
@@ -389,30 +549,47 @@ extern "C" fn phase(phase: u32) -> bool {
     }
 }
 
+/// Whether the armed trace of epoch `current`, begun at `began`, keeps a
+/// parked id: parked in the previous epoch or later (born since the previous
+/// trace began, or during this one), reached by this trace, or still inside
+/// its grace deadline. One predicate for weak-key verdicts and releases.
+fn trace_keeps(parked: &Parked, current: u64, began: Option<Instant>) -> bool {
+    parked.epoch >= current.saturating_sub(1)
+        || parked.reached == current
+        || parked
+            .not_before
+            .is_some_and(|deadline| began.is_none_or(|began| began < deadline))
+}
+
 fn finish_full_trace() {
-    let current = EPOCH.with(|epoch| {
+    let (current, began) = EPOCH.with(|epoch| {
         let mut epoch = epoch.borrow_mut();
         epoch.tracing = false;
         epoch.full_traces += 1;
-        epoch.current
+        if let Some(from) = epoch.span_from.take() {
+            epoch.span = epoch.registrations.wrapping_sub(from) as usize;
+        }
+        (epoch.current, epoch.trace_began.take())
     });
-    // Parked in the previous epoch or later: born since the previous trace
-    // began, or during this one.
-    let young_from = current.saturating_sub(1);
     let mut dead = Vec::new();
-    let survivors = PARKED.with(|map| {
+    let mut live = 0usize;
+    PARKED.with(|map| {
         let mut map = map.borrow_mut();
         map.0.retain(|_, parked| {
-            let keep = parked.epoch >= young_from || parked.reached == current;
+            let keep = trace_keeps(parked, current, began);
             if !keep {
                 dead.push(*parked);
+            } else if parked.epoch < current.saturating_sub(1) && parked.reached == current {
+                // Decidable, and a word named it: the program holds it.
+                live += 1;
             }
             keep
         });
-        map.0.len()
     });
     EPOCH.with(|epoch| {
-        epoch.borrow_mut().trigger_at = MIN_TRIGGER.max(survivors.saturating_mul(2));
+        let mut epoch = epoch.borrow_mut();
+        epoch.live = live;
+        epoch.trigger_at = MIN_TRIGGER.max(live.saturating_mul(2));
     });
     release(&dead);
 }
@@ -429,6 +606,32 @@ fn release(dead: &[Parked]) {
             }
         }
     }
+}
+
+/// Liveness of a handle-band key word during an armed trace (the runtime asks
+/// for weak and ephemeron keys). False exactly for the ids this trace's finish
+/// will release, so their weak entries are deleted in the same trace.
+extern "C" fn is_live(bits: u64) -> bool {
+    let id = (bits & 0x0000_FFFF_FFFF_FFFF) as Handle;
+    let Some(parked) = PARKED
+        .try_with(|map| map.borrow().0.get(&id).copied())
+        .ok()
+        .flatten()
+    else {
+        return true;
+    };
+    EPOCH
+        .try_with(|epoch| {
+            let epoch = epoch.borrow();
+            !epoch.tracing || trace_keeps(&parked, epoch.current, epoch.trace_began)
+        })
+        .unwrap_or(true)
+}
+
+/// Ask the liveness predicate directly (tests).
+#[doc(hidden)]
+pub fn is_live_for_tests(bits: u64) -> bool {
+    is_live(bits)
 }
 
 extern "C" fn observe(bits: u64, mark: Mark, ctx: *mut c_void) -> bool {
