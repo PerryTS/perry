@@ -93,6 +93,8 @@ pub use perry_native_registration::{
 };
 
 mod handle;
+/// GC-proven reclamation of shared-band handle ids (#11453).
+pub mod handle_lifecycle;
 #[allow(deprecated)]
 pub use handle::gc_register_root_scanner;
 pub use handle::{
