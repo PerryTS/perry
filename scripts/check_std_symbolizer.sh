@@ -27,12 +27,38 @@ if [ "$#" -lt 1 ]; then
   echo "usage: $0 <archive-or-binary>..." >&2
   exit 2
 fi
+# llvm-nm, looked up as the other archive gates do: rustup's llvm-tools nm
+# (rustc's own LLVM), then $LLVM_SYS_221_PREFIX (the CI LLVM; a Windows path
+# under MSYS/Git Bash, converted with cygpath), then PATH. A candidate counts
+# only if it is LLVM 22 or newer: an older nm cannot read the archive members
+# and would make every listing empty. No such nm: fail closed.
+llvm_major() {
+  "$1" --version 2>/dev/null | sed -n 's/.*LLVM version \([0-9][0-9]*\).*/\1/p' | head -1
+}
+cands=()
+if command -v rustc >/dev/null 2>&1; then
+  sysroot=$(rustc --print sysroot 2>/dev/null || true)
+  host=$(rustc -vV 2>/dev/null | sed -n 's/^host: //p')
+  if [ -n "$sysroot" ] && [ -n "$host" ]; then
+    cands+=("$sysroot/lib/rustlib/$host/bin/llvm-nm")
+  fi
+fi
+if [ -n "${LLVM_SYS_221_PREFIX:-}" ]; then
+  prefix=$LLVM_SYS_221_PREFIX
+  case "$(uname -s)" in
+    MINGW* | MSYS* | CYGWIN*) prefix=$(cygpath -u "$prefix") ;;
+  esac
+  cands+=("$prefix/bin/llvm-nm")
+fi
+cands+=(llvm-nm-22 llvm-nm)
 NM=""
-for cand in ${LLVM_SYS_221_PREFIX:+"$LLVM_SYS_221_PREFIX/bin/llvm-nm"} llvm-nm-22 llvm-nm; do
-  if command -v "$cand" >/dev/null 2>&1; then NM=$cand; break; fi
+for cand in "${cands[@]}"; do
+  command -v "$cand" >/dev/null 2>&1 || continue
+  major=$(llvm_major "$cand")
+  if [ -n "$major" ] && [ "$major" -ge 22 ]; then NM=$cand; break; fi
 done
 if [ -z "$NM" ]; then
-  echo "::error::check_std_symbolizer: llvm-nm not found (set LLVM_SYS_221_PREFIX)" >&2
+  echo "::error::check_std_symbolizer: no llvm-nm of LLVM 22 or newer (tried: ${cands[*]}); install rustup llvm-tools or set LLVM_SYS_221_PREFIX" >&2
   exit 2
 fi
 PATTERN='std::backtrace_rs::symbolize::gimli'
