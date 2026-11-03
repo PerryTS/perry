@@ -1,0 +1,1 @@
+hir: the shared expression walkers (`walk_expr_children`, `walk_expr_children_mut`) grow the stack like expression lowering does, so every recursive analysis over a deeply nested closure body (a 65-arm conditional chain: closure capture and assigned-local collection) runs on the lowering thread without overflowing it.
