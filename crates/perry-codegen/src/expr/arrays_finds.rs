@@ -964,6 +964,13 @@ pub(crate) fn lower(
                 let reason = buffer_access_materialization_reason(ctx, array);
                 return Ok(materialize_js_value(ctx, value, reason));
             }
+            // A `TaPtr` parameter's entry-bound view: the same checked tier
+            // `IndexGet` takes (expr/proven_view_access.rs), a bounds compare
+            // against the hoisted length and a byte load. Local `Uint8Array`
+            // views index by byte, so `proven_view_receiver` declines them.
+            if let Some(value) = super::try_lower_proven_view_checked_f64_load(ctx, array, index)? {
+                return Ok(value);
+            }
             // All numeric byte cells use the same checked element read,
             // including an unknown/fractional key. Strong tracked views above
             // keep their native proof; misses keep the boxed [[Get]] protocol.

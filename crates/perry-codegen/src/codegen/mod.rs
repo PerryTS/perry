@@ -317,6 +317,8 @@ mod spec_preserve_none_tests;
 mod spec_return_proof;
 #[cfg(test)]
 mod spec_self_recursion_tests;
+#[cfg(test)]
+mod spec_uint8_ta_ptr_tests;
 pub(crate) mod static_constfn;
 pub(crate) mod static_constfn_class;
 pub(crate) mod static_fields;

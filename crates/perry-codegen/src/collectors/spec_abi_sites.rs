@@ -648,8 +648,8 @@ fn record_expr_use(e: &Expr, depth: u32, scan: &mut ModuleScan) {
         // `new Int32Array(src)` consumes `src` by COPY (non-view: the arg is
         // not an ArrayBuffer when the binding proof later demands it), so the
         // ctor-arg position cannot change `src`'s length afterwards. Length
-        // reads are also safe.
-        Expr::TypedArrayNew { arg: Some(arg), .. } => {
+        // reads are also safe. `new Uint8Array(src)` copies the same way.
+        Expr::TypedArrayNew { arg: Some(arg), .. } | Expr::Uint8ArrayNew(Some(arg)) => {
             if let Expr::LocalGet(id) = arg.as_ref() {
                 if depth > 0 {
                     scan.closure_refs.insert(*id);
@@ -1265,8 +1265,8 @@ pub fn collect_spec_abi_facts(hir: &Module) -> SpecAbiModuleFacts {
     }
 
     // Proven typed-array bindings: single TOP-LEVEL `let`/`const` bound to a
-    // provably-non-view `TypedArrayNew` of a numeric kind, never reassigned,
-    // never referenced by a closure.
+    // provably-non-view `TypedArrayNew` of a numeric kind (or `Uint8ArrayNew`),
+    // never reassigned, never referenced by a closure.
     let mut ta_bindings: HashMap<u32, SpecTaBinding> = HashMap::new();
     // The callee hoists the data pointer and length through the header once,
     // so only a sealed binding may be passed: observing `.buffer` rebinds the
@@ -1286,6 +1286,16 @@ pub fn collect_spec_abi_facts(hir: &Module) -> SpecAbiModuleFacts {
                 Expr::TypedArrayNew { kind, arg } if spec_ta_kind_is_numeric(*kind) => {
                     judge_ctor_arg(arg.as_deref(), &array_literal_locals, &length_locals)
                         .map(|const_len| (*kind, const_len))
+                }
+                // `new Uint8Array(x)` lowers to `Uint8ArrayNew`, not
+                // `TypedArrayNew`, but births the same non-view byte store:
+                // `js_uint8array_alloc` and `typed_array_alloc(UINT8, n)` both
+                // brand it `GC_TYPE_BUFFER_UINT8ARRAY` (`store_alloc`, never a
+                // view). The judge keeps `new Uint8Array(buffer)` boxed: only a
+                // proven length or plain-array source is a copy.
+                Expr::Uint8ArrayNew(arg) => {
+                    judge_ctor_arg(arg.as_deref(), &array_literal_locals, &length_locals)
+                        .map(|const_len| (perry_hir::TYPED_ARRAY_KIND_UINT8, const_len))
                 }
                 // `Buffer.alloc(size)` births a fresh owning byte cell (a
                 // `BufferHeader`: u32 length at +0, inline bytes behind the

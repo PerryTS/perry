@@ -647,7 +647,7 @@ mod literal_chunks_tests;
 /// Dead-code elimination (`dynamic_reach`): the dynamic `import()` /
 /// `require(expr)` specifiers a body that can run holds, by the whole
 /// program's activation pass over `modules`, as (module path, specifier).
-/// `None` when facts are off or past their bounds (every site may run).
+/// `None` when facts are off (every site may run).
 pub(crate) fn live_dynamic_imports(
     modules: &BTreeMap<PathBuf, perry_hir::Module>,
     export_sources: perry_wpfacts::ExportSources,

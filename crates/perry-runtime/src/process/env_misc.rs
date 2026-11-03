@@ -82,7 +82,7 @@ pub extern "C" fn js_process_add_uncaught_exception_capture_callback(callback: f
     undefined_value()
 }
 
-/// Exit the process with the given exit code.
+/// Exit the calling Worker, or the process when called on the main thread.
 /// process.exit(code?: number | string | null) -> never
 /// Uses libc::_exit() to bypass cleanup handlers that can cause SIGILL
 /// during async event loop drain and V8 isolate destruction.
@@ -108,6 +108,7 @@ pub extern "C" fn js_process_exit(code: f64) {
     // returns `None` for exactly the nullish (no-argument) case.
     let published = validate_exit_code(code);
     let exit_code = run_process_exit_sequence(published);
+    crate::loop_interrupt::exit_current_worker();
     // Node's `reallyExit` ends the process without `FreeEnvironment`: no
     // Node-API cleanup hooks or finalizers run here. An addon finalizer may
     // join a thread that only ends with the process.

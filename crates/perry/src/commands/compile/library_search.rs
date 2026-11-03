@@ -22,7 +22,6 @@
 use anyhow::{anyhow, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::OnceLock;
 
 // `rust_target_triple` and `find_perry_workspace_root` still live in
 // the compile.rs orchestrator. Pull them in as private parent-module
@@ -34,35 +33,19 @@ use super::{
     WindowsTargetArch,
 };
 
-/// Resolve the host's Rust target triple by parsing `rustc -vV`.
-///
-/// Cached per-process via `OnceLock`. Returns `None` if `rustc` is missing
-/// or its `-vV` output doesn't include a `host:` line — callers should
-/// fall back to the simple `target/release/` layout in that case.
+/// The host's Rust target triple: the target this compiler was built for
+/// (`TARGET` of its build script), which is also the target of the runtime
+/// archives it links by default. Known at build time, so compiling never
+/// needs `rustc` on `PATH`.
 ///
 /// Used by `locate_native_lib_artifact` (refs #564) to probe
 /// `target/<host-triple>/release/` when cargo writes artifacts under the
 /// triple-prefixed directory because something pinned a default target
 /// (`[build] target = "..."` in `.cargo/config.toml`,
-/// `CARGO_BUILD_TARGET`, `rust-toolchain.toml` `targets = [...]`).
+/// `CARGO_BUILD_TARGET`, `rust-toolchain.toml` `targets = [...]`), and as
+/// the native-addon target of a build without `--target`.
 pub(crate) fn host_target_triple() -> Option<&'static str> {
-    static CACHE: OnceLock<Option<String>> = OnceLock::new();
-    CACHE
-        .get_or_init(|| {
-            let vv = Command::new("rustc").arg("-vV").output().ok()?;
-            if !vv.status.success() {
-                return None;
-            }
-            let vv_str = String::from_utf8_lossy(&vv.stdout);
-            let host_line = vv_str.lines().find(|l| l.starts_with("host:"))?;
-            let triple = host_line.trim_start_matches("host:").trim().to_string();
-            if triple.is_empty() {
-                None
-            } else {
-                Some(triple)
-            }
-        })
-        .as_deref()
+    Some(super::target_packages::HOST_TRIPLE)
 }
 
 /// Locate a `perry.nativeLibrary` crate's build artifact, probing both

@@ -111,16 +111,16 @@ pub extern "C" fn js_worker_threads_process_pending() -> i32 {
                 processed += 1;
             }
             WorkerEvent::Exit(worker_id, code) => {
-                let (terminate_promise, async_resources) =
+                let (terminate_promises, async_resources) =
                     if let Some(worker) = WORKERS.lock().unwrap().get_mut(&worker_id) {
                         let refed = worker.refed;
                         worker.set_liveness(false, refed);
                         (
-                            worker.terminate_promise.take(),
+                            std::mem::take(&mut worker.terminate_promises),
                             Some(worker.async_resources),
                         )
                     } else {
-                        (None, None)
+                        (Vec::new(), None)
                     };
                 dispatch_worker_event(worker_id, "exit", Some(code as f64));
                 if let Some(async_resources) = async_resources {
@@ -128,7 +128,7 @@ pub extern "C" fn js_worker_threads_process_pending() -> i32 {
                         perry_runtime::async_hook_slots::destroy(resource.async_id);
                     }
                 }
-                if let Some(promise) = terminate_promise {
+                for promise in terminate_promises {
                     super::async_shim::queue_promise_resolution(
                         promise,
                         true,
