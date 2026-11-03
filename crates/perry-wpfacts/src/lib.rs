@@ -1726,8 +1726,8 @@ fn compute_act<'a>(
             .map(|(mi, id, name)| (sorted[mi as usize].0.to_owned(), id, name))
             .collect()
     });
-    let fnproto_borrow_written = if stats.aborted {
-        Some("solve aborted".to_string())
+    let fnproto_borrow_written = if !stats.gave_up.is_empty() {
+        Some("a subject gave up its solve".to_string())
     } else {
         g.m.fnproto_borrow_write
             .map(|r| g.m.reasons[r as usize].clone())

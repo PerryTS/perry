@@ -650,7 +650,7 @@ fn borrowed_function_methods_merge_writes_from_units() {
     ] {
         let pf = units(source);
         assert!(
-            !pf.stats.aborted,
+            pf.stats.gave_up.is_empty(),
             "fixture must complete its solve: {source}"
         );
         assert_eq!(pf.fnproto_borrow_written.is_some(), written, "{source}");
