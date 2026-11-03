@@ -3677,10 +3677,13 @@ pub fn run_with_parse_cache(
     // `js_node_http_create_server`), so the import-driven flips alone miss
     // them; the HIR pass sees the native surfaces themselves.
     //
-    // Codegen still sees `needs_stdlib` as feature detection left it: the
-    // entry module's event-loop shape keys on it, and folding the providers
-    // in first would change the emitted code (`codegen_needs_stdlib`).
-    let codegen_needs_stdlib = ctx.needs_stdlib;
+    // After this pass `ctx.needs_stdlib` is the one answer to "is
+    // perry-stdlib linked", and codegen reads that same answer: the entry
+    // prologue's `js_stdlib_init_dispatch`, the worker-entry registrations
+    // and the cron arms of the event loop all exist because stdlib's symbols
+    // are on the link line. A provider-only program (`new SQL()` from "bun",
+    // an Effect `Stream`) links stdlib here, so it initializes it too;
+    // otherwise its handle dispatchers stay unregistered.
     let program_providers = perry_codegen::providers::program_providers(
         ctx.native_modules.values(),
         &perry_codegen::providers::ProviderInputs {
@@ -6245,7 +6248,7 @@ pub fn run_with_parse_cache(
             disable_constfn_shapes: std::env::var("PERRY_CONSTFN_SHAPE").as_deref() == Ok("0"),
             program_has_worker,
             program_has_thread_agents,
-            needs_stdlib: codegen_needs_stdlib,
+            needs_stdlib: ctx.needs_stdlib,
             program_is_synchronous,
             needs_ui: ctx.needs_ui,
             needs_geisterhand: ctx.needs_geisterhand,
