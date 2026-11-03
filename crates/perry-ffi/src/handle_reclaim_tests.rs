@@ -339,3 +339,45 @@ fn a_proven_dead_record_is_released_after_the_pause() {
     assert_eq!(proven_dead_pending_for_tests(), 0);
     assert!(reissuable(id));
 }
+
+/// The young rule by event-loop turn: a trace keeps an id parked in the turn
+/// it began in, and decides one parked in an earlier turn (no native frame of
+/// that turn still holds it). The runtime-link build reads the runtime's own
+/// turn counter, which only the generated main loop advances.
+#[cfg(not(feature = "runtime-link"))]
+#[test]
+fn an_id_parked_in_an_earlier_turn_is_decided_by_the_next_trace() {
+    use std::sync::atomic::Ordering::SeqCst;
+    let _serial = recycle_serial();
+    // Age out what other tests left parked.
+    collect_unobserved();
+    let (kept, kept_drops) = reclaimed_payload();
+    assert!(park_reclaimable_ffi(kept, &RECLAIMED_OWNER));
+    trace_phase_for_tests(0);
+    assert!(
+        full_scan_edges_for_tests().contains(&edge_word(kept)),
+        "parked in the turn the trace began in: young, a root"
+    );
+    trace_phase_for_tests(1);
+    assert_eq!(kept_drops.load(SeqCst), 0, "a young id is kept");
+    let (id, drops) = reclaimed_payload();
+    assert!(park_reclaimable_ffi(id, &RECLAIMED_OWNER));
+    crate::handle_lifecycle::begin_event_loop_turn_for_tests();
+    trace_phase_for_tests(0);
+    assert!(
+        !full_scan_edges_for_tests().contains(&edge_word(id)),
+        "parked in an earlier turn: not a root"
+    );
+    trace_phase_for_tests(1);
+    assert_eq!(
+        drops.load(SeqCst),
+        1,
+        "unnamed and parked in an earlier turn: released by the first trace after it"
+    );
+    assert!(!handle_exists(id));
+    assert_eq!(
+        kept_drops.load(SeqCst),
+        1,
+        "the second trace decides the first id"
+    );
+}

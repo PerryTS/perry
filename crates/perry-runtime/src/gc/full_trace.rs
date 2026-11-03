@@ -299,6 +299,14 @@ pub extern "C" fn perry_ffi_gc_word_is_minor_relevant(bits: u64) -> bool {
     super::young_log::bits_are_minor_relevant(bits)
 }
 
+/// Event-loop turns the calling thread began
+/// (`promise::microtasks::event_loop_turn`). No native frame of one turn
+/// survives into a later turn.
+#[no_mangle]
+pub extern "C" fn perry_ffi_gc_event_loop_turn() -> u64 {
+    crate::promise::microtasks::event_loop_turn()
+}
+
 /// Native registry pressure requests a full trace at the next safe poll;
 /// allocating a numeric handle itself must never collect under table locks.
 #[no_mangle]

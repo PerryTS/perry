@@ -21,11 +21,14 @@
 //! new object. The runtime offers every traced `[1, 0x40000)` word to
 //! `observe` through `perry_ffi_gc_register_pool_handle_trace`.
 //!
-//! **Young ids.** An id parked since the previous trace began is kept by the
-//! next one (a native frame may hold a fresh id unpublished across an
-//! allocation), and ids parked while a trace runs are never decided by it. So
-//! an id always survives at least one full trace after it was parked. Each
-//! parked record carries the trace epoch it was parked in and the epoch of the
+//! **Young ids.** Ids parked while a trace runs are never decided by it. An
+//! id parked since the previous trace began is kept by the next one only if
+//! that trace began in the event-loop turn the id was parked in: a native
+//! frame may hold a fresh id unpublished across an allocation that begins a
+//! trace, but no native frame of an earlier turn is still running (the runtime
+//! counts a turn only at the generated main loop). A thread whose turn never
+//! advances keeps every such id through one more trace. Each parked record
+//! carries the trace epoch and the turn it was parked in and the epoch of the
 //! last trace that reached it; no side sets.
 //!
 //! **Pacing.** The collector's own full traces decide parked ids for free. A
@@ -38,8 +41,8 @@
 //! however small its heap. Two things override that budget so memory stays
 //! bounded: [`MAX_PARKED`] unproven ids, and the band reserve.
 //!
-//! **Band reserve.** A release needs two traces to begin after the park (the
-//! first keeps the id as young). So when fewer than `max(BAND_RESERVE, 2 x
+//! **Band reserve.** A release may need two traces to begin after the park
+//! (the first keeps an id parked in its own turn as young). So when fewer than `max(BAND_RESERVE, 2 x
 //! span + 2 x stride)` shared ids are obtainable, `span` being the ids this
 //! mutator registered across its last trace (request to finish), registration
 //! requests a trace without the time budget. The band then runs out only if
@@ -84,6 +87,7 @@ extern "C" {
     );
     fn perry_ffi_gc_register_pool_handle_liveness(is_live: extern "C" fn(u64) -> bool);
     fn perry_ffi_gc_thread_is_mutator() -> bool;
+    fn perry_ffi_gc_event_loop_turn() -> u64;
 }
 
 #[cfg(all(test, not(feature = "runtime-link")))]
@@ -110,6 +114,28 @@ unsafe extern "C" fn perry_ffi_gc_register_pool_handle_liveness(
 #[no_mangle]
 unsafe extern "C" fn perry_ffi_gc_thread_is_mutator() -> bool {
     true
+}
+
+#[cfg(all(test, not(feature = "runtime-link")))]
+thread_local! {
+    static TEST_EVENT_LOOP_TURN: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+// The unit tests begin event-loop turns themselves.
+#[cfg(all(test, not(feature = "runtime-link")))]
+#[no_mangle]
+unsafe extern "C" fn perry_ffi_gc_event_loop_turn() -> u64 {
+    TEST_EVENT_LOOP_TURN.with(std::cell::Cell::get)
+}
+
+/// Begin an event-loop turn on this test thread.
+#[cfg(all(test, not(feature = "runtime-link")))]
+pub(crate) fn begin_event_loop_turn_for_tests() {
+    TEST_EVENT_LOOP_TURN.with(|turn| turn.set(turn.get() + 1));
+}
+
+fn event_loop_turn() -> u64 {
+    unsafe { perry_ffi_gc_event_loop_turn() }
 }
 
 /// Unproven parked ids below which parking alone never requests a full trace.
@@ -182,6 +208,8 @@ struct Parked {
     identity: NativeRegistrationIdentity,
     /// Trace epoch the id was parked in.
     epoch: u64,
+    /// Event-loop turn the id was parked in (see [`is_young`]).
+    turn: u64,
     /// Epoch of the last trace that observed a word naming the id.
     reached: u64,
     /// Epoch of the last trace during which native code borrowed the payload
@@ -203,6 +231,8 @@ struct Epoch {
     serial: u64,
     /// A trace armed by `phase(0)` is running.
     tracing: bool,
+    /// Event-loop turn the current (or last) trace began in.
+    began_turn: u64,
     /// When the armed trace began: the one clock its deadline checks read,
     /// so its weak-key verdicts and its releases agree.
     trace_began: Option<Instant>,
@@ -275,6 +305,7 @@ thread_local! {
         current: 0,
         serial: 0,
         tracing: false,
+        began_turn: 0,
         trace_began: None,
         trigger_at: MIN_TRIGGER,
         live: 0,
@@ -310,6 +341,7 @@ fn park(id: Handle, kind: Kind, identity: NativeRegistrationIdentity, not_before
         kind,
         identity,
         epoch: 0,
+        turn: 0,
         reached: 0,
         written: 0,
         visited: 0,
@@ -365,6 +397,7 @@ fn park(id: Handle, kind: Kind, identity: NativeRegistrationIdentity, not_before
     }
     let mut parked = unstamped(kind);
     parked.epoch = epoch;
+    parked.turn = event_loop_turn();
     let mut slot = Some(parked);
     let Ok(count) = PARKED.try_with(|map| {
         let mut map = map.borrow_mut();
@@ -626,12 +659,24 @@ pub(crate) fn clear_parked_props_in_ranges(contains: &dyn Fn(usize) -> bool) {
 /// are marked only through a word naming its id. A rescan of the same trace
 /// (the final remark) skips a record the earlier scan visited unless it was
 /// borrowed mutably since: its edges cannot have changed.
-fn full_scan_visits(parked: &Parked, current: u64, serial: u64) -> bool {
+fn full_scan_visits(parked: &Parked, current: u64, began_turn: u64, serial: u64) -> bool {
     let written = parked.written == current;
     if parked.visited == serial && !written {
         return false;
     }
-    written || parked.epoch >= current.saturating_sub(1)
+    written || is_young(parked, current, began_turn)
+}
+
+/// Whether the trace of epoch `current`, begun in event-loop turn
+/// `began_turn`, treats a parked id as young: parked during this trace, or
+/// parked since the previous trace began and in the turn this trace began in.
+/// A native frame may hold a fresh id unpublished across an allocation that
+/// begins a trace; no native frame of an earlier turn is still running, so an
+/// id parked in an earlier turn is decided by this trace. The one young rule
+/// for root visits, verdicts and the live count.
+fn is_young(parked: &Parked, current: u64, began_turn: u64) -> bool {
+    parked.epoch >= current
+        || (parked.epoch.saturating_add(1) == current && parked.turn == began_turn)
 }
 
 /// The mutable root scanner of this mutator's parked records: each record's
@@ -644,17 +689,17 @@ fn scan_parked_record_roots(visitor: &mut GcRootVisitor<'_>) {
         return;
     }
     let full_mark = visitor.is_full_mark();
-    let (current, serial) = EPOCH
+    let (current, began_turn, serial) = EPOCH
         .try_with(|epoch| {
             let epoch = epoch.borrow();
-            (epoch.current, epoch.serial)
+            (epoch.current, epoch.began_turn, epoch.serial)
         })
-        .unwrap_or((0, 0));
+        .unwrap_or((0, 0, 0));
     let records = parked_records(|parked| {
         if !full_mark {
             return true;
         }
-        let visits = full_scan_visits(parked, current, serial);
+        let visits = full_scan_visits(parked, current, began_turn, serial);
         if visits {
             parked.visited = serial;
         }
@@ -897,11 +942,16 @@ pub fn parked_handle_count() -> usize {
 /// the payload's edges is reached by the final root remark instead. An old
 /// parked payload's edges are marked only through a traced word naming its id.
 pub fn payload_edges_are_rooted(id: Handle) -> bool {
-    let current = EPOCH.try_with(|epoch| epoch.borrow().current).unwrap_or(0);
+    let (current, began_turn) = EPOCH
+        .try_with(|epoch| {
+            let epoch = epoch.borrow();
+            (epoch.current, epoch.began_turn)
+        })
+        .unwrap_or((0, 0));
     PARKED
         .try_with(|parked| {
             parked.borrow().0.get(&id).is_none_or(|parked| {
-                parked.epoch >= current.saturating_sub(1) || parked.written == current
+                is_young(parked, current, began_turn) || parked.written == current
             })
         })
         .unwrap_or(true)
@@ -992,11 +1042,13 @@ extern "C" fn phase(phase: u32) -> bool {
                 .lock()
                 .map(|mut orphans| std::mem::take(&mut *orphans))
                 .unwrap_or_default();
+            let turn = event_loop_turn();
             let current = EPOCH
                 .try_with(|epoch| {
                     let mut epoch = epoch.borrow_mut();
                     epoch.current += 1;
                     epoch.serial += 1;
+                    epoch.began_turn = turn;
                     epoch.trace_began = Some(Instant::now());
                     if std::mem::take(&mut epoch.requested_pending) {
                         epoch.requested_started = Some(Instant::now());
@@ -1014,6 +1066,7 @@ extern "C" fn phase(phase: u32) -> bool {
                     for (id, mut parked) in orphans {
                         // Adopted ids are decided no earlier than the next trace.
                         parked.epoch = current;
+                        parked.turn = turn;
                         if matches!(parked.kind, Kind::Record { .. }) {
                             adopted.push(id);
                         }
@@ -1053,12 +1106,12 @@ extern "C" fn phase(phase: u32) -> bool {
     }
 }
 
-/// Whether the armed trace of epoch `current`, begun at `began`, keeps a
-/// parked id: parked in the previous epoch or later (born since the previous
-/// trace began, or during this one), reached by this trace, or still inside
-/// its grace deadline. One predicate for weak-key verdicts and releases.
-fn trace_keeps(parked: &Parked, current: u64, began: Option<Instant>) -> bool {
-    parked.epoch >= current.saturating_sub(1)
+/// Whether the armed trace of epoch `current`, begun in turn `began_turn` at
+/// `began`, keeps a parked id: young ([`is_young`]), reached by this trace, or
+/// still inside its grace deadline. One predicate for weak-key verdicts and
+/// releases.
+fn trace_keeps(parked: &Parked, current: u64, began_turn: u64, began: Option<Instant>) -> bool {
+    is_young(parked, current, began_turn)
         || parked.reached == current
         || parked
             .not_before
@@ -1066,23 +1119,23 @@ fn trace_keeps(parked: &Parked, current: u64, began: Option<Instant>) -> bool {
 }
 
 fn finish_full_trace() {
-    let (current, began) = EPOCH.with(|epoch| {
+    let (current, began_turn, began) = EPOCH.with(|epoch| {
         let mut epoch = epoch.borrow_mut();
         epoch.tracing = false;
         epoch.full_traces += 1;
         if let Some(from) = epoch.span_from.take() {
             epoch.span = epoch.registrations.wrapping_sub(from) as usize;
         }
-        (epoch.current, epoch.trace_began.take())
+        (epoch.current, epoch.began_turn, epoch.trace_began.take())
     });
     let mut live = 0usize;
     let dead: Vec<Parked> = PARKED.with(|map| {
         let mut map = map.borrow_mut();
         let mut dead_ids = Vec::new();
         for (&id, parked) in map.0.iter() {
-            if !trace_keeps(parked, current, began) {
+            if !trace_keeps(parked, current, began_turn, began) {
                 dead_ids.push(id);
-            } else if parked.epoch < current.saturating_sub(1) && parked.reached == current {
+            } else if !is_young(parked, current, began_turn) && parked.reached == current {
                 // Decidable, and a word named it: the program holds it.
                 live += 1;
             }
@@ -1162,10 +1215,12 @@ fn release(dead: Vec<Parked>) {
 /// will release, so their weak entries are deleted in the same trace.
 extern "C" fn is_live(bits: u64) -> bool {
     let id = (bits & 0x0000_FFFF_FFFF_FFFF) as Handle;
-    let Some((current, began)) = EPOCH
+    let Some((current, began_turn, began)) = EPOCH
         .try_with(|epoch| {
             let epoch = epoch.borrow();
-            epoch.tracing.then_some((epoch.current, epoch.trace_began))
+            epoch
+                .tracing
+                .then_some((epoch.current, epoch.began_turn, epoch.trace_began))
         })
         .ok()
         .flatten()
@@ -1177,7 +1232,7 @@ extern "C" fn is_live(bits: u64) -> bool {
             map.borrow()
                 .0
                 .get(&id)
-                .is_none_or(|parked| trace_keeps(parked, current, began))
+                .is_none_or(|parked| trace_keeps(parked, current, began_turn, began))
         })
         .unwrap_or(true)
 }
