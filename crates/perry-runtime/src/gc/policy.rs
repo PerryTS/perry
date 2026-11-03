@@ -5236,10 +5236,12 @@ fn js_gc_collect_body() {
 /// `gc(); assertFreed()` is the shape every test and every ratchet probe uses.
 /// This changes the root set, not the timing.
 fn manual_gc_collect_now() {
-    // NOTE: pending finalization jobs from earlier AUTOMATIC cycles are NOT
-    // cleared here — each record enqueues exactly once (its pending flag is
-    // reset at enqueue time), so dropping the vec would lose those callbacks
-    // forever. The delivery below simply takes whatever is queued.
+    // NOTE: pending finalization jobs are NOT delivered here. A cleanup
+    // callback is its own later job (spec: HostEnqueueFinalizationRegistry
+    // CleanupJob), so until the next microtask-pump drain delivers it the
+    // dead cell is still registered: `gc(); registry.unregister(token)` in the
+    // same synchronous turn removes it and returns true, and its callback
+    // never runs (node does the same).
     // An explicit `gc()` runs a FULL mark-sweep rather than the generational
     // fast path. With gen-GC on (the default), `gc_collect_inner_with_trigger`
     // dispatches a MINOR cycle, whose sweep skips dead-old-block reclamation
@@ -5283,7 +5285,6 @@ fn manual_gc_collect_now() {
     }
     gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Manual))
         .emit_after_current();
-    crate::weakref::queue_pending_finalization_callbacks_after_gc();
 }
 
 /// `perry/gc` `collect()` — explicit full collection, same semantics as the
