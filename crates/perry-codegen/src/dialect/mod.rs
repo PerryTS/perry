@@ -26,11 +26,15 @@ use inkwell::values::{
 };
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 
+mod branch_meta;
 mod eh;
+mod from_text;
 pub(crate) mod numbered;
 mod text;
 mod types;
 mod vector;
+#[allow(unused_imports)]
+pub(crate) use from_text::{add_function_from_text, add_function_from_text_with};
 
 /// LLVM's numeric id for the `preserve_none` calling convention
 /// (`llvm::CallingConv::PreserveNone`, llvm/IR/CallingConv.h — 21 in the
@@ -126,34 +130,6 @@ impl<'ctx, 'm> FnStream<'ctx, 'm> {
     pub(crate) fn finish(self) -> Result<(usize, usize)> {
         self.inner.finish()
     }
-}
-
-/// Parse `fn_text` (a complete `define ... { ... }`) and build it into
-/// `module`. Returns the number of instructions constructed.
-#[allow(dead_code)] // retained as the text-path oracle for native-emission debugging
-pub(crate) fn add_function_from_text<'ctx>(
-    context: &'ctx Context,
-    module: &Module<'ctx>,
-    fn_text: &str,
-) -> Result<usize> {
-    add_function_from_text_with(context, module, &NumberedMetadata::none(), fn_text)
-}
-
-/// [`add_function_from_text`] with the module's numbered metadata.
-#[allow(dead_code)]
-pub(crate) fn add_function_from_text_with<'ctx>(
-    context: &'ctx Context,
-    module: &Module<'ctx>,
-    metadata: &NumberedMetadata<'ctx>,
-    fn_text: &str,
-) -> Result<usize> {
-    let mut lines = fn_text.lines();
-    let header = lines.next().ok_or_else(|| anyhow!("empty function text"))?;
-    let mut stream = FnStream::begin(context, module, metadata, header)?;
-    for line in lines {
-        stream.line(line)?;
-    }
-    stream.finish().map(|(t, r)| t + r)
 }
 
 struct FnReader<'ctx, 'm> {
@@ -1987,27 +1963,6 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
                 Ok(())
             }
         }
-    }
-
-    /// The attachments `BranchMeta::render_into` writes on the text path,
-    /// built on the same nodes: the latch's numbered `!llvm.loop` ID and the
-    /// byte-view admission's `!perry.byte_view.version !{}`.
-    fn branch_meta(
-        &self,
-        inst: InstructionValue<'ctx>,
-        meta: Option<&crate::inst::BranchMeta>,
-    ) -> Result<()> {
-        let Some(meta) = meta else { return Ok(()) };
-        let mut parts = Vec::new();
-        if let Some(tag) = &meta.loop_tag {
-            if tag.id != 0 {
-                parts.push(format!("!llvm.loop !{}", tag.id));
-            }
-        }
-        if meta.byte_view_version {
-            parts.push("!perry.byte_view.version !{}".to_string());
-        }
-        attach_trailing_metadata(self.ctx, self.metadata, Some(inst), &parts)
     }
 
     fn finish(mut self) -> Result<(usize, usize)> {
