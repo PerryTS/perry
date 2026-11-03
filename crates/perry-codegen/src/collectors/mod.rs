@@ -136,8 +136,7 @@ pub(crate) use proven_this::{
     exportable_method_capabilities as exportable_proven_this_method_capabilities,
     inherited_accessor_proven_this, method_proven_this, prune_unregistered_clones,
     pshape_method_name, ptr_array_cache_fields, ptr_array_cache_method_name,
-    ptr_array_cached_method, stmts_contain_loop,
-    tower_route_profitable as pshape_tower_route_profitable,
+    ptr_array_cached_method, tower_route_profitable as pshape_tower_route_profitable,
 };
 pub(crate) use ptr_numarray::{NumArrayDensity, NumArrayLocal};
 pub(crate) use ptr_shape::{

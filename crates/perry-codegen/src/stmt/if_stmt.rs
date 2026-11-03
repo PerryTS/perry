@@ -174,28 +174,6 @@ pub(crate) fn lower_if(
         .and_then(|(id, _, _)| ctx.snapshot_guarded_proof(id));
 
     let i1 = lower_if_condition_i1(ctx, condition)?;
-    // A loop nest guarded by an `if` inside a loop is the expensive arm, and
-    // the skip is the cheap one that runs on every iteration that bypasses the
-    // nest. Say so, so the skip is laid out as the fall-through: entering the
-    // nest then costs one taken branch, the skip saves one each time.
-    // A condition that is a compile-time constant has no likely side to name.
-    let i1 = if else_branch.is_none_or(|stmts| stmts.is_empty())
-        && i1 != "true"
-        && i1 != "false"
-        && ctx
-            .loop_targets
-            .iter()
-            .any(|(continue_label, _, _)| !continue_label.is_empty())
-        && crate::collectors::stmts_contain_loop(then_branch)
-    {
-        ctx.block().call(
-            crate::types::I1,
-            "llvm.expect.i1",
-            &[(crate::types::I1, &i1), (crate::types::I1, "false")],
-        )
-    } else {
-        i1
-    };
     let alias_entry_snapshot = NativeArenaOwnerAliasSnapshot::capture(ctx);
 
     let then_idx = ctx.new_block("if.then");
