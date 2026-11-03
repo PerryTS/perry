@@ -3,6 +3,8 @@
 # Compares output between Node.js and Perry native compilation
 # Fixture parity-rlimit-as-mb ceilings apply only to native execution;
 # unsupported containment fails before the test binary can run.
+# A test overrides the run timeout (PERRY_RUN_TIMEOUT, default 10 s) for itself
+# only with a header comment in its first 5 lines: `// perry-test: run-timeout=60`.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEST_DIR="$SCRIPT_DIR/test-files"
@@ -81,6 +83,12 @@ if [[ ! "$PERRY_RUN_TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
     echo "Invalid PERRY_RUN_TIMEOUT '$PERRY_RUN_TIMEOUT' (want a positive integer)" >&2
     exit 1
 fi
+# Per-test override of the run timeout: a test whose own work cannot fit the
+# default (for example 300k HTTP requests) says so in a header comment within
+# its first 5 lines, `// perry-test: run-timeout=60` (seconds), and only that
+# test gets the longer budget. The node oracle run and the native run both use
+# it. PERRY_RUN_TIMEOUT stays the default for every other test, and the compile
+# step keeps its own PERRY_COMPILE_TIMEOUT.
 # #10757: the COMPILE step below had no timeout at all (only the executed-
 # binary run did, via PERRY_RUN_TIMEOUT above) — a compiler hang/superlinear
 # blowup on one fixture wedged the whole harness rather than failing that one
@@ -281,7 +289,7 @@ fi
 perry_abnormal_exit() {
     local code=$1
     case "$code" in
-        124) echo "TIMEOUT (killed after ${PERRY_RUN_TIMEOUT:-10}s)" ;;
+        124) echo "TIMEOUT (killed after ${test_run_timeout:-${PERRY_RUN_TIMEOUT:-10}}s)" ;;
         132) echo "SIGILL (exit 132)" ;;
         134) echo "SIGABRT (exit 134)" ;;
         136) echo "SIGFPE (exit 136)" ;;
@@ -1355,6 +1363,18 @@ for (( selected_i = 0; selected_i < JOURNAL_TOTAL; selected_i++ )); do
         continue
     fi
 
+    test_run_timeout="$PERRY_RUN_TIMEOUT"
+    override_line=$(head -n 5 "$test_file" | grep -m1 -E '^[[:space:]]*//[[:space:]]*perry-test:[[:space:]]*run-timeout=' || true)
+    if [[ -n "$override_line" ]]; then
+        override_value=${override_line##*run-timeout=}
+        override_value=${override_value%%[[:space:]]*}
+        if [[ ! "$override_value" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Invalid run-timeout '$override_value' in $test_file (want a positive integer)" >&2
+            exit 2
+        fi
+        test_run_timeout="$override_value"
+    fi
+
     parity_runtime_prefix=()
     if grep -qE '^[[:space:]]*//[[:space:]]*parity-rlimit-as-mb:' "$test_file"; then
         # Validate before oracle/compile work; enforce only on the native run.
@@ -1385,14 +1405,14 @@ for (( selected_i = 0; selected_i < JOURNAL_TOTAL; selected_i++ )); do
     # `$(...)`, so capturing the exit code requires the file detour
     # rather than a `cmd | cap_output` pipeline.
     node_tmp="$PARITY_TMP/${safe_test_id}.node-output"
-    run_with_timeout "$PERRY_RUN_TIMEOUT" env FORCE_COLOR=0 NO_COLOR=1 NODE_DISABLE_COLORS=1 \
+    run_with_timeout "$test_run_timeout" env FORCE_COLOR=0 NO_COLOR=1 NODE_DISABLE_COLORS=1 \
         node --experimental-strip-types "${node_argv[@]}" "$test_file" "${test_argv[@]}" > "$node_tmp" 2>&1
     node_exit=$?
     if [[ $node_exit -ne 0 ]] && can_retry_node_globals_as_commonjs "$test_id" "$test_file"; then
         parity_test_file="$PARITY_TMP/${safe_test_id}.cts"
         cp "$test_file" "$parity_test_file"
         perry_compile_command=(compile)
-        run_with_timeout "$PERRY_RUN_TIMEOUT" env FORCE_COLOR=0 NO_COLOR=1 NODE_DISABLE_COLORS=1 \
+        run_with_timeout "$test_run_timeout" env FORCE_COLOR=0 NO_COLOR=1 NODE_DISABLE_COLORS=1 \
             node --experimental-strip-types "${node_argv[@]}" "$parity_test_file" "${test_argv[@]}" > "$node_tmp" 2>&1
         node_exit=$?
     fi
@@ -1576,10 +1596,10 @@ for (( selected_i = 0; selected_i < JOURNAL_TOTAL; selected_i++ )); do
         # Git Bash has no enforceable RLIMIT_NPROC (`ulimit -u`) for native
         # Windows processes. The Python-backed timeout starts a fresh process
         # group and kills its tree, even when GNU timeout is unavailable.
-        run_with_timeout "$PERRY_RUN_TIMEOUT" env PERRY_STUB_DIAG=off "${parity_env[@]}" \
+        run_with_timeout "$test_run_timeout" env PERRY_STUB_DIAG=off "${parity_env[@]}" \
             "${parity_runtime_prefix[@]}" "$perry_binary" "${test_argv[@]}" > "$perry_tmp" 2>&1
     else
-        run_with_timeout "$PERRY_RUN_TIMEOUT" "$BASH" -c '
+        run_with_timeout "$test_run_timeout" "$BASH" -c '
             if [ "$(uname -s)" = "Linux" ]; then
                 proc_list=$(ps -u "$(id -u)" -L -o lwp= 2>/dev/null)
             else
