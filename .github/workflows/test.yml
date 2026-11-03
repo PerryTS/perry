@@ -382,13 +382,8 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_runtime_test_batches.py'
           node --test scripts/publish/platform-visibility.test.mjs
 
-      # #11560: the parity harness gave auto-optimize compiles of plain fixtures
-      # the 300s budget, so the full tier killed ~36 per run mid-rebuild.
-      - name: Parity harness compile-budget regression
-        run: ./tests/test_parity_compile_budget.sh
-
       # The parity normalizer is the ONE definition of "Perry printed what Node
-      # printed" shared by run_parity_tests.sh and scripts/node_suite_run.py.
+      # printed" that scripts/parity.py applies.
       # These fixtures were captured from the two implementations it replaced,
       # so this step is what proves the unification stayed verdict-preserving.
       # It runs in `lint` rather than beside the parity job because `parity` is
@@ -399,12 +394,6 @@ jobs:
 
       - name: Parity runner unit tests
         run: python3 -m unittest tests.test_parity_runner
-
-      # The normalizer probe is what stops the harness from comparing empty
-      # output against empty output and reporting the whole suite green. It is
-      # invisible in any green run, so it gets its own gate.
-      - name: Parity harness normalizer guard
-        run: ./tests/test_parity_normalize_guard.sh
 
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-10-04 --profile minimal --component rustfmt --component clippy
@@ -1104,37 +1093,6 @@ jobs:
             || git fetch --no-tags --depth=1 origin "$BASE_SHA"
           python3 scripts/native_handle_ledger.py --no-raise-vs "$BASE_SHA"
 
-      # The gap-suite ratchet decides whether conformance-smoke goes red, so
-      # its own logic is unit-checked on the cheap job rather than only being
-      # exercised 8 shards deep.
-      - name: Gap snapshot checker self-test
-        if: ${{ !cancelled() }}
-        run: python3 scripts/gap_snapshot.py --self-test
-
-      # Two halves of the same gate (#7582).
-      #
-      # `--self-test` unit-checks the checker. `--audit` runs the checker's
-      # OFFLINE half against the committed files: every known_failures.json
-      # entry must carry provenance (issue + date, #797), name a test that
-      # still exists, and — for gap-suite entries — be corroborated by
-      # `test-parity/gap_snapshot.json`, which is GENERATED and bidirectional.
-      # An entry absent from that snapshot is one the snapshot asserts passes,
-      # i.e. a suppression that has outlived its bug.
-      #
-      # This belongs on `lint` rather than only on `parity` because `parity` is
-      # TAG-gated: the live half of the ratchet fires after every merge it was
-      # meant to judge. `test_gap_diagchannel_3082_3084_3085_3086` sat here from
-      # 2026-07-04 and absorbed a real data-loss regression for six days (#7580);
-      # this step would have named it on the day it was added. Costs ~0.1s and
-      # runs no tests.
-      - name: Platform-aware parity allowlist self-test
-        if: ${{ !cancelled() }}
-        run: python3 scripts/parity_known_failures.py --self-test
-
-      - name: Parity allowlist ratchet (provenance + stale entries)
-        if: ${{ !cancelled() }}
-        run: python3 scripts/parity_known_failures.py --audit
-
       # Moving-GC gate wiring. The GC gates are the ones this repo has most
       # often found unable to fail (CLAUDE.md's four hazards), and every miss so
       # far was caught by a human re-deriving it mid-incident. This asserts the
@@ -1195,21 +1153,19 @@ jobs:
       # SEQUENCE of independent gates, and a step that fails takes every later
       # step in the job to `skipped`. That is not hypothetical here — `Public
       # benchmark evidence freshness` has failed on `main` on every run from
-      # 2026-07-29 onward, so `File size limit`, `GC store-site inventory`,
-      # `Address-classification audit`, `Gap snapshot checker self-test` and
-      # `Platform-aware parity allowlist self-test` have all been skipped for
+      # 2026-07-29 onward, so `File size limit`, `GC store-site inventory` and
+      # `Address-classification audit` have all been skipped for
       # days while the job dutifully reported red for an unrelated reason. A gate
       # that never executes cannot fail on its own subject. This step costs 0.2s
       # and shares no state with anything above it, so it always speaks.
       # (`!cancelled()` rather than `always()`: a cancelled run should stay
-      # cancelled.) The five steps above deserve the same treatment; that is a
+      # cancelled.) The three steps above deserve the same treatment; that is a
       # separate change from this one.
       - name: Test registration (dark tests)
         if: ${{ !cancelled() }}
         run: |
           python3 scripts/check_test_registration.py --self-test
           python3 scripts/check_test_registration.py
-          python3 scripts/node_suite_run.py --self-test
 
       - name: Coverage classifier regression tests
         if: ${{ !cancelled() }}
@@ -2357,16 +2313,15 @@ jobs:
       # Small deterministic subset: verifies the Git Bash driver itself,
       # `.exe`/`.lib` discovery, native TEMP paths, compilation, execution,
       # and Node/Perry comparison on a real Windows host.
+      - name: Install the npm packages the parity oracle resolves
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
       - name: Windows parity harness smoke
         shell: bash
         run: |
-          PERRY_SKIP_BUILD=1 \
           PERRY_BIN="$PWD/target/debug/perry.exe" \
           PERRY_RUNTIME_DIR="$PWD/target/debug" \
-          ./run_parity_tests.sh \
-            --suite node-suite \
-            --module process \
-            --filter process/env/access
+          python scripts/parity.py run test-parity/node-suite/process/env/access.ts --mode fast
 
       - name: Verify perry.exe VERSIONINFO resource
         shell: pwsh

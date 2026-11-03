@@ -448,7 +448,7 @@ def _self_test() -> int:
     check("nested .md is not core", not is_core("crates/perry/README.md"))
     check("AGENTS.md is core (lint doc-claim audits)", is_core("AGENTS.md"))
     check("a .ts test file is core", is_core("test-files/test_gap_x.ts"))
-    check("scripts are core", is_core("scripts/run_gap_tests.sh"))
+    check("scripts are core", is_core("scripts/parity.py"))
     check("generated api docs are core", is_core("docs/api/perry.d.ts"))
 
     # 3. Sweep and full.

@@ -355,6 +355,20 @@ class Lanes(unittest.TestCase):
         self.assertFalse(parity.runs_serially("node-suite/zlib/a", zlib, "fast"))
 
 
+class CompileBudget(unittest.TestCase):
+    """An auto-optimize compile may rebuild the runtime, so it gets the toolchain budget."""
+
+    def test_budget_per_compile_kind(self):
+        plain, toolchain, ordinary = "console.log(1);", parity.TOOLCHAIN_TIMEOUT, parity.COMPILE_TIMEOUT
+        forced = sorted(parity.FORCE_NO_AUTO)[0]
+        self.assertEqual(parity.compile_budget("test_gap_x", plain, auto=True, ext_routed=False), toolchain)
+        self.assertEqual(parity.compile_budget("test_gap_x", plain, auto=False, ext_routed=False), ordinary)
+        self.assertEqual(parity.compile_budget("test_gap_x", "new WebAssembly.Module(b);",
+                                               auto=False, ext_routed=False), toolchain)
+        self.assertEqual(parity.compile_budget(forced, plain, auto=False, ext_routed=True), toolchain)
+        self.assertEqual(parity.compile_budget(forced, plain, auto=False, ext_routed=False), ordinary)
+
+
 @unittest.skipIf(os.name == "nt" or not Path("/bin/dash").exists(), "needs a POSIX host with dash")
 class ProcessBudget(unittest.TestCase):
     def test_fork_cap_applies_when_sh_is_dash(self):
