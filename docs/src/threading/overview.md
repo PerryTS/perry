@@ -288,3 +288,11 @@ the ordinary method lookup, including own replacements and getters.
 instances come from channels or transfers; calling or constructing one directly
 throws `ERR_CONSTRUCT_CALL_INVALID`. Calling `BroadcastChannel` without `new`
 throws the ordinary class-constructor `TypeError`, without a Node error code.
+
+### Renamed constructor imports
+
+Renaming a `node:worker_threads` constructor import keeps the original
+constructor identity, including aliases named like another constructor.
+Worker aliases retain child-entry discovery and the same options/eval lowering
+as canonical imports. Lexical bindings, namespace imports and explicit global
+constructors keep their existing resolution rules.
