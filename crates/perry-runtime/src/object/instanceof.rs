@@ -294,7 +294,7 @@ fn js_instanceof_dynamic_tail(value: f64, type_ref: f64) -> f64 {
 /// `true` iff some link is identical to `P`. Used as a fallback for the
 /// synthetic class-id shortcut, which is stamped at construction and misses a
 /// prototype installed via `Fn.prototype = Object.create(Base.prototype)`.
-fn ordinary_has_instance_prototype_walk(value: f64, type_ref: f64) -> bool {
+pub(crate) fn ordinary_has_instance_prototype_walk(value: f64, type_ref: f64) -> bool {
     let scope = crate::gc::RuntimeHandleScope::new();
     let value = scope.root_nanbox_f64(value);
     let type_ref = scope.root_nanbox_f64(type_ref);

@@ -1561,7 +1561,10 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             // arm below resolves by name (`Expr::New { class_name }`, `FuncRef`,
             // `LocalGet`), so it would construct that binding — construct the
             // global property's value instead.
-            if global_intrinsic_shadowed {
+            if global_intrinsic_shadowed
+                || (source_class_name == "MessageEvent"
+                    && !global_name_has_user_binding(ctx, source_class_name))
+            {
                 let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
                 return Ok(global_property_new_dynamic(
                     source_class_name,

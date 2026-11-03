@@ -954,7 +954,8 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
                     | BuiltinConstructorIdentity::BigInt64Array
                     | BuiltinConstructorIdentity::BigUint64Array
             );
-            let proto = if typed {
+            let deferred = typed || identity == BuiltinConstructorIdentity::MessageEvent;
+            let proto = if deferred {
                 None
             } else {
                 new_target_custom_object_prototype(nt.get_nanbox_f64())
@@ -963,7 +964,7 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
             let values: Vec<_> = args.iter().map(|h| h.get_nanbox_f64()).collect();
             if let Some(result) = builtin::construct(identity, func.get_nanbox_f64(), &values) {
                 let result = scope.root_nanbox_f64(result);
-                let proto = if typed {
+                let proto = if deferred {
                     new_target_custom_object_prototype(nt.get_nanbox_f64())
                         .map(|bits| scope.root_nanbox_u64(bits))
                 } else {
