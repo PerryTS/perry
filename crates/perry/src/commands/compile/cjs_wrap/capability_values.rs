@@ -450,6 +450,7 @@ impl<'a> Proof<'a> {
                 object,
                 property,
                 value,
+                ..
             } => {
                 let o = self.expr(object, function);
                 let v = self.expr(value, function);
@@ -462,6 +463,7 @@ impl<'a> Proof<'a> {
                 object,
                 index,
                 value,
+                ..
             } => {
                 let o = self.expr(object, function);
                 self.expr(index, function);

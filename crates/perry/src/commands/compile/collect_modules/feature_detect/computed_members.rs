@@ -1108,7 +1108,7 @@ mod tests {
         ] {
             let path = std::path::PathBuf::from("/p").join(name);
             let (wrapped, _) = crate::commands::compile::cjs_wrap::wrap_commonjs_with_addon_paths(
-                source, &path, None, false, None, None, &mut Vec::new(), None,
+                source, &path, None, false, None, None, None, &mut Vec::new(), None,
             );
             let ast = perry_parser::parse_typescript(&wrapped, name).unwrap();
             let mut module = perry_hir::lower_module(&ast, name, path.to_str().unwrap()).unwrap();

@@ -327,6 +327,7 @@ mod tests {
                 false,
                 None,
                 None,
+                None,
                 &mut Vec::new(),
                 None,
             );
