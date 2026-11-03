@@ -42,6 +42,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import realm_dump  # noqa: E402
@@ -49,13 +50,40 @@ import realm_dump  # noqa: E402
 ROOT = Path(__file__).resolve().parent.parent
 REFS = ROOT / "realm-dumps"
 DUMPER = ROOT / "scripts" / "realm_dump.ts"
-PROGRAMS = ["hello", "lad-04-classes", "lad-07-json"]
+PROGRAMS = ["hello", "lad-04-classes", "lad-07-json", "node-imports"]
 # The dump binary runs in one fixed environment on every arm and host.
 RUN_ENV = {"PATH": "/usr/bin:/bin", "HOME": "/root", "LANG": "C"}
-RUN_DIR = Path("/tmp/perry-realm-diff")
-# The dumper's source path is a realm value too (process.argv[1]): every arm
-# and host compiles it from this one path.
-DUMPER_SRC = Path("/tmp/perry-realm-diff-src") / "realm_dump.ts"
+# The executable's path and the dumper's source path are realm values too
+# (process.execPath, process.argv, module paths). Each gate run works in its
+# own temporary directory, so concurrent runs never touch each other's files,
+# and the dump spells that directory as a fixed token (paths derived from it,
+# such as node:module's globalPaths entry <run>/../lib/node, follow).
+WORK_TOKEN = "$REALM_DIFF_WORK"
+_WORK = []
+
+
+def work_dir():
+    """This process's private directory: src/ holds the dumper source, run/
+    the dump binary's working directory."""
+    if not _WORK:
+        work = Path(tempfile.mkdtemp(prefix="perry-realm-diff-"))
+        import atexit
+        atexit.register(shutil.rmtree, work, True)
+        _WORK.append(work)
+    return _WORK[0]
+
+
+def import_name(specifier):
+    """The name R records for `import * as ns from "<specifier>"`: the
+    compiler's realm-reach scan (perry-hir realm_reach.rs native_module) adds
+    the module's `node:<module>` namespace entry and its members. A native
+    receiver cell (%NativeNamespace:...%) is a different root: the runtime
+    spells it (path/posix's is %NativeNamespace:path.posix%) and some modules
+    (node:fs) have none. The dumper keys its native roots by this name
+    (`nativeRoots` in realm_dump.ts; the gate tests hold the two together)."""
+    return "node:" + specifier.removeprefix("node:")
+
+
 NATIVE_IMPORT = re.compile(r'^import \* as (realm_native_\d+) from "([^"]+)";$', re.M)
 
 
@@ -79,7 +107,7 @@ def compile_ts(perry, source, binary, extra_env):
 
 
 def dumper_source(names=None):
-    """The dumper, written to DUMPER_SRC. Restricted to `names`, every
+    """The dumper, written to this run's src directory. Restricted to `names`, every
     namespace import of a module outside R is bound to undefined: a static
     import runs its module's init, which births all of the module's exports,
     and a restricted dumper must not touch a root outside R."""
@@ -89,12 +117,13 @@ def dumper_source(names=None):
         raise GateError(f"{DUMPER} has no native namespace imports (format changed?)")
     if names is not None:
         text = NATIVE_IMPORT.sub(
-            lambda m: m.group(0) if m.group(2) in names
+            lambda m: m.group(0) if import_name(m.group(2)) in names
             else f"const {m.group(1)}: any = undefined; // {m.group(2)} is outside R", text)
-    shutil.rmtree(DUMPER_SRC.parent, ignore_errors=True)
-    DUMPER_SRC.parent.mkdir(parents=True)
-    DUMPER_SRC.write_text(text)
-    return DUMPER_SRC
+    source = work_dir() / "src" / "realm_dump.ts"
+    shutil.rmtree(source.parent, ignore_errors=True)
+    source.parent.mkdir(parents=True)
+    source.write_text(text)
+    return source
 
 
 def reach_of(log):
@@ -123,18 +152,20 @@ def dump(binary, names=None, walk=False):
     restricted dumper walks only roots in R. Its output is restricted to
     `names` either way."""
     # The executable's path and argv[0] are realm values (process.execPath,
-    # process.argv, module paths): every dump runs as the same file from the
-    # same directory, on every arm and host.
-    shutil.rmtree(RUN_DIR, ignore_errors=True)
-    RUN_DIR.mkdir(parents=True)
-    shutil.copy2(binary, RUN_DIR / "realm-dump")
+    # process.argv, module paths): every dump runs as the same file name from
+    # this run's directory, and that directory is spelled as a token.
+    run_dir = work_dir() / "run"
+    shutil.rmtree(run_dir, ignore_errors=True)
+    run_dir.mkdir(parents=True)
+    shutil.copy2(binary, run_dir / "realm-dump")
     if walk:
-        (RUN_DIR / "realm-dump.names").write_text("\n".join(sorted(names)))
-    run = subprocess.run(["./realm-dump"], cwd=RUN_DIR, env=RUN_ENV,
+        (run_dir / "realm-dump.names").write_text("\n".join(sorted(names)))
+    run = subprocess.run(["./realm-dump"], cwd=run_dir, env=RUN_ENV,
                          capture_output=True, text=True)
     if run.returncode != 0:
         raise GateError(f"{binary} exited {run.returncode}: {run.stderr[-500:]}")
-    return realm_dump.canonical(realm_dump.graph_from_text(run.stdout), names)
+    text = realm_dump.canonical(realm_dump.graph_from_text(run.stdout), names)
+    return text.replace(str(work_dir()), WORK_TOKEN)
 
 
 def witness_names(perry, program, out):

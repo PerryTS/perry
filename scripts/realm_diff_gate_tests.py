@@ -3,6 +3,9 @@
 import importlib.util
 import json
 from pathlib import Path
+import re
+import subprocess
+import sys
 import unittest
 
 spec = importlib.util.spec_from_file_location(
@@ -63,6 +66,57 @@ class RestrictedSource(unittest.TestCase):
         text = gate.dumper_source().read_text()
         self.assertEqual(text, gate.DUMPER.read_text())
         self.assertNotIn("is outside R", text)
+
+
+def kept_imports(names):
+    text = gate.dumper_source(set(names)).read_text()
+    return sorted(spec for _, spec in gate.NATIVE_IMPORT.findall(text))
+
+
+class ImportNames(unittest.TestCase):
+    """An import is kept exactly when R records its import name, checked
+    against names files the compiler wrote (realm-dumps/*.names.json)."""
+
+    def names(self, program):
+        return json.loads((gate.REFS / f"{program}.names.json").read_text())["names"]
+
+    def test_the_dumper_keys_its_native_roots_by_the_import_name(self):
+        text = gate.DUMPER.read_text()
+        roots = dict((var, key) for key, var in re.findall(
+            r'^    \["([^"]+)", (realm_native_\d+)\],$', text, re.M))
+        imports = gate.NATIVE_IMPORT.findall(text)
+        self.assertEqual(len(roots), len(imports))
+        for var, spec in imports:
+            self.assertEqual(roots[var], gate.import_name(spec))
+
+    def test_a_program_importing_modules_keeps_exactly_those_imports(self):
+        names = self.names("node-imports")
+        self.assertEqual(kept_imports(names), ["node:events", "node:fs", "node:path/posix"])
+        # The native receiver cells are spelled by the runtime, not by the
+        # specifier: keyed by them, node:fs and node:path/posix would be lost.
+        self.assertIn("%NativeNamespace:events%", names)
+        self.assertNotIn("%NativeNamespace:fs%", names)
+        self.assertNotIn("%NativeNamespace:path/posix%", names)
+        self.assertIn("%NativeNamespace:path.posix%", names)
+
+    def test_a_global_receiver_cell_does_not_keep_its_module_import(self):
+        names = self.names("hello")
+        self.assertIn("%NativeNamespace:console%", names)
+        self.assertEqual(kept_imports(names), [])
+
+
+class PerRunDirectory(unittest.TestCase):
+    def test_each_run_works_in_its_own_directory_and_removes_it(self):
+        probe = ("import importlib.util, sys; s = importlib.util.spec_from_file_location('g', sys.argv[1]); "
+                 "g = importlib.util.module_from_spec(s); s.loader.exec_module(g); "
+                 "print(g.dumper_source().parent)")
+        script = str(Path(gate.__file__))
+        dirs = [Path(subprocess.run([sys.executable, "-c", probe, script], capture_output=True,
+                                    text=True, check=True).stdout.strip()) for _ in range(2)]
+        self.assertNotEqual(dirs[0], dirs[1])
+        for d in dirs:
+            self.assertEqual(d.name, "src")
+            self.assertFalse(d.parent.exists())
 
 
 class OneSource(unittest.TestCase):
