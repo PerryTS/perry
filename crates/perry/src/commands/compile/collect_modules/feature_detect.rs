@@ -714,10 +714,22 @@ fn detect_optional_feature_usage_with_capabilities(
         .iter()
         .any(|name| hir_debug.contains(name));
     ctx.uses_json_format |= module_uses_json_format(hir_module);
+    // A global object used as a value reaches every global by a runtime key
+    // (`globalThis[k]`), so every namespace and web member table the realm
+    // holds must be complete: the same reach as a dynamic-code site. Without
+    // its feature a namespace is born tag-only (`Math` with no members).
     if global_object::may_escape(hir_module) {
+        ctx.uses_global_math = true;
         ctx.uses_global_json = true;
+        ctx.uses_global_reflect = true;
+        ctx.uses_global_atomics = true;
+        ctx.uses_intl_namespace = true;
         ctx.uses_url = true;
         ctx.uses_global_url = true;
+        ctx.uses_global_text = true;
+        ctx.uses_global_websocket = true;
+        ctx.uses_global_webcrypto = true;
+        ctx.uses_global_webfetch = true;
     }
     if hir_debug.contains("Proxy")
         || hir_debug.contains("GlobalThisExpr")
@@ -1668,8 +1680,25 @@ class C {
             "function host() { return this; } const j = host()[process.argv[2]]; console.log(j.stringify({x:1}));",
             "const host = function () { return this; }; console.log(host()[process.argv[2]]);",
         ] {
-            assert!(detect_for_source(source).uses_global_json, "{source}");
+            let ctx = detect_for_source(source);
+            assert!(ctx.uses_global_json, "{source}");
+            // Every namespace and web member table is reachable by the key.
+            for (on, name) in [
+                (ctx.uses_global_math, "math"),
+                (ctx.uses_global_reflect, "reflect"),
+                (ctx.uses_global_atomics, "atomics"),
+                (ctx.uses_intl_namespace, "intl"),
+                (ctx.uses_global_url, "url"),
+                (ctx.uses_global_text, "text"),
+                (ctx.uses_global_websocket, "websocket"),
+                (ctx.uses_global_webcrypto, "webcrypto"),
+                (ctx.uses_global_webfetch, "webfetch"),
+            ] {
+                assert!(on, "{name}: {source}");
+            }
         }
+        let control = detect_for_source("console.log(globalThis.Math === Math);");
+        assert!(!control.uses_global_reflect && !control.uses_global_websocket);
         assert!(
             detect_for_source(
                 "const j = globalThis[process.argv[2]]; console.log(j.stringify({x:1}));"
