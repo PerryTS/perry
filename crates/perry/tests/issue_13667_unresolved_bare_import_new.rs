@@ -1,10 +1,7 @@
-//! A `new` on a named import of a package that is not installed is a compile
-//! error, like a call of one (#11576). Before this, construction was excluded
-//! on the grounds that it "links, and throws where it is reached": it does
-//! link, but nothing throws — the constructed value is a plain object whose
-//! every member reads `undefined`, so the program ran to completion with
-//! wrong results. Node fails the same program at load with
-//! ERR_MODULE_NOT_FOUND.
+//! A `new` on a named or default import of a package that is not installed is
+//! a compile error, like a call of one (#11576). Left to link, the construct
+//! builds a plain object whose every member reads `undefined`, so the program
+//! exits 0 over a package that is not there.
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -70,8 +67,6 @@ fn constructing_a_default_import_of_a_missing_package_fails() {
 
 #[test]
 fn a_subpath_of_a_missing_package_names_the_package_not_the_subpath() {
-    // The shape that found this: `@scope/pkg/backend/simple` resolves to
-    // nothing, and the message must name the package to install.
     let (output, message, _dir) = compile(
         "import { Simple } from \"@scope-13667/pkg/backend/simple\";\n\
          const backend = new Simple();\n\
@@ -85,9 +80,22 @@ fn a_subpath_of_a_missing_package_names_the_package_not_the_subpath() {
 }
 
 #[test]
+fn a_class_shadowing_the_import_is_not_a_missing_package() {
+    // `Expr::New` carries the class name alone, so this `new` on the local
+    // `Simple` is indistinguishable from one on the import by name.
+    let (output, message, _dir) = compile(
+        "import { Simple } from \"backend-not-installed-13667\";\n\
+         function make() {\n\
+         \x20 class Simple {}\n\
+         \x20 return new Simple();\n\
+         }\n\
+         console.log(typeof make());\n",
+    );
+    assert!(output.status.success(), "{message}");
+}
+
+#[test]
 fn a_property_read_or_type_use_of_a_missing_package_keeps_compiling() {
-    // Unchanged by this fix: neither shape silently fabricates a value the
-    // way `new` did, and #11576 deliberately keeps both non-fatal.
     let (output, message, _dir) = compile(
         "import type { A } from \"types-not-installed-13667\";\n\
          import validator from \"validator-not-installed-13667\";\n\

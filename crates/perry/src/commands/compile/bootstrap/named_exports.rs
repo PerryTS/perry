@@ -89,12 +89,9 @@ fn is_typescript_importer(path: &Path) -> bool {
 ///   `require()`s: packages routinely `require` optional peers inside a
 ///   `try` (`debug` → `supports-color`), which must stay non-fatal;
 /// * only bindings the module CALLS or CONSTRUCTS directly (see
-///   [`called_or_constructed_import_names`]). A call used to die in the linker.
-///   A `new` does not: it links, and the constructed value is a plain object
-///   whose every member reads `undefined`, so the program runs to completion
-///   with wrong results instead of throwing where it is reached. A property
-///   read on an unresolved binding still warns and continues, and a type-only
-///   use of an uninstalled `@types`-style import still compiles.
+///   [`called_or_constructed_import_names`]). A property read on an unresolved
+///   binding still warns and continues, and a type-only use of an
+///   uninstalled `@types`-style import still compiles.
 fn enforce_resolved_bare_imports(ctx: &CompilationContext) -> Result<()> {
     let mut missing = Vec::new();
     for (importer, module) in &ctx.native_modules {
@@ -104,7 +101,7 @@ fn enforce_resolved_bare_imports(ctx: &CompilationContext) -> Result<()> {
         {
             continue;
         }
-        let mut called: Option<HashSet<String>> = None;
+        let mut referenced: Option<HashSet<String>> = None;
         for import in &module.imports {
             if import.resolved_path.is_some()
                 || import.is_native
@@ -124,7 +121,7 @@ fn enforce_resolved_bare_imports(ctx: &CompilationContext) -> Result<()> {
                     // Namespace imports already hard-error at collection (#629).
                     ImportSpecifier::Namespace { .. } => continue,
                 };
-                if called
+                if referenced
                     .get_or_insert_with(|| called_or_constructed_import_names(module))
                     .contains(local)
                 {
@@ -323,10 +320,16 @@ pub(super) fn value_reference_names(module: &Module) -> HashSet<String> {
 /// Imported bindings `module` CALLS (`nanoid()`, `uuidv4()`) or CONSTRUCTS
 /// (`new Simple()`) directly. A call lowers to an extern symbol named after the
 /// local binding, so an unresolved one fails in the linker (#11576). A `new`
-/// links instead and silently yields a plain object, which is worse: the
-/// program keeps running and every member of that object reads `undefined`.
+/// links instead: it builds a plain object whose every member reads `undefined`.
+/// A name the module also declares as a class is dropped, because `Expr::New`
+/// carries the name alone and a `new` on a local class shadowing the import
+/// reaches the same shape.
 fn called_or_constructed_import_names(module: &Module) -> HashSet<String> {
-    collect_refs(module).called_or_constructed
+    let mut names = collect_refs(module).called_or_constructed;
+    for class in &module.classes {
+        names.remove(&class.name);
+    }
+    names
 }
 
 #[derive(Default)]
