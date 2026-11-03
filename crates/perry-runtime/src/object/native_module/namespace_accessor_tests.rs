@@ -80,7 +80,9 @@ fn restored_fs_getter_resolves_canonical_value_without_recursion() {
     .unwrap();
 }
 
-static REAL_GETS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+per_test_global! {
+    static REAL_GETS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+}
 
 extern "C" fn counted_receiver_getter(
     _closure: *const crate::closure::ClosureHeader,

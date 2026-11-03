@@ -29,6 +29,14 @@ const ADDON_EXIT_FINALIZER_C: &str = include_str!("fixtures/node_api_host/addon_
 #[cfg(unix)]
 const ADDON_EXIT_FINALIZER_MAIN: &str =
     include_str!("fixtures/node_api_host/addon_exit_finalizer_main.js");
+#[cfg(unix)]
+const ADDON_SCOPE_RETURN_C: &str = include_str!("fixtures/node_api_host/addon_scope_return.c");
+#[cfg(unix)]
+const ADDON_SCOPE_RETURN_MAIN: &str =
+    include_str!("fixtures/node_api_host/addon_scope_return_main.js");
+#[cfg(unix)]
+const ADDON_SCOPE_RETURN_EXPECTED: &str =
+    include_str!("fixtures/node_api_host/addon_scope_return_expected.txt");
 #[cfg(windows)]
 const ADDON_DEF: &str = include_str!("fixtures/node_api_host/addon.def");
 const HOST_SYMBOLS: &str =
@@ -689,7 +697,9 @@ exports.loadNewer = () => require("./newer.node")
 /// `process.exit()` ends the process without tearing the Node-API environment
 /// down (Node's `reallyExit` skips `FreeEnvironment`): no thread-safe function
 /// finalizer and no environment cleanup hook runs. The natural end of the loop
-/// still runs both.
+/// runs them in Node's order: the cleanup queue (cleanup hooks, async cleanup
+/// hooks and thread-safe functions) newest first, then the finalizers of the
+/// closed thread-safe functions.
 #[cfg(unix)]
 #[test]
 fn process_exit_skips_node_api_environment_teardown() {
@@ -746,16 +756,6 @@ fn process_exit_skips_node_api_environment_teardown() {
         String::from_utf8_lossy(&compile.stderr)
     );
 
-    // Node runs the cleanup hook before the finalizer; the order of the two is
-    // not what this test checks, so the natural transcript is compared as a set.
-    let natural_lines = |stdout: &[u8]| {
-        let mut lines = String::from_utf8_lossy(stdout)
-            .lines()
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
-        lines.sort();
-        lines
-    };
     let check = |program: &Path, args: &[&Path], subject: &str| {
         let exit = Command::new(program)
             .current_dir(root)
@@ -778,9 +778,9 @@ fn process_exit_skips_node_api_environment_teardown() {
             .output()
             .unwrap_or_else(|error| panic!("could not run {subject}: {error}"));
         assert_eq!(
-            natural_lines(&natural.stdout),
-            ["cleanup", "finalized", "held"],
-            "{subject}: the natural end must run Node-API teardown\nstderr:\n{}",
+            String::from_utf8_lossy(&natural.stdout),
+            "held\ncleanup\nasync-cleanup\ncleanup-first\nfinalized\n",
+            "{subject}: the natural end must run Node-API teardown in Node's order\nstderr:\n{}",
             String::from_utf8_lossy(&natural.stderr)
         );
         assert!(
@@ -792,6 +792,94 @@ fn process_exit_skips_node_api_environment_teardown() {
     check(&executable, &[], "compiled Node-API exit program");
     if command_available("node") {
         check(Path::new("node"), &[entry.as_path()], "Node differential");
+    } else {
+        eprintln!("SKIP: node is unavailable for the differential");
+    }
+}
+
+/// A Node-API callback that closes its own handle scope before it returns the
+/// object it built there returns that object (node-addon-api's
+/// `Napi::HandleScope` shape), as under Node.
+#[cfg(unix)]
+#[test]
+fn objects_built_in_a_closed_callback_scope_are_returned() {
+    if !require_tool("clang") {
+        return;
+    }
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let package = root.join("node_modules/fixture-scope-return");
+    std::fs::create_dir_all(&package).expect("create fixture package");
+    std::fs::write(
+        root.join("package.json"),
+        r#"{
+  "name": "perry-node-api-scope-return-e2e",
+  "private": true,
+  "perry": {
+    "compilePackages": ["fixture-scope-return"],
+    "allow": { "compilePackages": ["fixture-scope-return"] },
+    "nativeAddons": ["fixture-scope-return"]
+  }
+}"#,
+    )
+    .expect("write project manifest");
+    std::fs::write(
+        package.join("package.json"),
+        r#"{"name":"fixture-scope-return","version":"1.0.0","main":"index.js"}"#,
+    )
+    .expect("write addon manifest");
+    std::fs::write(
+        package.join("index.js"),
+        "module.exports = require(\"./addon.node\")\n",
+    )
+    .expect("write addon wrapper");
+    let source = root.join("addon_scope_return.c");
+    std::fs::write(&source, ADDON_SCOPE_RETURN_C).expect("write scope return fixture");
+    let mut clang = Command::new("clang");
+    clang.current_dir(root).arg("-shared");
+    #[cfg(not(target_os = "macos"))]
+    clang.arg("-fPIC");
+    #[cfg(target_os = "macos")]
+    clang.args(["-undefined", "dynamic_lookup"]);
+    clang.arg("-o").arg(package.join("addon.node")).arg(&source);
+    run(clang, "scope return fixture build");
+    let entry = root.join("main.js");
+    std::fs::write(&entry, ADDON_SCOPE_RETURN_MAIN).expect("write scope return entry");
+
+    let executable = root.join("app");
+    let compile = compile_app(root, &entry, &executable);
+    assert!(
+        compile.status.success(),
+        "scope return compile failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let perry = Command::new(&executable)
+        .current_dir(root)
+        .output()
+        .expect("run scope return executable");
+    assert_eq!(
+        String::from_utf8_lossy(&perry.stdout),
+        ADDON_SCOPE_RETURN_EXPECTED,
+        "Perry must return the objects Node returns\nstderr:\n{}",
+        String::from_utf8_lossy(&perry.stderr)
+    );
+    assert!(perry.status.success(), "status: {:?}", perry.status);
+    if command_available("node") {
+        let node = run(
+            {
+                let mut command = Command::new("node");
+                command.current_dir(root).arg(&entry);
+                command
+            },
+            "scope return Node differential",
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&node.stdout),
+            ADDON_SCOPE_RETURN_EXPECTED,
+            "the checked-in transcript must still be Node's"
+        );
     } else {
         eprintln!("SKIP: node is unavailable for the differential");
     }

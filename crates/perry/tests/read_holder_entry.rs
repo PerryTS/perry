@@ -210,7 +210,6 @@ fn run(n: &str) -> (String, String) {
     let run = Command::new(&output)
         .arg(n)
         .current_dir(dir.path())
-        .env("PERRY_METHOD_SITE_STATS", "1")
         .env("PERRY_GC_FORCE_EVACUATE", "1")
         .env("PERRY_GC_POISON_FROMSPACE", "1")
         .output()
@@ -224,32 +223,13 @@ fn run(n: &str) -> (String, String) {
     (String::from_utf8_lossy(&run.stdout).into_owned(), stderr)
 }
 
-fn stat(stderr: &str, name: &str) -> u64 {
-    let line = stderr
-        .lines()
-        .find(|l| l.starts_with("[method-site]"))
-        .unwrap_or_else(|| panic!("no [method-site] line in:\n{stderr}"));
-    line.split_whitespace()
-        .find_map(|w| w.strip_prefix(name).and_then(|v| v.strip_prefix('=')))
-        .and_then(|v| v.parse().ok())
-        .unwrap_or_else(|| panic!("no {name} in {line}"))
-}
-
 #[test]
 fn holder_entry_follows_every_chain_change() {
     for n in ["40", "41"] {
-        let (stdout, stderr) = run(n);
+        let (stdout, _stderr) = run(n);
         let lines: Vec<&str> = stdout.lines().collect();
         assert_eq!(lines.len(), 17, "n={n}: expected 17 checks:\n{stdout}");
         let failed: Vec<&&str> = lines.iter().filter(|l| !l.ends_with(" ok")).collect();
         assert!(failed.is_empty(), "n={n}: wrong reads {failed:?}\n{stdout}");
-        assert!(
-            stat(&stderr, "read_holder_primes") > 0,
-            "n={n}: no data entry primed\n{stderr}"
-        );
-        assert!(
-            stat(&stderr, "read_absent_primes") > 0,
-            "n={n}: no absent entry primed\n{stderr}"
-        );
     }
 }

@@ -828,6 +828,24 @@ fn call_callback1(callback_bits: u64, this_bits: u64, arg: f64) {
     );
 }
 
+fn call_message_callback1(callback_bits: u64, this_bits: u64, arg: f64) {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let callback = scope.root_nanbox_f64(f64::from_bits(callback_bits));
+    let target = scope.root_nanbox_f64(f64::from_bits(this_bits));
+    let event = scope.root_nanbox_f64(arg);
+    perry_runtime::event_target_hook_slots::with_message_event_dispatch(
+        event.get_nanbox_f64(),
+        target.get_nanbox_f64(),
+        || {
+            call_callback1(
+                callback.get_nanbox_u64(),
+                target.get_nanbox_u64(),
+                event.get_nanbox_f64(),
+            );
+        },
+    );
+}
+
 fn object_event_handler(target_bits: u64, name: &str) -> Option<u64> {
     if target_bits == 0 {
         return None;
@@ -865,6 +883,9 @@ fn object_event_handler(target_bits: u64, name: &str) -> Option<u64> {
 }
 
 fn event_object(event_type: &str, target_bits: u64, data: Option<f64>) -> f64 {
+    if let Some(data) = data {
+        return perry_runtime::event_target_hook_slots::message_event(data);
+    }
     let obj = perry_runtime::object::js_object_alloc(0, 6);
     let type_ptr = js_string_from_bytes(event_type.as_ptr(), event_type.len() as u32);
     let type_value = f64::from_bits(JSValue::string_ptr(type_ptr).bits());
@@ -874,22 +895,12 @@ fn event_object(event_type: &str, target_bits: u64, data: Option<f64>) -> f64 {
     set_object_field(obj, "currentTarget", target);
     set_object_field(obj, "defaultPrevented", js_bool(false));
     let ctor = perry_runtime::object::js_object_alloc(0, 1);
-    if let Some(data) = data {
-        set_object_field(obj, "data", data);
-        let name = js_string_from_bytes(b"MessageEvent".as_ptr(), 12);
-        set_object_field(
-            ctor,
-            "name",
-            f64::from_bits(JSValue::string_ptr(name).bits()),
-        );
-    } else {
-        let name = js_string_from_bytes(b"Event".as_ptr(), 5);
-        set_object_field(
-            ctor,
-            "name",
-            f64::from_bits(JSValue::string_ptr(name).bits()),
-        );
-    }
+    let name = js_string_from_bytes(b"Event".as_ptr(), 5);
+    set_object_field(
+        ctor,
+        "name",
+        f64::from_bits(JSValue::string_ptr(name).bits()),
+    );
     set_object_field(obj, "constructor", object_value(ctor));
     object_value(obj)
 }
@@ -1029,13 +1040,17 @@ extern "C" fn worker_off(
     js_undefined()
 }
 
-extern "C" fn worker_post_message(
+unsafe extern "C" fn worker_post_message(
     closure: *const ClosureHeader,
     _this: perry_runtime::closure::JsThis,
-    value: f64,
-    transfer: f64,
+    args: *const f64,
+    len: usize,
 ) -> f64 {
-    let worker_id = captured_worker_id(closure);
+    let (value, transfer) = unsafe { perry_runtime::messaging::post_message_arguments(args, len) };
+    worker_post_message_by_id(captured_worker_id(closure), value, transfer)
+}
+
+fn worker_post_message_by_id(worker_id: u64, value: f64, transfer: f64) -> f64 {
     let message = clone_message(value, transfer);
     let sender = WORKERS
         .lock()

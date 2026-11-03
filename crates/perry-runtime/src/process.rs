@@ -175,6 +175,7 @@ pub(crate) fn builtin_submodule_key(module_name: &str) -> Option<&'static str> {
     match module_name {
         "diagnostics_channel" => Some("diagnostics_channel"),
         "fs/promises" => Some("fs_promises"),
+        "readline/promises" => Some("readline_promises"),
         "stream/consumers" => Some("stream_consumers"),
         "stream/web" => Some("stream_web"),
         "test/reporters" => Some("test_reporters"),

@@ -91,16 +91,8 @@ impl RealmPlan {
             symbols: BTreeSet::new(),
         };
         for (name, declaration) in &all {
-            // Every program has the global cell, so the layouts it declares as
-            // its own births (the one it is born on) are always reached.
-            let global_owned = matches!(
-                &declaration.storage,
-                Some(RealmStorageFacts::RuntimeLayout(layout))
-                    if layout.owners.iter().any(|owner| owner == "%Global%")
-            );
-            if name == "%Global%"
-                || (!reach.is_full() && !reach.names.contains(name) && !global_owned)
-            {
+            // The global cell's own layout is in every R (RealmReach::close).
+            if name == "%Global%" || (!reach.is_full() && !reach.names.contains(name)) {
                 continue;
             }
             if let Some(RealmStorageFacts::RuntimeLayout(layout)) = &declaration.storage {
@@ -508,6 +500,37 @@ mod tests {
                 declaration.own_symbol_order.iter().collect::<Vec<_>>()
             );
         }
+    }
+
+    #[test]
+    fn every_global_key_reached_alone_closes_its_plan() {
+        // A global key's value (a reference or an accessor's getter) must be
+        // born by the key's own R node: a program that reads only that key
+        // gets a closed plan. `navigator` became an accessor whose getter no
+        // node birthed.
+        let global: RealmDeclaration = crate::realm_manifest::REALM
+            .iter()
+            .find(|entry| entry.name == "%Global%")
+            .map(|entry| serde_json::from_str(entry.facts).unwrap())
+            .unwrap();
+        let keys: Vec<_> = global
+            .properties
+            .iter()
+            .filter(|property| !property.symbol)
+            .map(|property| property.key.clone())
+            .collect();
+        assert!(keys.iter().any(|key| key == "navigator"));
+        let mut failures = Vec::new();
+        for key in &keys {
+            let reach = reach(&format!("console.log(typeof globalThis.{key});"));
+            if reach.is_full() {
+                continue;
+            }
+            if let Err(error) = RealmPlan::from_reach(&reach) {
+                failures.push(format!("{key}: {error}"));
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
     }
 
     #[test]

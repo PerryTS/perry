@@ -364,12 +364,13 @@ pub(crate) fn resolve_url(url_str: &str, base_str: &str) -> String {
     let mut segments: Vec<&str> = base_dir.split('/').filter(|s| !s.is_empty()).collect();
 
     for part in url_str.split('/') {
-        match part {
-            "." | "" => continue,
-            ".." => {
-                segments.pop();
-            }
-            _ => segments.push(part),
+        if part.is_empty() || is_single_dot_segment(part) {
+            continue;
+        }
+        if is_double_dot_segment(part) {
+            segments.pop();
+        } else {
+            segments.push(part);
         }
     }
 
@@ -377,8 +378,14 @@ pub(crate) fn resolve_url(url_str: &str, base_str: &str) -> String {
     // A trailing slash is semantically significant for URL resolution: the
     // result remains a directory base for a subsequent `new URL(...)` call.
     // Dropping it made `new URL("cert.pem", new URL("../fixtures/", base))`
-    // resolve next to `fixtures` instead of inside it (#6765).
-    if url_str.ends_with('/') && !resolved_path.ends_with('/') {
+    // resolve next to `fixtures` instead of inside it (#6765). A final `.` or
+    // `..` segment names a directory too (`new URL(".", import.meta.url)` is
+    // the module's directory, with its trailing slash).
+    let final_segment = url_str.rsplit('/').next().unwrap_or_default();
+    let names_directory = url_str.ends_with('/')
+        || is_single_dot_segment(final_segment)
+        || is_double_dot_segment(final_segment);
+    if names_directory && !resolved_path.ends_with('/') {
         resolved_path.push('/');
     }
 

@@ -83,16 +83,7 @@ pub extern "C" fn js_worker_threads_worker_post_message(
     let Some(worker_id) = worker_id_from_receiver(receiver) else {
         return js_undefined();
     };
-    let message = clone_message(value, transfer);
-    let sender = WORKERS
-        .lock()
-        .unwrap()
-        .get(&worker_id)
-        .map(|worker| worker.sender.clone());
-    if let Some(sender) = sender {
-        let _ = sender.send(WorkerCommand::Message(message));
-    }
-    js_undefined()
+    worker_post_message_by_id(worker_id, value, transfer)
 }
 
 #[no_mangle]
@@ -264,7 +255,7 @@ pub(super) fn worker_object(
         obj,
         "postMessage",
         closure_value_with_worker_id(
-            perry_runtime::fn_info!(worker_post_message, 2; with_declared(1)),
+            perry_runtime::fn_info!(native_args worker_post_message, 1),
             worker_id,
         ),
     );

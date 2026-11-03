@@ -9,7 +9,7 @@ Its value is **breadth**: every builtin, both forms, one pinned oracle. It is
 the systematic version of tracker
 [#812](https://github.com/PerryTS/perry/issues/812) ("42-module behavioral
 matrix"). Deep *behavioral* parity lives in the hand-authored node-suite
-(`run_parity_tests.sh`); this harness is a wide, shallow **shape** sweep.
+(`scripts/parity.py`); this harness is a wide, shallow **shape** sweep.
 
 ## To check one module fast
 

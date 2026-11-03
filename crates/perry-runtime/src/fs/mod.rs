@@ -197,6 +197,16 @@ pub(crate) fn fd_is_registered(fd: i32) -> bool {
     FD_REGISTRY.with(|r| r.borrow().contains_key(&fd))
 }
 
+/// Move a program descriptor out of the registry to a new owner (a
+/// `net.Socket({ fd })`), which closes it. fs operations on `fd` then fail
+/// with EBADF, as under Node once the socket has closed it.
+pub(crate) fn take_registered_fd(fd: i32) -> Option<fs::File> {
+    let file = FD_REGISTRY.with(|r| r.borrow_mut().remove(&fd))?;
+    FD_PATHS.with(|paths| paths.borrow_mut().remove(&fd));
+    FD_APPEND_MODE.with(|flags| flags.borrow_mut().remove(&fd));
+    Some(file)
+}
+
 pub(crate) fn try_clone_registered_fd(fd: i32) -> Option<fs::File> {
     FD_REGISTRY.with(|r| r.borrow().get(&fd).and_then(|file| file.try_clone().ok()))
 }

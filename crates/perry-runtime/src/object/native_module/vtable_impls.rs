@@ -20,10 +20,11 @@ pub(super) unsafe fn vt_get_own_field(
     let key_len = (*key).byte_len as usize;
     let nb_ptr = crate::value::js_nanbox_pointer(obj as i64);
     let module = js_object_get_field(obj as *mut _, 0);
+    // SSO-aware (#1781): a module name of five bytes or fewer (`fs`, `os`,
+    // `path`) is stored inline, not as a heap string.
+    let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     if (*obj).class_id != NATIVE_MODULE_CLASS_ID
-        || !module.is_string()
-        || module.as_string_ptr().is_null()
-        || (*module.as_string_ptr()).byte_len == 0
+        || !crate::string::js_string_key_bytes(module, &mut sso_buf).is_some_and(|b| !b.is_empty())
     {
         return None;
     }

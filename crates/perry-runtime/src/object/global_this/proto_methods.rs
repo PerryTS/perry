@@ -1353,7 +1353,7 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
             web_method_enumerable(proto(), "toJSON");
         }
         "AbortController" | "AbortSignal" | "EventTarget" | "Event" | "CustomEvent"
-        | "DOMException" => {
+        | "DOMException" | "MessageEvent" => {
             let _gc = crate::gc::GcSuppressScope::new();
             crate::event_target_hook_slots::install_web_event_proto_methods(
                 builtin_name,

@@ -8,6 +8,14 @@ Use `parallelMap`, `parallelFilter` and `spawn` to run native work on OS threads
 
 Perry workers run native code on OS threads, each with its own arena and collector. Ordinary captures and results are serialized between heaps; this has a cost proportional to the transferred data. SharedArrayBuffer and supported ownership transfers are explicit exceptions, not permission to share arbitrary heap pointers.
 
+## Message events
+
+`MessageEvent` extends `Event`. Its constructor accepts `data`, `origin`,
+`lastEventId`, a branded `MessagePort` as `source`, and an iterable of branded
+ports. Worker and channel message listeners receive the same canonical event
+values, with dispatch targets and phases restored after callbacks return or throw.
+Like Node 26, `initMessageEvent` returns a new event rather than mutating its receiver.
+
 ## Three Primitives
 
 ### `parallelMap` — Data-Parallel Processing
@@ -273,3 +281,26 @@ natural exits use the Worker's own `process.exitCode` and synchronous `exit`
 listeners, including a listener's updated exit code. External `terminate()`
 still reports code1 without running those listeners. Main-thread process exit
 and finalization are unchanged.
+
+### Message argument presence
+
+`Worker.postMessage`, `MessagePort.postMessage` and
+`BroadcastChannel.postMessage` require a message argument: an omitted argument
+throws `TypeError` with code `ERR_MISSING_ARGS`, but explicit `undefined` is a
+valid message. Rejected calls do not enqueue a message. Worker method calls use
+the ordinary method lookup, including own replacements and getters.
+
+### Messaging constructor errors
+
+`MessageChannel` requires `new` (`ERR_CONSTRUCT_CALL_REQUIRED`). `MessagePort`
+instances come from channels or transfers; calling or constructing one directly
+throws `ERR_CONSTRUCT_CALL_INVALID`. Calling `BroadcastChannel` without `new`
+throws the ordinary class-constructor `TypeError`, without a Node error code.
+
+### Renamed constructor imports
+
+Renaming a `node:worker_threads` constructor import keeps the original
+constructor identity, including aliases named like another constructor.
+Worker aliases retain child-entry discovery and the same options/eval lowering
+as canonical imports. Lexical bindings, namespace imports and explicit global
+constructors keep their existing resolution rules.

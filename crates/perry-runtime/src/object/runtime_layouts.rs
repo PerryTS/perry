@@ -226,13 +226,50 @@ macro_rules! runtime_layout {
             pub fn desc() -> *mut PerryLayoutDesc {
                 #[cfg(not(any(test, feature = "test-layout-descriptors")))]
                 {
-                    // SAFETY: an extern_weak static reads as the symbol's
-                    // address, or null when the program does not define it.
-                    let desc = unsafe { DEFINITION };
+                    let desc = definition();
                     if desc.is_null() {
                         crate::object::runtime_layouts::undefined_runtime_layout(stringify!($name));
                     }
                     desc
+                }
+                #[cfg(any(test, feature = "test-layout-descriptors"))]
+                {
+                    definition()
+                }
+            }
+            /// The layout symbol's address, or null when the program does
+            /// not define it.
+            #[cfg(not(target_os = "windows"))]
+            #[inline(always)]
+            fn definition() -> *mut PerryLayoutDesc {
+                #[cfg(not(any(test, feature = "test-layout-descriptors")))]
+                {
+                    // SAFETY: an extern_weak static reads as the symbol's
+                    // address, or null when the program does not define it.
+                    unsafe { DEFINITION }
+                }
+                #[cfg(any(test, feature = "test-layout-descriptors"))]
+                {
+                    std::ptr::addr_of_mut!(super::$name)
+                }
+            }
+            // COFF: LLVM lowers an undefined extern_weak reference, in each
+            // object that makes one, to a weak external whose default
+            // (`.weak.<symbol>.default.<a symbol of that object>`) is unique
+            // to the object, and MSVC link.exe rejects two weak externals of
+            // one symbol with different defaults (LNK1227). An inlined
+            // `desc()` made one per object that births the layout, here and
+            // in every crate that inlines it. So on Windows exactly one object
+            // reads the symbol: this reader, which every birth calls. Wrapper
+            // crates call it by its C name (perry-ffi `runtime_layouts`).
+            #[cfg(target_os = "windows")]
+            #[inline(never)]
+            #[export_name = concat!("perry_layout_reader_", stringify!($name))]
+            extern "C" fn definition() -> *mut PerryLayoutDesc {
+                #[cfg(not(any(test, feature = "test-layout-descriptors")))]
+                {
+                    // SAFETY: as above.
+                    unsafe { DEFINITION }
                 }
                 #[cfg(any(test, feature = "test-layout-descriptors"))]
                 {
@@ -610,6 +647,9 @@ use literal_atoms::ATOM_28;
 use literal_atoms::ATOM_29;
 use literal_atoms::ATOM_3;
 use literal_atoms::ATOM_30;
+use literal_atoms::ATOM_31;
+use literal_atoms::ATOM_32;
+use literal_atoms::ATOM_33;
 use literal_atoms::ATOM_4;
 use literal_atoms::ATOM_5;
 use literal_atoms::ATOM_6;
@@ -634,7 +674,9 @@ runtime_layout!(
     0x52540001,
     0,
     &raw const READABLE_STATE_PROTO_FAMILY,
-    [ATOM_0, ATOM_1, ATOM_2, ATOM_3, ATOM_4, ATOM_5],
+    // node 26.12 ReadableState (26102c22f2, 247c0274c1): `fastChunk`,
+    // `pipeOnData` and `pipePause` sit between `length` and `pipes`.
+    [ATOM_0, ATOM_1, ATOM_2, ATOM_3, ATOM_31, ATOM_32, ATOM_33, ATOM_4, ATOM_5],
     realm = [
         "node:stream.Readable",
         "node:stream.Duplex",

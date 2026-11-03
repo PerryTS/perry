@@ -191,10 +191,16 @@ pub(crate) fn try_lower_proven_field_call(
     Ok(Some(v))
 }
 
-/// `x.k(args)` where the local `x` holds exactly class C's class object and
-/// the facts prove C's own static `k` holds its declaration (FVA 3.4): the
-/// static call `C.k(args)`, whose lowering then needs no guard. The receiver
-/// is still evaluated (a TDZ read throws).
+/// `x.k(args)` where the local `x` holds only class objects of class C and
+/// the facts prove C's own static `k` holds its declaration (FVA 3.4): a
+/// direct call of that declaration, with no guard.
+///
+/// The receiver stays the call's `this`. The facts' class object of C stands
+/// for every evaluation of C's declaration: a declaration that runs more than
+/// once (in a function body, #11759 (c′)) gives each evaluation its own class
+/// object, with its own statics and its own class environment, which the body
+/// reaches through `this` (`js_static_this_resolve_class`). A call of
+/// `C.k(args)` would bind the first evaluation's.
 pub(crate) fn try_lower_proven_static_call(
     ctx: &mut FnCtx<'_>,
     callee: &Expr,
@@ -226,13 +232,43 @@ pub(crate) fn try_lower_proven_static_call(
     if !declared || !crate::expr::wpfacts_access::proves_static(ctx, cid, property) {
         return Ok(None);
     }
-    let _ = lower_expr(ctx, object)?;
-    let call = Expr::StaticMethodCall {
-        class_name,
-        method_name: property.clone(),
-        args: args.to_vec(),
+    let key = (
+        class_name.clone(),
+        crate::codegen::static_method_registry_key(property),
+    );
+    let Some(fn_name) = ctx.methods.get(&key).cloned() else {
+        return Ok(None);
     };
-    lower_expr(ctx, &call).map(Some)
+    // A rest parameter or a generator body takes the general static call
+    // lowering (argument bundling, generator state).
+    let generator = ctx.classes.get(&class_name).is_some_and(|c| {
+        c.static_methods.iter().any(|m| {
+            m.name == *property && crate::codegen::helpers::body_has_fixed_generator_state(&m.body)
+        })
+    });
+    if generator || ctx.method_has_rest.get(&key).copied().unwrap_or(false) {
+        return Ok(None);
+    }
+    let declared = ctx.method_param_counts.get(&key).copied().unwrap_or(0);
+    crate::rooting::with_rooted_group(ctx, 1, |ctx, group| {
+        // The receiver is evaluated first (a TDZ read throws) and held across
+        // the arguments.
+        let collects = crate::rooting::any_operand_may_collect(ctx, args.iter());
+        let recv_idx = group.lower(ctx, object, collects)?;
+        let (mut lowered, args_group) = super::lower_call_args_rooted(ctx, args)?;
+        // Missing arguments are `undefined` (default parameters fire); extra
+        // ones are evaluated and dropped.
+        let undefined = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+        lowered.resize(declared, undefined);
+        let recv = group.reread(ctx, recv_idx)?;
+        ctx.block()
+            .call_void("js_static_this_arm_value", &[(DOUBLE, &recv)]);
+        let arg_slices: Vec<(crate::types::LlvmType, &str)> =
+            lowered.iter().map(|v| (DOUBLE, v.as_str())).collect();
+        let result = ctx.block().call(DOUBLE, &fn_name, &arg_slices);
+        args_group.release(ctx);
+        Ok(Some(result))
+    })
 }
 
 /// The call of the proven bodies `bodies` (symbols `symbols`) through the

@@ -1196,6 +1196,7 @@ pub struct Model {
     /// them. `None` after the solve: compiled code never writes them
     /// ([`Model::note_fnproto_write`]).
     pub fnproto_write: Option<u32>,
+    pub fnproto_borrow_write: Option<u32>,
     /// #13645: why iterating an array may not read the builtin
     /// `%Array.prototype%[@@iterator]`: the first write under
     /// `Symbol.iterator`, `__proto__` or a computed key, definition or

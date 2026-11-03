@@ -217,6 +217,8 @@ pub struct Module {
     /// is recorded here. Keyed by ClassId; consumed by codegen when
     /// emitting `js_register_class_name`.
     pub class_display_names: std::collections::HashMap<crate::ClassId, String>,
+    /// Ordinary methods/accessors have [[Call]] but no [[Construct]].
+    pub non_constructor_funcs: std::collections::HashSet<crate::types::FuncId>,
     /// #4101: original source text for each user function, keyed by HIR
     /// FuncId. Populated at lowering by slicing the module source against the
     /// AST span of every function declaration / expression / arrow. Consumed
@@ -270,9 +272,41 @@ pub struct Module {
     /// (`export * from "./a"` above `import * as b from "./b"` evaluates `a`
     /// first); `topo_sort_non_entry_modules` follows it.
     pub requested_modules: Vec<String>,
+    /// Local names of TypeScript named/default imports that a top-level
+    /// declaration of this module repeats. Each is the early
+    /// `SyntaxError: Identifier 'x' has already been declared` only if the
+    /// export it resolves to has a value meaning: a specifier naming an
+    /// interface or type alias binds nothing (tsc elides it) and the local
+    /// declaration merges with it. The compile driver decides them once
+    /// imports resolve; every other redeclaration is rejected by lowering.
+    pub locally_redeclared_imports: Vec<String>,
 }
 
 impl Module {
+    /// Whether exported `name` is only an erased TypeScript declaration (an
+    /// interface or type alias) and no JavaScript binding of this module.
+    ///
+    /// Interfaces and type aliases stay in `exports` so cross-module type
+    /// resolution can follow re-export chains; a declaration-merged name that
+    /// also has a value binding is a value.
+    pub fn is_type_only_export_binding(&self, name: &str) -> bool {
+        let has_type_declaration = self.interfaces.iter().any(|i| i.name == name)
+            || self.type_aliases.iter().any(|alias| alias.name == name);
+        has_type_declaration
+            && !(self.functions.iter().any(|f| f.name == name)
+                || self
+                    .exported_functions
+                    .iter()
+                    .any(|(exported, _)| exported == name)
+                || self
+                    .exported_objects
+                    .iter()
+                    .any(|exported| exported == name)
+                || self.classes.iter().any(|c| c.name == name)
+                || self.enums.iter().any(|e| e.name == name)
+                || self.globals.iter().any(|g| g.name == name))
+    }
+
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -305,12 +339,14 @@ impl Module {
             async_step_closures: std::collections::HashSet::new(),
             closure_display_names: std::collections::HashMap::new(),
             class_display_names: std::collections::HashMap::new(),
+            non_constructor_funcs: Default::default(),
             closure_source_text: std::collections::HashMap::new(),
             class_source_text: std::collections::HashMap::new(),
             async_generator_funcs: std::collections::HashSet::new(),
             local_source_spans: std::collections::HashMap::new(),
             gen_param_prologue_len: std::collections::HashMap::new(),
             requested_modules: Vec::new(),
+            locally_redeclared_imports: Vec::new(),
         }
     }
 

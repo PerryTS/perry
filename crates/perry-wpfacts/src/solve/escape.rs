@@ -164,7 +164,7 @@ impl Model {
             let what = format!("reaches unmodeled code ({})", self.reasons[reason as usize]);
             self.note_array_member_write(t, None, None, &what);
         }
-        if self.fnproto_write.is_none()
+        if (self.fnproto_write.is_none() || self.fnproto_borrow_write.is_none())
             && matches!(self.toks[t as usize], TokKind::ObjectProto)
             && self.reasons[reason as usize].starts_with(crate::gen_expr::UNMODELED_OPERAND)
         {

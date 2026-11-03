@@ -127,15 +127,6 @@ pub(super) const EXTRAS_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "worker_threads",
         has_receiver: true,
-        method: "postMessage",
-        class_filter: Some("Worker"),
-        runtime: "js_worker_threads_worker_post_message",
-        args: &[NA_F64, NA_F64],
-        ret: NR_F64,
-    },
-    NativeModSig {
-        module: "worker_threads",
-        has_receiver: true,
         method: "on",
         class_filter: Some("Worker"),
         runtime: "js_worker_threads_worker_on",

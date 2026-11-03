@@ -102,6 +102,7 @@ tests/test-*
 # also needs its own `lint` step: adding one is a conscious act in two places,
 # never a file that is committed and then never run.
 !tests/test_parity_normalize.py
+!tests/test_parity_runner.py
 !tests/test_perf_frontier_gate_smoke.sh
 !tests/*/
 bench_*

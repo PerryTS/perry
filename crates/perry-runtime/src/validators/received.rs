@@ -84,22 +84,17 @@ pub(crate) fn describe_received_js(value: f64) -> *mut StringHeader {
         return received_name("function ", name.get_nanbox_f64());
     }
     if jv.is_reference() {
+        // Node 26.12 (`errors: validate constructor name`): the name is
+        // `value.constructor?.name`, each property read once (either may be an
+        // accessor, and `constructor` may be a primitive). Only a non-empty
+        // string names the instance; anything else falls through to
+        // `inspect(value, { depth: -1 })`.
         let constructor =
             scope.root_nanbox_f64(received_property(value.get_nanbox_f64(), "constructor"));
-        if crate::value::js_is_truthy(constructor.get_nanbox_f64()) != 0 {
-            let constructor =
-                scope.root_nanbox_f64(received_property(value.get_nanbox_f64(), "constructor"));
-            let key = scope.root_nanbox_f64(received_key("name"));
-            // Node uses `"name" in value.constructor`: the second read may
-            // be primitive, which must throw an uncoded language TypeError.
-            if crate::object::js_in_operator(constructor.get_nanbox_f64(), key.get_nanbox_f64())
-                .to_bits()
-                == crate::value::TAG_TRUE
-            {
-                let constructor =
-                    scope.root_nanbox_f64(received_property(value.get_nanbox_f64(), "constructor"));
-                let name =
-                    scope.root_nanbox_f64(received_property(constructor.get_nanbox_f64(), "name"));
+        if !is_nullish(JSValue::from_bits(constructor.get_nanbox_f64().to_bits())) {
+            let name =
+                scope.root_nanbox_f64(received_property(constructor.get_nanbox_f64(), "name"));
+            if received_nonempty_string(name.get_nanbox_f64()) {
                 return received_name("an instance of ", name.get_nanbox_f64());
             }
         }
@@ -114,15 +109,21 @@ pub(crate) fn describe_received_js(value: f64) -> *mut StringHeader {
         {
             let empty = header.is_some_and(|h| unsafe {
                 crate::gc_type_is_object!((*h.as_ptr()).obj_type)
-                    && crate::object::object_keys(addr as *const crate::object::ObjectHeader)
-                        .count()
-                        == 0
-            });
+            }) && !received_has_enumerable_own_keys(value.get_nanbox_f64());
             return received_text(if empty {
                 "[Object: null prototype] {}"
             } else {
                 "[Object: null prototype]"
             });
+        }
+        // `inspect(value, { depth: -1 })` of an object with no enumerable own
+        // keys (string or symbol) prints its braces, `{}`; any key makes the
+        // depth cut-off print `[Object]`.
+        let ordinary = header.is_some_and(|h| unsafe {
+            crate::gc_type_is_object!((*h.as_ptr()).obj_type)
+        });
+        if ordinary && !received_has_enumerable_own_keys(value.get_nanbox_f64()) {
+            return received_text("{}");
         }
         return received_text("[Object]");
     }
@@ -444,6 +445,40 @@ pub(crate) fn received_native_fallback(value: f64) -> Option<*mut StringHeader> 
         }
     }
     Some(received_text(&format!("[{label}{suffix}]")))
+}
+
+/// node's `getKeys(value, showHidden = false)` is non-empty: an own
+/// enumerable string key (`Object.keys`) or an own enumerable symbol key.
+fn received_has_enumerable_own_keys(value: f64) -> bool {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    let addr = crate::value::addr_class::object_ref_addr(value.get_nanbox_f64());
+    let keys = crate::object::js_object_keys(addr as *const crate::object::ObjectHeader);
+    if !keys.is_null() && crate::array::js_array_length(keys) != 0 {
+        return true;
+    }
+    let symbols = scope.root_raw_const_ptr(unsafe {
+        crate::symbol::js_object_get_own_property_symbols(value.get_nanbox_f64())
+    } as *const crate::array::ArrayHeader);
+    let count = crate::array::js_array_length(symbols.get_raw_const_ptr());
+    (0..count).any(|i| {
+        let key = crate::array::js_array_get_f64(symbols.get_raw_const_ptr(), i);
+        crate::object::js_object_property_is_enumerable(value.get_nanbox_f64(), key).to_bits()
+            == crate::value::TAG_TRUE
+    })
+}
+
+/// `typeof value === 'string' && value !== ''`.
+fn received_nonempty_string(value: f64) -> bool {
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_any_string() {
+        return false;
+    }
+    if jv.is_short_string() {
+        return jv.short_string_len() != 0;
+    }
+    let ptr = crate::value::js_get_string_pointer_unified(value) as *const StringHeader;
+    !ptr.is_null() && unsafe { (*ptr).byte_len } != 0
 }
 
 pub(crate) fn received_name(prefix: &str, value: f64) -> *mut StringHeader {

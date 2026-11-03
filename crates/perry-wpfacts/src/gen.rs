@@ -1219,7 +1219,7 @@ impl<'a> Gen<'a> {
                 .params
                 .iter()
                 .rev()
-                .take_while(|p| p.name.starts_with(perry_hir::cap_fields::CAP_FIELD_PREFIX))
+                .take_while(|p| perry_hir::cap_fields::is_cap_field_name(&p.name))
                 .count();
             self.m.funcs[f as usize].captures =
                 (0..caps).map(|i| self.class_env(mi, &c.name, i)).collect();

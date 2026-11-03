@@ -1,3 +1,4 @@
+// perry-test: run-timeout=60
 // Bug 9 under id pressure: every server request retires two native handle ids
 // (the request and the response), and the shared band holds 262k. 300k
 // requests on a few keep-alive connections retire more than twice the band,

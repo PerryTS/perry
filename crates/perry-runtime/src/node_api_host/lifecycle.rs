@@ -2,6 +2,7 @@ use super::*;
 use crate::async_hook_slots::AsyncResourceIds;
 use crate::value::JSValue;
 use std::ffi::{c_char, c_void};
+use std::sync::Arc;
 use std::sync::LazyLock;
 
 pub type NapiCleanupHook = Option<unsafe extern "C" fn(*mut c_void)>;
@@ -23,6 +24,8 @@ pub(crate) struct CallbackScopeRecord {
 pub(crate) struct CleanupHookRecord {
     pub callback: usize,
     pub argument: usize,
+    /// Position in the environment's cleanup queue (`Env::cleanup_order`).
+    pub order: u64,
 }
 
 pub(crate) struct AsyncCleanupHookRecord {
@@ -30,6 +33,8 @@ pub(crate) struct AsyncCleanupHookRecord {
     pub callback: usize,
     pub argument: usize,
     pub active: bool,
+    /// Position in the environment's cleanup queue (`Env::cleanup_order`).
+    pub order: u64,
 }
 
 pub(crate) struct InstanceDataRecord {
@@ -287,9 +292,11 @@ pub unsafe extern "C" fn napi_add_env_cleanup_hook(
         return set_status(env, NapiStatus::InvalidArg, "cleanup hook must not be null");
     };
     if with_env_mut(env, |env| {
+        let order = env.next_cleanup_order();
         env.cleanup_hooks.push(CleanupHookRecord {
             callback: callback as usize,
             argument: argument as usize,
+            order,
         });
     })
     .is_none()
@@ -335,20 +342,22 @@ pub unsafe extern "C" fn napi_add_async_cleanup_hook(
     argument: *mut c_void,
     result: *mut NapiAsyncCleanupHookHandle,
 ) -> NapiStatus {
-    if result.is_null() || callback.is_none() {
+    // The removal handle is optional, as in Node: the hook receives it too.
+    let Some(callback) = callback else {
         return set_status(
             env,
             NapiStatus::InvalidArg,
-            "async cleanup callback and result must not be null",
+            "async cleanup callback must not be null",
         );
-    }
-    let callback = callback.unwrap();
+    };
     let handle = with_env_mut(env, |env| {
+        let order = env.next_cleanup_order();
         let mut record = Box::new(AsyncCleanupHookRecord {
             env_serial: env.serial,
             callback: callback as usize,
             argument: argument as usize,
             active: true,
+            order,
         });
         let pointer = (&mut *record) as *mut AsyncCleanupHookRecord as NapiAsyncCleanupHookHandle;
         env.async_cleanup_lookup
@@ -359,7 +368,9 @@ pub unsafe extern "C" fn napi_add_async_cleanup_hook(
     let Some(handle) = handle else {
         return NapiStatus::InvalidArg;
     };
-    *result = handle;
+    if !result.is_null() {
+        *result = handle;
+    }
     ok(env)
 }
 
@@ -424,6 +435,13 @@ pub unsafe extern "C" fn napi_fatal_exception(env: NapiEnv, error: NapiValue) ->
     ok(env)
 }
 
+/// One entry of the environment cleanup queue.
+enum CleanupStep {
+    Hook(usize, usize),
+    AsyncHook(usize, usize, usize),
+    Close(Arc<super::tsfn::ThreadsafeFunctionInner>),
+}
+
 /// Idempotent owning-agent shutdown. Cleanup callbacks and finalizers run only
 /// after all internal borrows have been released.
 pub fn shutdown_current_env() {
@@ -442,48 +460,67 @@ pub fn shutdown_current_env() {
             return None;
         }
         env.shutting_down = true;
-        let async_hooks = env
-            .async_cleanup_hooks
-            .iter()
-            .filter(|record| record.active)
-            .map(|record| {
-                (
-                    record.callback,
-                    record.argument,
-                    (&**record) as *const _ as usize,
-                )
-            })
+        // Node's environment cleanup queue: cleanup hooks, async cleanup hooks
+        // and thread-safe functions (each registers its own hook when it is
+        // created) run newest first.
+        let mut queue = env
+            .cleanup_hooks
+            .drain(..)
+            .map(|hook| (hook.order, CleanupStep::Hook(hook.callback, hook.argument)))
             .collect::<Vec<_>>();
-        Some((
-            async_hooks,
-            std::mem::take(&mut env.cleanup_hooks),
-            env.instance_data.take(),
-        ))
+        queue.extend(
+            env.async_cleanup_hooks
+                .iter()
+                .filter(|record| record.active)
+                .map(|record| {
+                    (
+                        record.order,
+                        CleanupStep::AsyncHook(
+                            record.callback,
+                            record.argument,
+                            (&**record) as *const _ as usize,
+                        ),
+                    )
+                }),
+        );
+        queue.extend(
+            env.tsfns
+                .iter()
+                .map(|inner| (inner.cleanup_order(), CleanupStep::Close(Arc::clone(inner)))),
+        );
+        queue.sort_by_key(|(order, _)| std::cmp::Reverse(*order));
+        Some((queue, env.instance_data.take()))
     })
     .flatten();
-    let Some((async_hooks, cleanup_hooks, instance_data)) = state else {
+    let Some((queue, instance_data)) = state else {
         return;
     };
     super::async_work::cancel_env_async_work(env_pointer);
-    super::tsfn::shutdown_threadsafe_functions(env_pointer);
+    for (_, step) in queue {
+        match step {
+            CleanupStep::Hook(callback, argument) => {
+                let callback: unsafe extern "C" fn(*mut c_void) =
+                    unsafe { std::mem::transmute(callback) };
+                unsafe {
+                    callback(argument as *mut c_void);
+                }
+            }
+            CleanupStep::AsyncHook(callback, argument, handle) => {
+                let callback: unsafe extern "C" fn(NapiAsyncCleanupHookHandle, *mut c_void) =
+                    unsafe { std::mem::transmute(callback) };
+                unsafe {
+                    callback(
+                        handle as NapiAsyncCleanupHookHandle,
+                        argument as *mut c_void,
+                    );
+                }
+            }
+            CleanupStep::Close(inner) => super::tsfn::close_for_shutdown(&inner),
+        }
+    }
+    // A closed thread-safe function finalizes once its handle closes, after
+    // the whole queue ran (Node closes the handles after draining it).
     super::process_pending();
-    for (callback, argument, handle) in async_hooks {
-        let callback: unsafe extern "C" fn(NapiAsyncCleanupHookHandle, *mut c_void) =
-            unsafe { std::mem::transmute(callback) };
-        unsafe {
-            callback(
-                handle as NapiAsyncCleanupHookHandle,
-                argument as *mut c_void,
-            );
-        }
-    }
-    for hook in cleanup_hooks.into_iter().rev() {
-        let callback: unsafe extern "C" fn(*mut c_void) =
-            unsafe { std::mem::transmute(hook.callback) };
-        unsafe {
-            callback(hook.argument as *mut c_void);
-        }
-    }
     if let Some(instance_data) = instance_data {
         if let Some(finalizer) = instance_data.finalizer {
             super::metadata::enqueue_finalizer(finalizer);

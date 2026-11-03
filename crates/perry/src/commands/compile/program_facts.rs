@@ -285,6 +285,7 @@ pub(crate) fn view_for(
     let digest = if elision.is_empty()
         && !elision.fnproto_bind_unwritten
         && elision.super_unrelinked.is_empty()
+        && !elision.fnproto_borrow_unwritten
     {
         pf.digest_for(&key)
     } else {
@@ -355,6 +356,7 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
         iteration_sabotage || (pf.interp_guard.is_none() && pf.array_iteration_written.is_none());
     out.array_iterator_close_unwritten = iteration_sabotage
         || (pf.interp_guard.is_none() && pf.array_iterator_close_written.is_none());
+    out.fnproto_borrow_unwritten = pf.fnproto_borrow_written.is_none() || unchecked;
     let Some(mb) = pf.bindings_for(path) else {
         return out;
     };
