@@ -839,6 +839,22 @@ impl<'a> Gen<'a> {
                 let (_, t) = self.new_lit_tmpl(fx.module, &[]);
                 self.tok_node(t)
             }
+            // DEC 255 (hunk 2): the strict existing-global store `NS = v`
+            // (`perry-hir` `strict_global_assign_existing_or_throw`) is a
+            // store into the global object under that name, as
+            // `globalThis.NS = v` is: the same `native_writes[(GlobalThis,
+            // NS)]` the namespace call's generic arm reads. The assignment
+            // expression evaluates to its RHS.
+            "js_global_assign_existing_or_throw" => {
+                let (Some(k), Some(v)) = (lit(0), arg(1)) else {
+                    return self.extern_fail(name, &args, &spread);
+                };
+                let t = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+                let recv = self.tok_node(t);
+                let key = Key::Named(self.m.atom(&k));
+                self.store(fx, recv, key, v, name.to_string(), None, false);
+                v
+            }
             "js_vm_module_call" => {
                 crate::builtins::set_dyn_eval(&mut self.m, "E14 node:vm");
                 self.extern_fail(name, &args, &spread)
