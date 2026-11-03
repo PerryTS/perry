@@ -1046,7 +1046,9 @@ pub fn run_with_parse_cache(
     // #2309: tree-shake the final module graph — prune unreachable
     // node_modules modules and re-raise any deferred refusal that survives.
     // No-op unless tree-shaking is enabled (byte-identical to pre-#2309).
-    {
+    // The compile's one activation pass (dynamic reach runs it) and its roots
+    // go to the facts (`perry_wpfacts::Activation`).
+    let (activation, activation_roots) = {
         let entry_canonical = ctx.entry_canonical.clone().unwrap_or_else(|| {
             args.input
                 .canonicalize()
@@ -1065,8 +1067,9 @@ pub fn run_with_parse_cache(
                 roots.push(entry_path.canonicalize().unwrap_or(entry_path));
             }
         }
-        super::dynamic_reach::prune(&mut ctx, &roots)?;
-    }
+        let activation = super::dynamic_reach::prune(&mut ctx, &roots)?;
+        (activation, roots)
+    };
 
     // --- Web/WASM target: emit WASM binary + JS runtime bridge ---
     if matches!(args.target.as_deref(), Some("web") | Some("wasm")) {
@@ -6589,8 +6592,12 @@ pub fn run_with_parse_cache(
             || ctx.uses_data_url_dynamic_import,
         &ctx.patched_builtins.dynamic_code_reach,
         &ctx.cjs_wrap_debug_sources,
-        super::program_facts::module_roots(&ctx),
+        activation_roots
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect(),
         &ctx.cache_dir,
+        activation,
     );
     program_step("whole-program facts", Some(facts_started));
     #[allow(clippy::type_complexity)]

@@ -106,7 +106,8 @@ fn imports_formatter(host: &str) -> bool {
     let hirs = hirs(&main_with(host));
     let list: Vec<(String, &perry_hir::Module)> =
         hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
-    let live = crate::live_dynamic_imports(&list, &FactsConfig::default()).expect("in bound");
+    let activation = crate::activation(&list, &FactsConfig::default());
+    let live = activation.live_dynamic_imports().expect("in bound");
     live.contains(&("gen.ts".to_string(), "./fmtlib.js".to_string()))
 }
 
@@ -253,7 +254,8 @@ fn a_module_only_an_uncalled_body_imports_never_runs() {
     ] {
         let hirs = program_of(&[("lazy", LAZY), ("main", main)]);
         let list: Vec<(String, &perry_hir::Module)> = hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
-        let live = crate::live_dynamic_imports(&list, &FactsConfig::default()).expect("in bound");
+        let activation = crate::activation(&list, &FactsConfig::default());
+    let live = activation.live_dynamic_imports().expect("in bound");
         assert_eq!(live.contains(&("main.ts".to_string(), "./lazy.js".to_string())), loads, "{main}");
         let pf = crate::compute(&list, &FactsConfig::default());
         let on = pf.active_bodies.as_ref().expect("activated");
