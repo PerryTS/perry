@@ -131,6 +131,12 @@ fn the_whole_block_sweep_matches_the_per_object_sweep() {
     std::thread::spawn(crate::gc::ensure_gc_initialized)
         .join()
         .expect("runtime setup thread");
+    // The first full collection of a process also leaves a small process-wide
+    // allocation behind that a later arm would count as live; run one
+    // discarded collection of each kind first, as earlier tests of a shared
+    // process did.
+    let _ = on_fresh_thread(true, false);
+    let _ = on_fresh_thread(false, false);
     let per_object = on_fresh_thread(true, false);
     let whole_block = on_fresh_thread(false, false);
     assert!(
