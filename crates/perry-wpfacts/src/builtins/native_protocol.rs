@@ -173,9 +173,22 @@ pub fn native_written_by(m: &Model, np: Tok, a: Atom) -> (bool, bool) {
     // `ObjectProto` stands for every collapsed one, a global native's
     // included). What interpreted code writes onto one, or through a ⊤ it
     // handed back, is the runtime guard word's (decision 150 (b)).
+    //
+    // Per unit (DECISIONS 251: retired, H3 deletes it) a store into ⊤
+    // keeps main's premise, every builtin prototype: the actor set is per
+    // unit and does not cross the unit boundary, so a unit never sees
+    // another unit's join. Sound, imprecise.
+    //
+    // A module's native prototype (`extends EventEmitter` of an import) is
+    // unknown code's from birth: its constructor is the import, a ⊤ value,
+    // so `EventEmitter.prototype` is a read of ⊤ (⊤ and the chain marker,
+    // never the named prototype) and a store or delete there is one
+    // through ⊤ under its key.
     let actor = |t: Tok| m.top_protos.contains_key(&t);
     let top_may_be = match &m.toks[np as usize] {
         _ if is_global => m.global_in_top,
+        _ if m.unit_mode => true,
+        TokKind::NativeProto(_) if !global => true,
         TokKind::NativeProto(_) => {
             actor(np) || m.tok_index.get(&TokKind::ObjectProto).is_some_and(|&op| actor(op))
         }

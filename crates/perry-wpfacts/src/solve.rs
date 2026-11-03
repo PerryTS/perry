@@ -851,7 +851,7 @@ impl Model {
     /// set): idempotent per prototype, one constraint, not one per write.
     pub(crate) fn chain_mark(&mut self, reason: u32, join: bool) {
         let bit = if join { 2 } else { 1 };
-        if self.top_chain_marks & bit != 0 {
+        if self.unit_mode || self.top_chain_marks & bit != 0 {
             return;
         }
         self.top_chain_marks |= bit;

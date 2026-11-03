@@ -78,6 +78,9 @@ impl Model {
                     self.chain_step(n, origin, p, key, act);
                 }
             }
+            // Per unit the marker machinery is inert (DECISIONS 251): a
+            // store into ⊤ writes every builtin prototype there.
+            Cons::ChainMark { .. } if self.unit_mode => {}
             Cons::ChainMark { reason, join } => {
                 let tc = self.top_chain();
                 if n == tc {

@@ -575,7 +575,7 @@ impl Model {
             Key::Any => true,
             Key::Named(a) => matches!(self.atoms[a as usize].as_str(), "__proto__" | "prototype"),
         };
-        if yields {
+        if yields && !self.unit_mode {
             let mk = self.top_chain_marker();
             self.add_tok(dst, mk);
         }
@@ -596,8 +596,10 @@ impl Model {
         match self.toks[t as usize] {
             TokKind::Top => {
                 self.add_tok(dst, TOP);
-                let mk = self.top_chain_marker();
-                self.add_tok(dst, mk);
+                if !self.unit_mode {
+                    let mk = self.top_chain_marker();
+                    self.add_tok(dst, mk);
+                }
             }
             TokKind::ObjectProto => {
                 self.add_tok(dst, t);

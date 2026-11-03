@@ -63,6 +63,16 @@ impl Model {
                 false => crate::builtins::note_top_proto(self, t, reason),
             }
         }
+        // DECISIONS 254 (hunk H): a builtin constructor or namespace reaching
+        // ⊤ brings its chain and a constructor its `prototype`, each a
+        // builtin prototype (collapsed into `ObjectProto`): unknown code may
+        // hand it back, so a read of a ⊤ value's chain may yield it
+        // (`unknown.take(Array); unknown.value.prototype.indexOf = 1`).
+        if !self.unit_mode && matches!(self.toks[t as usize], TokKind::Builtin(_)) {
+            let op = self.tok(TokKind::ObjectProto);
+            let c = self.top_chain();
+            self.add_tok(c, op);
+        }
         // Unknown code given the Function constructor may call it, and ⊤
         // may then be it (DECISIONS 235). Until then a ⊤ callee is not it:
         // the program is closed, and no native returns the constructor; the

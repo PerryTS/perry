@@ -163,8 +163,10 @@ fn unknown_method_proto(m: &mut Model, call: CallId, why: &str, proto: Option<us
     m.add_prim(c.ret, prim::ALL);
     // DECISIONS 254: it may compute a prototype of an argument (each one
     // escaped above, its chain with it): the chain marker.
-    let mk = m.top_chain_marker();
-    m.add_tok(c.ret, mk);
+    if !m.unit_mode {
+        let mk = m.top_chain_marker();
+        m.add_tok(c.ret, mk);
+    }
 }
 
 fn implicit_args(m: &mut Model, call: CallId, why: &str, proto: Protocol) {
