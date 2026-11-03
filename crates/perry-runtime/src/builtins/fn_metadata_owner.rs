@@ -456,6 +456,7 @@ impl BundleFunctionNames<'_> {
         }
     }
     /// The entry the key order picks: the greatest under `better`.
+    #[cfg(test)]
     fn best(
         &self,
         keep: &dyn Fn(usize) -> bool,
