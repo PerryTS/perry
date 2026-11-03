@@ -56,11 +56,80 @@ fn is_valid_raw_json_text(text: &str) -> bool {
     if first == b'{' || first == b'[' {
         return false;
     }
+    // A number is checked against the JSON grammar only: its magnitude is
+    // irrelevant (V8 accepts `JSON.rawJSON("1e1000")`; serde rejects it as an
+    // out-of-range f64).
+    if first == b'-' || first.is_ascii_digit() {
+        return is_json_number_text(text.as_bytes());
+    }
     // Must be valid JSON that parses to a scalar.
     match serde_json::from_str::<serde_json::Value>(text) {
         Ok(serde_json::Value::Object(_)) | Ok(serde_json::Value::Array(_)) => false,
         Ok(_) => true,
         Err(_) => false,
+    }
+}
+
+/// JSON `number` production: `-? (0 | [1-9][0-9]*) (. [0-9]+)? ([eE] [+-]? [0-9]+)?`.
+fn is_json_number_text(bytes: &[u8]) -> bool {
+    let mut i = 0;
+    if bytes.get(i) == Some(&b'-') {
+        i += 1;
+    }
+    match bytes.get(i) {
+        Some(b'0') => i += 1,
+        Some(b'1'..=b'9') => {
+            while bytes.get(i).is_some_and(u8::is_ascii_digit) {
+                i += 1;
+            }
+        }
+        _ => return false,
+    }
+    if bytes.get(i) == Some(&b'.') {
+        i += 1;
+        let start = i;
+        while bytes.get(i).is_some_and(u8::is_ascii_digit) {
+            i += 1;
+        }
+        if i == start {
+            return false;
+        }
+    }
+    if matches!(bytes.get(i), Some(b'e' | b'E')) {
+        i += 1;
+        if matches!(bytes.get(i), Some(b'+' | b'-')) {
+            i += 1;
+        }
+        let start = i;
+        while bytes.get(i).is_some_and(u8::is_ascii_digit) {
+            i += 1;
+        }
+        if i == start {
+            return false;
+        }
+    }
+    i == bytes.len()
+}
+
+#[cfg(test)]
+mod raw_json_number_tests {
+    use super::is_valid_raw_json_text;
+
+    #[test]
+    fn numbers_follow_the_grammar_not_the_f64_range() {
+        for ok in [
+            "0",
+            "-0",
+            "1e1000",
+            "12345678901234567890",
+            "1.5e-7",
+            "-1E+2",
+        ] {
+            assert!(is_valid_raw_json_text(ok), "{ok}");
+        }
+        for bad in ["01", "1.", ".5", "1e", "-", "+1", "1 ", "NaN", "0x10"] {
+            assert!(!is_valid_raw_json_text(bad), "{bad}");
+        }
     }
 }
 
@@ -190,15 +259,28 @@ pub unsafe extern "C" fn js_json_raw_json(text: f64) -> f64 {
         throw_raw_json_syntax_error();
     }
 
-    let obj = crate::object::js_object_alloc_null_proto(RAW_JSON_CLASS_ID, 1);
-    let text_str = js_string_from_bytes(s.as_ptr(), s.len() as u32);
+    // The text and key allocations can move the young wrapper: root it.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc_null_proto(
+        RAW_JSON_CLASS_ID,
+        1,
+    ));
+    let text_str = scope.root_string_ptr(js_string_from_bytes(s.as_ptr(), s.len() as u32));
     let key = raw_json_key();
     crate::object::js_object_set_field_by_name(
-        obj,
+        obj.get_raw_mut_ptr::<ObjectHeader>(),
         key,
-        f64::from_bits(JSValue::string_ptr(text_str).bits()),
+        f64::from_bits(
+            JSValue::string_ptr(text_str.get_raw_const_ptr::<StringHeader>() as *mut StringHeader)
+                .bits(),
+        ),
     );
-    f64::from_bits(JSValue::object_ptr(obj as *mut u8).bits())
+    // ECMA-262 JSON.rawJSON step 6: SetIntegrityLevel(internalSlotsList, frozen).
+    let wrapper = f64::from_bits(
+        JSValue::object_ptr(obj.get_raw_mut_ptr::<ObjectHeader>() as *mut u8).bits(),
+    );
+    crate::object::js_object_freeze(wrapper);
+    f64::from_bits(JSValue::object_ptr(obj.get_raw_mut_ptr::<ObjectHeader>() as *mut u8).bits())
 }
 
 /// `JSON.isRawJSON(value)` — returns a NaN-boxed boolean.
