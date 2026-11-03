@@ -41,9 +41,8 @@ pub(super) fn transform_static_literal_requires_with_bunfs(
     // `createRequire(import.meta.url)("pkg")` with no binding in between: the
     // call expression itself is the module-relative require.
     for create_alias in &create_require_aliases {
-        let immediate = format!("{create_alias}(import.meta.url)");
-        if source.contains(&immediate) {
-            require_aliases.insert(immediate);
+        for call in create_require_call_re(create_alias).find_iter(source) {
+            require_aliases.insert(call.as_str().to_string());
         }
     }
     // #9202: `const require = createRequire(import.meta.url)` binds a
@@ -542,52 +541,91 @@ fn prepend_imports_preserving_shebang(source: &str, imports: &[String]) -> Strin
     prefix
 }
 
+/// Every name a `createRequire` from `"module"` is reachable under: ESM named,
+/// default and namespace imports, CommonJS destructuring and bindings of
+/// `require("module")`, and the inline `require("module").createRequire`.
+/// A literal require through any of them is the same module-relative require
+/// (one specifier, one resolution), so each one must be recognised.
 fn collect_create_require_aliases(source: &str) -> HashSet<String> {
-    // Only an imported `createRequire` yields an alias: skip the regex scan
-    // over a source that never names it.
+    // Only a `createRequire` that is named somewhere yields an alias: skip the
+    // regex scans over a source that never names it.
     if !source.contains("createRequire") {
         return HashSet::new();
     }
+    const MODULE: &str = r#"['"](?:node:)?module['"]"#;
+    const ID: &str = r"[A-Za-z_$][A-Za-z0-9_$]*";
     static IMPORT_RE: OnceLock<Regex> = OnceLock::new();
     let import_re = IMPORT_RE.get_or_init(|| {
-        Regex::new(
-            r#"(?m)^\s*import\s*\{(?P<specs>[^}]*)\}\s*from\s*['"](?:node:)?module['"]\s*;?"#,
-        )
-        .expect("createRequire import regex")
+        Regex::new(&format!(
+            r"(?m)^\s*import\s+(?:(?P<def>{ID})\s*,?\s*)?(?:\*\s*as\s+(?P<ns>{ID})|\{{(?P<specs>[^}}]*)\}})?\s*from\s*{MODULE}"
+        ))
+        .expect("module import regex")
+    });
+    static DESTRUCTURE_RE: OnceLock<Regex> = OnceLock::new();
+    let destructure_re = DESTRUCTURE_RE.get_or_init(|| {
+        Regex::new(&format!(
+            r"(?m)^\s*(?:const|let|var)\s*\{{(?P<specs>[^}}]*)\}}\s*=\s*require\s*\(\s*{MODULE}\s*\)"
+        ))
+        .expect("module destructuring regex")
+    });
+    static BINDING_RE: OnceLock<Regex> = OnceLock::new();
+    let binding_re = BINDING_RE.get_or_init(|| {
+        Regex::new(&format!(
+            r"(?m)^\s*(?:const|let|var)\s+(?P<ns>{ID})\s*=\s*require\s*\(\s*{MODULE}\s*\)\s*;?\s*$"
+        ))
+        .expect("module binding regex")
+    });
+    static INLINE_RE: OnceLock<Regex> = OnceLock::new();
+    let inline_re = INLINE_RE.get_or_init(|| {
+        Regex::new(&format!(
+            r"require\s*\(\s*{MODULE}\s*\)\s*\.\s*createRequire"
+        ))
+        .expect("inline module createRequire regex")
     });
 
     let mut aliases = HashSet::new();
-    // `import * as NodeModule from "node:module"`: `NodeModule.createRequire`
-    // (bundlers emit this form for `import * as NodeModule` sources).
-    static NAMESPACE_RE: OnceLock<Regex> = OnceLock::new();
-    let namespace_re = NAMESPACE_RE.get_or_init(|| {
-        Regex::new(
-            r#"(?m)^\s*import\s*\*\s*as\s+(?P<ns>[A-Za-z_$][A-Za-z0-9_$]*)\s+from\s*['"](?:node:)?module['"]\s*;?"#,
-        )
-        .expect("module namespace import regex")
-    });
-    for cap in namespace_re.captures_iter(source) {
-        if let Some(namespace) = cap.name("ns") {
-            aliases.insert(format!("{}.createRequire", namespace.as_str()));
-        }
-    }
-    for cap in import_re.captures_iter(source) {
-        let Some(specs) = cap.name("specs") else {
-            continue;
-        };
-        for part in specs.as_str().split(',') {
+    let add_specs = |specs: &str, separator: &str, aliases: &mut HashSet<String>| {
+        for part in specs.split(',') {
             let part = part.trim();
             if part == "createRequire" {
                 aliases.insert("createRequire".to_string());
                 continue;
             }
-            if let Some(rest) = part.strip_prefix("createRequire as ") {
+            if let Some(rest) = part
+                .strip_prefix("createRequire")
+                .and_then(|rest| rest.trim_start().strip_prefix(separator))
+            {
                 let alias = rest.trim();
                 if is_identifier(alias) {
                     aliases.insert(alias.to_string());
                 }
             }
         }
+    };
+    for cap in import_re.captures_iter(source) {
+        // `import type { createRequire } from "module"` binds no value.
+        if let Some(default) = cap.name("def").filter(|name| name.as_str() != "type") {
+            aliases.insert(format!("{}.createRequire", default.as_str()));
+        }
+        if let Some(namespace) = cap.name("ns") {
+            aliases.insert(format!("{}.createRequire", namespace.as_str()));
+        }
+        if let Some(specs) = cap.name("specs") {
+            add_specs(specs.as_str(), "as ", &mut aliases);
+        }
+    }
+    for cap in destructure_re.captures_iter(source) {
+        if let Some(specs) = cap.name("specs") {
+            add_specs(specs.as_str(), ":", &mut aliases);
+        }
+    }
+    for cap in binding_re.captures_iter(source) {
+        if let Some(namespace) = cap.name("ns") {
+            aliases.insert(format!("{}.createRequire", namespace.as_str()));
+        }
+    }
+    for inline in inline_re.find_iter(source) {
+        aliases.insert(inline.as_str().to_string());
     }
     aliases
 }
@@ -608,9 +646,25 @@ fn collect_create_require_aliases_from_decls(
     out
 }
 
+/// The `createRequire` arguments that name this module's own location, so the
+/// require they make resolves exactly like this module's literal `require`:
+/// its URL or path, or its directory as a URL (`new URL(".", import.meta.url)`).
+/// A directory path without a trailing separator (`import.meta.dirname`,
+/// `__dirname`) names a file in the parent directory to Node and is not one.
+const THIS_MODULE_BASE: &str = r#"(?:import\.meta\.url|import\.meta\.filename|__filename|(?:[A-Za-z_$][A-Za-z0-9_$]*\s*\.\s*)?fileURLToPath\s*\(\s*import\.meta\.url\s*\)|new\s+URL\s*\(\s*(?:['"]\.\/?['"]\s*,\s*)?import\.meta\.url\s*\))"#;
+
+/// `<createRequire alias>(<this module>)`.
+fn create_require_call_re(create_alias: &str) -> Regex {
+    Regex::new(&format!(
+        r"{}\s*\(\s*{THIS_MODULE_BASE}\s*\)",
+        perry_perex::tooling::escape(create_alias)
+    ))
+    .expect("createRequire call regex")
+}
+
 fn create_require_decl_re(create_alias: &str) -> Regex {
     Regex::new(&format!(
-        r#"(?m)^\s*(?:const|let|var)\s+(?P<alias>[A-Za-z_$][A-Za-z0-9_$]*)(?:\s*:\s*[^=;]+)?\s*=\s*{}\s*\(\s*import\.meta\.url\s*\)\s*;?"#,
+        r#"(?m)^\s*(?:const|let|var)\s+(?P<alias>[A-Za-z_$][A-Za-z0-9_$]*)(?:\s*:\s*[^=;]+)?\s*=\s*{}\s*\(\s*{THIS_MODULE_BASE}\s*\)\s*;?"#,
         perry_perex::tooling::escape(create_alias)
     ))
     .expect("createRequire declaration regex")
@@ -1081,6 +1135,54 @@ const { answer } = NodeModule.createRequire(import.meta.url)("demo-js");
         assert!(
             got.contains("demo-js") && got.matches("index.js").count() >= 1,
             "got:\n{got}"
+        );
+    }
+
+    /// Every way a module obtains `createRequire` from `"module"`, and every
+    /// argument that names the module itself, makes a literal require through
+    /// it resolve like the module's own literal `require`: the package joins
+    /// the program.
+    #[test]
+    fn every_create_require_form_of_this_module_is_recognised() {
+        let dir = tempfile::tempdir().unwrap();
+        let package = dir.path().join("node_modules/plain-cjs");
+        std::fs::create_dir_all(package.join("lib")).unwrap();
+        std::fs::write(
+            package.join("package.json"),
+            r#"{"name":"plain-cjs","main":"lib/index.js"}"#,
+        )
+        .unwrap();
+        std::fs::write(package.join("lib/index.js"), "exports.answer = 42;\n").unwrap();
+        let forms = [
+            "import Module from \"node:module\";\nconst req = Module.createRequire(import.meta.url);\nreq(\"plain-cjs\");\n",
+            "import Module, { createRequire } from \"module\";\nModule.createRequire(import.meta.url)(\"plain-cjs\");\n",
+            "import { createRequire } from \"node:module\";\nconst req = createRequire(new URL(\".\", import.meta.url));\nreq(\"plain-cjs\");\n",
+            "import { createRequire } from \"node:module\";\nimport { fileURLToPath } from \"node:url\";\nconst req = createRequire(fileURLToPath(import.meta.url));\nreq(\"plain-cjs\");\n",
+            "import { createRequire } from \"node:module\";\nconst req = createRequire(import.meta.filename);\nreq(\"plain-cjs\");\n",
+            "const { createRequire } = require(\"module\");\nconst req = createRequire(__filename);\nreq(\"plain-cjs\");\n",
+            "const { createRequire: make } = require(\"node:module\");\nmake(__filename)(\"plain-cjs\");\n",
+            "const NodeModule = require(\"node:module\");\nconst req = NodeModule.createRequire(__filename);\nreq(\"plain-cjs\");\n",
+            "const req = require(\"node:module\").createRequire(__filename);\nreq(\"plain-cjs\");\n",
+        ];
+        for source in forms {
+            let got = transform_static_literal_requires(source, &HashSet::new(), dir.path());
+            assert!(
+                got.contains("plain-cjs/lib/index.js"),
+                "the package must join the program for:\n{source}\ngot:\n{got}"
+            );
+        }
+    }
+
+    /// A `createRequire` whose base is not this module (a directory path
+    /// without a trailing separator names a file in its parent to Node)
+    /// resolves elsewhere and is left to the runtime.
+    #[test]
+    fn create_require_of_another_base_is_not_this_module() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = "import { createRequire } from \"node:module\";\nconst req = createRequire(import.meta.dirname);\nreq(\"plain-cjs\");\n";
+        assert_eq!(
+            transform_static_literal_requires(source, &HashSet::new(), dir.path()),
+            source
         );
     }
 

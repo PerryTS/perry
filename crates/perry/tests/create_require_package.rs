@@ -489,3 +489,83 @@ proc.onExit(({ exitCode }: { exitCode: number }) => {
 
     assert_eq!(compile_and_run(root, &entry), "saw: true\nexit 0\n");
 }
+
+/// One specifier, one resolution: however a module obtains `createRequire`
+/// from `"module"` (default import, CommonJS destructuring or binding, inline
+/// `require("module").createRequire`) and however it names itself as the base
+/// (`import.meta.url`, `new URL(".", import.meta.url)`,
+/// `fileURLToPath(import.meta.url)`, `__filename`), a literal require of an
+/// installed CommonJS package outside `compilePackages` loads it, as Node does.
+#[test]
+fn every_create_require_form_loads_an_installed_commonjs_package() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    std::fs::write(
+        root.join("package.json"),
+        r#"{ "name": "create-require-forms", "private": true, "type": "module" }"#,
+    )
+    .expect("write consumer package.json");
+    let package = root.join("node_modules/plain-cjs");
+    std::fs::create_dir_all(package.join("lib")).expect("mkdir plain-cjs");
+    std::fs::write(
+        package.join("package.json"),
+        r#"{ "name": "plain-cjs", "version": "1.0.0", "main": "lib/index.js" }"#,
+    )
+    .expect("write plain-cjs package.json");
+    std::fs::write(
+        package.join("lib/index.js"),
+        "exports.hello = function () { return \"hi\"; };\n",
+    )
+    .expect("write plain-cjs index");
+
+    let esm = root.join("main.ts");
+    std::fs::write(
+        &esm,
+        r#"import Module from "node:module";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
+const byDefault = Module.createRequire(import.meta.url);
+const byDirectoryUrl = createRequire(new URL(".", import.meta.url));
+const byPath = createRequire(fileURLToPath(import.meta.url));
+console.log("default", byDefault("plain-cjs").hello());
+console.log("directory-url", byDirectoryUrl("plain-cjs").hello());
+console.log("path", byPath("plain-cjs").hello());
+"#,
+    )
+    .expect("write ESM entry");
+    let expected_esm = "default hi\ndirectory-url hi\npath hi\n";
+    assert_eq!(compile_and_run(root, &esm), expected_esm);
+
+    let commonjs = root.join("main.cts");
+    std::fs::write(
+        &commonjs,
+        r#"const { createRequire } = require("module");
+const NodeModule = require("node:module");
+const byDestructuring = createRequire(__filename);
+const byBinding = NodeModule.createRequire(__filename);
+const inline = require("node:module").createRequire(__filename);
+console.log("destructuring", byDestructuring("plain-cjs").hello());
+console.log("binding", byBinding("plain-cjs").hello());
+console.log("inline", inline("plain-cjs").hello());
+"#,
+    )
+    .expect("write CommonJS entry");
+    let expected_commonjs = "destructuring hi\nbinding hi\ninline hi\n";
+    assert_eq!(compile_and_run(root, &commonjs), expected_commonjs);
+
+    if Command::new("node").arg("--version").output().is_ok() {
+        for (entry, expected) in [(&esm, expected_esm), (&commonjs, expected_commonjs)] {
+            let node = Command::new("node")
+                .current_dir(root)
+                .arg(entry)
+                .output()
+                .expect("run node");
+            assert_eq!(
+                String::from_utf8_lossy(&node.stdout),
+                expected,
+                "the expected transcript must be Node's\nstderr:\n{}",
+                String::from_utf8_lossy(&node.stderr)
+            );
+        }
+    }
+}
