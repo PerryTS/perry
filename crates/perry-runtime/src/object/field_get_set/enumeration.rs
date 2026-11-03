@@ -1632,18 +1632,18 @@ pub(crate) fn is_internal_runtime_key_bytes(b: &[u8]) -> bool {
         || b.starts_with(b"#<perry:static-private-method:")
 }
 
-// Match the compiler's salted capture spelling, and legacy cached HIR's
-// numeric spelling, without hiding ordinary __perry_cap_* user properties.
+// The compiler's exact salted capture spelling `__perry_cap_<digits>m<12 hex>`
+// (twin of perry_hir::cap_fields::is_cap_field_name). Anything else spelled
+// `__perry_cap_*` (including digits-only) is an ordinary user property.
 fn is_class_capture_key(key: &[u8]) -> bool {
     let Some(suffix) = key.strip_prefix(b"__perry_cap_") else {
         return false;
     };
     let digits = suffix.iter().take_while(|b| b.is_ascii_digit()).count();
     digits > 0
-        && (digits == suffix.len()
-            || (suffix.get(digits) == Some(&b'm')
-                && suffix.len() == digits + 13
-                && suffix[digits + 1..].iter().all(u8::is_ascii_hexdigit)))
+        && suffix.get(digits) == Some(&b'm')
+        && suffix.len() == digits + 13
+        && suffix[digits + 1..].iter().all(u8::is_ascii_hexdigit)
 }
 
 /// `&str` form of [`is_internal_runtime_key_bytes`].
