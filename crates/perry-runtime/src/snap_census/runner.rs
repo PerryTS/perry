@@ -538,6 +538,10 @@ struct State {
     /// R2: a shared immutable cell (string, regex program, canonical key
     /// list) is named by its content and takes no rank. `PERRY_SNAP_R2=0`.
     r2: bool,
+    /// Key-name rule (design §2.10.18): a key word is named by what it is
+    /// (a leaked symbol by its description), never by its address.
+    /// `PERRY_SNAP_KEYNAME=0`.
+    keyname: bool,
     /// R3: a WeakStorage digests its entry set, not its buckets. `PERRY_SNAP_R3=0`.
     r3: bool,
     /// Serial rule (design §2.10.17): a dynamic prototype serial is drawn in
@@ -797,6 +801,7 @@ unsafe fn start(out: String) {
         repr_depth: 0,
         born_by: SizeMap::new(26),
         r2: !std::env::var("PERRY_SNAP_R2").is_ok_and(|v| v == "0"),
+        keyname: !std::env::var("PERRY_SNAP_KEYNAME").is_ok_and(|v| v == "0"),
         r3: !std::env::var("PERRY_SNAP_R3").is_ok_and(|v| v == "0"),
         serial: !std::env::var("PERRY_SNAP_SERIAL").is_ok_and(|v| v == "0"),
         sizes: SizeMap::new(26),
@@ -2896,6 +2901,37 @@ fn write_report(st: &mut State) {
             let first = user + std::mem::size_of::<crate::array::ArrayHeader>() + if attrs { 8 } else { 0 };
             (0..n).map(|i| first + 8 * i).take_while(|&w| w + 8 <= end).map(|w| rolled(w)).collect()
         };
+        // Key-name rule (design §2.10.18): a key is named by what it is, never
+        // by where it lives. A key in a named cell takes that cell's name (a
+        // string by its bytes, R2). A symbol the runtime leaked into malloc
+        // memory (`symbol::leak_symbol`: process-lifetime, no birth; mimalloc
+        // randomizes its address per run even with ASLR off, and its creation
+        // id is drawn in creation order) is named by its description and its
+        // `Symbol.for` bit (two symbols of one description share a name). Any other foreign key word hashes as its tag, like
+        // every foreign word of the digest. `PERRY_SNAP_KEYNAME=0`: raw words.
+        let kname = |names: &[(usize, usize, u64)], w: u64| -> u64 {
+            let a = (w & 0xFFFF_FFFF_FFFF) as usize;
+            let named = pname(names, w);
+            if !st.keyname || named != w || !in_malloc(a) || a < crate::gc::GC_HEADER_SIZE {
+                return named;
+            }
+            let g = unsafe { &*((a - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader) };
+            if g.obj_type != crate::gc::GC_TYPE_SYMBOL {
+                return fnv(0x464f_5245_4947_4e00, w >> 48);
+            }
+            let sym = unsafe { &*(a as *const crate::symbol::SymbolHeader) };
+            let d = sym.description as u64;
+            // The description by its bytes (a string is a value, R2), wherever it lives.
+            let dn = if d == 0 {
+                0
+            } else {
+                let sh = d as *const crate::string::StringHeader;
+                let n = unsafe { (*sh).byte_len } as usize;
+                let bytes = unsafe { std::slice::from_raw_parts(crate::string::string_data(sh), n) };
+                bytes.iter().fold(fnv(0x5354_5249_4e47_0000, n as u64), |h, &c| fnv(h, c as u64))
+            };
+            fnv(fnv(fnv(0x5359_4d42_0000_0000, w >> 48), (sym.registered & 1) as u64), dn)
+        };
         if !keylists.is_empty() {
             keylists.sort_unstable();
             let upd: Vec<(usize, u64)> = names
@@ -2907,7 +2943,7 @@ fn write_report(st: &mut State) {
                     let len = (rolled(user) & 0xFFFF_FFFF) as usize;
                     let h = key_words(user, n.1, len)
                         .into_iter()
-                        .fold(fnv(0x4b45_5953_0000_0000, len as u64), |h, w| fnv(h, pname(&names, w)));
+                        .fold(fnv(0x4b45_5953_0000_0000, len as u64), |h, w| fnv(h, kname(&names, w)));
                     (i, h)
                 })
                 .collect();
@@ -2925,7 +2961,23 @@ fn write_report(st: &mut State) {
             }
             key_words(v, names[i - 1].1, count)
                 .into_iter()
-                .fold(fnv(0x4b45_5953_0000_0000, count as u64), |h, w| fnv(h, pname(&names, w)))
+                .fold(fnv(0x4b45_5953_0000_0000, count as u64), |h, w| fnv(h, kname(&names, w)))
+        };
+        // Diagnostic (the dig dump): a shape key input key by key: L (a named heap
+        // list) or P (pointer named by pname), then each key word's raw value and name.
+        let shape_keys_tok = |keys: u64, count: usize| -> String {
+            let v = (keys & 0xFFFF_FFFF_FFFF) as usize;
+            let i = names.partition_point(|&(a, _, _)| a <= v);
+            if !st.r2 || i == 0 || v >= names[i - 1].1 || v != names[i - 1].0 + crate::gc::GC_HEADER_SIZE {
+                let (n, o) = if i > 0 && v < names[i - 1].1 { (names[i - 1].2, v - names[i - 1].0) } else { (0, 0) };
+                return format!("P{keys:x}={n:x}+{o}");
+            }
+            let ws = key_words(v, names[i - 1].1, count);
+            let mut t = format!("L{}", ws.len());
+            for w in ws {
+                t.push_str(&format!(",{w:x}={:x}", kname(&names, w)));
+            }
+            t
         };
         // Serial rule (design §2.10.17): a dynamic prototype serial
         // (`FIRST_DYNAMIC_PROTOTYPE_SERIAL` and up, drawn in allocation
@@ -3127,10 +3179,11 @@ fn write_report(st: &mut State) {
                             (h ^ x).wrapping_mul(0x100000001B3)
                         });
                         let tok = format!(
-                            "s{:x}:{sname:x}|k{:x}|p{:x}|r{rest:x}",
+                            "s{:x}:{sname:x}|k{:x}|p{:x}|r{rest:x}|K{}",
                             v & 0xFFFF_FFFF,
                             parts[0],
-                            parts[4]
+                            parts[4],
+                            shape_keys_tok(d.keys, d.logical_key_count as usize)
                         );
                         dump(st.inits[b.init as usize].addr, bname, off - 8, tok);
                         continue;
@@ -3195,9 +3248,9 @@ fn write_report(st: &mut State) {
     let _ = writeln!(f, "#excluded\t{}", st.excluded);
     let _ = writeln!(
         f,
-        "#repw\trule={}\twords={}\twrites={}\towned={}\treads={}\tr2={}\tr3={}\tserial={}",
+        "#repw\trule={}\twords={}\twrites={}\towned={}\treads={}\tr2={}\tr3={}\tserial={}\tkeyname={}",
         st.r1 as u8, st.repw.len, st.repw_writes, st.repw_owned, st.repw_reads, st.r2 as u8, st.r3 as u8,
-        st.serial as u8
+        st.serial as u8, st.keyname as u8
     );
     let _ = writeln!(f, "#free_space\t{}", st.free_space);
     let _ = writeln!(f, "#reborn\t{}", st.reborn);
