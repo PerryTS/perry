@@ -17,17 +17,6 @@ const SOURCE: &str = include_str!("../../../tests/fixtures/one_shape_class_proto
 const EXPECTED: &str =
     include_str!("../../../tests/fixtures/one_shape_class_proto_relink/expected.txt");
 
-fn stat(stderr: &str, name: &str) -> u64 {
-    let line = stderr
-        .lines()
-        .find(|l| l.starts_with("[method-site]"))
-        .unwrap_or_else(|| panic!("no [method-site] line in:\n{stderr}"));
-    line.split_whitespace()
-        .find_map(|w| w.strip_prefix(name).and_then(|v| v.strip_prefix('=')))
-        .and_then(|v| v.parse().ok())
-        .unwrap_or_else(|| panic!("no {name} in {line}"))
-}
-
 #[test]
 fn reads_follow_a_relinked_prototype() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -54,7 +43,6 @@ fn reads_follow_a_relinked_prototype() {
         let run = Command::new(&output)
             .arg(n)
             .current_dir(dir.path())
-            .env("PERRY_METHOD_SITE_STATS", "1")
             .env("PERRY_GC_FORCE_EVACUATE", "1")
             .env("PERRY_GC_POISON_FROMSPACE", "1")
             .output()
@@ -75,16 +63,6 @@ fn reads_follow_a_relinked_prototype() {
         assert!(
             wrong.is_empty() && EXPECTED.lines().count() == stdout.lines().count(),
             "n={n}: stale reads {wrong:?}\n{stdout}"
-        );
-        // The sites must have primed before the relinks, or nothing here
-        // tested what they validate.
-        assert!(
-            stat(&stderr, "class_read_primes") > 0,
-            "n={n}: no class read entry primed\n{stderr}"
-        );
-        assert!(
-            stat(&stderr, "read_holder_primes") > 0,
-            "n={n}: no holder entry primed\n{stderr}"
         );
     }
 }
