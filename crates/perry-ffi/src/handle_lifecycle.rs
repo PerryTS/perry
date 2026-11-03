@@ -121,8 +121,12 @@ pub trait ParkedPayloadOwner: Sync {
     /// hand the id back with `finish_retirement_reusable`. Runs outside every
     /// registry lock and allocates nothing on the GC heap.
     fn release(&self, identity: NativeRegistrationIdentity);
-    /// The current mutator's property bag on the payload of `id`, if any.
-    fn property_bag(&self, id: Handle) -> Option<u64>;
+    /// Push every GC edge the payload of `id` holds for the current mutator,
+    /// as JSValue words: its property bag, its callbacks and the handle words
+    /// of payloads it names. A full trace marks them the first time a word
+    /// naming `id` is reached; until then the owner's root scanner skips them
+    /// (see [`payload_edges_are_rooted`]).
+    fn edges(&self, id: Handle, out: &mut Vec<u64>);
 }
 
 #[derive(Clone, Copy)]
@@ -142,6 +146,9 @@ struct Parked {
     epoch: u64,
     /// Epoch of the last trace that observed a word naming the id.
     reached: u64,
+    /// Epoch of the last trace during which native code borrowed the payload
+    /// mutably (a possible edge store after `observe` took its edges).
+    written: u64,
     /// A retirement with a grace deadline (`drop_handle_until`) is not
     /// released by a trace that began before it.
     not_before: Option<Instant>,
@@ -229,6 +236,7 @@ fn park(id: Handle, kind: Kind, identity: NativeRegistrationIdentity, not_before
                 identity,
                 epoch: 0,
                 reached: 0,
+                written: 0,
                 not_before,
             },
         );
@@ -254,6 +262,7 @@ fn park(id: Handle, kind: Kind, identity: NativeRegistrationIdentity, not_before
                 identity,
                 epoch: 0,
                 reached: 0,
+                written: 0,
                 not_before,
             },
         );
@@ -270,6 +279,7 @@ fn park(id: Handle, kind: Kind, identity: NativeRegistrationIdentity, not_before
         identity,
         epoch,
         reached: 0,
+        written: 0,
         not_before,
     };
     let Ok(count) = PARKED.try_with(|map| {
@@ -444,18 +454,51 @@ pub fn parked_handle_count() -> usize {
     PARKED.try_with(|map| map.borrow().0.len()).unwrap_or(0)
 }
 
-/// Strong native owners and newborn parked records protect unpublished bags;
-/// old parked records are traced only when a reachable JS value names them.
-pub fn payload_bag_is_rooted(id: Handle) -> bool {
-    let parked = PARKED.with(|parked| parked.borrow().0.get(&id).copied());
-    parked.is_none_or(|parked| {
-        let current = EPOCH.with(|epoch| epoch.borrow().current);
-        parked.epoch >= current.saturating_sub(1)
-    })
+/// Whether a full mark's root scanner must visit the edges of the payload of
+/// `id` itself. True for a payload no parked record owns (native code owns it),
+/// for a young parked record (it may still be unpublished), and for one native
+/// code borrowed mutably during this trace: an edge stored after `observe` took
+/// the payload's edges is reached by the final root remark instead. An old
+/// parked payload's edges are marked only through a traced word naming its id.
+pub fn payload_edges_are_rooted(id: Handle) -> bool {
+    let Some(parked) = PARKED
+        .try_with(|parked| parked.borrow().0.get(&id).copied())
+        .ok()
+        .flatten()
+    else {
+        return true;
+    };
+    let current = EPOCH.try_with(|epoch| epoch.borrow().current).unwrap_or(0);
+    parked.epoch >= current.saturating_sub(1) || parked.written == current
 }
 
-/// Whether this mutator has `id` parked (tests and diagnostics).
-#[doc(hidden)]
+/// Native code is about to borrow the payload of `id` mutably. During an armed
+/// trace this may store an edge into a parked payload whose edges `observe`
+/// already marked, so the payload is rooted for the rest of this trace.
+/// Outside a trace it costs one thread-local read.
+#[inline]
+pub fn note_mutable_access(id: Handle) {
+    let current = EPOCH
+        .try_with(|epoch| {
+            let epoch = epoch.borrow();
+            epoch.tracing.then_some(epoch.current)
+        })
+        .ok()
+        .flatten();
+    let Some(current) = current else {
+        return;
+    };
+    let _ = PARKED.try_with(|map| {
+        if let Some(parked) = map.borrow_mut().0.get_mut(&id) {
+            if matches!(parked.kind, Kind::Reclaimable(_)) {
+                parked.written = current;
+            }
+        }
+    });
+}
+
+/// Whether this mutator has `id` parked: its native owner is done with it
+/// and a full trace decides it.
 pub fn is_parked(id: Handle) -> bool {
     PARKED
         .try_with(|map| map.borrow().0.contains_key(&id))
@@ -662,9 +705,12 @@ extern "C" fn observe(bits: u64, mark: Mark, ctx: *mut c_void) -> bool {
         return false;
     };
     if first {
-        // Marked outside every borrow: marking may offer more words.
+        // Marked outside every borrow and registry lock: marking may offer
+        // more words (a paired payload's id) and re-enter `observe`.
         if let Kind::Reclaimable(owner) = parked.kind {
-            if let Some(bits) = owner.property_bag(id).filter(|&bits| bits != 0) {
+            let mut edges = Vec::new();
+            owner.edges(id, &mut edges);
+            for bits in edges.into_iter().filter(|&bits| bits != 0) {
                 mark(bits, ctx);
             }
         }

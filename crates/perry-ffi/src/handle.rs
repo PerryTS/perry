@@ -594,6 +594,8 @@ pub fn with_handle_mut<T: 'static + Send + Sync, R, F: FnOnce(&mut T) -> R>(
     handle: Handle,
     f: F,
 ) -> Option<R> {
+    // A mutable borrow may store an edge into a parked payload.
+    crate::handle_lifecycle::note_mutable_access(handle);
     HANDLES
         .get_mut(&handle)
         .and_then(|mut entry| entry.value_mut().downcast_mut::<T>().map(f))
@@ -617,6 +619,7 @@ pub fn get_handle<T: 'static + Send + Sync>(handle: Handle) -> Option<&'static T
 
 /// Mutable counterpart to [`get_handle`].
 pub fn get_handle_mut<T: 'static + Send + Sync>(handle: Handle) -> Option<&'static mut T> {
+    crate::handle_lifecycle::note_mutable_access(handle);
     HANDLES.get_mut(&handle).and_then(|mut entry| {
         let ptr = entry.value_mut().downcast_mut::<T>()? as *mut T;
         Some(unsafe { &mut *ptr })
@@ -653,6 +656,46 @@ fn remove_payload(handle: Handle, deadline: Option<Instant>) -> Option<Box<dyn A
         index_note_removed(payload, handle);
     }
     park(identity, deadline);
+    removed
+}
+
+/// Park a registered payload whose owners are JS values once native code is
+/// finished with it: `owner` drops it (through [`release_reclaimed_payload`]),
+/// and its id is reissued, once a full trace proves no traced word names it.
+/// Until then it stays registered and readable. Returns false when `handle`
+/// is not a live registration.
+pub fn park_reclaimable_ffi(
+    handle: Handle,
+    owner: &'static dyn crate::handle_lifecycle::ParkedPayloadOwner,
+) -> bool {
+    let Some(identity) = REGISTRATIONS.identity(handle) else {
+        return false;
+    };
+    if !HANDLES.contains_key(&handle) {
+        return false;
+    }
+    crate::handle_lifecycle::park_reclaimable(identity, owner);
+    true
+}
+
+/// The release half of [`park_reclaimable_ffi`], for a
+/// [`ParkedPayloadOwner::release`](crate::handle_lifecycle::ParkedPayloadOwner::release):
+/// remove the payload of `identity` and hand the id back at once (the trace
+/// already proved nothing names it; an outstanding lease still defers reuse).
+/// `None` when a concurrent `drop_handle` retired it first. The caller drops
+/// the payload outside every registry lock.
+pub fn release_reclaimed_payload(
+    identity: crate::NativeRegistrationIdentity,
+) -> Option<Box<dyn Any + Send + Sync>> {
+    if !REGISTRATIONS.begin_retirement_of(identity) {
+        return None;
+    }
+    let handle = identity.numeric_id();
+    let removed = HANDLES.remove(&handle).map(|(_, record)| record.payload);
+    if let Some(payload) = removed.as_deref() {
+        index_note_removed(payload, handle);
+    }
+    assert!(REGISTRATIONS.finish_retirement_reusable(identity));
     removed
 }
 
@@ -722,6 +765,32 @@ where
     for mut entry in HANDLES.iter_mut() {
         if let Some(v) = entry.value_mut().downcast_mut::<T>() {
             f(v);
+        }
+    }
+}
+
+/// [`iter_handles_of_mut`] that also hands `f` the payload's id, for scanners
+/// whose rule depends on the id's parked state
+/// ([`crate::handle_lifecycle::payload_edges_are_rooted`]).
+pub fn iter_handle_entries_of_mut<T, F>(mut f: F)
+where
+    T: 'static + Send + Sync,
+    F: FnMut(Handle, &mut T),
+{
+    if let Some(ids) = indexed_ids_of::<T>() {
+        for id in ids {
+            if let Some(mut entry) = HANDLES.get_mut(&id) {
+                if let Some(v) = entry.value_mut().downcast_mut::<T>() {
+                    f(id, v);
+                }
+            }
+        }
+        return;
+    }
+    for mut entry in HANDLES.iter_mut() {
+        let id = *entry.key();
+        if let Some(v) = entry.value_mut().downcast_mut::<T>() {
+            f(id, v);
         }
     }
 }
@@ -1111,13 +1180,13 @@ mod tests {
         crate::handle_lifecycle::trace_phase_for_tests(1);
     }
 
-    fn boxed(id: Handle) -> u64 {
+    pub(super) fn boxed(id: Handle) -> u64 {
         0xFFF9_0000_0000_0000 | id as u64
     }
 
     /// Whether `id` could be registered again right now (registers and retires
     /// it reusably when it can, leaving the pool as it found it).
-    fn reissuable(id: Handle) -> bool {
+    pub(super) fn reissuable(id: Handle) -> bool {
         let Ok(identity) =
             REGISTRATIONS.begin_registration_with_id(id, NativeRegistrationKind::Payload)
         else {
@@ -1793,6 +1862,10 @@ mod tests {
 #[path = "handle_registration_tests.rs"]
 mod registration_tests;
 
+#[cfg(test)]
+#[path = "handle_reclaim_tests.rs"]
+mod reclaim_tests;
+
 /// Access the current mutator's bag on an existing native payload record.
 /// No caller may retain a reference into the registry across a GC operation.
 pub fn native_handle_props(handle: Handle) -> Option<u64> {
@@ -1800,6 +1873,7 @@ pub fn native_handle_props(handle: Handle) -> Option<u64> {
 }
 /// Replace the property bag on the current mutator's native owner.
 pub fn set_native_handle_props(handle: Handle, bits: u64) -> bool {
+    crate::handle_lifecycle::note_mutable_access(handle);
     let stored = HANDLES
         .get_mut(&handle)
         .is_some_and(|mut entry| entry.set_props(bits));
@@ -1809,7 +1883,14 @@ pub fn set_native_handle_props(handle: Handle, bits: u64) -> bool {
     stored
 }
 fn scan_native_payload_roots(visitor: &mut GcRootVisitor<'_>) {
+    // Full marks reach the bags of old parked payloads through the id's
+    // owner (`ParkedPayloadOwner::edges`); minors and relocation scans
+    // rewrite every bag.
+    let full_mark = visitor.is_full_mark();
     for mut entry in HANDLES.iter_mut() {
+        if full_mark && !crate::handle_lifecycle::payload_edges_are_rooted(*entry.key()) {
+            continue;
+        }
         if let Some(slot) = entry.props_slot() {
             visitor.visit_nanbox_u64_slot(slot);
         }
