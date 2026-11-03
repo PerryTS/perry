@@ -142,25 +142,12 @@ impl<'a> Gen<'a> {
         }
     }
 
-    pub(crate) fn descriptor_of(&mut self, mi: u32, o: NodeId) -> NodeId {
-        let r = self
-            .m
-            .reason("getOwnPropertyDescriptor (accessors handed out)");
-        self.m.cons(
-            o,
-            Cons::Implicit {
-                reason: r,
-                proto: Protocol::Any,
-            },
-        );
-        let vals = self.load(o, Key::Any);
+    /// Rule C: a fresh descriptor of `o`'s own member under key node `k`
+    /// (`None`: any own member), as the value call builds it
+    /// (`builtins::own_descriptor`).
+    pub(crate) fn descriptor_of(&mut self, mi: u32, o: NodeId, k: Option<NodeId>) -> NodeId {
         let (t, n) = self.bobj(mi, "descriptor");
-        let fa = self.m.field_any(t);
-        self.m.edge(vals, fa);
-        // get/set functions of the object: handed to user code without a
-        // receiver — ⊤-called.
-        self.m.add_tok(fa, TOP);
-        self.m.add_prim(fa, prim::ALL);
+        crate::builtins::own_descriptor(&mut self.m, t, o, k);
         n
     }
 

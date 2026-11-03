@@ -1259,6 +1259,38 @@ fn define_properties_called_as_a_value_reads_its_descriptor_map() {
     assert!(tmpl(&pf, "P").escape.is_some(), "{}", pf.dump_text());
 }
 
+/// Rule C (CJS14 rule 13): `Object.getOwnPropertyDescriptor(s)` and
+/// `Reflect.getOwnPropertyDescriptor`, called as values (the generic arm of
+/// a guarded namespace call) or as intrinsics, are one operation: a fresh
+/// descriptor whose `value` is the target's own member. The target is read,
+/// not handed over, and a call through `value` calls that member. Before,
+/// the value call was an undescribed builtin: its arguments escaped and its
+/// result was ⊤, so `p` escaped through the call.
+#[test]
+fn descriptor_builtins_called_as_values_read_own_members() {
+    let src = r#"
+        declare const unknown: any;
+        class P { x = 1; }
+        const p = new P();
+        const o: any = { f: (v: any) => v.x };
+        const d: any = Object.getOwnPropertyDescriptor(o, "f");
+        const e: any = Reflect.getOwnPropertyDescriptor(o, "f");
+        const ds: any = Object.getOwnPropertyDescriptors(o);
+        console.log(d.value(p), e.value(p), ds.f.value(p));
+    "#;
+    let pf = guarded_facts(src);
+    assert!(tmpl(&pf, "P").escape.is_none(), "{}", pf.dump_text());
+    // The fixture can fail: an unknown key of an unknown holder names an
+    // unknown member, so `value` is ⊤ and the call through it hands `p` over.
+    let unknown = src.replace(
+        "Object.getOwnPropertyDescriptor(o, \"f\")",
+        "Object.getOwnPropertyDescriptor(unknown.value, String(process.argv.length))",
+    );
+    assert_ne!(unknown, src);
+    let pf = guarded_facts(&unknown);
+    assert!(tmpl(&pf, "P").escape.is_some(), "{}", pf.dump_text());
+}
+
 #[test]
 fn define_properties_invokes_own_descriptor_getters() {
     let pf = facts(

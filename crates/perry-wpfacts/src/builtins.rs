@@ -1078,6 +1078,37 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
                 ),
             }
         }
+        // Rule C (CJS14 rule 13): called as a value, the descriptor
+        // builtins are the operation, see `own_descriptor_value`: a fresh
+        // descriptor (`getOwnPropertyDescriptors`: a fresh record of them)
+        // of the target's own members. The target is read, not handed over.
+        (BuiltinNs::Object | BuiltinNs::Reflect, "getOwnPropertyDescriptor")
+        | (BuiltinNs::Object, "getOwnPropertyDescriptors") => {
+            let c = m.calls[call as usize].clone();
+            let many = name == "getOwnPropertyDescriptors";
+            match (c.args.first(), c.args.get(1)) {
+                (Some(&o), k) if c.spread.is_empty() && (many || k.is_some()) => {
+                    if many {
+                        let d = own_descriptor_value(m, call, o, None);
+                        let rec = site_tmpl(m, call, "descriptors");
+                        let fa = m.field_any(rec);
+                        m.add_tok(fa, d);
+                        ret_tok(m, call, rec);
+                    } else {
+                        let d = own_descriptor_value(m, call, o, k.copied());
+                        ret_tok(m, call, d);
+                        ret_prim(m, call, prim::UNDEF);
+                    }
+                }
+                _ => unknown_method_proto(
+                    m,
+                    call,
+                    &format!("argument of builtin {ns:?}.{name}"),
+                    None,
+                    true,
+                ),
+            }
+        }
         // Rule 12 as for `defineProperty`: `Object.defineProperties(o, map)`
         // called as a value is the operation its intrinsic lowers to
         // (`Expr::ObjectDefineProperties`): `Cons::DefineAll` of the map on
@@ -1182,6 +1213,63 @@ fn define_property_value(m: &mut Model, o: NodeId, k: NodeId, d: NodeId, ns: Bui
             },
         );
     }
+}
+
+/// Rule C (CJS14 rule 13): the descriptor of `o`'s own member under key
+/// `k` (`None`: under any key, as `getOwnPropertyDescriptors` reads them),
+/// called as a value. A fresh descriptor per call site: `value` holds the
+/// member under a constant key (`Model::key_nodes`; a builtin's
+/// `prototype` is that prototype, which escapes with the descriptor, route
+/// 1), else `o`'s own values (`Cons::OwnValues`: an opaque holder's unknown
+/// key is ⊤, never a prototype by itself, so no chain marker). `get`/`set`
+/// are the accessors handed out without a receiver: ⊤, and `o` is touched
+/// as the intrinsic does (`descriptor_of`). `o` does not escape.
+fn own_descriptor_value(m: &mut Model, call: CallId, o: NodeId, k: Option<NodeId>) -> Tok {
+    let d = site_tmpl(m, call, "descriptor");
+    own_descriptor(m, d, o, k);
+    d
+}
+
+/// The fields of descriptor `d` of `o`'s own member under key node `k`
+/// (rule C; the intrinsic `descriptor_of` and the value call share it).
+pub(crate) fn own_descriptor(m: &mut Model, d: Tok, o: NodeId, k: Option<NodeId>) {
+    let r = m.reason("getOwnPropertyDescriptor (accessors handed out)");
+    m.cons(
+        o,
+        Cons::Implicit {
+            reason: r,
+            proto: Protocol::Any,
+        },
+    );
+    let va = m.atom("value");
+    let value = m.field(d, va);
+    let key = k.and_then(|k| m.key_nodes.get(&k).copied());
+    match key {
+        Some(a) => m.cons(
+            o,
+            Cons::Load {
+                key: Key::Named(a),
+                dst: value,
+            },
+        ),
+        None => m.cons(o, Cons::OwnValues { dst: value }),
+    }
+    if let Some(k) = k {
+        m.cons(
+            k,
+            Cons::Implicit {
+                reason: r,
+                proto: Protocol::ToPrimitive,
+            },
+        );
+    }
+    for name in ["get", "set"] {
+        let a = m.atom(name);
+        let f = m.field(d, a);
+        m.add_top(f, |_| "getOwnPropertyDescriptor: an accessor handed out without a receiver".into());
+    }
+    let fa = m.field_any(d);
+    m.add_prim(fa, prim::BOOL);
 }
 
 /// Rule 12: `Object.defineProperties(o, map)` called as a value, lowered

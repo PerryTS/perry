@@ -138,12 +138,12 @@ impl<'a> Gen<'a> {
             Expr::ObjectGetOwnPropertyDescriptor(o, k)
             | Expr::ReflectGetOwnPropertyDescriptor { target: o, key: k } => {
                 let on = self.expr(fx, o);
-                let _ = self.expr(fx, k);
-                self.descriptor_of(mi, on)
+                let kn = self.expr(fx, k);
+                self.descriptor_of(mi, on, Some(kn))
             }
             Expr::ObjectGetOwnPropertyDescriptors(o) => {
                 let on = self.expr(fx, o);
-                let d = self.descriptor_of(mi, on);
+                let d = self.descriptor_of(mi, on, None);
                 let (t, n) = self.bobj(mi, "descriptors");
                 let fa = self.m.field_any(t);
                 self.m.edge(d, fa);
