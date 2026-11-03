@@ -164,6 +164,15 @@ pub enum BuiltinNs {
     /// The method is named by [`ProtoOwn`], not by an atom: builtin tokens
     /// are shared between the units' models, whose atom tables differ.
     ObjectProtoOwn(ProtoOwn),
+    /// A method of `EventEmitter.prototype` read as a value through a
+    /// chain (`con.on`): index `i` in `native_proto_keys("EventEmitter")`
+    /// (an index, not an atom: builtin tokens are shared between the units'
+    /// models). A call is Node's documented protocol on its receiver
+    /// (`native_method`: `on`/`once`/... store the listener on the
+    /// receiver, `emit` calls the stored listeners with this = receiver);
+    /// the receiver does not escape. `call`/`apply`/`bind` are
+    /// `Function.prototype`'s. Not a constructor.
+    EventEmitterMethod(u8),
     Other,
 }
 
@@ -220,6 +229,12 @@ pub enum TokKind {
     /// The prototype of a native parent class (`extends EventEmitter`),
     /// whose methods have summaries in `builtins.rs`.
     NativeProto(String),
+    /// DECISIONS 254 (rule P): the chain marker, one shared token: a ⊤
+    /// read that may yield a builtin prototype on an escaped value's chain
+    /// (`Model::top_chain`) holds it beside ⊤. A write or an escape through
+    /// it is that of every prototype there (`Model::apply_chain_marker`);
+    /// a read, call or `this` through it is ⊤'s, which the node holds.
+    TopChain,
 }
 
 /// An object every unit shares (decision 151): the runtime's own objects
@@ -869,6 +884,8 @@ pub struct Model {
     /// Points-to entries ever inserted (work bound; see `max_pts`).
     pub pts_entries: u64,
     pub max_pts: u64,
+    /// PERRY_ACT_TRACE_GUARD diagnostics: (module, kind, test node).
+    pub trace_guards: Vec<(String, &'static str, NodeId)>,
     /// Solve work so far and its bound (0 = none); see `FactsConfig::max_work`.
     pub work: u64,
     pub max_work: u64,
@@ -1117,6 +1134,10 @@ pub struct Model {
     pub bound_synth: crate::pts::FxHashSet<CallId>,
     /// (bound value, `new`) → its merged call.
     pub bound_merged: FxHashMap<(u32, bool), CallId>,
+    /// The `new` an escaped bound value's unknown holder may make
+    /// (`Model::escape_bound`): it constructs only a target unknown code
+    /// may construct (`Model::unknown_constructs`).
+    pub bound_unknown_new: crate::pts::FxHashSet<CallId>,
     /// Lookups that visited a holder token: replayed when an accessor is
     /// installed on it later.
     pub visits: FxHashMap<Tok, crate::pts::FxHashSet<(Tok, Key, ChainAct)>>,
@@ -1266,6 +1287,24 @@ pub struct Model {
     /// dynamic code may hand it out (`Function('return this')()`). Until
     /// then a store into ⊤ cannot write a global.
     pub global_in_top: bool,
+    /// DECISIONS 254 (rule P, DEC 253's per-object actor set): the builtin
+    /// prototypes (`ObjectProto`, `NativeProto`) a ⊤ value may be, each with
+    /// the reason it reached ⊤ by a route compiled code can see
+    /// (`note_top_proto`). Until one is here, a store through ⊤ writes no
+    /// builtin prototype. Interpreted code's own reach is the runtime guard
+    /// word's (decision 150, option (b)), not this set's.
+    pub top_protos: FxHashMap<Tok, u32>,
+    /// The builtin prototypes reached along the chain of an escaped value
+    /// (`chain_escape`): what a read of a ⊤ value's chain (`__proto__`,
+    /// `prototype`, a computed key, `getPrototypeOf(⊤)`, an unmodeled
+    /// builtin's result) may yield, as values (`Model::top_chain`).
+    pub top_chain_node: Option<NodeId>,
+    /// The chain marker token (`TokKind::TopChain`), once minted.
+    pub top_chain_mark: Option<Tok>,
+    /// Which `Cons::ChainMark` `top_chain` holds, by key and join (the
+    /// write marks, one per constant key a store through the marker named;
+    /// the actor-set join), so each is installed once.
+    pub top_chain_marks: crate::pts::FxHashSet<(Option<Key>, bool)>,
     /// Explain: builtin function values minted, by the arm that minted them.
     pub bf_mints: FxHashMap<&'static str, u32>,
     /// Per unit (design §17.16 (b)): the global object's program-owned
@@ -1693,6 +1732,12 @@ pub struct Model {
     /// Diagnostics (`PERRY_FACTS_EXPLAIN=1`): where ⊤ first entered each
     /// node: (source node or `NO_NODE`, reason id). Never read by facts.
     pub explain: bool,
+    /// PERRY_ACT_TRACE_GUARD: record ⊤ first arrivals without the explain log.
+    pub top_trace: bool,
+    /// PERRY_ACT_TRACE_GUARD: the node whose constraint is being applied.
+    pub trace_apply_node: NodeId,
+    /// PERRY_ACT_TRACE_GUARD: targets of any-key defines.
+    pub trace_define_on: Vec<NodeId>,
     pub top_pred: FxHashMap<NodeId, (NodeId, u32)>,
     pub cur_src: NodeId,
     pub cur_why: u32,

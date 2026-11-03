@@ -33,6 +33,48 @@ impl Model {
         if t == TOP {
             return;
         }
+        // DECISIONS 254: the chain marker escaping joins. What receives it
+        // (a ⊤ callee, which may be a compiled function whose parameters are
+        // plain ⊤ without the marker; an escaped object; a return to ⊤) may
+        // store through it as through ⊤, so every prototype in `top_chain`
+        // joins the actor set (`Cons::ChainMark { join }`); those stores are
+        // stores into ⊤, which then write it under their own keys (a getter
+        // installed under `k` writes no other key). Interpreted code
+        // adds nothing: what it writes is the runtime guard word's (decision
+        // 150 (b)), and `interpreted_code_runs` puts no prototype in the set.
+        // Flowing to compiled code (a known callee, a field of a known
+        // object, a return to a known caller) is no escape: the token flows,
+        // and a write through it is the mark.
+        if matches!(self.toks[t as usize], TokKind::TopChain) {
+            self.chain_mark(reason, true, None);
+            return;
+        }
+        // DECISIONS 254 (rule P): a builtin prototype handed to unknown code
+        // as a value may come back as ⊤ (route 1); one reached along an
+        // escaped value's chain is ⊤ only to a read of that chain
+        // (`top_chain`), as a value.
+        if matches!(
+            self.toks[t as usize],
+            TokKind::ObjectProto | TokKind::NativeProto(_)
+        ) {
+            match self.chain_escape {
+                true => {
+                    let c = self.top_chain();
+                    self.add_tok(c, t);
+                }
+                false => crate::builtins::note_top_proto(self, t, reason),
+            }
+        }
+        // DECISIONS 254 (hunk H): a builtin constructor or namespace reaching
+        // ⊤ brings its chain and a constructor its `prototype`, each a
+        // builtin prototype (collapsed into `ObjectProto`): unknown code may
+        // hand it back, so a read of a ⊤ value's chain may yield it
+        // (`unknown.take(Array); unknown.value.prototype.indexOf = 1`).
+        if !self.unit_mode && matches!(self.toks[t as usize], TokKind::Builtin(_)) {
+            let op = self.tok(TokKind::ObjectProto);
+            let c = self.top_chain();
+            self.add_tok(c, op);
+        }
         // Unknown code given the Function constructor may call it, and ⊤
         // may then be it (DECISIONS 235). Until then a ⊤ callee is not it:
         // the program is closed, and no native returns the constructor; the
@@ -155,10 +197,14 @@ impl Model {
         // (`fnproto_write` fails closed). The runtime's own operations and
         // callbacks are not that: they never write the intrinsics, and a
         // compiled function called from unknown code sees ⊤ parameters, whose
-        // writes `store_into` records.
+        // writes `store_into` records. One reached along the operand's
+        // prototype chain (`chain_escape`) is not the construct's operand:
+        // the construct is handed the value, and what it writes is the
+        // value's own, as for a store into ⊤ below.
         if self.array_member_write.is_none()
             && t != TOP
             && self.tok_on_array_chain(t)
+            && !self.chain_escape
             && self.reasons[reason as usize].starts_with(crate::gen_expr::UNMODELED_OPERAND)
         {
             let what = format!("reaches unmodeled code ({})", self.reasons[reason as usize]);
@@ -166,6 +212,7 @@ impl Model {
         }
         if (self.fnproto_write.is_none() || self.fnproto_borrow_write.is_none())
             && matches!(self.toks[t as usize], TokKind::ObjectProto)
+            && !self.chain_escape
             && self.reasons[reason as usize].starts_with(crate::gen_expr::UNMODELED_OPERAND)
         {
             let what = format!("reaches unmodeled code ({})", self.reasons[reason as usize]);
@@ -174,7 +221,8 @@ impl Model {
         if matches!(
             self.toks[t as usize],
             TokKind::ObjectProto | TokKind::NativeProto(_)
-        ) && self.reasons[reason as usize].starts_with(crate::gen_expr::UNMODELED_OPERAND)
+        ) && !self.chain_escape
+            && self.reasons[reason as usize].starts_with(crate::gen_expr::UNMODELED_OPERAND)
         {
             let what = format!("reaches unmodeled code ({})", self.reasons[reason as usize]);
             crate::builtins::note_native_write(self, t, None, &what);
@@ -631,14 +679,7 @@ impl Model {
         // Published through its contract, the units constructing it pass
         // their arguments (`ctor_runs`): constructed by `Gen::published_ctors`.
         let published = self.pub_reason == Some(reason) || self.field_fn_reason == Some(reason);
-        if published
-            || fi.lexical_this
-            || fi.gen_step
-            || fi.ctor_of.is_some()
-            || fi.func_id == u32::MAX
-            || !(self.fn_birth.contains_key(&f) || self.fn_inst.contains_key(&f))
-            || !self.unknown_new.insert(f)
-        {
+        if published || !self.unknown_constructs(f) || !self.unknown_new.insert(f) {
             return;
         }
         let ret = self.node_l("top-new");
@@ -969,12 +1010,7 @@ impl Model {
                     self.escape(c, reason);
                 }
             }
-            TokKind::Bound(b) => {
-                let (target, bthis, bargs) = self.bound[b as usize].clone();
-                for n in [target, bthis].into_iter().chain(bargs) {
-                    self.sink_node(n, reason);
-                }
-            }
+            TokKind::Bound(b) => self.escape_bound(b, reason),
             _ => {}
         }
     }
@@ -996,6 +1032,14 @@ impl Model {
     }
 
     pub fn mark_hard(&mut self, t: Tok, kind: Hard, reason: u32) {
+        self.mark_hard_key(t, kind, reason, None);
+    }
+
+    /// `mark_hard` of an operation under constant key `key` (a
+    /// `defineProperty`/`delete` naming it): on a prototype of the runtime
+    /// or a builtin namespace it writes that key and no other, so the
+    /// native-write notes take the key (`None`: any key, as `mark_hard`).
+    pub fn mark_hard_key(&mut self, t: Tok, kind: Hard, reason: u32, key: Option<Atom>) {
         self.virt_revoke(t, None);
         // DECISIONS 234: under a computed key, a defineProperty on a
         // prototype of the runtime, or through ⊤ (which may be one), may
@@ -1016,7 +1060,7 @@ impl Model {
                 self.top_reshape(None);
                 self.note_shared(SharedWrite::Removed(None));
             } else if self.is_chain_proto(t) {
-                self.reshape(None);
+                self.reshape(key);
             } else {
                 self.note_inst(t, true);
             }
@@ -1038,19 +1082,21 @@ impl Model {
             kind,
             Hard::E5DefineProperty | Hard::E6SetPrototypeOf | Hard::E15With
         ) {
-            self.note_array_member_write(t, None, None, kind.code());
+            let k = key.filter(|_| kind != Hard::E15With).map(Key::Named);
+            self.note_array_member_write(t, k, None, kind.code());
         }
         if matches!(
             kind,
             Hard::E5DefineProperty | Hard::E7Delete | Hard::E15With
         ) {
-            self.note_fnproto_write(t, None, kind.code());
+            let k = key.filter(|_| kind != Hard::E15With).map(Key::Named);
+            self.note_fnproto_write(t, k, kind.code());
         }
         if matches!(
             kind,
             Hard::E5DefineProperty | Hard::E6SetPrototypeOf | Hard::E7Delete | Hard::E15With
         ) {
-            let what = match self.explain {
+            let what = match self.explain || self.top_trace {
                 true => format!("{} ({})", kind.code(), self.reasons[reason as usize]),
                 false => kind.code().to_string(),
             };
@@ -1058,7 +1104,10 @@ impl Model {
             // chain is noted by the prototype it is given (`ProtoFrom`,
             // `settle_native_given`). Another unit's gives one unknown here.
             if kind != Hard::E6SetPrototypeOf || self.shared_replay {
-                crate::builtins::note_native_write(self, t, None, &what);
+                let k = key
+                    .filter(|_| matches!(kind, Hard::E5DefineProperty | Hard::E7Delete))
+                    .map(Key::Named);
+                crate::builtins::note_native_write(self, t, k, &what);
             }
         }
         if t == TOP {

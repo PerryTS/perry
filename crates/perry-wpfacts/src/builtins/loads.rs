@@ -285,8 +285,11 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             }
         }
         // A method has no `prototype`.
-        TokKind::Builtin(BuiltinNs::ObjectProtoMethod | BuiltinNs::ObjectProtoOwn(_))
-            if name.as_deref() == Some("prototype") =>
+        TokKind::Builtin(
+            BuiltinNs::ObjectProtoMethod
+            | BuiltinNs::ObjectProtoOwn(_)
+            | BuiltinNs::EventEmitterMethod(_),
+        ) if name.as_deref() == Some("prototype") =>
         {
             m.add_prim(dst, prim::UNDEF)
         }
@@ -490,6 +493,29 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             }
         }
         TokKind::ModNs(_) | TokKind::Proto(_) => m.add_prim(dst, prim::UNDEF),
+        // A described method of `EventEmitter.prototype`: Node's protocol
+        // is the member's value (`BuiltinNs::EventEmitterMethod`); a key a
+        // store into ⊤ may have written reads the opaque member too.
+        TokKind::NativeProto(n)
+            if n == "EventEmitter"
+                && name
+                    .as_deref()
+                    .and_then(native_protocol::event_emitter_method)
+                    .is_some() =>
+        {
+            let Key::Named(a) = key else { unreachable!() };
+            let i = name
+                .as_deref()
+                .and_then(native_protocol::event_emitter_method)
+                .unwrap_or_default();
+            let f = m.tok(TokKind::Builtin(BuiltinNs::EventEmitterMethod(i)));
+            m.add_tok(dst, f);
+            if native_protocol::native_written(m, t, a) {
+                opaque_member(m, dst);
+            } else {
+                m.native_missing.push((t, a, NativeMiss::Load(dst)));
+            }
+        }
         // A key the native prototype does not define: the chain goes on.
         TokKind::NativeProto(_) if native_skips(m, t, key, NativeMiss::Load(dst)) => {}
         // A builtin function value (or a bound function): the members of
@@ -512,7 +538,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 m.add_tok(dst, fc);
             }
         }
-        TokKind::Top => {}
+        TokKind::Top | TokKind::TopChain => {}
     }
 }
 

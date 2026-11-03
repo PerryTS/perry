@@ -101,6 +101,31 @@ pub fn native_proto_keys(name: &str) -> &'static [&'static str] {
     }
 }
 
+/// The index of `EventEmitter.prototype`'s method `name` in its key list
+/// (`BuiltinNs::EventEmitterMethod`): a key `native_method` models,
+/// not `constructor` nor a bookkeeping field.
+pub fn event_emitter_method(name: &str) -> Option<u8> {
+    native_proto_keys("EventEmitter")
+        .iter()
+        .position(|k| *k == name)
+        .filter(|_| name != "constructor" && !name.starts_with('_'))
+        .map(|i| i as u8)
+}
+
+/// A call of `BuiltinNs::EventEmitterMethod(i)`: the protocol on its
+/// receiver (`cur_this`); a receiver no token stands for, or ⊤, is unknown
+/// here.
+pub(super) fn event_emitter_method_call(m: &mut Model, i: u8, call: CallId) {
+    let name = native_proto_keys("EventEmitter")[i as usize];
+    match m.cur_this {
+        Some(o) if o != TOP => {
+            let np = native_proto(m, "EventEmitter");
+            native_method(m, np, "EventEmitter", o, name, call);
+        }
+        _ => unknown_method(m, call, &format!("argument of EventEmitter.prototype.{name}")),
+    }
+}
+
 /// May native prototype `np`'s key `a` be written ([`Model::native_writes`])?
 pub fn native_written(m: &Model, np: Tok, a: Atom) -> bool {
     let (top, own) = native_written_by(m, np, a);
@@ -143,12 +168,34 @@ pub fn native_written_by(m: &Model, np: Tok, a: Atom) -> (bool, bool) {
     };
     let is_global = matches!(m.toks[np as usize], TokKind::Builtin(BuiltinNs::GlobalThis));
     // A store into ⊤ writes the global object only once it reached
-    // unmodeled code. It may always write a builtin prototype: unknown code
-    // reaches every one of them without being handed one (the chain of any
-    // object or function it holds, the globals interpreted code reads), and
-    // gives them to compiled code as ⊤.
+    // unmodeled code, and a builtin prototype only once that prototype may
+    // be ⊤ (DECISIONS 254, rule P: `top_protos`, the per-object actor set;
+    // `ObjectProto` stands for every collapsed one, a global native's
+    // included). What interpreted code writes onto one, or through a ⊤ it
+    // handed back, is the runtime guard word's (decision 150 (b)).
+    //
+    // Per unit (DECISIONS 251: retired, H3 deletes it) a store into ⊤
+    // keeps main's premise, every builtin prototype: the actor set is per
+    // unit and does not cross the unit boundary, so a unit never sees
+    // another unit's join. Sound, imprecise.
+    //
+    // A module's native prototype (`extends EventEmitter` of an import) is
+    // unknown code's from birth: its constructor is the import, a ⊤ value,
+    // so `EventEmitter.prototype` is a read of ⊤ (⊤ and the chain marker,
+    // never the named prototype) and a store or delete there is one
+    // through ⊤ under its key.
+    let actor = |t: Tok| m.top_protos.contains_key(&t);
+    let top_may_be = match &m.toks[np as usize] {
+        _ if is_global => m.global_in_top,
+        _ if m.unit_mode => true,
+        TokKind::NativeProto(_) if !global => true,
+        TokKind::NativeProto(_) => {
+            actor(np) || m.tok_index.get(&TokKind::ObjectProto).is_some_and(|&op| actor(op))
+        }
+        _ => actor(np),
+    };
     (
-        hit(TOP) && (!is_global || m.global_in_top),
+        hit(TOP) && top_may_be,
         hit(np)
             || (global
                 && m.tok_index
@@ -217,6 +264,46 @@ pub fn note_native_write(m: &mut Model, t: Tok, key: Option<Key>, what: &str) {
             "perry: wpfacts explain: may be written: {what} on {on} key {:?}",
             k.map(|a| m.atoms[a as usize].clone())
         );
+    }
+    if m.top_trace && !m.shared_replay && k.is_none() {
+        let f = m.cur_fn;
+        let fname = if f == crate::model::NO_FN { "-".to_string() } else { m.funcs[f as usize].name.clone() };
+        eprintln!("perry: acttrace nativewrite any-key on {} in {} :: {what}", on.rsplit("node_modules/").next().unwrap_or(&on), fname.rsplit("node_modules/").next().unwrap_or(&fname));
+        let mut c = m.trace_apply_node;
+        for _ in 0..60 {
+            if (c as usize) >= m.labels.len() { break; }
+            let f = m.node_fn.get(c as usize).copied().unwrap_or(crate::model::NO_FN);
+            let fname = if f == crate::model::NO_FN { "-".to_string() } else { m.funcs[f as usize].name.clone() };
+            let w = m.top_pred.get(&c).map(|&(_, why)| if why == u32::MAX { String::new() } else { m.reasons[why as usize].clone() }).unwrap_or_default();
+            eprintln!("perry: acttrace nwhop node={c} label={} fn={} why={w}", m.labels[c as usize], fname.rsplit("node_modules/").next().unwrap_or(&fname));
+            match m.top_pred.get(&c) {
+                Some(&(src, _)) if src != crate::model::NO_NODE => c = src,
+                _ => break,
+            }
+        }
+        eprintln!("perry: acttrace nworigin {}", m.top_origin(m.trace_apply_node));
+        if t == TOP {
+            for o in m.trace_define_on.clone() {
+                eprintln!("perry: acttrace defon node={o} label={} haspred={} n={}", m.labels[o as usize], m.top_pred.contains_key(&o), m.trace_define_on.len());
+                if !m.top_pred.contains_key(&o) { continue; }
+                let mut c = o;
+                for _ in 0..80 {
+                    if (c as usize) >= m.labels.len() { break; }
+                    let f = m.node_fn.get(c as usize).copied().unwrap_or(crate::model::NO_FN);
+                    let fname = if f == crate::model::NO_FN { "-".to_string() } else { m.funcs[f as usize].name.clone() };
+                    let w = m.top_pred.get(&c).map(|&(_, why)| if why == u32::MAX { String::new() } else { m.reasons[why as usize].clone() }).unwrap_or_default();
+                    eprintln!("perry: acttrace defhop node={c} label={} fn={} why={w}", m.labels[c as usize], fname.rsplit("node_modules/").next().unwrap_or(&fname));
+                    match m.top_pred.get(&c) {
+                        Some(&(src, _)) if src != crate::model::NO_NODE => c = src,
+                        _ => break,
+                    }
+                }
+                eprintln!("perry: acttrace deforigin {}", m.top_origin(o));
+            }
+            let bt = std::backtrace::Backtrace::force_capture().to_string();
+            let fr: Vec<&str> = bt.lines().filter(|l| l.contains("perry_wpfacts::")).take(14).map(|l| l.trim()).collect();
+            eprintln!("perry: acttrace nwbt {}", fr.join(" <- "));
+        }
     }
     let r = m.reason(&format!("native prototype may be written: {what} on {on}"));
     m.native_writes.insert((t, k), r);
@@ -349,6 +436,19 @@ pub fn note_global_in_top(m: &mut Model) {
         m.global_in_top = true;
         replay_native_missing(m);
     }
+}
+
+/// DECISIONS 254 (rule P): builtin prototype `t` reached ⊤ by a route
+/// compiled code can see (`why`): stores through ⊤ may have written it.
+pub fn note_top_proto(m: &mut Model, t: Tok, why: u32) {
+    if !matches!(m.toks[t as usize], TokKind::ObjectProto | TokKind::NativeProto(_)) {
+        return;
+    }
+    if m.top_protos.contains_key(&t) {
+        return;
+    }
+    m.top_protos.insert(t, why);
+    replay_native_missing(m);
 }
 
 /// Lookups that passed a native prototype (or read a program-owned global)

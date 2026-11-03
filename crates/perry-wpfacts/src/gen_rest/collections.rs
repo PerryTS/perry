@@ -363,14 +363,18 @@ impl<'a> Gen<'a> {
                 self.m.edge(inner, fa);
                 n
             }
+            // Own enumerable string-keyed properties only (ECMA-262
+            // 20.1.2.22/5, EnumerableOwnProperties): never an inherited one.
             Expr::ObjectValues(x) => {
                 let v = self.expr(fx, x);
-                let el = self.load(v, Key::Any);
+                let el = self.tmp("ownvalues");
+                self.m.cons(v, Cons::OwnValues { dst: el });
                 self.new_arr_from(mi, "values", &[el])
             }
             Expr::ObjectEntries(x) => {
                 let v = self.expr(fx, x);
-                let el = self.load(v, Key::Any);
+                let el = self.tmp("ownvalues");
+                self.m.cons(v, Cons::OwnValues { dst: el });
                 let s = self.prim_node(prim::STR);
                 let pair = self.new_arr_from(mi, "entry", &[el, s]);
                 self.new_arr_from(mi, "entries", &[pair])

@@ -226,7 +226,7 @@ pub(super) fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
     match m.toks[t as usize].clone() {
         // `Function.prototype.call/apply/bind` of a described builtin
         // method: its call, the receiver given.
-        TokKind::Builtin(BuiltinNs::ObjectProtoOwn(_))
+        TokKind::Builtin(BuiltinNs::ObjectProtoOwn(_) | BuiltinNs::EventEmitterMethod(_))
             if matches!(name.as_deref(), Some("call" | "apply" | "bind")) =>
         {
             function_method(m, t, name.as_deref(), call)
@@ -252,6 +252,12 @@ pub(super) fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
                 }
             }
         },
+        // `Object.prototype` (standing for every builtin prototype) as the
+        // receiver, the chain marker's effect-only call included
+        // (DECISIONS 254): its own members are `Object.prototype`'s methods,
+        // which run on it (a `__defineGetter__` writes it). It has no
+        // prototype of its own to reach them by.
+        TokKind::ObjectProto if name.is_some() => proto_method_inner(m, t, t, key, call),
         TokKind::NativeProto(_) => {}
         TokKind::Obj(tm, _) => match m.tmpls[tm as usize].kind.clone() {
             TmplKind::Arr { .. } => array_method(m, t, name.as_deref(), call),
@@ -375,6 +381,20 @@ pub(super) fn proto_method_inner(m: &mut Model, p: Tok, origin: Tok, key: Key, c
             "__defineGetter__" | "__defineSetter__" => {
                 let r = m.reason("E5 __defineGetter__/__defineSetter__");
                 m.mark_hard(origin, Hard::E5DefineProperty, r);
+                // On a builtin prototype (a `this` from the chain marker's
+                // effect-only call, DECISIONS 254) the accessor is a native
+                // write: under the constant key, else under any key.
+                let key = m.calls[call as usize]
+                    .args
+                    .first()
+                    .and_then(|k| m.key_nodes.get(k).copied())
+                    .map(Key::Named);
+                super::native_protocol::note_native_write(
+                    m,
+                    origin,
+                    key,
+                    "__defineGetter__/__defineSetter__ on a builtin prototype",
+                );
                 // An accessor under a key not known here.
                 let star = m.atom(crate::STAR_KEY);
                 let ks = m.accessor_keys.entry(origin).or_default();

@@ -81,16 +81,20 @@ impl<'a> Gen<'a> {
                         self.define_keyed(fx, on, kp, dn, r, accessor, own);
                     }
                     None => {
+                        let free = key.is_some() && self.receiver_free_getter(mi, d);
                         let dn = self.expr(fx, d);
-                        self.define_property(fx, on, key, dn, r, accessor);
+                        self.define_property(fx, on, key, dn, r, accessor, free);
                     }
                 }
                 on
             }
             Expr::ObjectDefineProperties(o, props) => {
                 let on = self.expr(fx, o);
+                if self.m.top_trace {
+                    self.m.trace_define_on.push(on);
+                }
                 let pn = self.expr(fx, props);
-                let why = if self.m.explain {
+                let why = if self.m.explain || self.m.top_trace {
                     format!(
                         "E5 Object.defineProperties at {}::{}",
                         self.mods[fx.module as usize].path, self.m.funcs[fx.f as usize].name
@@ -134,12 +138,13 @@ impl<'a> Gen<'a> {
             Expr::ObjectGetOwnPropertyDescriptor(o, k)
             | Expr::ReflectGetOwnPropertyDescriptor { target: o, key: k } => {
                 let on = self.expr(fx, o);
-                let _ = self.expr(fx, k);
-                self.descriptor_of(mi, on)
+                let kn = self.expr(fx, k);
+                let kn = self.const_key_node(fx.module, k, kn);
+                self.descriptor_of(mi, on, Some(kn))
             }
             Expr::ObjectGetOwnPropertyDescriptors(o) => {
                 let on = self.expr(fx, o);
-                let d = self.descriptor_of(mi, on);
+                let d = self.descriptor_of(mi, on, None);
                 let (t, n) = self.bobj(mi, "descriptors");
                 let fa = self.m.field_any(t);
                 self.m.edge(d, fa);
@@ -181,7 +186,7 @@ impl<'a> Gen<'a> {
                 if let Some(props) = props {
                     let pv = self.expr(fx, props);
                     let descs = self.load(pv, Key::Any);
-                    self.define_property(fx, n, None, descs, r, false);
+                    self.define_property(fx, n, None, descs, r, false, false);
                 }
                 n
             }

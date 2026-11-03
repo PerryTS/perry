@@ -131,6 +131,8 @@ impl Model {
                 }
                 if matches!(s, Shared::ObjectProto | Shared::NativeProto(_)) {
                     builtins::note_native_write(self, t, None, what);
+                    let r = self.reason(what);
+                    builtins::note_top_proto(self, t, r);
                 }
                 if matches!(s, Shared::Builtin(BuiltinNs::GlobalThis)) {
                     builtins::note_global_in_top(self);
@@ -138,6 +140,12 @@ impl Model {
             }
             // Its effect is the stores and accessors the driver derives
             // (`units::shared_closure`).
+            // DECISIONS 254: another unit handed a builtin prototype out.
+            SharedWrite::Handed(s @ (Shared::ObjectProto | Shared::NativeProto(_))) => {
+                let t = self.shared_tok(s);
+                let r = self.reason("another unit's builtin prototype handed out");
+                builtins::note_top_proto(self, t, r);
+            }
             SharedWrite::Handed(_) => {}
             // DECISIONS 234: another unit's defineProperty through ⊤ under a
             // computed key (⊤ may be a builtin prototype); its delete,

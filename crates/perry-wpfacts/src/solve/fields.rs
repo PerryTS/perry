@@ -115,7 +115,10 @@ impl Model {
             TokKind::Top | TokKind::Builtin(_) | TokKind::BuiltinFn | TokKind::NativeProto(_) => {
                 true
             }
-            TokKind::Obj(tm, _) => matches!(self.tmpls[*tm as usize].kind, TmplKind::BObj { .. }),
+            TokKind::Obj(tm, _) => {
+                matches!(self.tmpls[*tm as usize].kind, TmplKind::BObj { .. })
+                    && !self.is_json_data(*tm)
+            }
             _ => false,
         };
         let fa_d = self.any_key_node(d);
@@ -262,13 +265,26 @@ impl Model {
         n
     }
 
+    /// A `JSON.parse` object (ECMA-262 25.5.1.1): fresh data. InternalizeJSONProperty
+    /// and the parser create it with CreateDataProperty only, so its own
+    /// properties are exactly the template's modeled fields (strings,
+    /// numbers, booleans, null and other parsed objects and arrays), never a
+    /// builtin's or the program's values. A reviver's results reach it through
+    /// the stores its lowering models.
+    pub(crate) fn is_json_data(&self, tm: TmplId) -> bool {
+        matches!(self.tmpls[tm as usize].kind, TmplKind::BObj { what: "json", .. })
+    }
+
     /// dst ⊇ the values of `t`'s own properties (`Cons::OwnValues`).
     pub(crate) fn own_values_of(&mut self, t: Tok, dst: NodeId) {
         let opaque = match &self.toks[t as usize] {
             TokKind::Top | TokKind::Builtin(_) | TokKind::BuiltinFn | TokKind::NativeProto(_) => {
                 true
             }
-            TokKind::Obj(tm, _) => matches!(self.tmpls[*tm as usize].kind, TmplKind::BObj { .. }),
+            TokKind::Obj(tm, _) => {
+                matches!(self.tmpls[*tm as usize].kind, TmplKind::BObj { .. })
+                    && !self.is_json_data(*tm)
+            }
             _ => false,
         };
         if opaque {

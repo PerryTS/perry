@@ -70,15 +70,28 @@ fn an_escaped_open_function_exposes_what_it_stores_in_its_argument() {
 #[test]
 fn an_escaped_namespace_exposes_nested_result_objects() {
     let src = "export namespace Core { export function make(x: any) { if (x) return x; return [{ definition: { payload: 1 } }]; } } const foreign: any = (globalThis as any).o; foreign[String(process.argv[0])] = 1; const r = Core.make((globalThis as any).x); console.log(r[0].definition.payload);";
-    for (mode, pf) in [("whole", facts(src)), ("unit", units(src))] {
-        let lits: Vec<_> = pf
-            .templates
+    // Rule P (DECISIONS 254): whole program the computed store into ⊤
+    // writes the builtin prototypes unknown code was given (here
+    // `Object.prototype`); per unit main's premise holds (DECISIONS 251).
+    let handed = format!("(globalThis as any).hostFn(Object.prototype); {src}");
+    let payload = |pf: &ProgramFacts| -> Vec<bool> {
+        pf.templates
             .iter()
             .filter(|t| t.fields.iter().any(|f| f.key == "payload"))
-            .collect();
+            .map(|t| t.escape.is_some())
+            .collect()
+    };
+    for (mode, pf) in [("whole", facts(&handed)), ("unit", units(src))] {
+        let lits = payload(&pf);
         assert!(!lits.is_empty(), "live payload ({mode})");
-        assert!(lits.iter().all(|t| t.escape.is_some()), "{mode}: a possibly replaced namespace callee retains Core and can call its other fields\n{}", pf.dump_text());
+        assert!(lits.iter().all(|&e| e), "{mode}: a possibly replaced namespace callee retains Core and can call its other fields\n{}", pf.dump_text());
     }
+    // Whole program, nothing given: the store writes no builtin prototype,
+    // `Core.make` is the program's function and its result stays compiled
+    // code's.
+    let pf = facts(src);
+    let lits = payload(&pf);
+    assert!(!lits.is_empty() && lits.iter().all(|&e| !e), "whole, nothing given\n{}", pf.dump_text());
 }
 
 #[test]

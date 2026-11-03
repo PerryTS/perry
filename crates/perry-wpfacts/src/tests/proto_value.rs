@@ -210,11 +210,18 @@ fn a_number_key_calls_what_a_store_into_an_intrinsic_wrote() {
 /// the store `w` into ⊤ (tsc's `forEach(nodeFactoryPatchers, fn =>
 /// fn(factory))`, where no patcher is ever added).
 fn element_callee_escapes(w: &str) -> bool {
+    element_callee_escapes_given("Object.prototype", w)
+}
+
+/// `element_callee_escapes` with `unknown.reach({given})` as `t`: rule P
+/// (DECISIONS 254), a store into ⊤ writes the builtin prototypes unknown
+/// code was given.
+fn element_callee_escapes_given(given: &str, w: &str) -> bool {
     let pf = facts(&format!(
         "declare const unknown: any;
         class F {{ y = 2; make() {{ return 1; }} }}
         const f = new F();
-        const t: any = unknown.reach(0);
+        const t: any = unknown.reach({given});
         const n = Math.random() > 0.5 ? 0 : 1;
         const k = String(Math.random());
         {w}
@@ -246,6 +253,8 @@ fn a_number_key_reads_no_named_key_a_store_into_top_wrote() {
         format!("t[k] = {fun};"),
     ] {
         assert!(element_callee_escapes(&w), "{w}");
+        // Rule P: nothing given, the store writes no builtin prototype.
+        assert!(!element_callee_escapes_given("0", &w), "{w}");
     }
 }
 

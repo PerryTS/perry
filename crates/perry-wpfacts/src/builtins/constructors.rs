@@ -180,7 +180,9 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             unknown_method(m, call, "E14 dynamic code");
         }
         // Not a constructor (TypeError).
-        BuiltinNs::ObjectProtoMethod | BuiltinNs::ObjectProtoOwn(_) => {}
+        BuiltinNs::ObjectProtoMethod
+        | BuiltinNs::ObjectProtoOwn(_)
+        | BuiltinNs::EventEmitterMethod(_) => {}
         BuiltinNs::Array => call_builtin_ns(m, ns, call),
         BuiltinNs::Object => {
             let o = site_tmpl(m, call, "Object()");

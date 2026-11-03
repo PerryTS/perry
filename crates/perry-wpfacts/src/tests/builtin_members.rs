@@ -161,11 +161,12 @@ fn a_key_written_onto_a_builtin_prototype_is_a_member_again() {
 /// absent, a computed one may be `inner`.
 #[test]
 fn a_store_into_top_writes_the_intrinsics_under_its_key() {
-    let body = |hand: &str, w: &str, other: &str| {
+    let body = |pre: &str, hand: &str, w: &str, other: &str| {
         format!(
             "{CLASSES}{M}
             declare const unknown: any;
             class N {{ inner: any; constructor() {{ this.inner = new M(); }} }}
+            {pre}
             const t: any = unknown.reach({hand});
             {w}
             const v: any = k > 1 ? new N() : {other};
@@ -197,13 +198,26 @@ fn a_store_into_top_writes_the_intrinsics_under_its_key() {
             "{ q: 1 }",
         ] {
             for (w, want) in [(named, false), (computed, false), (elsewhere, true)] {
-                let src = body(hand, w, other);
+                let src = body(HAND, hand, w, other);
                 let pf = facts(&src);
                 assert_eq!(proven(&pf, "m"), want, "{src}\n{}", pf.dump_text());
             }
         }
     }
+    // Rule P (DECISIONS 254): no builtin prototype, constructor or
+    // namespace reached ⊤, so the store writes none: `inner` stays absent
+    // under every key.
+    for w in [named, computed, elsewhere] {
+        let src = body("", "0", w, "{ q: 1 }");
+        let pf = facts(&src);
+        assert!(proven(&pf, "m"), "{src}\n{}", pf.dump_text());
+    }
 }
+
+/// Unknown code given `Object.prototype` (rule P's actor set, DECISIONS
+/// 254): a store into ⊤ may write it, and every builtin prototype it
+/// stands for, under the store's key.
+const HAND: &str = "unknown.fn(Object.prototype);";
 
 /// A namespace's prototype is a builtin prototype (`Function.prototype`
 /// for a constructor, `Object.prototype` at the end of the global object's
@@ -318,7 +332,9 @@ fn a_key_written_onto_a_namespace_is_a_member() {
         )
     };
     let fw = "(Function.prototype as any).inner = function () { return 1; };";
-    let top = "const t: any = unknown.value; t.inner = function () { return 1; };";
+    let bare = "const t: any = unknown.value; t.inner = function () { return 1; };";
+    let top = format!("{HAND} {bare}");
+    let top = top.as_str();
     for (src, want) in [
         (body("", ""), true),
         (
@@ -333,6 +349,10 @@ fn a_key_written_onto_a_namespace_is_a_member() {
         (body(top, ""), false),
         (body(&format!("unknown.take(Map); {top}"), ""), false),
         (body("", top), false),
+        // Rule P (DECISIONS 254): no builtin prototype reached ⊤, so the
+        // store into ⊤ writes none.
+        (body(bare, ""), true),
+        (body("", bare), true),
     ] {
         let pf = facts(&src);
         assert_eq!(proven(&pf, "m"), want, "{src}\n{}", pf.dump_text());
@@ -346,10 +366,11 @@ fn a_key_written_onto_a_namespace_is_a_member() {
 /// the call) is an unknown function that receives the global object.
 #[test]
 fn a_runtime_global_function_called_on_the_global_object_hands_nothing() {
-    let body = |before: &str, after: &str| {
+    let body = |hand: &str, before: &str, after: &str| {
         format!(
             "{CLASSES}{M}
             declare const unknown: any;
+            {hand}
             {before}
             const g: any = globalThis;
             g.__perry_t_held = new M();
@@ -368,7 +389,17 @@ fn a_runtime_global_function_called_on_the_global_object_hands_nothing() {
     // no flow-sensitive "own key present"): the read is unknown with or
     // without the global object handed over. What the call hands over still
     // decides the global field itself.
-    for src in [body("", ""), body(w, ""), body("", w)] {
+    for src in [body(HAND, "", ""), body(HAND, w, ""), body(HAND, "", w)] {
+        let pf = facts(&src);
+        assert!(!proven(&pf, "m"), "{src}\n{}", pf.dump_text());
+    }
+    // Rule P (DECISIONS 254): with no builtin prototype handed the store
+    // into ⊤ writes none, and the global object's own field only once a
+    // call hands the global object over.
+    let src = body("", "", "");
+    let pf = facts(&src);
+    assert!(proven(&pf, "m"), "{src}\n{}", pf.dump_text());
+    for src in [body("", w, ""), body("", "", w)] {
         let pf = facts(&src);
         assert!(!proven(&pf, "m"), "{src}\n{}", pf.dump_text());
     }
@@ -379,7 +410,7 @@ fn a_runtime_global_function_called_on_the_global_object_hands_nothing() {
             .filter(|s| s.key == "m")
             .any(|s| s.receivers.iter().any(|r| r.ends_with(":M")))
     };
-    assert!(held(&body("", "")), "the global field keeps its M");
+    assert!(held(&body(HAND, "", "")), "the global field keeps its M");
 }
 
 /// Soundness (ABM2 fixtures FB/FC, CWN 10-27): a store into ⊤ under the key
@@ -388,12 +419,13 @@ fn a_runtime_global_function_called_on_the_global_object_hands_nothing() {
 /// store under another key leaves the description alone.
 #[test]
 fn a_store_into_top_replaces_a_described_member_under_its_key() {
-    let body = |w: &str| {
+    let body_with = |pre: &str, hand: &str, w: &str| {
         format!(
             "{CLASSES}
             declare const unknown: any;
             class Q {{ x = 5; b = 1; }}
-            const t: any = unknown.reach(Map);
+            {pre}
+            const t: any = unknown.reach({hand});
             {w}
             const mp = new Map<number, any>(); mp.set(1, new B());
             const g = mp.get(1);
@@ -402,6 +434,7 @@ fn a_store_into_top_replaces_a_described_member_under_its_key() {
             console.log(s.length);"
         )
     };
+    let body = |w: &str| body_with(HAND, "Map", w);
     let site_b = |pf: &ProgramFacts| {
         pf.sites
             .iter()
@@ -416,5 +449,9 @@ fn a_store_into_top_replaces_a_described_member_under_its_key() {
     ] {
         let pf = facts(&body(w));
         assert!(!site_b(&pf), "{w}\n{}", pf.dump_text());
+        // Rule P (DECISIONS 254): nothing handed, the store writes no
+        // builtin prototype and `get` keeps its description.
+        let pf = facts(&body_with("", "0", w));
+        assert!(site_b(&pf), "{w}\n{}", pf.dump_text());
     }
 }

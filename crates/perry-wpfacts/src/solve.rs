@@ -110,7 +110,7 @@ impl Model {
         if top_new && self.diagnostic.is_some() {
             self.diagnostic_predecessor(n, self.cur_src, self.cur_why);
         }
-        if top_new && self.explain {
+        if top_new && (self.explain || self.top_trace) {
             self.top_pred
                 .entry(n)
                 .or_insert((self.cur_src, self.cur_why));
@@ -312,7 +312,7 @@ impl Model {
                     d.seeds.entry(n).or_insert(w.clone());
                 }
             }
-            if self.explain {
+            if self.explain || self.top_trace {
                 let r = self.reason(&w);
                 let saved = (self.cur_src, self.cur_why);
                 self.cur_src = NO_NODE;
@@ -408,7 +408,14 @@ impl Model {
         let saved = (self.cur_src, self.cur_why);
         self.cur_src = n;
         self.cur_why = u32::MAX;
+        let tsaved = self.trace_apply_node;
+        if self.top_trace {
+            self.trace_apply_node = n;
+        }
         self.with_s(|m| m.apply(n, &c, &toks, prim));
+        if self.top_trace {
+            self.trace_apply_node = tsaved;
+        }
         (self.cur_src, self.cur_why) = saved;
         self.bufs.push(toks);
     }
@@ -666,6 +673,257 @@ impl Model {
         self.apply_tokens_in(n, c, toks, prim);
     }
     fn apply_tokens_in(&mut self, n: NodeId, c: &Cons, toks: Tokens<'_>, prim: u16) {
+        if let Some(mk) = self.top_chain_mark {
+            if toks.iter().any(|&t| t == mk) {
+                return self.apply_chain_marker(n, c, toks, prim, mk);
+            }
+        }
+        self.apply_tokens_body(n, c, toks, prim);
+    }
+
+    /// DECISIONS 254 (rule P): `toks` holds the chain marker, always beside
+    /// ⊤: "⊤, which may be any prototype in `top_chain`". Every constraint
+    /// kind is named (a new kind is a compile error here, not a silent
+    /// hole):
+    /// - `Mark`: a write through it (a member added, replaced, deleted or
+    ///   defined, an accessor installed, the [[Prototype]] relinked, the
+    ///   receiver handed to a writer) marks every prototype in `top_chain`,
+    ///   now and as the set grows, as written with ⊤ under the write's
+    ///   constant key, or under an unknown key where it names none
+    ///   (`Cons::ChainMark`): the opaque mark, never a value flow. DEC 250
+    ///   makes adds the only effect, so only a missing-member read of that
+    ///   key sees it. A delete marks nothing: deleting a described member is
+    ///   a TypeError at the store (DEC 250), and an added key is opaque
+    ///   already. A `setPrototypeOf` writes no own key: the prototypes take
+    ///   the source as their [[Prototype]] (`ProtoFrom` on `top_chain`);
+    /// - `Call`: a method or `super` call, or a receiver binding, with the
+    ///   prototypes as `this`, for its effect only (`effect_only`): the
+    ///   member resolves against each prototype's described members;
+    /// - `Pass`: the value itself flows on (a copy, a guard, a sink, a
+    ///   run's result): the marker stays with it;
+    /// - `Drop`: a read, call, key, chain walk or descriptor through it is
+    ///   ⊤'s, which `toks` holds.
+    fn apply_chain_marker(&mut self, n: NodeId, c: &Cons, toks: Tokens<'_>, prim: u16, mk: Tok) {
+        enum Mk {
+            Mark,
+            Call,
+            Pass,
+            Drop,
+        }
+        let mode = match c {
+            // Writes onto the node's objects.
+            Cons::Store { .. } => Mk::Mark,
+            Cons::DefineKey { .. } => Mk::Mark,
+            Cons::AddsKeys => Mk::Mark,
+            Cons::Hard { .. } => Mk::Mark,
+            Cons::DeleteKey { .. } => Mk::Mark,
+            Cons::AccessorInstall { .. } => Mk::Mark,
+            // `Object.assign`'s target.
+            Cons::SpreadFrom { .. } => Mk::Mark,
+            // A literal's birth puts the field on every token of the node:
+            // on a prototype that is a write.
+            Cons::BirthField { .. } => Mk::Mark,
+            Cons::ProtoFrom { .. } => Mk::Mark,
+            Cons::StoreTopProto { .. } => Mk::Mark,
+            Cons::NewTargetHard { .. } => Mk::Mark,
+            // The node's objects handed to a writer.
+            Cons::StoreOut { .. } => Mk::Mark,
+            Cons::HandOver { .. } => Mk::Mark,
+            Cons::ContractThis { .. } => Mk::Mark,
+            Cons::OverrideThis { .. } => Mk::Mark,
+            // A method call or a receiver binding with the node's objects as
+            // `this`.
+            Cons::MCall { .. } => Mk::Call,
+            Cons::IdxMCall { .. } => Mk::Call,
+            Cons::ThisInst { .. } => Mk::Call,
+            Cons::SuperCtor { .. } => Mk::Call,
+            Cons::SuperCtorParent { .. } => Mk::Call,
+            // `super.key` on `this`: a read is ⊤'s; a call is on the
+            // receiver; a store writes it.
+            Cons::Super {
+                act: ChainAct::Load(_),
+                ..
+            } => Mk::Drop, // read
+            Cons::Super {
+                act: ChainAct::Call(_),
+                ..
+            } => Mk::Call,
+            Cons::Super { .. } => Mk::Mark,
+            // The value itself flows on.
+            Cons::Guard { .. } => Mk::Pass,
+            Cons::Defined { .. } => Mk::Pass,
+            Cons::NotNullish { .. } => Mk::Pass,
+            Cons::TopIfAny { .. } => Mk::Pass,
+            Cons::CjsPublish { .. } => Mk::Pass,
+            Cons::TopSink { .. } => Mk::Pass,
+            Cons::OwnOnly { .. } => Mk::Pass,
+            Cons::CallerValue { .. } => Mk::Pass,
+            Cons::RetInto { .. } => Mk::Pass,
+            Cons::ArrayLenArg { .. } => Mk::Pass,
+            // An undescribed builtin's argument: its own arm reads the
+            // marker.
+            Cons::ChainMark { .. } => Mk::Pass,
+            // Reads: ⊤'s result (a chain key on ⊤ marks its own result).
+            Cons::Load { .. } => Mk::Drop,      // read
+            Cons::OwnValues { .. } => Mk::Drop, // read
+            Cons::IdxLoad { .. } => Mk::Drop,   // read
+            Cons::Miss { .. } => Mk::Drop,      // read
+            Cons::Implicit { .. } => Mk::Drop,  // read
+            Cons::IterNext { .. } => Mk::Drop,  // read
+            Cons::ForInKeys { .. } => Mk::Drop, // read
+            Cons::Spread { .. } => Mk::Drop,    // read
+            Cons::ProtoOf { .. } => Mk::Drop,   // read
+            // The node is a callee: ⊤'s call.
+            Cons::Call { .. } => Mk::Drop,        // call
+            Cons::CallThis { .. } => Mk::Drop,    // call
+            Cons::New { .. } => Mk::Drop,         // call
+            Cons::NewNamed { .. } => Mk::Drop,    // call
+            Cons::ThisTo { .. } => Mk::Drop,      // call
+            Cons::CallArgs { .. } => Mk::Drop,    // call
+            Cons::BuiltinCallee => Mk::Drop,      // call
+            Cons::ForInBody { .. } => Mk::Drop,   // call
+            Cons::ThisFrom { .. } => Mk::Drop,    // call
+            Cons::ParentGiven { .. } => Mk::Drop, // call
+            // The node is a key; the receiver gets its own constraint.
+            Cons::StoreKeyed { .. } => Mk::Drop,    // key
+            Cons::StoreIndexed { .. } => Mk::Drop,  // key
+            Cons::DefineKeyed { .. } => Mk::Drop,   // key
+            Cons::AccessorKeyed { .. } => Mk::Drop, // key
+            Cons::IdxKey { .. } => Mk::Drop,        // key
+            Cons::IdxKeyCall { .. } => Mk::Drop,    // key
+            // The node is a descriptor map, a descriptor or an accessor
+            // function; the target gets its own constraint.
+            Cons::DefineAll { .. } => Mk::Drop,  // map
+            Cons::DefineDesc { .. } => Mk::Drop, // desc
+            Cons::Accessor { .. } => Mk::Drop,   // fn
+            // Chain walks: ⊤ is an unknown prototype there.
+            Cons::Chain { .. } => Mk::Drop,         // chain
+            Cons::ChainUnion { .. } => Mk::Drop,    // chain
+            Cons::ProtoGiven { .. } => Mk::Drop,    // chain
+            Cons::ProtoClosure { .. } => Mk::Drop,  // chain
+            Cons::ProtoMethods { .. } => Mk::Drop,  // chain
+            Cons::AnyAccessors { .. } => Mk::Drop,  // chain
+            Cons::ProtoValues { .. } => Mk::Drop,   // chain
+            Cons::PlainKey { .. } => Mk::Drop,      // chain
+            Cons::HolderStep { .. } => Mk::Drop,    // chain
+            Cons::VisitHolders { .. } => Mk::Drop,  // chain
+            Cons::VisitStop { .. } => Mk::Drop,     // chain
+            // Primitive results only.
+            Cons::Arith { .. } => Mk::Drop, // prim
+            Cons::Plus { .. } => Mk::Drop,  // prim
+            // Program prototypes only (E10), never a builtin one.
+            Cons::CreateProto { .. } => Mk::Drop, // program
+            // Parameter markers only (DECISIONS 44 (b)).
+            Cons::ArgInto { .. } => Mk::Drop, // marker
+            // ⊤ beside it is a shared buffer already (B1).
+            Cons::ShareBuffer { .. } => Mk::Drop, // top
+        };
+        let tc = self.top_chain();
+        let here = n != tc && !self.sum_skip(n, c);
+        match mode {
+            Mk::Pass => return self.apply_tokens_body(n, c, toks, prim),
+            Mk::Mark if here => {
+                let key = match c {
+                    Cons::Store { key, .. } | Cons::BirthField { key, .. } => Some(*key),
+                    Cons::Super {
+                        key,
+                        act: ChainAct::Store(_),
+                        ..
+                    } => Some(*key),
+                    Cons::DefineKey { key, .. } | Cons::AccessorInstall { key, .. } => {
+                        Some(Key::Named(*key))
+                    }
+                    Cons::DeleteKey { .. }
+                    | Cons::Hard {
+                        kind: Hard::E7Delete,
+                        ..
+                    } => None,
+                    // `setPrototypeOf` writes no own key: each prototype
+                    // takes the source as its [[Prototype]], as ⊤ does
+                    // (`native_given`), so its lookups reach the keys of the
+                    // source's chain and no other.
+                    Cons::Hard {
+                        kind: Hard::E6SetPrototypeOf,
+                        ..
+                    } => None,
+                    Cons::ProtoFrom { .. } => {
+                        self.cons(tc, *c);
+                        None
+                    }
+                    _ => Some(Key::Any),
+                };
+                if let Some(key) = key {
+                    let r = self.reason(&format!("a {} through the chain marker", c.kind_name()));
+                    self.chain_mark(r, false, Some(key));
+                }
+            }
+            Mk::Call if here => {
+                // DEC 250 (narrowed): only a prototype's own members other
+                // than `constructor` are locked. `constructor` and a computed
+                // member may be any value, written where the solve does not
+                // see it: the call may write the prototypes, the mark.
+                let open = match c {
+                    Cons::MCall { key: Key::Named(a), .. } => {
+                        self.atoms[*a as usize] == "constructor"
+                    }
+                    Cons::MCall { key: Key::Any, .. } | Cons::IdxMCall { .. } => true,
+                    _ => false,
+                };
+                if open {
+                    let r = self.reason("a call of an unlocked member through the chain marker");
+                    self.chain_mark(r, false, Some(Key::Any));
+                }
+                let e = self.effect_only(c);
+                self.cons(tc, e);
+            }
+            Mk::Mark | Mk::Call | Mk::Drop => {}
+        }
+        let rest: Vec<Tok> = toks.iter().copied().filter(|&t| t != mk).collect();
+        self.apply_tokens_body(n, c, Tokens::Slice(&rest), prim);
+    }
+
+    /// DECISIONS 254: the opaque mark on every prototype in `top_chain`
+    /// (`Cons::ChainMark`), installed once per key (`join`: once more, for
+    /// the actor set): idempotent per prototype, one constraint per constant
+    /// key, not one per write.
+    pub(crate) fn chain_mark(&mut self, reason: u32, join: bool, key: Option<Key>) {
+        if self.unit_mode || !self.top_chain_marks.insert((key, join)) {
+            return;
+        }
+        let tc = self.top_chain();
+        self.cons(tc, Cons::ChainMark { reason, join, key });
+    }
+
+    /// DECISIONS 254: `c` copied onto `top_chain` for its effect only: a
+    /// call it makes (a method or `super` call with the prototypes as
+    /// `this`, a receiver binding) is a solver call of the same site whose
+    /// result no node reads. The prototypes reach that call's `this` and
+    /// what the method writes there; never a value (`sort`, `valueOf`,
+    /// `Set.prototype.add` return `this`), where ⊤ stands already.
+    fn effect_only(&mut self, c: &Cons) -> Cons {
+        let mut c = *c;
+        let call = match &mut c {
+            Cons::MCall { call, .. }
+            | Cons::IdxMCall { call, .. }
+            | Cons::ThisInst { call, .. }
+            | Cons::SuperCtor { call, .. }
+            | Cons::SuperCtorParent { call, .. }
+            | Cons::Super {
+                act: ChainAct::Call(call),
+                ..
+            } => call,
+            _ => return c,
+        };
+        let mut cs = self.calls[*call as usize].clone();
+        cs.ret = self.node_l("TOPCHAIN-ret");
+        *call = self.solver_call(*call, cs);
+        c
+    }
+
+    fn apply_tokens_body(&mut self, n: NodeId, c: &Cons, toks: Tokens<'_>, prim: u16) {
+        if self.top_trace {
+            self.trace_apply_node = n;
+        }
         if self.sum_skip(n, c) {
             return;
         }
@@ -1108,6 +1366,10 @@ impl Model {
                 format!("chain {n} {origin} {} {act:?}", self.key_name(*key))
             }
             Cons::TopSink { reason } => format!("top {n} {reason}"),
+            Cons::ChainMark { reason, join, key } => {
+                let k = key.map_or("-".to_string(), |k| self.key_name(k));
+                format!("chainmark {n} {reason} {join} {k}")
+            }
             Cons::HandOver { reason, ctor, arg } => format!("handover {n} {reason} {ctor} {arg}"),
             Cons::OwnOnly { f, dst } => format!("ownonly {n} {f} {dst}"),
             Cons::CallerValue { dst, reason } => format!("callervalue {n} {dst} {reason}"),

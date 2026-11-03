@@ -73,7 +73,37 @@ impl<'a> Gen<'a> {
                 return self.call_value(c, ThisArg::Undef, vec![lit], vec![]);
             }
         }
-        let a: Vec<NodeId> = args.iter().map(|x| self.expr(fx, x)).collect();
+        let mut a: Vec<NodeId> = args.iter().map(|x| self.expr(fx, x)).collect();
+        // Rule 12: a constant key of a `defineProperty` method call is the
+        // one key its argument node holds (`Model::key_nodes`). When the
+        // callee is the builtin (the generic arm of a guarded or patched
+        // namespace call), the value call defines that key, as the
+        // intrinsic does (`builtins::define_property_value`). A getter that
+        // cannot read its receiver makes the key a field of its holder
+        // (`receiver_free_getter`): no lookup walks for it.
+        // Rule C: so is the key of a `getOwnPropertyDescriptor` value call.
+        if let (Expr::PropertyGet { property, .. }, Some(k)) = (callee, args.get(1)) {
+            if property == "getOwnPropertyDescriptor" {
+                a[1] = self.const_key_node(fx.module, k, a[1]);
+            }
+        }
+        if let (Expr::PropertyGet { property, .. }, Some(k)) = (callee, args.get(1)) {
+            if property == "defineProperty" {
+                if let Some(crate::gen_const::Const::Str(s)) = self.const_eval(fx.module, k) {
+                    let key = self.m.atom(&s);
+                    let n = self.m.node_l("define-key-arg");
+                    self.m.edge(a[1], n);
+                    self.m.key_nodes.insert(n, key);
+                    if !args
+                        .get(2)
+                        .is_some_and(|d| self.receiver_free_getter(fx.module, d))
+                    {
+                        self.m.accessor_atoms.insert(key);
+                    }
+                    a[1] = n;
+                }
+            }
+        }
         self.call_lit_arg = match args.first().map(|x| self.const_eval(fx.module, x)) {
             Some(Some(crate::gen_const::Const::Str(s))) => Some(self.m.atom(&s)),
             _ => None,
@@ -91,6 +121,19 @@ impl<'a> Gen<'a> {
             }
         }
         self.call_with(fx, callee, a, vec![], byte_offset)
+    }
+
+    /// Key node `n` of expression `k`; a constant string key gets a node
+    /// that names it (`Model::key_nodes`).
+    pub(crate) fn const_key_node(&mut self, module: u32, k: &Expr, n: NodeId) -> NodeId {
+        let Some(crate::gen_const::Const::Str(s)) = self.const_eval(module, k) else {
+            return n;
+        };
+        let key = self.m.atom(&s);
+        let kn = self.m.node_l("descriptor-key-arg");
+        self.m.edge(n, kn);
+        self.m.key_nodes.insert(kn, key);
+        kn
     }
 
     /// The key of member access `object.property`: a guarded private

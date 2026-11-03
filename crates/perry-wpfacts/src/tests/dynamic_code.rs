@@ -123,6 +123,11 @@ fn object_prototype_method_value_runs_on_its_receiver() {
 /// replaces.
 #[test]
 fn a_store_into_top_reaches_the_seeded_chains() {
+    // Rule P (DECISIONS 254): the store into ⊤ writes the builtin
+    // prototypes unknown code was given (`Object.prototype` here); with
+    // none given (`TOP`) it writes none and nothing escapes (below).
+    const TOP: &str =
+        "declare const unknown: any; const t: any = unknown.reach(Object.prototype);";
     let f = "function (o: any) { o.y = 'x'; }";
     let named = format!("t.constructor = {f};");
     let computed = format!("declare const kk: string; t[kk] = {f};");
@@ -149,6 +154,12 @@ fn a_store_into_top_reaches_the_seeded_chains() {
     }
     for (body, _) in cases("new (class P {})()", "o.constructor(d);") {
         assert_eq!(d_escape(&body), None, "{body}");
+    }
+    for recv in ["[1]", "{ a: 1 }", "{}"] {
+        for (body, _) in cases(recv, "o.constructor(d);") {
+            let bare = body.replace(TOP, self::TOP);
+            assert_eq!(d_escape(&bare), None, "{bare}");
+        }
     }
     for recv in ["{ a: 1 }", "new (class P {})()"] {
         assert_eq!(

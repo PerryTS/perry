@@ -1204,6 +1204,93 @@ fn cjs_main_record_reaches_code_through_process_main_module() {
     );
 }
 
+/// Facts for `src` in a program whose interpreted code names the global
+/// scope: every namespace call is lowered guarded
+/// (`NamespacePatched(ns) ? globalThis.ns.m(..) : intrinsic`), so the
+/// generic arm calls the builtin as a value.
+fn guarded_facts(src: &str) -> ProgramFacts {
+    let mut reach = perry_hir::dynamic_code::DynamicCodeReach::default();
+    reach.record_global("new Function(...) @ x.ts (byte 1) (names globals)".into());
+    let mut pb = perry_hir::patched_builtins::PatchedBuiltins::new();
+    pb.dynamic_code_reach = reach.clone();
+    perry_hir::patched_builtins::set_patched_builtins(std::sync::Arc::new(pb));
+    let module = perry_parser::parse_typescript(src, "t.ts").expect("parses");
+    let hir = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
+    perry_hir::patched_builtins::clear_patched_builtins();
+    let mut cfg = FactsConfig::default();
+    cfg.max_work = Some(50_000_000);
+    cfg.dynamic_code = Some("interp".into());
+    cfg.dynamic_code_reach = reach;
+    compute(&[("t.ts".to_string(), &hir)], &cfg)
+}
+
+/// Rule 12 for `Object.defineProperties`: in the generic arm of a guarded
+/// namespace call the builtin is called as a value, and it is the
+/// intrinsic's operation. The map is read: each descriptor defines its key
+/// on the target, and the getter's value reaches only the read of that key.
+/// Before, the map escaped as an argument of an undescribed builtin, the
+/// getter with it and `P` through the getter.
+#[test]
+fn define_properties_called_as_a_value_reads_its_descriptor_map() {
+    let src = r#"
+        class P { x = 1; }
+        const p = new P();
+        const o: any = {};
+        const r: any = Object.defineProperties(o, { k: { enumerable: true, get() { return p; } } });
+        console.log(o.k.x, r.k.x);
+    "#;
+    let pf = guarded_facts(src);
+    let t = tmpl(&pf, "P");
+    assert!(t.escape.is_none(), "{}", pf.dump_text());
+    let site = pf.sites.iter().find(|s| s.key == "x").expect("site");
+    assert!(
+        site.receivers.iter().any(|r| r.ends_with(":P")),
+        "{}",
+        pf.dump_text()
+    );
+    // The fixture can fail: with a spread argument the operands are
+    // unknown and the map is handed over, the getter and `p` with it.
+    let unknown = src.replace(
+        "Object.defineProperties(o, { k: { enumerable: true, get() { return p; } } })",
+        "Object.defineProperties(...([o, { k: { enumerable: true, get() { return p; } } }] as [any, any]))",
+    );
+    assert_ne!(unknown, src);
+    let pf = guarded_facts(&unknown);
+    assert!(tmpl(&pf, "P").escape.is_some(), "{}", pf.dump_text());
+}
+
+/// Rule C (CJS14 rule 13): `Object.getOwnPropertyDescriptor(s)` and
+/// `Reflect.getOwnPropertyDescriptor`, called as values (the generic arm of
+/// a guarded namespace call) or as intrinsics, are one operation: a fresh
+/// descriptor whose `value` is the target's own member. The target is read,
+/// not handed over, and a call through `value` calls that member. Before,
+/// the value call was an undescribed builtin: its arguments escaped and its
+/// result was ⊤, so `p` escaped through the call.
+#[test]
+fn descriptor_builtins_called_as_values_read_own_members() {
+    let src = r#"
+        declare const unknown: any;
+        class P { x = 1; }
+        const p = new P();
+        const o: any = { f: (v: any) => v.x };
+        const d: any = Object.getOwnPropertyDescriptor(o, "f");
+        const e: any = Reflect.getOwnPropertyDescriptor(o, "f");
+        const ds: any = Object.getOwnPropertyDescriptors(o);
+        console.log(d.value(p), e.value(p), ds.f.value(p));
+    "#;
+    let pf = guarded_facts(src);
+    assert!(tmpl(&pf, "P").escape.is_none(), "{}", pf.dump_text());
+    // The fixture can fail: an unknown key of an unknown holder names an
+    // unknown member, so `value` is ⊤ and the call through it hands `p` over.
+    let unknown = src.replace(
+        "Object.getOwnPropertyDescriptor(o, \"f\")",
+        "Object.getOwnPropertyDescriptor(unknown.value, String(process.argv.length))",
+    );
+    assert_ne!(unknown, src);
+    let pf = guarded_facts(&unknown);
+    assert!(tmpl(&pf, "P").escape.is_some(), "{}", pf.dump_text());
+}
+
 #[test]
 fn define_properties_invokes_own_descriptor_getters() {
     let pf = facts(

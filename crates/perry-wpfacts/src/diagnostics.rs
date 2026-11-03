@@ -841,6 +841,7 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
     for (i, t) in m.toks.iter().enumerate() {
         let (kind, layout, function, context) = match t {
             TokKind::Top => ("top", None, None, None),
+            TokKind::TopChain => ("top-chain", None, None, None),
             TokKind::Obj(l, c) => ("object", Some(*l), None, Some(*c)),
             TokKind::Func(f, c) => ("function", None, Some(*f), Some(*c)),
             TokKind::Bound(_) => ("bound", None, None, None),

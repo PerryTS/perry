@@ -74,6 +74,36 @@ impl<'a> Gen<'a> {
         Some((class_name, args, arg("get"), arg("set")))
     }
 
+    /// Rule 12 cost (CJS15b): `d` is an accessor descriptor literal whose
+    /// only accessor is a `get` that cannot observe its receiver: a function
+    /// without parameters (no `arguments`), not async or a generator, whose
+    /// body is one `return` of a plain read (locals, globals, constants,
+    /// property reads of those; no `this`, no call). tsc's re-export getter
+    /// `function () { return m_1.k; }` is that shape. Its result does not
+    /// depend on the receiver, so the key is a field of its holder
+    /// (`Cons::AccessorInstall`) and no lookup walks for it. A body without
+    /// calls keeps the activation pass exact: running such a getter
+    /// earlier than its first read activates nothing.
+    pub(crate) fn receiver_free_getter(&self, mi: u32, d: &Expr) -> bool {
+        let Some((_, args, Some(g), None)) = self.accessor_literal(mi, d) else {
+            return false;
+        };
+        let Some(Expr::Closure {
+            params,
+            body,
+            is_async,
+            is_generator,
+            ..
+        }) = args.get(g)
+        else {
+            return false;
+        };
+        if !params.is_empty() || *is_async || *is_generator {
+            return false;
+        }
+        matches!(body.as_slice(), [Stmt::Return(Some(e))] if plain_read(e))
+    }
+
     /// The class whose method home `home` reads, when it is that home.
     fn class_home_of(&self, fx: &Fx, home: &Expr) -> Option<TmplId> {
         match home {
@@ -399,8 +429,6 @@ impl<'a> Gen<'a> {
             | Expr::ObjectIsSealed(..)
             | Expr::ObjectIsExtensible(..)
             | Expr::ReflectIsExtensible(..)
-            | Expr::SymbolNew(..)
-            | Expr::SymbolFor(..)
             | Expr::SymbolKeyFor(..)
             | Expr::SymbolDescription(..)
             | Expr::RegExpEscape(..)
@@ -465,6 +493,12 @@ impl<'a> Gen<'a> {
             | Expr::ProxyRevoke(..) => {
                 // Mixed: element reads, `raw` / `toISOString` lookups, spreads.
                 self.prim_kids(fx, e, prim::ALL, "primitive builtin operand", Protocol::Any)
+            }
+            // `Symbol(d)` / `Symbol.for(k)`: a symbol, never a string (a
+            // computed read under it never names `prototype`, DECISIONS
+            // 254).
+            Expr::SymbolNew(..) | Expr::SymbolFor(..) => {
+                self.prim_kids(fx, e, prim::SYMBOL, "primitive builtin operand", Protocol::Any)
             }
             Expr::DateGetTime(..) => self.receiver_method(fx, e, "getTime"),
             Expr::DateGetFullYear(..) => self.receiver_method(fx, e, "getFullYear"),
@@ -1047,5 +1081,21 @@ impl<'a> Gen<'a> {
             | Expr::ObjectRest { .. }
             | Expr::PutValueSet { .. } => self.expr_rest_reflection(fx, e),
         }
+    }
+}
+
+/// A read with no effect of its own: a local, a global, a constant, or a
+/// property read of one (`receiver_free_getter`).
+fn plain_read(e: &Expr) -> bool {
+    match e {
+        Expr::LocalGet(_)
+        | Expr::GlobalGet(_)
+        | Expr::String(_)
+        | Expr::Number(_)
+        | Expr::Bool(_)
+        | Expr::Undefined
+        | Expr::Null => true,
+        Expr::PropertyGet { object, .. } => plain_read(object),
+        _ => false,
     }
 }

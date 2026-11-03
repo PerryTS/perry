@@ -78,6 +78,25 @@ impl Model {
                     self.chain_step(n, origin, p, key, act);
                 }
             }
+            // Per unit the marker machinery is inert (DECISIONS 251): a
+            // store into ⊤ writes every builtin prototype there.
+            Cons::ChainMark { .. } if self.unit_mode => {}
+            Cons::ChainMark { reason, join, key } => {
+                let tc = self.top_chain();
+                if n == tc {
+                    let what = self.reasons[reason as usize].clone();
+                    for &t in toks {
+                        if let Some(key) = key {
+                            crate::builtins::note_native_write(self, t, Some(key), &what);
+                        }
+                        if join {
+                            crate::builtins::note_top_proto(self, t, reason);
+                        }
+                    }
+                } else if self.top_chain_mark.is_some_and(|mk| toks.iter().any(|&t| t == mk)) {
+                    self.chain_mark(reason, join, key);
+                }
+            }
             Cons::TopSink { reason } => {
                 let chain = self.chain_sinks.contains(&n);
                 let saved = std::mem::replace(&mut self.chain_escape, chain);
@@ -373,12 +392,27 @@ impl Model {
                         let k = self.atoms[key as usize].clone();
                         self.note_shared(SharedWrite::Removed(Some(k)));
                     } else {
-                        self.mark_hard(t, Hard::E7Delete, reason);
+                        self.mark_hard_key(t, Hard::E7Delete, reason, Some(key));
                     }
                 }
             }
             Cons::Hard { kind, reason } => {
                 for &t in toks {
+                    if self.top_trace && t == TOP && { static K: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0); K.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 6 } {
+                        let mut c = n;
+                        for _ in 0..80 {
+                            let f = self.node_fn.get(c as usize).copied().unwrap_or(crate::model::NO_FN);
+                            let fname = if f == crate::model::NO_FN { "-".to_string() } else { self.funcs[f as usize].name.clone() };
+                            let w = self.top_pred.get(&c).map(|&(_, why)| if why == u32::MAX { String::new() } else { self.reasons[why as usize].clone() }).unwrap_or_default();
+                            eprintln!("perry: acttrace hardhop node={c} label={} fn={} why={w}", self.labels[c as usize], fname.rsplit("node_modules/").next().unwrap_or(&fname));
+                            match self.top_pred.get(&c) {
+                                Some(&(src, _)) if src != crate::model::NO_NODE => c = src,
+                                _ => break,
+                            }
+                        }
+                        let preds: Vec<String> = (0..self.nodes.len()).filter(|&i| self.nodes[i].succ.contains(&n)).take(8).map(|i| format!("{i}:{}", self.labels[i])).collect();
+                        eprintln!("perry: acttrace hardon {} :: {} preds={preds:?}", self.top_origin(n), self.reasons[reason as usize].rsplit("node_modules/").next().unwrap_or(""));
+                    }
                     if self.explain && t == TOP {
                         eprintln!(
                             "perry: wpfacts explain: {} on ⊤: {} (receiver: {})",
@@ -462,7 +496,7 @@ impl Model {
                             self.note_shared(SharedWrite::Accessor(Shared::Top, k.clone()));
                             self.note_shared(SharedWrite::Removed(Some(k)));
                         }
-                        _ => self.mark_hard(t, Hard::E5DefineProperty, reason),
+                        _ => self.mark_hard_key(t, Hard::E5DefineProperty, reason, Some(key)),
                     }
                 }
             }
@@ -592,10 +626,19 @@ impl Model {
             }
             Cons::ProtoMethods { origin, key, call } => {
                 for &q in toks {
-                    if matches!(
-                        self.toks[q as usize],
-                        TokKind::ObjectProto | TokKind::NativeProto(_)
-                    ) {
+                    // A described `EventEmitter.prototype` method runs as
+                    // the chain value's member (`EventEmitterMethod`).
+                    let ee_member = matches!(
+                        (&self.toks[q as usize], key),
+                        (TokKind::NativeProto(n), Key::Named(a)) if n == "EventEmitter"
+                            && builtins::event_emitter_method(&self.atoms[a as usize]).is_some()
+                    );
+                    if !ee_member
+                        && matches!(
+                            self.toks[q as usize],
+                            TokKind::ObjectProto | TokKind::NativeProto(_)
+                        )
+                    {
                         self.with_b(|m| builtins::proto_method(m, q, origin, key, call));
                     }
                 }
@@ -807,6 +850,23 @@ impl Model {
                         self.objproto_accessor = true;
                     }
                     self.accessor_installed(t, key, f, setter, !objproto);
+                    if !objproto && !self.accessor_atoms.contains(&key) {
+                        // Rule 12 cost (CJS15b): no lookup walks this key
+                        // (generation keeps receiver-free getters out of the
+                        // accessor atoms, `receiver_free_getter`). The
+                        // getter's result does not depend on the receiver, so
+                        // it is the holder's field: own, chain, any-key reads
+                        // and copies read fields. Anything else under such a
+                        // key runs as unknown code.
+                        if setter {
+                            let r = self.reason("setter under an unwalked accessor key");
+                            self.escape(f, r);
+                        } else {
+                            let ar = self.acc_groups[&(t, Key::Named(key))].ar;
+                            let fd = self.field(t, key);
+                            self.edge(ar, fd);
+                        }
+                    }
                 }
             }
             Cons::ProtoFrom { src } => {
@@ -966,6 +1026,12 @@ impl Model {
                 for &t in toks {
                     if t == TOP {
                         self.add_tok(dst, TOP);
+                        // DECISIONS 254: a computed key may name `prototype`
+                        // (or `__proto__`): once the key may be a string,
+                        // the read is of ⊤'s chain (`IdxKey` below).
+                        if self.idx_done.insert((idx, TOP, dst, 0)) {
+                            self.cons(idx, Cons::IdxKey { obj: TOP, dst });
+                        }
                         continue;
                     }
                     // An object's own fields: by the key's values (`IdxKey`:
@@ -986,6 +1052,19 @@ impl Model {
             }
             Cons::IdxKey { obj, dst } => {
                 let named = prim & (prim::STR | prim::SYMBOL) != 0 || !toks.is_empty();
+                // An element of ⊤ is ⊤ (`IdxLoad`); under a key that may be
+                // a string (a string, or an object whose ToPropertyKey may
+                // be one; a symbol never names `prototype`) it may be ⊤'s
+                // chain: the chain marker. No Function constructor: the key
+                // is never `constructor` of a function ⊤ holds (DECISIONS
+                // 235).
+                if obj == TOP {
+                    let string = prim & prim::STR != 0 || !toks.is_empty();
+                    if string && self.idx_done.insert((n, TOP, dst, 1)) {
+                        self.top_chain_read(Key::Any, dst);
+                    }
+                    return;
+                }
                 if named && self.idx_done.insert((n, obj, dst, 1)) {
                     self.load_from(obj, obj, Key::Any, dst);
                 }

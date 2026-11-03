@@ -20,9 +20,10 @@ pub(crate) use collections::{WK_ITERATOR, WK_PREFIX};
 use members::{Family, Mem};
 pub use native_protocol::{
     global_field, global_user_key, is_builtin_module, native_parent_ctor, native_parent_keys,
-    native_parent_summarized, native_proto, native_written, native_written_by, note_global_in_top,
+    native_parent_summarized, native_proto, native_written, native_written_by, note_global_in_top, note_top_proto,
     note_native_write, require_parts, settle_native_given,
 };
+pub use native_protocol::event_emitter_method;
 use native_protocol::{native_method, native_skips};
 
 /// Global names the `GlobalGet(0)` sentinel resolves to.
@@ -137,10 +138,12 @@ fn unknown_method_proto(m: &mut Model, call: CallId, why: &str, proto: Option<us
             m.edge(a, n);
         } else {
             m.sink_node(a, r);
+            m.cons(a, Cons::ChainMark { reason: r, join: true, key: Some(Key::Any) });
         }
     }
     for &a in &c.spread {
         m.sink_node(a, r);
+        m.cons(a, Cons::ChainMark { reason: r, join: true, key: Some(Key::Any) });
     }
     // A method run on one receiver token sees that token as `this`, not
     // every token of the receiver node.
@@ -148,13 +151,22 @@ fn unknown_method_proto(m: &mut Model, call: CallId, why: &str, proto: Option<us
     match (m.cur_this, &c.this) {
         (Some(t), _) if kept(m, t) => {}
         (Some(t), _) => m.escape(t, r),
-        (None, ThisArg::Node(n)) => m.sink_node(*n, r),
+        (None, ThisArg::Node(n)) => {
+            m.sink_node(*n, r);
+            m.cons(*n, Cons::ChainMark { reason: r, join: true, key: Some(Key::Any) });
+        }
         (None, ThisArg::Tok(t)) if kept(m, *t) => {}
         (None, ThisArg::Tok(t)) => m.escape(*t, r),
         (None, ThisArg::Undef) => {}
     }
     m.add_top(c.ret, |_| format!("result: {why}"));
     m.add_prim(c.ret, prim::ALL);
+    // DECISIONS 254: it may compute a prototype of an argument (each one
+    // escaped above, its chain with it): the chain marker.
+    if !m.unit_mode {
+        let mk = m.top_chain_marker();
+        m.add_tok(c.ret, mk);
+    }
 }
 
 fn implicit_args(m: &mut Model, call: CallId, why: &str, proto: Protocol) {
@@ -210,6 +222,11 @@ fn site_tmpl(m: &mut Model, call: CallId, what: &'static str) -> Tok {
             module: u32::MAX,
             site,
         }
+    } else if what == "Object.create" {
+        TmplKind::ObjCreate {
+            module: u32::MAX,
+            site,
+        }
     } else {
         TmplKind::BObj {
             module: u32::MAX,
@@ -228,7 +245,7 @@ fn site_tmpl(m: &mut Model, call: CallId, what: &'static str) -> Tok {
         ctor: None,
         native_parent: None,
         accessor_keys: vec![],
-        has_computed_members: false,
+        has_computed_members: what == "Object.create",
         field_init: None,
         proto_members: vec![],
         parent_value: None,
@@ -725,16 +742,11 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
             ret_tok(m, call, pb);
         }
         (BuiltinNs::Object, "values" | "entries") => {
+            // EnumerableOwnProperties: own properties only.
             let arr = site_tmpl(m, call, "Array");
             let fa = m.field_any(arr);
             if let Some(o) = arg(m, call, 0) {
-                m.cons(
-                    o,
-                    Cons::Load {
-                        key: Key::Any,
-                        dst: fa,
-                    },
-                );
+                m.cons(o, Cons::OwnValues { dst: fa });
             }
             m.add_prim(fa, prim::STR);
             if name == "entries" {
@@ -759,16 +771,60 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
         (BuiltinNs::Object, "isFrozen" | "isSealed" | "isExtensible" | "is" | "hasOwn") => {
             ret_prim(m, call, prim::BOOL);
         }
+        // Called as a value (the generic arm of a guarded namespace call,
+        // an alias), `Object.create(p)` is the operation its intrinsic
+        // lowers to (`Expr::ObjectCreate`): a fresh object of this site
+        // whose chain holds `p` (E10 on `p`'s templates). A descriptor
+        // argument or a spread leaves the operation unknown.
         (BuiltinNs::Object, "create") => {
-            unknown_method_proto(m, call, "argument of builtin Object.create", Some(0), true)
+            let c = m.calls[call as usize].clone();
+            match c.args.as_slice() {
+                [p] if c.spread.is_empty() => {
+                    let p = *p;
+                    let r = m.reason("E10 Object.create");
+                    m.cons(p, Cons::CreateProto { reason: r });
+                    let t = site_tmpl(m, call, "Object.create");
+                    let pn = m.proto_node(t);
+                    m.edge(p, pn);
+                    ret_tok(m, call, t);
+                }
+                _ => unknown_method_proto(m, call, "argument of builtin Object.create", Some(0), true),
+            }
         }
-        (BuiltinNs::Object | BuiltinNs::Reflect, "setPrototypeOf") => unknown_method_proto(
-            m,
-            call,
-            &format!("argument of builtin {ns:?}.setPrototypeOf"),
-            Some(1),
-            true,
-        ),
+        // Called as a value (the generic arm of a guarded namespace call,
+        // an alias), the builtin is the operation its intrinsic lowers to
+        // (`Expr::ObjectSetPrototypeOf`): E6 on the target, whose chain
+        // now holds the prototype; `Object.setPrototypeOf` returns the
+        // target, `Reflect.setPrototypeOf` a boolean. A spread argument
+        // leaves the operands unknown.
+        (BuiltinNs::Object | BuiltinNs::Reflect, "setPrototypeOf") => {
+            let c = m.calls[call as usize].clone();
+            match (c.args.first(), c.args.get(1)) {
+                (Some(&o), Some(&p)) if c.spread.is_empty() => {
+                    let r = m.reason(&format!("E6 {ns:?}.setPrototypeOf"));
+                    m.cons(
+                        o,
+                        Cons::Hard {
+                            kind: Hard::E6SetPrototypeOf,
+                            reason: r,
+                        },
+                    );
+                    m.cons(o, Cons::ProtoFrom { src: p });
+                    if ns == BuiltinNs::Object {
+                        m.edge(o, c.ret);
+                    } else {
+                        ret_prim(m, call, prim::BOOL);
+                    }
+                }
+                _ => unknown_method_proto(
+                    m,
+                    call,
+                    &format!("argument of builtin {ns:?}.setPrototypeOf"),
+                    Some(1),
+                    true,
+                ),
+            }
+        }
         (BuiltinNs::Object, "getPrototypeOf") | (BuiltinNs::Reflect, "getPrototypeOf") => {
             if let Some(o) = arg(m, call, 0) {
                 let ret = m.calls[call as usize].ret;
@@ -905,6 +961,14 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
                 ret_tok(m, call, pb);
             }
         }
+        // `Symbol.for(k)` is a symbol, `Symbol.keyFor(s)` its key or
+        // `undefined`: a computed read under the one never names
+        // `prototype` (DECISIONS 254).
+        (BuiltinNs::Symbol, "for") => {
+            implicit_args(m, call, "ToString", Protocol::ToPrimitive);
+            ret_prim(m, call, prim::SYMBOL);
+        }
+        (BuiltinNs::Symbol, "keyFor") => ret_prim(m, call, prim::STR | prim::UNDEF),
         (BuiltinNs::Symbol, _) => {
             implicit_args(m, call, "ToString", Protocol::ToPrimitive);
             ret_prim(m, call, prim::SYMBOL | prim::STR | prim::UNDEF);
@@ -1007,6 +1071,83 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
         (BuiltinNs::Function, _) => {
             // Not a method of the Function constructor (TypeError).
         }
+        // Rule 12: called as a value (the generic arm of a guarded or
+        // patched namespace call, an alias), the builtin is the operation
+        // its intrinsic lowers to (`Expr::ObjectDefineProperty`), see
+        // `define_property_value`. `Object.defineProperty` returns the
+        // target, `Reflect.defineProperty` a boolean. A spread argument
+        // leaves the operands unknown.
+        (BuiltinNs::Object | BuiltinNs::Reflect, "defineProperty") => {
+            let c = m.calls[call as usize].clone();
+            match (c.args.first(), c.args.get(1), c.args.get(2)) {
+                (Some(&o), Some(&k), Some(&d)) if c.spread.is_empty() => {
+                    define_property_value(m, o, k, d, ns);
+                    if ns == BuiltinNs::Object {
+                        m.edge(o, c.ret);
+                    } else {
+                        ret_prim(m, call, prim::BOOL);
+                    }
+                }
+                _ => unknown_method_proto(
+                    m,
+                    call,
+                    &format!("argument of builtin {ns:?}.defineProperty"),
+                    None,
+                    true,
+                ),
+            }
+        }
+        // Rule C (CJS14 rule 13): called as a value, the descriptor
+        // builtins are the operation, see `own_descriptor_value`: a fresh
+        // descriptor (`getOwnPropertyDescriptors`: a fresh record of them)
+        // of the target's own members. The target is read, not handed over.
+        (BuiltinNs::Object | BuiltinNs::Reflect, "getOwnPropertyDescriptor")
+        | (BuiltinNs::Object, "getOwnPropertyDescriptors") => {
+            let c = m.calls[call as usize].clone();
+            let many = name == "getOwnPropertyDescriptors";
+            match (c.args.first(), c.args.get(1)) {
+                (Some(&o), k) if c.spread.is_empty() && (many || k.is_some()) => {
+                    if many {
+                        let d = own_descriptor_value(m, call, o, None);
+                        let rec = site_tmpl(m, call, "descriptors");
+                        let fa = m.field_any(rec);
+                        m.add_tok(fa, d);
+                        ret_tok(m, call, rec);
+                    } else {
+                        let d = own_descriptor_value(m, call, o, k.copied());
+                        ret_tok(m, call, d);
+                        ret_prim(m, call, prim::UNDEF);
+                    }
+                }
+                _ => unknown_method_proto(
+                    m,
+                    call,
+                    &format!("argument of builtin {ns:?}.{name}"),
+                    None,
+                    true,
+                ),
+            }
+        }
+        // Rule 12 as for `defineProperty`: `Object.defineProperties(o, map)`
+        // called as a value is the operation its intrinsic lowers to
+        // (`Expr::ObjectDefineProperties`): `Cons::DefineAll` of the map on
+        // the target, which it returns. The map is read, not handed over.
+        (BuiltinNs::Object, "defineProperties") => {
+            let c = m.calls[call as usize].clone();
+            match (c.args.first(), c.args.get(1)) {
+                (Some(&o), Some(&map)) if c.spread.is_empty() => {
+                    define_properties_value(m, o, map);
+                    m.edge(o, c.ret);
+                }
+                _ => unknown_method_proto(
+                    m,
+                    call,
+                    "argument of builtin Object.defineProperties",
+                    None,
+                    true,
+                ),
+            }
+        }
         (_, n) => unknown_method_proto(
             m,
             call,
@@ -1015,6 +1156,201 @@ fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
             true,
         ),
     }
+}
+
+/// Rule 12: `defineProperty(o, k, d)` called as a value. A constant key
+/// (the one key of its argument node, `Model::key_nodes`) defines that key
+/// by the descriptor (`Cons::DefineDesc`); any other key is E5 HARD on the
+/// target, the descriptor's `value` stored under any key and its get/set
+/// installed under the computed key. The descriptor is read, not handed
+/// over.
+fn define_property_value(m: &mut Model, o: NodeId, k: NodeId, d: NodeId, ns: BuiltinNs) {
+    let r = m.reason(&format!("E5 {ns:?}.defineProperty"));
+    m.cons(
+        k,
+        Cons::Implicit {
+            reason: r,
+            proto: Protocol::ToPrimitive,
+        },
+    );
+    let site = m.anon_post_site("defineProperty");
+    if let Some(key) = m.key_nodes.get(&k).copied() {
+        m.cons(
+            d,
+            Cons::DefineDesc {
+                o,
+                key,
+                site,
+                reason: r,
+            },
+        );
+        return;
+    }
+    let star = m.atom(crate::STAR_KEY);
+    m.define_on.insert((o, star, true));
+    m.define_on.insert((o, star, false));
+    m.cons(
+        o,
+        Cons::Hard {
+            kind: Hard::E5DefineProperty,
+            reason: r,
+        },
+    );
+    let va = m.atom("value");
+    let v = m.node_l("define-value");
+    m.cons(
+        d,
+        Cons::Load {
+            key: Key::Named(va),
+            dst: v,
+        },
+    );
+    m.cons(
+        o,
+        Cons::Store {
+            key: Key::Any,
+            src: v,
+            site,
+        },
+    );
+    for (name, setter) in [("get", false), ("set", true)] {
+        let a = m.atom(name);
+        let f = m.node_l("define-accessor");
+        m.cons(
+            d,
+            Cons::Load {
+                key: Key::Named(a),
+                dst: f,
+            },
+        );
+        m.cons(
+            f,
+            Cons::Accessor {
+                holder: o,
+                key: star,
+                setter,
+            },
+        );
+    }
+}
+
+/// Rule C (CJS14 rule 13): the descriptor of `o`'s own member under key
+/// `k` (`None`: under any key, as `getOwnPropertyDescriptors` reads them),
+/// called as a value. A fresh descriptor per call site: `value` holds the
+/// member under a constant key (`Model::key_nodes`; a builtin's
+/// `prototype` is that prototype, which escapes with the descriptor, route
+/// 1), else `o`'s own values (`Cons::OwnValues`: an opaque holder's unknown
+/// key is ⊤, never a prototype by itself, so no chain marker). `get`/`set`
+/// are the accessors handed out without a receiver: ⊤, and `o` is touched
+/// as the intrinsic does (`descriptor_of`). `o` does not escape.
+fn own_descriptor_value(m: &mut Model, call: CallId, o: NodeId, k: Option<NodeId>) -> Tok {
+    let d = site_tmpl(m, call, "descriptor");
+    own_descriptor(m, d, o, k);
+    d
+}
+
+/// The fields of descriptor `d` of `o`'s own member under key node `k`
+/// (rule C; the intrinsic `descriptor_of` and the value call share it).
+pub(crate) fn own_descriptor(m: &mut Model, d: Tok, o: NodeId, k: Option<NodeId>) {
+    let r = m.reason("getOwnPropertyDescriptor (accessors handed out)");
+    m.cons(
+        o,
+        Cons::Implicit {
+            reason: r,
+            proto: Protocol::Any,
+        },
+    );
+    let va = m.atom("value");
+    let value = m.field(d, va);
+    let key = k.and_then(|k| m.key_nodes.get(&k).copied());
+    match key {
+        Some(a) => m.cons(
+            o,
+            Cons::Load {
+                key: Key::Named(a),
+                dst: value,
+            },
+        ),
+        None => {
+            m.cons(o, Cons::OwnValues { dst: value });
+            // A constructor's own `prototype` (a builtin's is a builtin
+            // prototype, DECISIONS 254) is one of its own members; the
+            // opaque own values above do not name it.
+            let pa = m.atom("prototype");
+            m.cons(
+                o,
+                Cons::Load {
+                    key: Key::Named(pa),
+                    dst: value,
+                },
+            );
+        }
+    }
+    if let Some(k) = k {
+        m.cons(
+            k,
+            Cons::Implicit {
+                reason: r,
+                proto: Protocol::ToPrimitive,
+            },
+        );
+    }
+    for name in ["get", "set"] {
+        let a = m.atom(name);
+        let f = m.field(d, a);
+        m.add_top(f, |_| "getOwnPropertyDescriptor: an accessor handed out without a receiver".into());
+    }
+    let fa = m.field_any(d);
+    m.add_prim(fa, prim::BOOL);
+}
+
+/// Rule 12: `Object.defineProperties(o, map)` called as a value, lowered
+/// as its intrinsic is (`Expr::ObjectDefineProperties`): a map of exactly
+/// known keys defines each key by its descriptor; any other map's own
+/// values are descriptors defined under a computed key (`Cons::DefineAll`).
+fn define_properties_value(m: &mut Model, o: NodeId, map: NodeId) {
+    let r = m.reason("E5 Object.defineProperties");
+    let descs = m.node_l("own-descriptors");
+    let va = m.atom("value");
+    let value = m.node_l("define-value");
+    m.cons(
+        descs,
+        Cons::Load {
+            key: Key::Named(va),
+            dst: value,
+        },
+    );
+    let site = m.anon_post_site("defineProperty");
+    let star = m.atom(crate::STAR_KEY);
+    for (name, setter) in [("get", false), ("set", true)] {
+        let a = m.atom(name);
+        let f = m.node_l("define-accessor");
+        m.cons(
+            descs,
+            Cons::Load {
+                key: Key::Named(a),
+                dst: f,
+            },
+        );
+        m.cons(
+            f,
+            Cons::Accessor {
+                holder: o,
+                key: star,
+                setter,
+            },
+        );
+    }
+    m.cons(
+        map,
+        Cons::DefineAll {
+            o,
+            descs,
+            value,
+            site,
+            reason: r,
+        },
+    );
 }
 
 pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
@@ -1102,6 +1438,7 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
         }
         BuiltinNs::ObjectProtoMethod => object_proto_method_call(m, call),
         BuiltinNs::ObjectProtoOwn(own) => object_proto_own_call(m, own, call),
+        BuiltinNs::EventEmitterMethod(i) => native_protocol::event_emitter_method_call(m, i, call),
         BuiltinNs::Error | BuiltinNs::AggregateError | BuiltinNs::RegExp => {
             new_builtin_ns(m, ns, call);
             if ns == BuiltinNs::RegExp {
@@ -1115,9 +1452,14 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             }
         }
         BuiltinNs::Date => ret_prim(m, call, prim::STR),
-        BuiltinNs::String | BuiltinNs::Number | BuiltinNs::Boolean | BuiltinNs::Symbol => {
+        BuiltinNs::String | BuiltinNs::Number | BuiltinNs::Boolean => {
             implicit_args(m, call, "ToPrimitive", Protocol::ToPrimitive);
             ret_prim(m, call, prim::ALL);
+        }
+        // `Symbol(description)`: ToString of the description, a new symbol.
+        BuiltinNs::Symbol => {
+            implicit_args(m, call, "ToString", Protocol::ToPrimitive);
+            ret_prim(m, call, prim::SYMBOL);
         }
         BuiltinNs::Object => {
             let c = m.calls[call as usize].clone();

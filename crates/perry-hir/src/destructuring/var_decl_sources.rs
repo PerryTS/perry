@@ -143,6 +143,58 @@ pub(super) fn destructure_builtin_module_source(
     None
 }
 
+/// #10623 for the member form: `const EventEmitter =
+/// require("events").EventEmitter` (pg's `Client`/`Connection`) binds the
+/// local FROM the native module's export `EventEmitter`, as
+/// `const { EventEmitter } = require("events")` does. Class heritage
+/// (`class_decl.rs`) reads this provenance so `extends EventEmitter` is the
+/// native parent, not a user shadow evaluated as an unknown value. A `const`
+/// only: a reassignable binding may hold anything later.
+pub(super) fn record_required_native_member(
+    ctx: &mut LoweringContext,
+    decl: &ast::VarDeclarator,
+    name: &str,
+    mutable: bool,
+) {
+    if mutable {
+        return;
+    }
+    let Some(ast::Expr::Member(member)) = decl.init.as_deref() else {
+        return;
+    };
+    let ast::MemberProp::Ident(key) = &member.prop else {
+        return;
+    };
+    if require_resolvable_native_specifier(&member.obj).is_some()
+        || is_native_module_value_import(ctx, &member.obj)
+    {
+        ctx.require_destructured_native_locals
+            .insert(name.to_string(), key.sym.to_string());
+    }
+}
+
+/// The CJS wrap adopts `require("events")` as `import _req_0 from "events"`
+/// and leaves `const EventEmitter = _req_0.EventEmitter` in the body, so the
+/// member form reaches HIR through the import binding, not the call. That
+/// binding is the module's CommonJS value when it is a namespace import or
+/// the default of a builtin whose default IS that value
+/// (`is_cjs_style_native_default_import`); `.K` is then the export K, as for
+/// `require("<native>").K`.
+fn is_native_module_value_import(ctx: &LoweringContext, obj: &ast::Expr) -> bool {
+    let ast::Expr::Ident(id) = obj else {
+        return false;
+    };
+    let name = id.sym.as_ref();
+    if ctx.lookup_local(name).is_some() {
+        return false;
+    }
+    match ctx.lookup_native_module(name) {
+        Some((_, None)) => true,
+        Some((module, Some("default"))) => crate::lower::is_cjs_style_native_default_import(module),
+        _ => false,
+    }
+}
+
 /// #3663 / #4905: register destructured builtin-module members as
 /// native-module aliases, mirroring what ESM named imports get
 /// generically in `module_decl.rs` (`import { connect } from 'net'`).
