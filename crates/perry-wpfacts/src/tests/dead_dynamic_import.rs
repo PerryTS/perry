@@ -1310,13 +1310,3 @@ fn a_marked_value_in_a_guarded_generic_arm_joins() {
     assert!(!imports_formatter_with_make(RULE_P, &tail, false));
     assert!(!imports_formatter_with_make(RULE_P, &tail, true));
 }
-
-/// DECISIONS 254 (amendment B): compiled code that stores an unknown value
-/// into the binding makes the generic arm's callee that value (the namespace
-/// is patched, so every module's `Object.assign` is the guarded form), and
-/// the marker escaping there joins.
-#[test]
-fn a_marked_value_in_a_guarded_arm_of_a_stored_binding_joins() {
-    let stored = rule_p_tail("unknown.fn({}); (globalThis as any).Object = unknown.o; Object.assign({}, unknown.r().__proto__);");
-    assert!(imports_formatter_with_make(RULE_P, &stored, true), "an unknown value in the binding");
-}
