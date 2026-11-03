@@ -50,3 +50,43 @@ fn runtime_port_core_operations_preserve_closed_identity_without_retaining_state
         &(first.get_raw_mut_ptr::<ObjectHeader>() as usize)
     )));
 }
+
+#[test]
+fn registered_post_message_preserves_absence_and_explicit_undefined() {
+    crate::gc::gc_init();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let first = scope.root_raw_mut_ptr(message_port_object_with_id(0));
+    let second = scope.root_raw_mut_ptr(message_port_object_with_id(0));
+    entangle_ports(first.get_raw_mut_ptr(), second.get_raw_mut_ptr());
+    install_core_methods(first.get_raw_mut_ptr());
+    let name = key("postMessage");
+    let method = scope.root_nanbox_f64(object::js_object_get_field_by_name_f64(
+        first.get_raw_mut_ptr(),
+        name,
+    ));
+    let method_ptr =
+        || JSValue::from_bits(method.get_nanbox_f64().to_bits()).as_pointer::<ClosureHeader>();
+    let receiver = || JsThis::from_f64(boxed_object(first.get_raw_mut_ptr()));
+    let missing = crate::exception::catch_js_throw(|| {
+        crate::closure::js_closure_call0(method_ptr(), receiver())
+    });
+    assert!(missing.is_err());
+    assert!(with_port_states(|map| map
+        [&(second.get_raw_mut_ptr::<ObjectHeader>() as usize)]
+        .queue
+        .is_empty()));
+    crate::closure::js_closure_call1(method_ptr(), receiver(), js_undefined());
+    let packet = with_port_states(|map| {
+        map.get_mut(&(second.get_raw_mut_ptr::<ObjectHeader>() as usize))
+            .unwrap()
+            .queue
+            .pop_front()
+    });
+    assert_eq!(packet.map(f64::to_bits), Some(js_undefined().to_bits()));
+    close(std::ptr::null(), receiver(), js_undefined());
+    close(
+        std::ptr::null(),
+        JsThis::from_f64(boxed_object(second.get_raw_mut_ptr())),
+        js_undefined(),
+    );
+}

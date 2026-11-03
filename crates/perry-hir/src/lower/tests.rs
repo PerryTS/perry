@@ -42,7 +42,7 @@ fn a_computed_instance_field_key_is_not_a_constructor_capture() {
         class
             .fields
             .iter()
-            .filter(|field| field.name.starts_with("__perry_cap_"))
+            .filter(|field| field.origin.is_capture())
             .count(),
         1,
         "the method value is captured, but the definition-time key is not"
@@ -1298,6 +1298,7 @@ mod ambient_declare;
 mod unresolved_new_global;
 
 mod global_this_new_shadowed;
+mod nested_class_name_outside_its_scope;
 
 mod capture_stash;
 mod class_member_var_captures;
@@ -1318,6 +1319,7 @@ mod hoisted_sibling_in_later_closure;
 
 #[path = "tests/anonymous_class_outer_binding.rs"]
 mod anonymous_class_outer_binding;
+mod class_expr_self_new_instanceof;
 mod forward_class_captures;
 mod function_constructor_shadow;
 mod issue_11157_class_decl_self_statics;
@@ -1501,3 +1503,5 @@ fn named_wasi_constructor_uses_registered_native_export() {
             ))), "WASI must construct the registered export, not an empty class placeholder: {:?}", hir.init);
     }
 }
+
+mod worker_constructor_imports;

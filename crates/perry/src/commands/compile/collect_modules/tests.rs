@@ -362,6 +362,9 @@ void iterator;
         None,
     )
     .expect("collect modules");
+    // Optional features are selected over the whole collected program, after
+    // the CommonJS closed-world pass (run_pipeline), not per collected module.
+    super::feature_detect::detect_program_optional_feature_usage(&mut ctx);
 
     assert!(
         ctx.uses_regex,
@@ -410,6 +413,9 @@ void value;
         None,
     )
     .expect("collect modules");
+    // Optional features are selected over the whole collected program, after
+    // the CommonJS closed-world pass (run_pipeline), not per collected module.
+    super::feature_detect::detect_program_optional_feature_usage(&mut ctx);
 
     assert!(
         !ctx.uses_regex,

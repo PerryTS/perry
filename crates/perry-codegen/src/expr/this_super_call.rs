@@ -1609,7 +1609,7 @@ fn lower_impl(ctx: &mut FnCtx<'_>, expr: &Expr, heritage_checked: bool) -> Resul
                 let parent_cap_params: Vec<String> = parent_ctor
                     .params
                     .iter()
-                    .filter(|p| p.name.starts_with("__perry_cap_"))
+                    .filter(|p| perry_hir::cap_fields::is_cap_field_name(&p.name))
                     .map(|p| p.name.clone())
                     .collect();
                 if !parent_cap_params.is_empty() {
@@ -1621,7 +1621,7 @@ fn lower_impl(ctx: &mut FnCtx<'_>, expr: &Expr, heritage_checked: bool) -> Resul
                         .map(|ctor| {
                             ctor.params
                                 .iter()
-                                .filter(|p| p.name.starts_with("__perry_cap_"))
+                                .filter(|p| perry_hir::cap_fields::is_cap_field_name(&p.name))
                                 .map(|p| (p.name.clone(), p.id))
                                 .collect()
                         })

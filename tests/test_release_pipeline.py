@@ -241,7 +241,10 @@ sleep() { :; }
                 (root / 'changelog.d').mkdir()
                 (root / 'release-notes-full.md').write_text(body)
                 result = shell(fragment.replace('/tmp/', tmp + '/'), cwd=root,
-                               env={'TAG': 'v0.0.1', 'REPO': 'test/repo'})
+                               env={'TAG': 'v0.0.1', 'REPO': 'test/repo',
+                                    # The fragment starts at LIMIT=; the workflow sets
+                                    # notes_dir just before it (release_notes_source.sh).
+                                    'notes_dir': 'changelog.d'})
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 actual = (root / 'release-notes.md').read_text()
                 self.assertLess(len(actual.encode()), 125000)

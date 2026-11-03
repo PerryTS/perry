@@ -1590,11 +1590,11 @@ fn split_body(
     // Constructor capture params are also read by member/field closures,
     // which are stored outside this body. Preserve their shared cells using
     // lowering's reserved capture names, just like captures found in-body.
-    captured.extend(params.iter().filter_map(|p| {
-        p.name
-            .starts_with(perry_hir::cap_fields::CAP_FIELD_PREFIX)
-            .then_some(p.id)
-    }));
+    captured.extend(
+        params
+            .iter()
+            .filter_map(|p| perry_hir::cap_fields::is_cap_field_name(&p.name).then_some(p.id)),
+    );
     let boxed: HashSet<u32> = captured
         .iter()
         .filter(|id| facts.writes.contains(id))

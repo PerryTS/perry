@@ -385,7 +385,7 @@ fn cp_defer_stream_callback(callback: f64) {
         js_closure_set_capture_ptr(deferred, 0, callback.get_nanbox_f64().to_bits() as i64);
     });
     deferred.with_mut_ptr(|deferred: *mut ClosureHeader| {
-        crate::timer::js_set_immediate_callback(deferred as i64);
+        crate::builtins::js_queue_next_tick(deferred as i64);
     });
 }
 
@@ -547,7 +547,7 @@ pub(crate) fn cp_defer_send_callback(cb: f64, ok: bool) {
     js_closure_set_capture_ptr(deferred, 0, cb.to_bits() as i64);
     let flag = if ok { TAG_TRUE_F64 } else { TAG_FALSE_F64 };
     js_closure_set_capture_ptr(deferred, 1, flag.to_bits() as i64);
-    crate::timer::js_set_immediate_callback(deferred as i64);
+    crate::builtins::js_queue_next_tick(deferred as i64);
 }
 
 /// Deferred `send` callback body. Slot 0 = the user callback; slot 1 = the
@@ -607,7 +607,7 @@ pub(crate) extern "C" fn cp_method_disconnect(
         1,
     );
     js_closure_set_capture_ptr(deferred, 0, this.to_bits() as i64);
-    crate::timer::js_set_immediate_callback(deferred as i64);
+    crate::builtins::js_queue_next_tick(deferred as i64);
     cp_undefined()
 }
 

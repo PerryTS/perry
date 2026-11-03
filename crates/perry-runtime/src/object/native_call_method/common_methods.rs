@@ -196,6 +196,15 @@ pub(super) unsafe fn dispatch_common(
                     && args_len > 0
                     && !args_ptr.is_null()) =>
         {
+            // An ordinary object reads `toLocaleString` off its prototype
+            // chain like any method: a function-constructor, replaced or
+            // `Object.create` prototype that defines it wins over
+            // `Object.prototype`'s, whose no-op body is answered below.
+            if let Some(called) =
+                call_ordinary_receiver_inherited_method(object_handle, method_name, arg_handles)
+            {
+                return called;
+            }
             return Some(js_object_default_to_locale_string(object));
         }
 

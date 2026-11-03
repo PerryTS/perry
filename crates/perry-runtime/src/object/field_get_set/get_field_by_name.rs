@@ -1666,6 +1666,26 @@ fn get_field_by_name_past_data_probe(
                             let bound = js_class_method_bind(boxed, heap_name, key_bytes.len());
                             return JSValue::from_bits(bound.to_bits());
                         }
+                        // Any other key is the ordinary [[Get]] continuing on
+                        // the cell's [[Prototype]], `Temporal.<Kind>.prototype`
+                        // (`constructor`, Object.prototype members, user
+                        // members); accessors run with the cell as receiver.
+                        if let Some(kind) = crate::temporal::temporal_kind(boxed) {
+                            let proto = crate::temporal::hooked::kind_prototype(kind);
+                            if JSValue::from_bits(proto.to_bits()).is_pointer() {
+                                let scope = crate::gc::RuntimeHandleScope::new();
+                                let key_root = scope.root_string_ptr(key);
+                                if let Some(v) =
+                                    crate::object::prototype_chain::resolve_inherited_field_from_prototype(
+                                        addr,
+                                        proto.to_bits(),
+                                        key_root.get_raw_const_ptr::<crate::StringHeader>(),
+                                    )
+                                {
+                                    return v;
+                                }
+                            }
+                        }
                     }
                 }
                 return JSValue::undefined();

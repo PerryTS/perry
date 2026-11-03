@@ -107,36 +107,19 @@ pub(crate) fn cp_decode_status(status: &std::process::ExitStatus) -> CpExit {
     }
 }
 
-/// Map a spawn-failure `io::Error` to the Node errno-style `code` string.
+/// Map a spawn-failure `io::Error` to the Node errno-style `code` string: libuv's
+/// name for the OS errno.
 pub(crate) fn cp_io_error_code(e: &std::io::Error) -> &'static str {
-    use std::io::ErrorKind;
-    match e.kind() {
-        ErrorKind::NotFound => "ENOENT",
-        ErrorKind::PermissionDenied => "EACCES",
-        ErrorKind::AlreadyExists => "EEXIST",
-        ErrorKind::BrokenPipe => "EPIPE",
-        ErrorKind::TimedOut => "ETIMEDOUT",
-        ErrorKind::ConnectionRefused => "ECONNREFUSED",
-        _ => "UNKNOWN",
-    }
+    crate::io_error::io_error_code(e)
 }
 
-/// Node's `errno` is the negative libc errno value for the failure code.
+/// Node's `errno` for a failure `code`: the number libuv gives that code
+/// (negative), from the same table that names the code.
 pub(crate) fn cp_errno_number(_code: &str) -> f64 {
     #[cfg(unix)]
-    let n = match _code {
-        "ENOENT" => libc::ENOENT,
-        "EACCES" => libc::EACCES,
-        "EEXIST" => libc::EEXIST,
-        "EPIPE" => libc::EPIPE,
-        "ENOBUFS" => libc::ENOBUFS,
-        "ETIMEDOUT" => libc::ETIMEDOUT,
-        "ECONNREFUSED" => libc::ECONNREFUSED,
-        _ => 0,
-    };
+    return crate::util_syserr::system_error_code_for_name(_code).map_or(0.0, |n| n as f64);
     #[cfg(not(unix))]
-    let n = 0;
-    -(n as f64)
+    return 0.0;
 }
 
 /// Build an error-like heap object. `ErrorHeader` rejects dynamic-property
@@ -412,5 +395,27 @@ pub(crate) fn cp_file_cmd_display(file: &str, args: &[String]) -> String {
         file.to_string()
     } else {
         format!("{} {}", file, args.join(" "))
+    }
+}
+
+#[cfg(all(test, unix))]
+mod errno_code_tests {
+    use super::{cp_errno_number, cp_io_error_code};
+
+    #[test]
+    fn spawn_errors_are_named_and_numbered_by_the_libuv_errno_table() {
+        for (errno, name) in [
+            (libc::ENOENT, "ENOENT"),
+            (libc::ENXIO, "ENXIO"),
+            (libc::E2BIG, "E2BIG"),
+            (libc::ENOEXEC, "ENOEXEC"),
+            (libc::EMFILE, "EMFILE"),
+            (libc::ENOMEM, "ENOMEM"),
+        ] {
+            let err = std::io::Error::from_raw_os_error(errno);
+            let code = cp_io_error_code(&err);
+            assert_eq!(code, name);
+            assert_eq!(cp_errno_number(code), -(errno as f64));
+        }
     }
 }

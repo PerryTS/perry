@@ -82,6 +82,13 @@ impl RealmAtoms {
         }
         for symbol in &symbols {
             let (description, registered) = symbol_description(symbol)?;
+            let registered = if registered {
+                perry_abi::SYMBOL_GLOBAL_REGISTRY
+            } else if symbol.starts_with("@@") {
+                perry_abi::SYMBOL_WELL_KNOWN
+            } else {
+                0
+            };
             let id = *identities
                 .get(symbol)
                 .ok_or_else(|| format!("unknown realm symbol {symbol}"))?;

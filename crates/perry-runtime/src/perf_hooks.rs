@@ -1617,7 +1617,7 @@ fn schedule_flush() {
             js_perf_observer_flush_all,
             0
         ));
-        crate::timer::js_set_immediate_callback(closure as i64);
+        crate::timer::schedule_native_immediate(closure as i64, &[], "Immediate");
     }
 }
 

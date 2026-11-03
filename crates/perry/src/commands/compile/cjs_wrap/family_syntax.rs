@@ -339,6 +339,7 @@ pub(crate) fn analyze(source: &str) -> ClassFamilySyntax {
     let mut result = ClassFamilySyntax {
         run_once_classes: perry_hir::lower::run_once_class_names(&module),
         module_capability_uses: super::run_once_syntax::module_capability_uses(&module),
+        descriptor_capability_uses: super::run_once_syntax::descriptor_capability_uses(&module),
         ..Default::default()
     };
     for item in &module.body {

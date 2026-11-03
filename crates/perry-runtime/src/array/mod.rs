@@ -99,6 +99,8 @@ mod dynamic_numeric_key_tests;
 #[cfg(test)]
 mod forwarding_tests;
 #[cfg(test)]
+mod identity_growth_tests;
+#[cfg(test)]
 mod hole_tail_tests;
 #[cfg(test)]
 mod index_get_exit_tests;
@@ -160,6 +162,9 @@ pub use self::flat_clone::{
     js_arraylike_flat, js_short_packed_spread_values,
 };
 pub(crate) use self::forwarding::clean_owned_arr_ptr;
+pub(crate) use self::forwarding::{
+    array_growth_epoch, array_identity_token, arrays_share_identity, is_array_value_bits,
+};
 pub use self::from_concat::{
     array_from_full, array_of_full, js_array_concat_variadic, js_array_from_mapped,
     js_array_from_value,

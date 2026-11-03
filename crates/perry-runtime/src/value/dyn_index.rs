@@ -58,6 +58,34 @@ fn receiver_gc_tag(addr: usize) -> Option<(u8, u8)> {
     }
 }
 
+/// `m[k]` on a registered Map/Set: ToPropertyKey(k), then the by-name get,
+/// whose Map/Set arm reads own expandos and the prototype chain
+/// (`map_set_receiver::map_set_instance_property`). Cold: only collection
+/// receivers reach it.
+#[cold]
+#[inline(never)]
+fn collection_keyed_get(raw_ptr: usize, index: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let recv = scope.root_raw_mut_ptr(raw_ptr as *mut crate::object::ObjectHeader);
+    // SAFETY: a NaN-boxed key; ToPropertyKey may run user code (rooted above).
+    let key = scope.root_nanbox_f64(unsafe { crate::object::js_to_property_key(index) });
+    let key = key.get_nanbox_f64();
+    if unsafe { crate::symbol::js_is_symbol(key) } != 0 {
+        let recv_bits = crate::value::js_nanbox_pointer(
+            recv.get_raw_const_ptr::<crate::object::ObjectHeader>() as i64,
+        );
+        return unsafe { crate::symbol::js_object_get_symbol_property(recv_bits, key) };
+    }
+    let key_ptr = js_get_string_pointer_unified(key) as *const crate::StringHeader;
+    if key_ptr.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    crate::object::js_object_get_field_by_name_f64(
+        recv.get_raw_const_ptr::<crate::object::ObjectHeader>(),
+        key_ptr,
+    )
+}
+
 #[inline(always)]
 fn is_registered_collection(addr: usize, obj_type: u8) -> bool {
     match obj_type {
@@ -391,11 +419,13 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
         let key = scope.root_nanbox_f64(unsafe { crate::object::js_to_property_key(index) });
         return crate::proxy_hooks::proxy_get(receiver.get_nanbox_f64(), key.get_nanbox_f64());
     }
+    // A Map/Set has no indexed own properties and its storage is no element
+    // vector: `m[k]` is the ordinary [[Get]] of ToPropertyKey(k), so own
+    // expandos, then the recorded [[Prototype]] chain (`m["get"]`, a subclass
+    // accessor). Reading the storage as an array answered `m[0]` with the
+    // first entry and every other key with undefined.
     if receiver_tag.is_some_and(|(obj_type, _)| is_registered_collection(raw_ptr, obj_type)) {
-        let Some(index) = finite_nonnegative_u32_index(index) else {
-            return f64::from_bits(TAG_UNDEFINED);
-        };
-        return crate::array::js_array_get_f64(raw_ptr as *const crate::array::ArrayHeader, index);
+        return collection_keyed_get(raw_ptr, index);
     }
     // Issue #63 / #321 (Effect.runSync→fork SIGBUS): the raw-I64 fallback
     // above accepts arbitrary in-range bits — including denormal f64
@@ -821,8 +851,18 @@ pub extern "C" fn js_dyn_index_set_strict(obj: f64, index: f64, value: f64, stri
     // #7865: reuse the header byte the array/object split below needs. Plain
     // receivers skip both registries; Map/Set tags still require confirmation.
     let receiver_tag = receiver_gc_tag(raw_ptr);
+    // A Map/Set has no indexed own properties and its storage is no element
+    // vector: `m[k] = v` is the ordinary [[Set]] of ToPropertyKey(k), so an
+    // inherited setter runs with the receiver, otherwise an own property is
+    // created (rejected on a frozen receiver). It is never a storage write,
+    // and never dropped. (The read twin is `collection_keyed_get`.)
     if receiver_tag.is_some_and(|(obj_type, _)| is_registered_collection(raw_ptr, obj_type)) {
-        return value;
+        let target = if jsval.is_pointer() {
+            obj
+        } else {
+            crate::value::js_nanbox_pointer(raw_ptr as i64)
+        };
+        return crate::proxy::js_put_value_set(target, index, value, target, strict);
     }
     if receiver_tag.is_some_and(|(obj_type, _)| obj_type == crate::gc::GC_TYPE_LAZY_ARRAY) {
         return unsafe {

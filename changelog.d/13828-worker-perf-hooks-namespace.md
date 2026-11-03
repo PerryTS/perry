@@ -1,0 +1,1 @@
+worker_threads.markAsUncloneable/markAsUntransferable/isMarkedAsUntransferable and perf_hooks.monitorEventLoopDelay/createHistogram now work through the module namespace object.

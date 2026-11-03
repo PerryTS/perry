@@ -959,6 +959,14 @@ pub(crate) unsafe fn try_read_string_header<'a>(
     Some(string)
 }
 
+/// Is `addr` (a string payload address) inside the string image section,
+/// where the static image strings live (not an allocated image-marked atom)?
+#[cfg(test)]
+pub(crate) fn in_string_image_section_for_tests(addr: usize) -> bool {
+    let (start, end) = image::bounds();
+    (start..end).contains(&addr)
+}
+
 #[cfg(test)]
 pub(crate) fn image_string_for_tests() -> *const crate::string::StringHeader {
     image_tests::image_string()

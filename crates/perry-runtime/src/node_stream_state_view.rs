@@ -335,20 +335,21 @@ pub(super) fn read_birth_data(obj: *const ObjectHeader, data: StateData) -> Opti
         StateData::ReadableHwm => 0,
         StateData::ReadableChunks => 1,
         StateData::ReadableBuffered => 3,
-        StateData::Pipes => 4,
+        StateData::Pipes => 7,
         StateData::WritableHwm => 0,
         StateData::WritableLength => 1,
         StateData::WritableCorked => 2,
         StateData::WritableWriteLen => 4,
     };
-    let desc = if data.readable() {
-        crate::object::runtime_layouts::READABLE_STATE::desc()
+    // Identity is the layout's fixed word: a program that reaches no stream
+    // defines neither state descriptor, and naming one is a birth.
+    let word = if data.readable() {
+        crate::object::runtime_layouts::READABLE_STATE::WORD
     } else {
-        crate::object::runtime_layouts::WRITABLE_STATE::desc()
+        crate::object::runtime_layouts::WRITABLE_STATE::WORD
     };
-    let shape = unsafe { crate::object::runtime_layouts::layout_id(desc) };
     // SAFETY: the caller validated this live ordinary state receiver.
-    if shape == 0 || unsafe { (*obj).parent_class_id } != shape {
+    if unsafe { (*obj).parent_class_id } != word {
         return None;
     }
     // This declared family has all its public data slots inline.
@@ -410,6 +411,13 @@ fn install_state_view(stream: f64, kind: usize, property: crate::runtime_state_k
             buffer.get_nanbox_f64(),
             0.0,
             0.0,
+            // node 26.12: `fastChunk`, `pipeOnData`, `pipePause` are born null.
+            // node fills them from pipe()'s 'data' listener and pause closure and a
+            // prefetched chunk; perry's pipe has no data-listener closure and keeps
+            // no prefetched chunk, so they stay null.
+            f64::from_bits(TAG_NULL),
+            f64::from_bits(TAG_NULL),
+            f64::from_bits(TAG_NULL),
             super::state_record::constructor_data(stream.get_nanbox_f64(), StateData::Pipes)
                 .unwrap_or(f64::from_bits(TAG_UNDEFINED)),
             f64::from_bits(TAG_NULL),

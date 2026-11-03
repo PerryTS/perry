@@ -723,7 +723,7 @@ fn dispatch_own_has_instance(
 /// function with that code.
 fn is_intrinsic_has_instance(cb: f64) -> bool {
     let jv = crate::JSValue::from_bits(cb.to_bits());
-    if !jv.is_pointer() {
+    if !jv.is_reference() {
         return false;
     }
     let addr = jv.as_pointer::<u8>() as usize;

@@ -347,11 +347,14 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
     if gc_type == crate::gc::GC_TYPE_CLOSURE {
         return unsafe { rooted_property_key_get(raw, idx) };
     }
+    // A Map/Set has no indexed own properties and its storage is no element
+    // vector: `s[7]` is the ordinary [[Get]] of "7" (own expandos, then the
+    // receiver's chain), the one keyed read `js_dyn_index_get` owns.
     if crate::set::is_registered_set(raw as usize) || crate::map::is_registered_map(raw as usize) {
-        let Some(index) = numeric_key_u32_index(idx) else {
-            return f64::from_bits(crate::value::TAG_UNDEFINED);
-        };
-        return crate::array::js_array_get_f64(raw as *mut crate::array::ArrayHeader, index);
+        return crate::value::js_dyn_index_get(
+            f64::from_bits(crate::value::POINTER_TAG | raw),
+            idx,
+        );
     }
     // Buffer / Map / Set / typed-array / unknown — try the array getter
     // (which handles registered buffers + typed arrays via per-kind reads).
@@ -495,7 +498,10 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
         );
         return;
     }
+    // A Map/Set: the ordinary [[Set]] of the property key (the store twin of
+    // the read above), never a storage write and never dropped.
     if crate::set::is_registered_set(raw as usize) || crate::map::is_registered_map(raw as usize) {
+        crate::value::js_dyn_index_set(f64::from_bits(crate::value::POINTER_TAG | raw), idx, value);
         return;
     }
 

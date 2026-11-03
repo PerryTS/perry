@@ -345,7 +345,13 @@ fn stmt_uses_arguments(stmt: &ast::Stmt) -> bool {
         ast::Stmt::While(w) => expr_uses_arguments(&w.test) || stmt_uses_arguments(&w.body),
         ast::Stmt::DoWhile(w) => expr_uses_arguments(&w.test) || stmt_uses_arguments(&w.body),
         ast::Stmt::For(f) => {
-            f.test.as_deref().map(expr_uses_arguments).unwrap_or(false)
+            f.init.as_ref().is_some_and(|init| match init {
+                ast::VarDeclOrExpr::VarDecl(v) => v
+                    .decls
+                    .iter()
+                    .any(|d| d.init.as_deref().is_some_and(expr_uses_arguments)),
+                ast::VarDeclOrExpr::Expr(e) => expr_uses_arguments(e),
+            }) || f.test.as_deref().map(expr_uses_arguments).unwrap_or(false)
                 || f.update
                     .as_deref()
                     .map(expr_uses_arguments)

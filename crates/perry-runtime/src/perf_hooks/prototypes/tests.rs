@@ -60,6 +60,24 @@ fn timerify_and_event_loop_utilization_share_the_native_export_identity() {
     assert_ne!(now.to_bits(), now_export.to_bits());
 }
 
+/// `import * as perf from "node:perf_hooks"; perf.monitorEventLoopDelay(...)`
+/// reaches the namespace dispatch, not codegen's static lowering: the bucket
+/// must create the histograms (it used to end in "not supported").
+#[test]
+fn histogram_factories_work_through_the_namespace_dispatch() {
+    let _scope = TestScope::new();
+    let _ = crate::perf_hooks::performance_namespace();
+    crate::perf_hook_slots::install();
+    for name in ["monitorEventLoopDelay", "createHistogram"] {
+        let export_value = crate::object::bound_native_callable_export_value("perf_hooks", name);
+        let histogram = unsafe { call_detached(export_value, &[]) };
+        assert!(
+            crate::value::JSValue::from_bits(histogram.to_bits()).is_pointer(),
+            "perf_hooks.{name}() must return its histogram object"
+        );
+    }
+}
+
 #[test]
 fn timerify_and_event_loop_utilization_work_when_detached() {
     let _scope = TestScope::new();

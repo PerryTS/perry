@@ -314,6 +314,7 @@ pub(crate) fn view_for(
     let digest = if elision.is_empty()
         && !elision.fnproto_bind_unwritten
         && elision.super_unrelinked.is_empty()
+        && !elision.fnproto_borrow_unwritten
     {
         pf.digest_for(&key)
     } else {
@@ -384,6 +385,7 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
         iteration_sabotage || (pf.interp_guard.is_none() && pf.array_iteration_written.is_none());
     out.array_iterator_close_unwritten = iteration_sabotage
         || (pf.interp_guard.is_none() && pf.array_iterator_close_written.is_none());
+    out.fnproto_borrow_unwritten = pf.fnproto_borrow_written.is_none() || unchecked;
     let Some(mb) = pf.bindings_for(path) else {
         return out;
     };
@@ -702,11 +704,13 @@ pub(crate) fn live_dynamic_imports(
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(DEFAULT_MAX_WORK * 100),
         ),
+        // Its points-to bound too: with every re-export source walked, the
+        // Supabase CLI converges at ~790M entries.
         max_pts: Some(
             std::env::var("PERRY_FACTS_MAX_PTS")
                 .ok()
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(400_000_000),
+                .unwrap_or(1_000_000_000),
         ),
         export_sources,
         dynamic_code_reach: dynamic_code_reach.clone(),

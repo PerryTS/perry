@@ -34,6 +34,7 @@
 1 1 crates/perry-ext-ws/src/turnloop_io.rs
 1 0 crates/perry-ext-ws/src/turnloop_link.rs
 2 1 crates/perry-ffi/src/handle.rs
+1 0 crates/perry-ffi/src/handle_lifecycle.rs
 1 0 crates/perry-runtime/src/array/element_shape.rs
 2 0 crates/perry-runtime/src/array/header.rs
 1 0 crates/perry-runtime/src/async_hooks.rs
@@ -70,7 +71,6 @@
 1 0 crates/perry-runtime/src/yoga.rs
 0 9 crates/perry-stdlib/src/cheerio.rs
 1 0 crates/perry-stdlib/src/common/handle.rs
-1 0 crates/perry-stdlib/src/common/handle_lifecycle.rs
 7 7 crates/perry-stdlib/src/container/types.rs
 0 5 crates/perry-stdlib/src/crypto/ecdh.rs
 0 1 crates/perry-stdlib/src/crypto/x509.rs

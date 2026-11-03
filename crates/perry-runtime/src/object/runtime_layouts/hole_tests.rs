@@ -531,6 +531,62 @@ fn deleting_absent_class_family_keys_preserves_birth_word() {
     }
 }
 
+/// R1: a loop region over a class family is primed (the family's layout
+/// keeps `SUMMARY_HOLES` for life), and its word carries the presence bit:
+/// the shape cannot say which keys the object has, its slots do. The guard
+/// proves presence once; inside F no JS runs, and a present key becomes absent
+/// only through a delete, which must change the object's word.
+#[test]
+fn a_class_family_primes_a_loop_region_word_with_the_presence_test() {
+    use crate::object::shapes::{
+        js_region_loop_prime, object_shape_stamp, REGION_GUARD_WORD_EMPTY,
+        REGION_LOOP_WORD_PRESENCE_TEST, REGION_LOOP_WORD_VALUE_TEST,
+    };
+    let _global = crate::gc::global_side_table_test_lock();
+    let _gc = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let obj = crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(CLASS_HOLEY));
+        js_object_set_field_by_name(obj, H_B.string, 7.0);
+        let bits = |a: &StaticAtom| crate::js_nanbox_string(a.string as i64).to_bits();
+        let site = core::sync::atomic::AtomicU64::new(REGION_GUARD_WORD_EMPTY);
+        // The body reads `b` as a Number and stores `a`, still a hole.
+        let word = js_region_loop_prime(
+            &site,
+            object_shape_stamp(obj).0,
+            2,
+            bits(&H_B),
+            bits(&H_A),
+            0,
+            0,
+            0,
+            0,
+            0b10,
+            0,
+            0b01,
+        );
+        assert_ne!(word, REGION_GUARD_WORD_EMPTY, "a class family is served");
+        assert_eq!(word as u32, object_shape_stamp(obj).0);
+        assert_ne!(word & REGION_LOOP_WORD_PRESENCE_TEST, 0);
+        assert_ne!(word & REGION_LOOP_WORD_VALUE_TEST, 0);
+        // The object decides presence: `b`'s slot holds its value, `a`'s the
+        // hole, which the guard's presence test refuses.
+        let slot = |i: u32| ((word >> (32 + 6 * i)) & 63) as usize;
+        let fields = (obj as *const u8).add(core::mem::size_of::<ObjectHeader>()) as *const u64;
+        assert_eq!(*fields.add(slot(0)), 7.0f64.to_bits());
+        assert_eq!(*fields.add(slot(1)), crate::value::TAG_HOLE);
+        let primed = object_shape_stamp(obj);
+        assert_eq!(
+            crate::object::delete_rest::js_object_delete_field(obj, H_B.string),
+            1
+        );
+        assert_ne!(
+            object_shape_stamp(obj),
+            primed,
+            "a delete of a present key must change the word the guard compares"
+        );
+    }
+}
+
 #[test]
 fn ordinary_hole_delete_keeps_the_existing_order_representation() {
     let _global = crate::gc::global_side_table_test_lock();

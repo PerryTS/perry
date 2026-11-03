@@ -15,8 +15,9 @@ This file holds only what the code cannot tell you and what is expensive to get 
 
 ```bash
 cargo build --release -p perry -p perry-runtime-static -p perry-stdlib-static
+scripts/gc_call_effects/sidecars.sh target/release   # perry refuses to link without them
 RUST_TEST_THREADS=1 cargo test --release -p perry-runtime
-./scripts/run_gap_tests.sh
+python3 scripts/parity.py run --suite test-files --filter test_gap_ --mode fast   # the PR gap lane
 cargo run --release -- file.ts --trace hir --focus fnName   # one function's HIR
 cargo run --release -- file.ts --trace llvm                 # IR in .perry-trace/llvm/
 ```

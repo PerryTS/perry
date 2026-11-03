@@ -269,7 +269,7 @@ pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr
             1,
         );
         crate::closure::js_closure_set_capture_ptr(emit_closure, 0, cp.to_bits() as i64);
-        crate::timer::js_set_immediate_callback(emit_closure as i64);
+        crate::builtins::js_queue_next_tick(emit_closure as i64);
     }
     cp
 }

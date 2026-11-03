@@ -264,10 +264,26 @@ static STACK_MAPS: StackMapIndexStore = StackMapIndexStore::new();
 /// corruption into a loud abort on the first test that reaches it. Landing it
 /// while the build is still eager is deliberate: it proves the check is placed
 /// on the path it claims to guard, before anything depends on it.
+///
+/// Once set it stays set: it means "an index has been published", which every
+/// later scan may rely on. A newly initialized image re-arms the build through
+/// [`STACK_MAPS_REBUILD_OWED`] instead. Clearing this flag on re-arm made it a
+/// process-wide window in which ANY thread's root scan aborted: every agent
+/// (a worker thread, a worker_threads worker) runs `js_gc_init`, and a
+/// collection another thread was already running reached the scan while the
+/// flag read false, although its own frames were covered by the published
+/// index (the re-arming image's code cannot be on another thread's stack
+/// before that image finished initializing).
 static STACK_MAPS_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
-/// Whether [`initialize`] has run. Exposed so a future lazy build can assert
-/// the same property at whatever point it chooses to construct the index.
+/// A loaded image initialized after the last build: the next [`ensure_built`]
+/// rebuilds so its section is decoded too.
+per_test_global! {
+    static STACK_MAPS_REBUILD_OWED: AtomicBool = AtomicBool::new(false);
+}
+
+/// Whether an index has been published. Exposed so a future lazy build can
+/// assert the same property at whatever point it chooses to construct the index.
 pub(in crate::gc) fn stack_maps_initialized() -> bool {
     STACK_MAPS_INITIALIZED.load(Ordering::Acquire)
 }
@@ -787,7 +803,7 @@ pub(in crate::gc) fn record_native_stack_walk_source(
 /// Re-arms on every call: a newly loaded image calls `js_gc_init` again, and
 /// the next collection must decode its section too.
 pub(in crate::gc) fn initialize() {
-    STACK_MAPS_INITIALIZED.store(false, Ordering::Release);
+    STACK_MAPS_REBUILD_OWED.store(true, Ordering::Release);
     if !lazy_stack_maps_enabled() {
         ensure_built();
     }
@@ -811,9 +827,14 @@ fn lazy_stack_maps_enabled() -> bool {
 /// and while allocation is still legal — the parser allocates its index once,
 /// and root scans must stay allocation-free while the collector owns the heap.
 pub(in crate::gc) fn ensure_built() {
-    if STACK_MAPS_INITIALIZED.load(Ordering::Acquire) {
+    if STACK_MAPS_INITIALIZED.load(Ordering::Acquire)
+        && !STACK_MAPS_REBUILD_OWED.load(Ordering::Acquire)
+    {
         return;
     }
+    // Take the debt BEFORE the loader snapshot: an image initializing during
+    // this rebuild re-owes one, so its section is never skipped.
+    STACK_MAPS_REBUILD_OWED.store(false, Ordering::Release);
     STACK_MAPS.rebuild();
     // Publish AFTER the rebuild: a reader that observes the flag must be able
     // to observe the index it promises.
@@ -1848,6 +1869,10 @@ mod unwind_contract;
 #[cfg(test)]
 #[path = "stack_maps_decode_tests.rs"]
 mod decode_tests;
+
+#[cfg(test)]
+#[path = "stack_maps_rearm_tests.rs"]
+mod rearm_tests;
 
 // The only test anywhere that runs BOTH aarch64 walkers over a frame whose
 // layout is known, and requires each to land on the word the record names.

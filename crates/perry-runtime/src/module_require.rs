@@ -457,27 +457,6 @@ fn package_parts(specifier: &str) -> (&str, Option<&str>) {
     }
 }
 
-fn resolve_exports(value: &serde_json::Value, key: &str) -> Option<String> {
-    match value {
-        serde_json::Value::String(target) => Some(target.clone()),
-        serde_json::Value::Array(items) => items.iter().find_map(|v| resolve_exports(v, key)),
-        serde_json::Value::Object(map) => {
-            if let Some(target) = map.get(key) {
-                return resolve_exports(target, key);
-            }
-            for (condition, target) in map {
-                if matches!(condition.as_str(), "node" | "require" | "default") {
-                    if let Some(found) = resolve_exports(target, key) {
-                        return Some(found);
-                    }
-                }
-            }
-            None
-        }
-        _ => None,
-    }
-}
-
 fn resolve_request(
     base: &std::path::Path,
     specifier: &str,
@@ -502,11 +481,12 @@ fn resolve_request(
         }
         if let Ok(text) = std::fs::read_to_string(package_dir.join("package.json")) {
             if let Ok(manifest) = serde_json::from_str::<serde_json::Value>(&text) {
-                if let Some(exports) = manifest.get("exports") {
+                if let Some(exports) = package_exports::manifest_exports(&text) {
                     let key = subpath
                         .map(|s| format!("./{s}"))
                         .unwrap_or_else(|| ".".into());
-                    let target = resolve_exports(exports, &key).ok_or(ResolveError::NotExported)?;
+                    let target = package_exports::resolve_require(&exports, &key)
+                        .ok_or(ResolveError::NotExported)?;
                     return resolve_file(&package_dir.join(target)).ok_or(ResolveError::NotFound);
                 }
                 if let Some(subpath) = subpath {
@@ -1033,7 +1013,37 @@ pub extern "C" fn js_module_create_require(filename_or_url: f64) -> f64 {
     validate_create_require_base(filename_or_url);
     let base = crate::module_require::file_url_text::module_base_to_path(filename_or_url)
         .unwrap_or_else(|| value_to_string(filename_or_url, "filename"));
-    make_require(string_value(&base), undefined())
+    make_require(string_value(&directory_base_as_file(base)), undefined())
+}
+
+/// Node resolves a `createRequire` base that ends in a separator
+/// (`createRequire(new URL(".", import.meta.url))`) as a directory: the
+/// require is the one of a file named `noop.js` inside it, so its base
+/// directory is that directory, not its parent.
+fn directory_base_as_file(base: String) -> String {
+    if base.ends_with('/') {
+        format!("{base}noop.js")
+    } else {
+        base
+    }
+}
+
+#[cfg(test)]
+mod directory_base_tests {
+    use super::directory_base_as_file;
+
+    #[test]
+    fn a_trailing_separator_names_a_directory() {
+        assert_eq!(
+            directory_base_as_file("/app/src/".into()),
+            "/app/src/noop.js"
+        );
+        assert_eq!(
+            directory_base_as_file("/app/src/main.js".into()),
+            "/app/src/main.js"
+        );
+        assert_eq!(directory_base_as_file("/app/src".into()), "/app/src");
+    }
 }
 
 /// Devirt codegen entry for `module.createRequire(...)` (#6644). The require
@@ -1054,6 +1064,7 @@ pub extern "C" fn js_module_create_require_devirt(filename_or_url: f64) -> f64 {
     js_module_create_require(filename_or_url)
 }
 
+mod package_exports;
 mod path_registry;
 pub(crate) use path_registry::path_registry_census;
 pub use path_registry::{adopt_path_init_image, current_path_init_image, PathInitImage};

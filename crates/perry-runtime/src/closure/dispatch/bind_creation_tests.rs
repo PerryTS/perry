@@ -210,3 +210,41 @@ fn receiver_witness_rejects_an_internal_slot_mutation() {
     js_closure_set_capture_f64(closure as *mut ClosureHeader, 1, 99.0);
     assert!(!witness());
 }
+
+#[test]
+fn bound_name_joins_target_name_code_units() {
+    // SetFunctionName(F, targetName, "bound") keeps every code unit of an own
+    // `name`, including NUL and a lone surrogate (WTF-8), which are not `&str`.
+    let _agent = crate::state::state();
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _trigger = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let target = js_closure_alloc(&ORDINARY, 0);
+    let units = [b'x', 0, 0xED, 0xA0, 0x80]; // "x\0\u{D800}"
+    let name = crate::string::js_string_from_wtf8_bytes(units.as_ptr(), units.len() as u32);
+    crate::closure::closure_define_dynamic_prop(
+        target as usize,
+        "name",
+        f64::from_bits(JSValue::string_ptr(name).bits()),
+    );
+    let target_value = crate::value::js_nanbox_pointer(target as i64);
+    let bound = unsafe { js_function_bind(target_value, &1.0, 1) };
+    let bound = JSValue::from_bits(bound.to_bits()).as_pointer::<u8>() as usize;
+    let value = unsafe { bound_function_lazy_name(bound) };
+    let header = (value.to_bits() & crate::value::POINTER_MASK) as *const crate::StringHeader;
+    let expected: Vec<f64> = "bound x\0"
+        .encode_utf16()
+        .map(f64::from)
+        .chain([55296.0])
+        .collect();
+    assert_eq!(
+        crate::string::js_string_length(header) as usize,
+        expected.len()
+    );
+    for (index, unit) in expected.into_iter().enumerate() {
+        assert_eq!(
+            crate::string::js_string_char_code_at(header, index as i32),
+            unit,
+            "unit {index}"
+        );
+    }
+}

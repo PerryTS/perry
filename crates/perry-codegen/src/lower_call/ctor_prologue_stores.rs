@@ -198,6 +198,20 @@ pub(super) fn prologue_store_plan(
         {
             return None;
         }
+        // A reservation field is added by this `[[Set]]`, not defined before
+        // the body runs: an inherited setter or non-writable key decides it,
+        // so the store is a slot store only when no prototype can intercept
+        // the add (the census). A defined field is already own, and a
+        // literal's keys are definitions.
+        if !class.is_literal_shape()
+            && class
+                .fields
+                .iter()
+                .any(|f| f.name == property && f.origin.is_reservation())
+            && !crate::proto_constants::create_add_free(property)
+        {
+            return None;
+        }
         // A compiled setter owns the name — never store into the slot behind it.
         if ctx
             .methods

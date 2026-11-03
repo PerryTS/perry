@@ -119,26 +119,43 @@ pub(crate) fn lower_array_pop_inline(ctx: &mut FnCtx<'_>, recv_box: &str) -> Str
     }
     let hdr_end = ctx.block_label(hdr_idx);
 
+    // Each load sits behind the branch that proves its address lies inside a
+    // live allocation: only a GC_TYPE_OBJECT receiver reads its meta slot,
+    // and `ObjectMeta.elements` (word 12) is read only through a non-null
+    // meta pointer. (A `select` substituting the receiver for a null meta
+    // pointer still loaded `receiver + 96`, past the end of a small array
+    // allocated at the end of a page.)
     ctx.current_block = elem_idx;
-    let store = {
+    let elem_meta_idx = ctx.new_block("apop.elements.meta");
+    let elem_load_idx = ctx.new_block("apop.elements.load");
+    let elem_meta_label = ctx.block_label(elem_meta_idx);
+    let elem_load_label = ctx.block_label(elem_load_idx);
+    {
         let blk = ctx.block();
         let gc_type_addr = blk.sub(I64, &handle, "8");
         let gc_type_ptr = blk.inttoptr(I64, &gc_type_addr);
         let gc_type = blk.load(I8, &gc_type_ptr);
         let is_object = crate::target_layout::emit_object_has_meta_word(blk, I8, &gc_type);
+        blk.cond_br(&is_object, &elem_meta_label, &slow_label);
+    }
+    ctx.current_block = elem_meta_idx;
+    let meta = {
+        let blk = ctx.block();
         let meta_addr = blk.add(I64, &handle, &meta_offset);
         let meta_slot = blk.inttoptr(I64, &meta_addr);
         let meta = blk.load(I64, &meta_slot);
         let has_meta = blk.icmp_ne(I64, &meta, "0");
-        let can_read_meta = blk.and(I1, &is_object, &has_meta);
-        // `select` keeps the load of word 12 off a null meta pointer.
-        let safe_meta = blk.select(I1, &can_read_meta, I64, &meta, &handle);
-        let meta_ptr = blk.inttoptr(I64, &safe_meta);
+        blk.cond_br(&has_meta, &elem_load_label, &slow_label);
+        meta
+    };
+    ctx.current_block = elem_load_idx;
+    let store = {
+        let blk = ctx.block();
+        let meta_ptr = blk.inttoptr(I64, &meta);
         let store_slot = blk.gep(I64, &meta_ptr, &[(I64, "12")]);
         let store = blk.load(I64, &store_slot);
         let has_store = blk.icmp_ne(I64, &store, "0");
-        let ok = blk.and(I1, &can_read_meta, &has_store);
-        blk.cond_br(&ok, &elem_check_label, &slow_label);
+        blk.cond_br(&has_store, &elem_check_label, &slow_label);
         store
     };
 
@@ -469,12 +486,35 @@ mod tests {
         // An elements-backed Array subclass resolves its payload through the
         // meta record (`ObjectMeta.elements`, word 12) and pops from it with
         // the same length/read/take blocks — no runtime entry for that case.
-        let elements = super::super::class_field_barrier_tests::block_body(ir, "apop.elements.")
-            .expect("the elements probe block exists");
+        let elements =
+            super::super::class_field_barrier_tests::block_body(ir, "apop.elements.load.")
+                .expect("the elements probe block exists");
         assert!(
             elements.contains("getelementptr i64, ptr %") && elements.contains(", i64 12"),
             "{what}: the probe must load ObjectMeta.elements at word 12:\n{elements}"
         );
+        // Every probe load is behind the branch proving its address: the
+        // type gate reads no meta, the meta block reads only the meta slot,
+        // and no `select` substitutes the receiver for a null meta pointer
+        // (that still loaded `receiver + 96`, past a small array's end).
+        let gate = super::super::class_field_barrier_tests::block_body(ir, "apop.elements.")
+            .expect("the elements type gate exists");
+        let meta = super::super::class_field_barrier_tests::block_body(ir, "apop.elements.meta.")
+            .expect("the meta block exists");
+        assert!(
+            gate.matches("load ").count() == 1 && !gate.contains("i64 12"),
+            "{what}: the type gate loads only the GC type byte:\n{gate}"
+        );
+        assert!(
+            meta.matches("load i64").count() == 1 && !meta.contains("i64 12"),
+            "{what}: the meta block loads only the meta slot:\n{meta}"
+        );
+        for block in [&gate, &meta, &elements] {
+            assert!(
+                !block.contains("select "),
+                "{what}: no select-guarded probe load:\n{block}"
+            );
+        }
         let check = super::super::class_field_barrier_tests::block_body(ir, "apop.elements.check.")
             .expect("the store validation block exists");
         assert!(
