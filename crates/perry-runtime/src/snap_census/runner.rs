@@ -739,11 +739,13 @@ pub(super) fn start_if_requested() -> bool {
         return false;
     }
     ANCHOR.started.store(2, Relaxed);
-    unsafe { start(out) };
+    unsafe { start_census(out) };
     true
 }
 
-unsafe fn start(out: String) {
+// Not `start`: scripts/gc_runtime_root_holders.py walks function names, and a
+// census fn named like a scanner callee would read GLOBAL_ROOTS as covered.
+unsafe fn start_census(out: String) {
     let seeded: Vec<usize> = std::env::var("PERRY_SNAP_D")
         .ok()
         .and_then(|p| std::fs::read_to_string(p).ok())
