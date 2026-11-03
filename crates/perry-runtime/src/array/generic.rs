@@ -1515,10 +1515,7 @@ pub(super) unsafe fn real_array_mutator(
         "push" => {
             // Spec §23.1.3.21 step 6 calls Set(O,"length",…) even with 0 args,
             // so frozen / non-writable-length throws regardless of arg count.
-            if crate::array::array_is_frozen(arr) {
-                crate::collection_iter::throw_type_error("Cannot mutate a frozen array");
-            }
-            crate::array::guard_writable_length(arr);
+            crate::array::push_guard(arr, args_len as u32);
             let mut a = arr;
             for i in 0..args_len {
                 a = crate::array::js_array_push_f64_spec(a, arg_or_undef(args_ptr, args_len, i));
