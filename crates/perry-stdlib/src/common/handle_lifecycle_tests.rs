@@ -311,3 +311,127 @@ fn another_thread_sets_its_own_property_bag_on_a_shared_handle() {
         drop_handle(id);
     });
 }
+
+fn handle_boxed(id: Handle) -> u64 {
+    0xFFF9_0000_0000_0000 | id as u64
+}
+
+const TRUE: u64 = 0x7FFC_0000_0000_0004;
+
+/// Whether `id` can be registered in the shared band right now; registers
+/// and retires it reusably when it can, leaving the pool as it found it.
+fn ffi_reissuable(id: Handle) -> bool {
+    let Ok(identity) = REGISTRATIONS.begin_registration_with_id_in_domain(
+        perry_ffi::handle_registry_domain(),
+        id,
+        perry_ffi::NativeRegistrationKind::Payload,
+    ) else {
+        return false;
+    };
+    assert!(REGISTRATIONS.publish(identity));
+    assert!(REGISTRATIONS.begin_retirement_of(identity));
+    assert!(REGISTRATIONS.finish_retirement_reusable(identity));
+    true
+}
+
+/// A perry-ffi payload id copied into a heap array outlives its payload:
+/// while the array holds the number no trace reissues the id, and the first
+/// traces after the array lets go do.
+#[test]
+fn an_ffi_id_held_in_a_heap_array_is_never_reissued() {
+    on_mutator(|| {
+        let scope = RuntimeHandleScope::new();
+        let id = perry_ffi::register_handle(7_u64);
+        let array = scope.root_raw_mut_ptr(perry_runtime::js_array_alloc(1));
+        let ptr = perry_runtime::js_array_push_f64(
+            array.get_raw_mut_ptr(),
+            f64::from_bits(handle_boxed(id)),
+        );
+        array.set_raw_mut_ptr(ptr);
+        assert!(perry_ffi::drop_handle(id));
+        for _ in 0..3 {
+            perry_ffi::drain_quarantined_handles();
+            collect();
+            assert!(!ffi_reissuable(id), "an array element still names the id");
+        }
+        array.set_raw_mut_ptr(std::ptr::null_mut::<perry_runtime::ArrayHeader>());
+        collect();
+        assert!(ffi_reissuable(id), "nothing names the id any more");
+    });
+}
+
+#[test]
+fn an_unreached_ffi_id_is_reissued_only_after_collection() {
+    on_mutator(|| {
+        let id = perry_ffi::register_handle(8_u64);
+        assert!(perry_ffi::drop_handle(id));
+        assert!(is_parked(id));
+        perry_ffi::drain_quarantined_handles();
+        assert!(!ffi_reissuable(id), "a tick drain proves nothing");
+        collect();
+        assert!(!is_parked(id));
+        assert!(ffi_reissuable(id));
+    });
+}
+
+/// The trace that releases a parked id deletes the WeakMap entries keyed by
+/// it, so a later handle given the same number finds none of them.
+#[test]
+fn a_weakmap_entry_keyed_by_a_parked_ffi_id_dies_with_the_release() {
+    on_mutator(|| {
+        let scope = RuntimeHandleScope::new();
+        let map = scope.root_raw_mut_ptr(perry_runtime::weakref::js_weakmap_new());
+        let map_value = || {
+            perry_runtime::value::js_nanbox_pointer(
+                map.get_raw_mut_ptr::<perry_runtime::ObjectHeader>() as i64,
+            )
+        };
+        let id = perry_ffi::register_handle(9_u64);
+        let key = f64::from_bits(handle_boxed(id));
+        perry_runtime::weakref::js_weakmap_set(map_value(), key, 1.0);
+        assert!(perry_ffi::drop_handle(id));
+        perry_runtime::gc::js_gc_collect();
+        assert_eq!(
+            perry_runtime::weakref::js_weakmap_has(map_value(), key).to_bits(),
+            TRUE,
+            "the trace after the drop cannot prove the id dead yet"
+        );
+        perry_runtime::gc::js_gc_collect();
+        assert!(ffi_reissuable(id), "the second trace releases the id");
+        assert_ne!(
+            perry_runtime::weakref::js_weakmap_has(map_value(), key).to_bits(),
+            TRUE,
+            "the releasing trace must delete the entry keyed by the id"
+        );
+    });
+}
+
+/// `wm.set(d, {d})`: an entry's value naming its own key is an ephemeron
+/// cycle, not an owner. The common id is reclaimed and the entry deleted.
+#[test]
+fn a_weakmap_self_cycle_does_not_keep_its_key_id() {
+    on_mutator(|| {
+        let scope = RuntimeHandleScope::new();
+        let map = scope.root_raw_mut_ptr(perry_runtime::weakref::js_weakmap_new());
+        let map_value = || {
+            perry_runtime::value::js_nanbox_pointer(
+                map.get_raw_mut_ptr::<perry_runtime::ObjectHeader>() as i64,
+            )
+        };
+        let id = register_reclaimable_handle(10_u64);
+        let key = f64::from_bits(boxed(id));
+        let value = perry_runtime::object::js_object_alloc(0, 1);
+        perry_runtime::object::js_object_set_field_f64(value, 0, key);
+        perry_runtime::weakref::js_weakmap_set(
+            map_value(),
+            key,
+            perry_runtime::value::js_nanbox_pointer(value as i64),
+        );
+        collect();
+        assert!(!handle_exists(id), "the entry's value must not own its key");
+        assert_ne!(
+            perry_runtime::weakref::js_weakmap_has(map_value(), key).to_bits(),
+            TRUE
+        );
+    });
+}
