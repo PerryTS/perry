@@ -134,6 +134,7 @@ fn leak_symbol(mut symbol: SymbolHeader) -> *mut SymbolHeader {
     let raw = space::alloc_cell();
     // SAFETY: a fresh, zeroed, exclusively owned cell of the space.
     unsafe {
+        // GC_STORE_AUDIT(INIT): fresh zeroed cell of the immortal symbol space, written once before publication; its description slot is installed afterward through the barriered setter.
         raw.write(cell);
         // The space is outside the moving arena. Use the shared setter so
         // pin custody remains explicit even for these immortal leaf cells.
@@ -831,6 +832,7 @@ mod symbol_identity_is_header {
     fn space_cell(obj_type: u8, magic: u32) -> usize {
         let raw = space::alloc_cell();
         unsafe {
+            // GC_STORE_AUDIT(INIT): test-only forged cell in a fresh symbol-space slot; description is null and nothing is published before the write.
             raw.write(PersistentSymbol {
                 header: header(obj_type, GC_FLAG_TENURED | GC_FLAG_MARKED),
                 symbol: payload(magic),
