@@ -64,7 +64,6 @@ fn solve(sources: &[(&str, &str)]) -> (tempfile::TempDir, Vec<String>, ProgramFa
     let list: Vec<(String, &perry_hir::Module)> =
         modules.iter().map(|(p, m)| (p.clone(), m)).collect();
     let cfg = FactsConfig {
-        max_work: Some(50_000_000),
         ..FactsConfig::default()
     };
     let pf = perry_wpfacts::compute(&list, &cfg);

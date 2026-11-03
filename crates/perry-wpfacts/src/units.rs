@@ -1287,9 +1287,6 @@ pub(crate) struct Published {
     /// Grouped by contract (DECISIONS 113): every unit may write one cell
     /// (`global:*`), and a reader takes each distinct write once.
     pub(crate) cells: FxHashMap<String, Vec<CellWrite>>,
-    /// A unit solve went over the bound: what it writes is unknown, so
-    /// every cell may hold an unknown value.
-    pub(crate) cells_top: bool,
 }
 
 impl Published {

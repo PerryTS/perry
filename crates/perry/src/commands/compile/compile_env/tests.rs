@@ -275,7 +275,6 @@ fn codegen_env_vars_are_build_cache_inputs() {
     // count above and the scanner-form test still prevent a vacuous audit.
     for name in [
         "PERRY_ALLOW_EVAL",
-        "PERRY_FACTS_MAX_WORK",
         "PERRY_FALLBACK_DIAG",
         "PERRY_LLVM_CLANG",
     ] {

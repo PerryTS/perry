@@ -145,7 +145,8 @@ impl Model {
             pts.contains_tok(TOP) || pts.to_sorted().into_iter().any(|t| m.bare_marker(t))
         };
         match stores.iter().find(|&&(n, _)| !holds_top(self, n)) {
-            Some(&(_, r)) => {
+            Some(&(n, r)) => {
+                self.subject_mark(self.node_subject[n as usize]);
                 self.write_builtin_fns(r);
                 true
             }
@@ -163,9 +164,6 @@ impl Model {
     pub(crate) fn arg_readers_add(&mut self, x: Tok, new: Vec<(Tok, Option<Atom>)>) {
         let mut st = vec![(x, new)];
         while let Some((x, zs)) = st.pop() {
-            if self.aborted {
-                return;
-            }
             let fresh: Vec<(Tok, Option<Atom>)> = zs
                 .into_iter()
                 .filter(|&(z, k)| self.arg_reader_seen.insert((x, z, k)))
@@ -174,8 +172,8 @@ impl Model {
                 continue;
             }
             self.work += fresh.len() as u64;
-            if self.max_work != 0 && self.work > self.max_work {
-                self.aborted = true;
+            if self.over_work() {
+                self.give_up(self.cur_subject, "work");
                 return;
             }
             self.arg_readers
@@ -540,9 +538,6 @@ impl Model {
         // take the store, so it went nowhere. It still marks the argument
         // escaped, as before.
         if self.is_arg_marker(t) {
-            if self.aborted {
-                return;
-            }
             if key == Key::Any {
                 self.mark_escape_why(t, &|_| "store: under a computed key".into());
             }

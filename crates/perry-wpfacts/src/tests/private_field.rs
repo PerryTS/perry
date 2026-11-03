@@ -23,8 +23,7 @@ fn modules(mods: &[(&str, &str)], per_unit: bool) -> ProgramFacts {
         .collect();
     let list: Vec<(String, &perry_hir::Module)> =
         hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
-    let mut cfg = FactsConfig::default();
-    cfg.max_work.get_or_insert(50_000_000);
+    let cfg = FactsConfig::default();
     match per_unit {
         true => crate::compute_units(&list, &cfg),
         false => crate::compute(&list, &cfg),

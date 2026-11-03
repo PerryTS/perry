@@ -52,10 +52,6 @@ impl Model {
         if log {
             self.rel(|| format!("copy {a} {b}"));
         }
-        // Over a bound the program gets no facts: nothing more to propagate.
-        if self.aborted {
-            return;
-        }
         let prim = self.nodes[a as usize].prim;
         if self.copy_coverage(a, b).0 {
             self.add(b, &[], prim);
@@ -157,7 +153,7 @@ impl Model {
         );
         self.nodes[dst as usize].pts = pts;
         self.work += self.nodes[dst as usize].delta.append_to(batch, &targets);
-        let before = self.pts_entries;
+
         self.pts_entries += batch.len() as u64;
         if top && self.diagnostic.is_some() {
             self.diagnostic_predecessor(dst, src, self.cur_why);
@@ -166,15 +162,6 @@ impl Model {
             self.top_pred
                 .entry(dst)
                 .or_insert((self.cur_src, self.cur_why));
-        }
-        if before >> 20 != self.pts_entries >> 20 {
-            if self
-                .budget
-                .is_some_and(|(start, limit)| start.elapsed() > limit)
-                || (self.max_pts != 0 && self.pts_entries > self.max_pts)
-            {
-                self.aborted = true;
-            }
         }
         self.add(dst, &[], prim);
         let node = &mut self.nodes[dst as usize];

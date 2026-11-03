@@ -7,7 +7,6 @@ fn check_result_escape(summarized: bool, field_publication: bool, contract: bool
     let ast = perry_parser::parse_typescript(source, "owner.ts").unwrap();
     let hir = perry_hir::lower_module(&ast, "owner", "owner.ts").unwrap();
     let mut g = Gen::new(vec![("owner.ts", &hir)], false, false);
-    g.m.max_work = 50_000_000;
     g.register_all();
     g.link_exports();
     g.walk_all();
@@ -59,7 +58,6 @@ fn check_result_escape(summarized: bool, field_publication: bool, contract: bool
     // That code can call api.F(), retain the object, and add/delete fields.
     g.m.escape(api, unknown);
     g.m.solve();
-    assert!(!g.m.aborted);
     assert!(escaped(&g.m), "unknown code retains F's result after its contract publication (summarized={summarized}, field={field_publication})");
 }
 
@@ -96,7 +94,6 @@ fn a_closed_publication_escapes_results_only_when_callers_are_unknown() {
             .unwrap();
             let hir = perry_hir::lower_module(&ast, "owner", "owner.ts").unwrap();
             let mut g = Gen::new(vec![("owner.ts", &hir)], false, false);
-            g.m.max_work = 50_000_000;
             g.register_all();
             g.link_exports();
             g.walk_all();
@@ -128,7 +125,6 @@ fn a_closed_publication_escapes_results_only_when_callers_are_unknown() {
                     .unwrap() as u32;
             let _ = g.m.tok(TokKind::Obj(tm, crate::model::NO_CTX));
             let escaped = g.m.tmpl_toks(tm).iter().any(|&t| g.m.is_escaped(t));
-            assert!(!g.m.aborted);
             assert_eq!(escaped, !known, "known={known}, summarized={summarized}");
         }
     }

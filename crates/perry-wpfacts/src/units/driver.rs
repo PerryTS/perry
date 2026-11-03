@@ -495,7 +495,7 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             // A unit over the bound keeps its result (`dependents`).
             for &si in level {
                 if !dirty[si]
-                    && per_unit[si].as_ref().is_some_and(|u| !u.stats.aborted)
+                    && per_unit[si].is_some()
                     && visible(si, &exports) != exports_seen[si]
                 {
                     dirty[si] = true;
@@ -663,20 +663,9 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         // on it; at the fixpoint every closed function's parameters hold
         // what its calls pass.
         let mut latest: FxHashMap<(String, String), ArgContract> = FxHashMap::default();
-        let mut aborted = false;
         for (si, s) in solves.iter().enumerate() {
             let path = sorted[s.mi].0;
             let u = per_unit[si].as_ref().expect("every unit solved");
-            if u.stats.aborted {
-                aborted = true;
-                for nm in &s.view.closed_refs {
-                    latest
-                        .entry((path.to_string(), nm.clone()))
-                        .or_default()
-                        .top = true;
-                }
-                continue;
-            }
             for (nm, ac) in &u.args_out {
                 latest
                     .entry((path.to_string(), nm.clone()))
@@ -686,20 +675,6 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             // A closed class's constructions, from any module (§18.13).
             for (k, ac) in &u.ctor_args_out {
                 latest.entry(k.clone()).or_default().join(ac);
-            }
-        }
-        // DECISIONS 157: an aborted unit may hold any published class (it
-        // need not name it: a namespace, a value), and its constructions
-        // publish nothing.
-        if aborted {
-            for s in &solves {
-                let path = sorted[s.mi].0;
-                for nm in &s.view.published {
-                    latest
-                        .entry((path.to_string(), nm.clone()))
-                        .or_default()
-                        .top = true;
-                }
             }
         }
         let mut args = input.args.clone();
@@ -722,12 +697,8 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         // joined with every unit's latest solve (D16), so they only grow.
         // The owners of a method whose join changed are solved again.
         let mut this_args = input.this_args.clone();
-        let mut this_top = input.this_args_top;
+        let this_top = input.this_args_top;
         for u in per_unit.iter().flatten() {
-            if u.stats.aborted {
-                this_top = true;
-                continue;
-            }
             for (nm, vc) in &u.this_args_out {
                 this_args.entry(nm.clone()).or_default().join(vc);
             }
@@ -746,7 +717,7 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         if !recv_changed.is_empty() {
             for (si, u) in per_unit.iter().enumerate() {
                 let u = u.as_ref().expect("every unit solved");
-                if !u.stats.aborted && u.fns_defined.iter().any(|d| recv_changed.contains(d)) {
+                if u.fns_defined.iter().any(|d| recv_changed.contains(d)) {
                     seeds.push(si);
                 }
             }
@@ -766,7 +737,7 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         if !runs_changed.is_empty() {
             for (si, u) in per_unit.iter().enumerate() {
                 let u = u.as_ref().expect("every unit solved");
-                if !u.stats.aborted && u.fns_defined.iter().any(|d| runs_changed.contains(d)) {
+                if u.fns_defined.iter().any(|d| runs_changed.contains(d)) {
                     seeds.push(si);
                 }
             }
@@ -788,7 +759,7 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         if !margs_changed.is_empty() {
             for (si, u) in per_unit.iter().enumerate() {
                 let u = u.as_ref().expect("every unit solved");
-                if !u.stats.aborted && u.fns_defined.iter().any(|d| margs_changed.contains(d)) {
+                if u.fns_defined.iter().any(|d| margs_changed.contains(d)) {
                     seeds.push(si);
                 }
             }
@@ -811,7 +782,7 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         if !news_changed.is_empty() {
             for (si, u) in per_unit.iter().enumerate() {
                 let u = u.as_ref().expect("every unit solved");
-                if !u.stats.aborted && u.fns_defined.iter().any(|d| news_changed.contains(d)) {
+                if u.fns_defined.iter().any(|d| news_changed.contains(d)) {
                     seeds.push(si);
                 }
             }
@@ -835,15 +806,14 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         if !fstores_changed.is_empty() {
             for (si, u) in per_unit.iter().enumerate() {
                 let u = u.as_ref().expect("every unit solved");
-                if !u.stats.aborted
-                    && (u
-                        .fns_read
-                        .iter()
-                        .any(|(n, _)| fstores_changed.contains(n.as_str()))
-                        || u.fns_defined.iter().any(|d| {
-                            d.strip_prefix("fn:")
-                                .is_some_and(|n| fstores_changed.contains(n))
-                        }))
+                if u
+                    .fns_read
+                    .iter()
+                    .any(|(n, _)| fstores_changed.contains(n.as_str()))
+                    || u.fns_defined.iter().any(|d| {
+                        d.strip_prefix("fn:")
+                            .is_some_and(|n| fstores_changed.contains(n))
+                    })
                 {
                     seeds.push(si);
                 }
@@ -913,7 +883,7 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             }
             v.sort_by(|x, y| x.writers.cmp(&y.writers));
         }
-        let cells_top = per_unit.iter().flatten().any(|u| u.stats.aborted);
+
         // A unit is solved again when what it READS of a cell changed: the
         // other writers' contracts (its own write is in its own solve,
         // DECISIONS 89), an unknown one or a unit over the bound being ⊤
@@ -922,7 +892,7 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         // DECISIONS 169: the view is the writes' digests (taken once per
         // round, `CellWrite`), not their contracts cloned and sorted per
         // reader: AWFY rounds 2-4 viewed 180K cell reads, 18.8 s of 26.6.
-        let view = |cells: &FxHashMap<String, Vec<CellWrite>>, top: bool, me: &str, k: &str| {
+        let view = |cells: &FxHashMap<String, Vec<CellWrite>>, me: &str, k: &str| {
             let others: Vec<&CellWrite> = cells
                 .get(k)
                 .into_iter()
@@ -940,7 +910,7 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
                     && c.boxes.is_empty()
                     && c.arrayboxes.is_empty()
             };
-            let top = top || others.iter().any(|w| pure(&w.c));
+            let top = others.iter().any(|w| pure(&w.c));
             let mut v: Vec<u64> = others
                 .into_iter()
                 .filter(|w| !pure(&w.c))
@@ -980,7 +950,7 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             let u = u.as_ref().expect("every unit solved");
             // A unit over the bound keeps its result (`dependents`): what it
             // read changes nothing it publishes.
-            if !u.stats.aborted && u.fns_read.iter().any(fn_changed) {
+            if u.fns_read.iter().any(fn_changed) {
                 seeds.push(si);
             }
         }
@@ -994,8 +964,7 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             // what it read through the other channels, each tracked: it
             // does not solve its publisher again.
             let own_copy = |(k, _): &&(String, u64)| copy_of.get(k.as_str()) == Some(&si);
-            if !u.stats.aborted
-                && u.layouts_read
+            if u.layouts_read
                     .iter()
                     .filter(|r| !own_copy(r))
                     .any(layout_changed)
@@ -1015,14 +984,14 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             .filter(|k| input.cells.get(*k) != cells.get(*k))
             .map(|k| k.as_str())
             .collect();
-        let top_changed = input.cells_top != cells_top;
+
         for (si, u) in per_unit.iter().enumerate() {
             let u = u.as_ref().expect("every unit solved");
             let me = solves[si].key.as_str();
             if u.cells_read.iter().any(|k| {
-                (top_changed || changed.contains(k.as_str())) && {
+                changed.contains(k.as_str()) && {
                     compares.set(compares.get() + 1);
-                    view(&input.cells, input.cells_top, me, k) != view(&cells, cells_top, me, k)
+                    view(&input.cells, me, k) != view(&cells, me, k)
                 }
             }) {
                 seeds.push(si);
@@ -1030,7 +999,7 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         }
         drop(changed);
         input.cells = cells;
-        input.cells_top = cells_top;
+
         // The write effects: last round's joined with what every unit's
         // latest solve stores into other units' bindings (an aborted unit:
         // any value into each it writes), so they only grow (D16, as the
@@ -1079,7 +1048,6 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
                 if shared.iter().any(|w| {
                     !seen.contains(w)
                         && !(replay_is_own(w) && u.shared_out.contains(w))
-                        && !u.stats.aborted
                         && u.shared_reads.sees(w)
                 }) {
                     seeds.push(si);
@@ -1113,7 +1081,7 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             // newly broken class still re-solves its owner's importers
             // (`resolve_again`): they read the broken set itself.
             for si in seeds {
-                if per_unit[si].as_ref().is_some_and(|u| !u.stats.aborted) {
+                if per_unit[si].is_some() {
                     dirty[si] = true;
                 }
             }
@@ -1670,18 +1638,11 @@ pub(super) fn resolve_again(
             .unwrap_or(d.as_str());
         match owner.get(d) {
             Some(sis) => work.extend(sis.iter().copied()),
-            // No unit owns it: every unit again, but a unit over the bound
-            // keeps its result, as in `dependents` (it claims nothing
-            // whatever its inputs; tsc: the 200M-work unit was solved again
-            // for one unowned display).
-            None => {
-                return (0..n)
-                    .map(|si| !per_unit[si].as_ref().is_some_and(|u| u.stats.aborted))
-                    .collect()
-            }
+            // No unit owns it: every unit again.
+            None => return vec![true; n],
         }
     }
-    dependents(solves, per_unit, work)
+    dependents(solves, work)
 }
 
 /// A published contract and its digest (DECISIONS 114), taken once when

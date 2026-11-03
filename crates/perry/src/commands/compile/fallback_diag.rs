@@ -12,12 +12,9 @@ pub(super) fn facts_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> Arc<Fac
     if !perry_codegen::fallback_diag::enabled() {
         return Arc::default();
     }
-    let analysis_refusal = pf.stats.aborted.then(|| {
-        format!(
-            "whole-program analysis aborted before publishing binding proofs (work={}, pops={})",
-            pf.stats.work, pf.stats.pops
-        )
-    });
+    // DECISIONS 252: the analysis never refuses a program; a subject over
+    // its budget is unseen code, reported per site.
+    let analysis_refusal: Option<String> = None;
     let Some(mi) = pf.module_paths.iter().position(|p| p == path) else {
         return Arc::new(Facts {
             module_path: path.into(),

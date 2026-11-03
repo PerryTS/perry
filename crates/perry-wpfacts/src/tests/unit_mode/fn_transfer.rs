@@ -264,60 +264,6 @@ console.log(main());"#;
     escapes(&[("a", a), ("b", b)]);
 }
 
-/// A third unit over the work bound runs the forwarded function: it reports
-/// what it consumed, so the function is unknown there; never stronger.
-#[test]
-fn a_function_forwarded_to_a_unit_over_the_bound_stays_sound() {
-    let b = r#"import { run } from "./c";
-export function use(f: any, o: any) { return run(f, o); }"#;
-    let mut c = String::from("export function run(g: any, o: any) { let s = 0;\n");
-    for i in 0..300 {
-        c.push_str(&format!(
-            "  const q{i} = {{ k{i}: {i}, f: g }}; s += q{i}.k{i};\n"
-        ));
-    }
-    c.push_str("  return g(o) + s; }");
-    let mods = [("a", A_PLAIN), ("b", b), ("c", c.as_str())];
-    let hirs = hirs_of(&mods);
-    let list: Vec<(String, &perry_hir::Module)> =
-        hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
-    let free = crate::compute_units(&list, &FactsConfig::default());
-    let wk = |p: &str| -> u64 {
-        free.units
-            .iter()
-            .filter(|(q, _)| crate::decl_units::module_of(q) == p)
-            .map(|(_, s)| s.work)
-            .sum()
-    };
-    let bound = 2 * wk("a.ts").max(wk("b.ts"));
-    assert!(wk("c.ts") > bound, "{:?}", free.units);
-    let u = crate::compute_units(
-        &list,
-        &FactsConfig {
-            max_work: Some(bound),
-            ..FactsConfig::default()
-        },
-    );
-    assert!(
-        u.units
-            .iter()
-            .any(|(q, s)| crate::decl_units::module_of(q) == "c.ts" && s.aborted),
-        "{:?}",
-        u.units
-    );
-    let w = whole_of(&mods);
-    let stronger: Vec<_> = proven_set(&u)
-        .difference(&proven_set(&w))
-        .cloned()
-        .collect();
-    assert!(
-        stronger.is_empty(),
-        "per unit stronger than whole: {stronger:?}\n{}",
-        u.dump_text()
-    );
-    assert!(!cb_proven(&u), "per unit over the bound\n{}", u.dump_text());
-}
-
 /// Two functions of `b` forward to the same third-unit function, one of
 /// them run by unknown code with unknown values: the stand-in's one body
 /// joins both calls, never stronger than whole.

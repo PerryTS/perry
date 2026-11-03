@@ -4,7 +4,6 @@ fn run(src: &str, units: bool) -> (perry_hir::Module, ProgramFacts) {
     let ast = perry_parser::parse_typescript(src, "owner.ts").unwrap();
     let hir = perry_hir::lower_module(&ast, "owner", "owner.ts").unwrap();
     let cfg = FactsConfig {
-        max_work: Some(50_000_000),
         ..Default::default()
     };
     let input = [("owner.ts".to_string(), &hir)];
@@ -13,7 +12,7 @@ fn run(src: &str, units: bool) -> (perry_hir::Module, ProgramFacts) {
     } else {
         compute(&input, &cfg)
     };
-    assert!(!facts.stats.aborted);
+    assert!(facts.stats.gave_up.is_empty());
     (hir, facts)
 }
 fn binding(hir: &perry_hir::Module, name: &str) -> u32 {
@@ -141,21 +140,6 @@ fn numeric_constructor_arguments_keep_owner_identity_without_inventing_an_extent
             "a source/view overload is never a numeric fresh-owner contract"
         );
     }
-}
-
-#[test]
-fn a_unit_over_its_work_budget_cannot_certify_program_wide_metadata_effects() {
-    let ast = perry_parser::parse_typescript("const x = new Uint8Array(4); Object.defineProperty(Uint8Array.prototype, length, {get() {return 2;}}); console.log(x.length);", "budget.ts").unwrap();
-    let hir = perry_hir::lower_module(&ast, "budget", "budget.ts").unwrap();
-    let facts = compute_units(
-        &[("budget.ts".into(), &hir)],
-        &FactsConfig {
-            max_work: Some(1),
-            ..Default::default()
-        },
-    );
-    assert!(facts.units.iter().any(|(_, s)| s.aborted));
-    assert!(!facts.indexed_metadata_pristine());
 }
 
 #[test]

@@ -10,6 +10,7 @@ mod array_iteration;
 mod array_length;
 mod array_named_keys;
 mod array_numeric;
+mod budget;
 mod array_record;
 mod array_search;
 mod binding_write_gap;
@@ -93,19 +94,22 @@ mod unit_this;
 mod unknown_accessor_key;
 mod unrun_param_call;
 
-use crate::{compute, FactsConfig, ProgramFacts, Verdict};
+use crate::{compute, Budget, FactsConfig, ProgramFacts, Verdict};
 
 fn facts(src: &str) -> ProgramFacts {
     facts_with(src, FactsConfig::default())
 }
 
-fn facts_with(src: &str, mut cfg: FactsConfig) -> ProgramFacts {
+fn facts_with(src: &str, cfg: FactsConfig) -> ProgramFacts {
     // Every test solve is bounded: a broken rule ends OVER (no facts, the
     // test fails) instead of running away.
-    cfg.max_work.get_or_insert(50_000_000);
+    // DECISIONS 252: the solve never gives up a whole program; a normal
+    // test program gives up no subject and never stalls the settle loop.
     let module = perry_parser::parse_typescript(src, "t.ts").expect("parses");
     let hir = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
-    compute(&[("t.ts".to_string(), &hir)], &cfg)
+    let pf = compute(&[("t.ts".to_string(), &hir)], &cfg);
+    assert!(!pf.stats.settle_stalled, "the settle loop stalled\n{}", pf.dump_text());
+    pf
 }
 
 fn tmpl<'a>(pf: &'a ProgramFacts, name: &str) -> &'a crate::TemplateFacts {
@@ -299,9 +303,7 @@ fn sabotage_plants_the_fact() {
             relations: false,
             sabotage: Some("readonly:P.x".into()),
             dynamic_code: None,
-            budget_secs: None,
             profile: false,
-            max_pts: None,
             ..Default::default()
         },
     );
@@ -335,9 +337,7 @@ fn write_dump_for_checker() {
             relations: true,
             sabotage: std::env::var("WPFACTS_TEST_SABOTAGE").ok(),
             dynamic_code: None,
-            budget_secs: None,
             profile: false,
-            max_pts: None,
             ..Default::default()
         },
     );
@@ -445,13 +445,10 @@ fn top_call_connects_only_top_values() {
     assert!(field(kept, "x").readonly);
 }
 
-/// The bounds hold from the first constraint. Generation solves online
-/// (`cons`/`edge` apply each rule to what the node already holds), so a
-/// bound passed while the constraints are generated must stop the pass
-/// there. The Next.js server spent 12+ minutes and 50 GB in generation,
-/// with no bound in force yet.
+/// Two hundred classes, each constructed and read through a parameter:
+/// every subject stays far under the default budget (nothing gives up).
 #[test]
-fn bounds_hold_during_generation() {
+fn two_hundred_classes_stay_under_the_budget() {
     let mut src = String::new();
     for i in 0..200 {
         src.push_str(&format!(
@@ -464,23 +461,7 @@ fn bounds_hold_during_generation() {
         src.push_str(&format!("console.log(f{i}(new C{}()));\n", (i + 1) % 200));
     }
     let full = facts(&src);
-    assert!(!full.stats.aborted);
-    // A node bound (max_pts / 8) far below what generation creates.
-    let bounded = facts_with(
-        &src,
-        FactsConfig {
-            max_pts: Some(800),
-            ..Default::default()
-        },
-    );
-    assert!(bounded.stats.aborted);
-    assert!(bounded.templates.is_empty() && bounded.sites.is_empty());
-    assert!(
-        bounded.stats.nodes * 2 < full.stats.nodes,
-        "generation went on past the bound: {} of {} nodes",
-        bounded.stats.nodes,
-        full.stats.nodes
-    );
+    assert!(full.stats.gave_up.is_empty(), "{:?}", full.stats.gave_up);
 }
 
 /// Re-binding a bound function (`f = f.bind(x)` in a loop) and calling or
@@ -498,11 +479,12 @@ fn bind_chains_terminate() {
     let pf = facts_with(
         src,
         FactsConfig {
-            max_work: Some(2_000_000),
+            budget: Budget(2_000_000),
             ..Default::default()
         },
     );
-    assert!(!pf.stats.aborted, "{}", pf.dump_text());
+    // Nothing gave up and the whole solve stays under the old 2 M pin.
+    assert!(pf.stats.gave_up.is_empty() && pf.stats.work <= 2_000_000, "{}", pf.dump_text());
 }
 
 fn site<'a>(pf: &'a ProgramFacts, key: &str) -> &'a crate::SiteFacts {
@@ -634,7 +616,6 @@ fn dense_prototype_copies_preserve_all_values_within_work_bound() {
     for count in [40, 60] {
         let mut m = copy_solver_model();
         assert_eq!(m.tok(TokKind::Top), TOP);
-        m.max_work = 500_000;
         let root = m.tok(TokKind::ObjectProto);
         let holders: Vec<_> = (0..24).map(|i| m.tok(TokKind::ModNs(i))).collect();
         let values: Vec<_> = (100..100 + count)
@@ -655,9 +636,10 @@ fn dense_prototype_copies_preserve_all_values_within_work_bound() {
             }
         }
         m.solve();
+        // The same pin as the old work bound (500_000), same counting.
         assert!(
-            !m.aborted,
-            "{count}-value copies aborted at {} work",
+            m.work <= 500_000,
+            "{count}-value copies used {} work",
             m.work
         );
         for n in reads {
@@ -707,16 +689,14 @@ fn copying_a_base_into_a_superset_keeps_extra_values_and_primitives() {
     m.add_tok(dst, extra);
     m.edge(src, dst);
     m.add_prim(src, prim::NUM);
-    m.max_work = 100;
     m.solve();
-    assert!(!m.aborted, "base copy used {} work", m.work);
+    assert!(m.work <= 100, "base copy used {} work", m.work);
     for t in values {
         assert!(m.nodes[dst as usize].pts.contains_tok(t));
     }
     assert!(m.nodes[dst as usize].pts.contains_tok(extra));
     assert!(!m.nodes[src as usize].pts.contains_tok(extra));
     assert_ne!(m.nodes[dst as usize].prim & prim::NUM, 0);
-    m.max_work = 0;
     let later = m.tok(TokKind::ModNs(40));
     m.add_tok(src, later);
     m.add_prim(src, prim::STR);
@@ -766,7 +746,6 @@ fn singleton_inclusion_keeps_concrete_destination_values_and_later_updates() {
         assert!(m.nodes[dst as usize].pts.contains_tok(t));
     }
     assert_eq!(m.nodes[dst as usize].prim, prim::NUM | prim::STR);
-    assert!(!m.aborted);
 }
 
 #[test]
@@ -794,10 +773,10 @@ fn observed_bases_avoid_recopying_pending_prefixes_and_keep_independent_members(
         m.add(src, &[later], prim::STR);
         // The bound measures the solve's deliveries, not setup.
         m.work = 0;
-        m.max_work = 6000;
+        m.mark.0 = 0;
         m.solve();
         assert!(
-            !m.aborted,
+            m.work <= 6000,
             "observed-base copies used {} work (own={own_members})",
             m.work
         );
@@ -835,9 +814,9 @@ fn observed_relay_bases_share_new_batches_without_enumerating_each_transfer() {
     m.add(src, &next, 0);
     // The bound measures the solve's deliveries, not setup.
     m.work = 0;
-    m.max_work = 5000;
+    m.mark.0 = 0;
     m.solve();
-    assert!(!m.aborted, "batch sharing used {} work", m.work);
+    assert!(m.work <= 5000, "batch sharing used {} work", m.work);
     for dst in destinations {
         for &t in first.iter().chain(&next) {
             assert!(m.nodes[dst as usize].pts.contains_tok(t));
@@ -894,9 +873,9 @@ fn small_observed_sets_preserve_superset_members_without_recopying_values() {
     }
     // The bound measures the solve's deliveries, not setup.
     m.work = 0;
-    m.max_work = 1500;
+    m.mark.0 = 0;
     m.solve();
-    assert!(!m.aborted, "small supersets used {} work", m.work);
+    assert!(m.work <= 1500, "small supersets used {} work", m.work);
     for (i, dst) in destinations.into_iter().enumerate() {
         for t in [a, b, extras[i]] {
             assert!(m.nodes[dst as usize].pts.contains_tok(t));
@@ -934,9 +913,9 @@ fn equal_snapshot_groups_keep_old_owners_covered_after_coalescing() {
     m.add_tok(src, added);
     // The bound measures the solve's deliveries, not setup.
     m.work = 0;
-    m.max_work = 5000;
+    m.mark.0 = 0;
     m.solve();
-    assert!(!m.aborted, "coalesced snapshots used {} work", m.work);
+    assert!(m.work <= 5000, "coalesced snapshots used {} work", m.work);
     for dst in first {
         assert!(m.nodes[dst as usize].pts.contains_tok(added));
     }
@@ -960,7 +939,6 @@ fn delivered_cardinality_proves_batch_adoption_with_independent_storage() {
         destinations.push(dst);
     }
     m.solve();
-    assert!(!m.aborted);
     // Preserve every value while giving each old destination its own
     // allocation: the proof must not depend on accidental sharing.
     for &dst in &destinations {
@@ -975,9 +953,9 @@ fn delivered_cardinality_proves_batch_adoption_with_independent_storage() {
     let next: Vec<_> = (40..80).map(|i| m.tok(TokKind::ModNs(i))).collect();
     m.add(src, &next, 0);
     m.work = 0;
-    m.max_work = 2000;
+    m.mark.0 = 0;
     m.solve();
-    assert!(!m.aborted, "cardinality batches used {} work", m.work);
+    assert!(m.work <= 2000, "cardinality batches used {} work", m.work);
     for (i, dst) in destinations.into_iter().enumerate() {
         let n = &m.nodes[dst as usize];
         for &t in first.iter().chain(&next) {
@@ -1008,9 +986,9 @@ fn new_subscribers_receive_current_values_once_and_then_later_deliveries() {
         }
         // The bound measures the solve's deliveries, not setup.
         m.work = 0;
-        m.max_work = group as u64 * 9;
+        m.mark.0 = 0;
         m.solve();
-        assert!(!m.aborted, "late subscribers used {} work", m.work);
+        assert!(m.work <= group as u64 * 9, "late subscribers used {} work", m.work);
         for &dst in &destinations {
             for t in [a, b, c] {
                 assert!(m.nodes[dst as usize].pts.contains_tok(t));
@@ -1019,9 +997,9 @@ fn new_subscribers_receive_current_values_once_and_then_later_deliveries() {
         let d = m.tok(TokKind::ModNs(4));
         m.add_tok(src, d);
         m.work = 0;
-        m.max_work = group as u64 * 4;
+        m.mark.0 = 0;
         m.solve();
-        assert!(!m.aborted);
+        assert!(m.work <= group as u64 * 4, "{} work", m.work);
         for dst in destinations {
             for t in [a, b, c, d] {
                 assert!(m.nodes[dst as usize].pts.contains_tok(t));

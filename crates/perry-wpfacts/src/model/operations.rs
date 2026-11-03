@@ -288,15 +288,24 @@ impl Model {
     /// are reported by label).
     pub fn node_named(&mut self, label: &'static str, name: impl FnOnce() -> String) -> NodeId {
         let id = self.nodes.len() as NodeId;
-        if self.max_nodes != 0 && self.nodes.len() > self.max_nodes {
-            // Work bound: the program gets no facts (checked by the solver).
-            self.aborted = true;
-        }
         self.nodes.push(Node::default());
         self.node_fn.push(NO_FN);
+        let s = self.cur_subject;
+        self.node_subject.push(s);
         self.labels.push(label);
         if self.relations.is_some() {
             self.node_names.push(name());
+        }
+        // DECISIONS 252: the node is its subject's. A subject that gave up
+        // births it retired; one over its node budget gives up now.
+        let budget = self.budget.0;
+        let c = self.charge_mut(s);
+        c.nodes += 1;
+        let (gave_up, reason, over) = (c.gave_up, c.reason, c.nodes > budget / 4);
+        if gave_up {
+            self.retire(id, reason);
+        } else if over {
+            self.give_up(s, "nodes");
         }
         id
     }
@@ -304,6 +313,26 @@ impl Model {
     /// `n` belongs to the body generation is walking.
     pub fn own(&mut self, n: NodeId) {
         self.node_fn[n as usize] = self.cur_fn;
+        if self.cur_fn != NO_FN {
+            // The node's charge follows its subject (DECISIONS 252).
+            let from = self.node_subject[n as usize];
+            if from != self.cur_fn {
+                self.node_subject[n as usize] = self.cur_fn;
+                self.charge_mut(from).nodes -= 1;
+                self.charge_mut(self.cur_fn).nodes += 1;
+            }
+        }
+    }
+
+    /// Module `mi`'s `<init>` body: the subject of its namespace token's nodes
+    /// (a module that gives up is unseen code; its exports are ⊤ to every
+    /// importer).
+    pub fn set_mod_fn(&mut self, mi: u32, f: FnIdx) {
+        let i = mi as usize;
+        if self.mod_fn.len() <= i {
+            self.mod_fn.resize(i + 1, NO_FN);
+        }
+        self.mod_fn[i] = f;
     }
 
     pub fn node_l(&mut self, label: &'static str) -> NodeId {
@@ -1508,7 +1537,7 @@ impl Model {
                 None => self.arg_parents.entry(m).or_default().push(r),
             }
         }
-        self.marker_links.push((m, r));
+        self.marker_links.push((m, r, self.cur_subject));
         if self.beside_markers.contains(&r) {
             match self.beside_values(m) {
                 true if !self.param_marker.contains_key(&m) => {

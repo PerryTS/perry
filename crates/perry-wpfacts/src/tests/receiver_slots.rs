@@ -155,7 +155,6 @@ fn both_modes(src: &str) -> Vec<(&'static str, ProgramFacts)> {
     let module = perry_parser::parse_typescript(src, "t.ts").expect("parses");
     let h = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
     let cfg = FactsConfig {
-        max_work: Some(50_000_000),
         ..FactsConfig::default()
     };
     vec![

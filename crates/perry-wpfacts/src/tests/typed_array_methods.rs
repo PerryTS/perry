@@ -119,6 +119,6 @@ fn a_species_result_fed_back_to_its_call_settles() {
         console.log(g(new Svc()), t.length);
     "#;
     let pf = facts(src);
-    assert!(!pf.stats.aborted, "{:?}", pf.stats);
+    assert!(pf.stats.gave_up.is_empty(), "{:?}", pf.stats);
     assert!(pf.stats.templates < 60, "templates {}", pf.stats.templates);
 }

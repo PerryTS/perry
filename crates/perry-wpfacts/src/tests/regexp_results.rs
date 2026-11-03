@@ -13,8 +13,7 @@ fn facts_of(src: &str, per_unit: bool) -> ProgramFacts {
     let module = perry_parser::parse_typescript(src, &path).expect("parses");
     let hir = perry_hir::lower_module(&module, "main", &path).expect("lowers");
     let list: Vec<(String, &perry_hir::Module)> = vec![(path, &hir)];
-    let mut cfg = FactsConfig::default();
-    cfg.max_work.get_or_insert(50_000_000);
+    let cfg = FactsConfig::default();
     match per_unit {
         true => crate::compute_units(&list, &cfg),
         false => crate::compute(&list, &cfg),
@@ -202,8 +201,7 @@ fn facts_of_modules(mods: &[(&str, &str)], per_unit: bool) -> ProgramFacts {
         .collect();
     let list: Vec<(String, &perry_hir::Module)> =
         hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
-    let mut cfg = FactsConfig::default();
-    cfg.max_work.get_or_insert(50_000_000);
+    let cfg = FactsConfig::default();
     match per_unit {
         true => crate::compute_units(&list, &cfg),
         false => crate::compute(&list, &cfg),

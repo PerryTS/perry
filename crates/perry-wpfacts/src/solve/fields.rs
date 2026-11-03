@@ -17,7 +17,7 @@ impl Model {
         if let Some(&n) = self.fields.get(&(t, a)) {
             return n;
         }
-        let n = self.node_named("field", || format!("field({t},{a})"));
+        let n = self.tok_node_named(t, "field", || format!("field({t},{a})"));
         self.nodes[n as usize].obs = self.obs_toks.contains(&t);
         self.nodes[n as usize].frame = self.fam_home(t);
         self.nodes[n as usize].of_marker = self.is_marker(t);
@@ -159,7 +159,7 @@ impl Model {
         if let Some(&n) = self.field_any.get(&t) {
             return n;
         }
-        let n = self.node_named("fieldany", || format!("fieldany({t})"));
+        let n = self.tok_node_named(t, "fieldany", || format!("fieldany({t})"));
         self.nodes[n as usize].obs = self.obs_toks.contains(&t);
         self.nodes[n as usize].frame = self.fam_home(t);
         self.nodes[n as usize].of_marker = self.is_marker(t);
@@ -252,7 +252,7 @@ impl Model {
         if let Some(&n) = self.named_any.get(&t) {
             return n;
         }
-        let n = self.node_named("namedany", || format!("namedany({t})"));
+        let n = self.tok_node_named(t, "namedany", || format!("namedany({t})"));
         self.nodes[n as usize].obs = self.obs_toks.contains(&t);
         self.nodes[n as usize].frame = self.fam_home(t);
         self.named_any.insert(t, n);
@@ -318,7 +318,7 @@ impl Model {
         if let Some(&n) = self.all_fields.get(&t) {
             return n;
         }
-        let n = self.node_named("allfields", || format!("allfields({t})"));
+        let n = self.tok_node_named(t, "allfields", || format!("allfields({t})"));
         self.nodes[n as usize].obs = self.obs_toks.contains(&t);
         self.nodes[n as usize].frame = self.fam_home(t);
         self.nodes[n as usize].of_marker = self.is_marker(t);
@@ -346,7 +346,7 @@ impl Model {
         if let Some(&n) = self.num_fields.get(&t) {
             return n;
         }
-        let n = self.node_named("numfields", || format!("numfields({t})"));
+        let n = self.tok_node_named(t, "numfields", || format!("numfields({t})"));
         self.nodes[n as usize].obs = self.obs_toks.contains(&t);
         self.nodes[n as usize].frame = self.fam_home(t);
         self.num_fields.insert(t, n);
