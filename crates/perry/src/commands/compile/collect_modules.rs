@@ -2024,7 +2024,7 @@ fn collect_module_one(
                 || import
                     .specifiers
                     .iter()
-                    .any(|s| local_of(s).starts_with("_lazyreq_"));
+                    .any(|s| is_deferred_require_binding(&local_of(s)));
             if is_lazy {
                 import.is_deferred_require = true;
             }
@@ -2255,4 +2255,13 @@ mod node_specifier_literal_tests {
             ["node:zlib", "node:fs/promises", "node:os", "node:crypto"]
         );
     }
+}
+
+/// The binding of a deferred require's import (`_lazyreq_N` from the CommonJS
+/// wrap, `_lazyreq_static_N` from a `createRequire` alias). No code reads it:
+/// its presence is what marks the import `is_deferred_require`, so the target
+/// initializes when a require call first runs, not at program start. A pass
+/// that drops unread import bindings must keep this one.
+pub(crate) fn is_deferred_require_binding(local: &str) -> bool {
+    local.starts_with("_lazyreq_")
 }

@@ -1,0 +1,1 @@
+A `createRequire` require of a CommonJS module inside code that may not run (`if (false) req("x")`) no longer runs that module at program start: dead-code elimination kept the deferred-require marker binding, so the module initializes when the require call runs, as in node.
