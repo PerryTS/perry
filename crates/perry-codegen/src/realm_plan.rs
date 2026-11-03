@@ -511,6 +511,37 @@ mod tests {
     }
 
     #[test]
+    fn every_global_key_reached_alone_closes_its_plan() {
+        // A global key's value (a reference or an accessor's getter) must be
+        // born by the key's own R node: a program that reads only that key
+        // gets a closed plan. `navigator` became an accessor whose getter no
+        // node birthed.
+        let global: RealmDeclaration = crate::realm_manifest::REALM
+            .iter()
+            .find(|entry| entry.name == "%Global%")
+            .map(|entry| serde_json::from_str(entry.facts).unwrap())
+            .unwrap();
+        let keys: Vec<_> = global
+            .properties
+            .iter()
+            .filter(|property| !property.symbol)
+            .map(|property| property.key.clone())
+            .collect();
+        assert!(keys.iter().any(|key| key == "navigator"));
+        let mut failures = Vec::new();
+        for key in &keys {
+            let reach = reach(&format!("console.log(typeof globalThis.{key});"));
+            if reach.is_full() {
+                continue;
+            }
+            if let Err(error) = RealmPlan::from_reach(&reach) {
+                failures.push(format!("{key}: {error}"));
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    #[test]
     fn an_absent_birth_is_an_error_not_implicit_reachability() {
         let mut reach = reach("console.log('hi');");
         reach.names.remove("Array.prototype");
