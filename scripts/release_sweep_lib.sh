@@ -180,7 +180,7 @@ sweep_json_escape() {
 
 # sweep_tier_run_summary <output_dir> <tier_id> <name> <command...>
 # Convenience wrapper for tiers that delegate to a patched test script
-# (run_parity_tests.sh, run_thread_tests.sh, etc.). Sets
+# (run_thread_tests.sh, etc.). Sets
 # PERRY_TEST_SUMMARY_OUT to a per-tier summary.json, runs the command with
 # stdout/stderr captured to <name>.log, then reads passed/failed/skipped
 # back out of the summary and emits the final tier result.

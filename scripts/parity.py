@@ -48,10 +48,8 @@ EXE = ".exe" if WINDOWS else ""
 
 STATUSES = ("pass", "parity_fail", "compile_fail", "crash", "node_fail", "skipped")
 TRIAGE_FIELDS = ("issue", "added", "category", "reason")
-# One run budget for every case: node_suite_run.py's 30s, because cases now
-# share the machine with parallel compiles and a slow-but-correct case must not
-# read as a crash. Compiles keep run_parity_tests.sh's 300s, or 900s when the
-# compile may build native toolchain artifacts (auto-optimize, wasm host).
+# One 30s run budget for every case: cases share the machine with parallel
+# compiles, and a slow-but-correct case must not read as a crash.
 RUN_TIMEOUT = 30
 COMPILE_TIMEOUT = 300
 TOOLCHAIN_TIMEOUT = 900
@@ -85,6 +83,16 @@ def runs_serially(cid: str, text: str, mode: str) -> bool:
     # Fast mode builds an ext-routed case's runtime with auto-optimize; one at a
     # time, so concurrent cases never rebuild the same feature set together.
     return bool(SERIAL_IMPORT.search(text)) or (mode == "fast" and bool(EXT_ROUTED.search(text)))
+
+
+def compile_budget(name: str, text: str, auto: bool, ext_routed: bool) -> int:
+    # A compile that may build native toolchain artifacts (an auto-optimize
+    # runtime rebuild, ext wrappers, a wasm host) takes minutes on hosted runners.
+    if auto or (name in FORCE_NO_AUTO and ext_routed) or WASM.search(text):
+        return TOOLCHAIN_TIMEOUT
+    return COMPILE_TIMEOUT
+
+
 # node-suite modules whose no-auto links need prebuilt wrapper archives built in
 # the same cargo invocation as the stdlib archive.
 EXT_ARCHIVES = {
@@ -308,8 +316,7 @@ def run_case(ctx: dict, cid: str, path: Path) -> tuple[str, str]:
         flags = []
         if re.match(r"node-suite/[^/]+/.*(webassembly|wasm)", cid):
             flags.append("--enable-wasm-runtime")
-        budget = (TOOLCHAIN_TIMEOUT if auto or (name in FORCE_NO_AUTO and ext_routed)
-                  or WASM.search(text) else COMPILE_TIMEOUT)
+        budget = compile_budget(name, text, auto, ext_routed)
         binary = work / f"case{EXE}"
         compile_line = [ctx["perry"], *compile_cmd, *flags, str(source), "-o", str(binary)]
         code = run(compile_line, budget, root, env, work / "compile")
