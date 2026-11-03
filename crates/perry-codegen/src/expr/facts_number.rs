@@ -57,6 +57,14 @@ fn read_kinds(ctx: &FnCtx<'_>, object: &Expr, property: &str) -> Option<u16> {
 
 /// Classify the caller-side operand `e`.
 pub(crate) fn operand(ctx: &FnCtx<'_>, e: &Expr) -> Option<Operand> {
+    // Inside a loop region's F copy, a bare read the region proves a Number
+    // (R: an identity F64 lane, or the guard's value test) is a raw double.
+    // That proof is stronger than the facts' kind mask, so the read must not
+    // take the `Prim` lowering, whose `js_number_coerce` leaf is a call the
+    // region verifier counts as one that may run JS.
+    if crate::stmt::region_loop::is_f64_read(ctx, e) {
+        return Some(Operand::Number);
+    }
     if let Expr::PropertyGet {
         object, property, ..
     } = e

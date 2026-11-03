@@ -44,6 +44,7 @@ pub unsafe extern "C" fn js_http_incoming_message_pipe(handle: Handle, dest: f64
     with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| {
         res.pipes.push(dest.to_bits());
     });
+    client_incoming_read::on_pipe_added(handle);
     dest
 }
 

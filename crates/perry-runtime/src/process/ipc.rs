@@ -477,7 +477,7 @@ fn defer_send_callback(cb: f64, ok: bool) {
     js_closure_set_capture_ptr(deferred, 0, cb.to_bits() as i64);
     let flag = if ok { TAG_TRUE } else { TAG_FALSE };
     js_closure_set_capture_ptr(deferred, 1, flag as i64);
-    crate::timer::js_set_immediate_callback(deferred as i64);
+    crate::builtins::js_queue_next_tick(deferred as i64);
 }
 
 extern "C" fn process_ipc_send_callback_thunk(

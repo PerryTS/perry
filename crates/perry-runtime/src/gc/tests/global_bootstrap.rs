@@ -20,10 +20,11 @@
 //! ***BOTH HALVES ARE ASSERTED*** (CLAUDE.md's fourth way a gate cannot fail).
 //! A test that only checked "no collection ran during the bootstrap" would pass
 //! on a tree where nothing was ever due. The test below therefore arms ONE
-//! pending collection, shows the bootstrap did not service it, and then shows
-//! that the SAME armed request is serviced by ordinary allocation once the
-//! window has closed. Same thread, same lever, same magnitude — the only
-//! variable is whether the allocations happened inside the window.
+//! pending collection, shows that no collection had run when the window
+//! closed (read at the window's exit, before the check it owes), and then shows
+//! that the SAME armed request was serviced by the check the window turned
+//! away and ran as it closed. Same thread, same lever, same magnitude — the
+//! only variable is whether the window was still open.
 //!
 //! SCOPE. Only `populate_global_this_builtins` is covered, and deliberately so.
 //! `ensure_generator_intrinsics` / `ensure_typed_array_intrinsic` build the same
@@ -71,28 +72,6 @@ fn clear_pending_collection() {
     GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.set(old_in_use));
 }
 
-/// THE CONTROL. Allocate ordinary young objects — nothing rooted, nothing
-/// exotic — until either the armed collection is serviced or two arena blocks
-/// have been consumed without it. Returns whether it was serviced.
-///
-/// Two blocks is deliberately more than the bootstrap window spans (measured:
-/// ~1.15 MB, i.e. just over one 1 MB block), so a `false` here means the
-/// arming is inert on this thread and the subject assertion above it proved
-/// nothing.
-fn ordinary_allocation_services_the_armed_collection(collections_before: u64) -> bool {
-    let arena_before = crate::arena::arena_total_bytes();
-    for _ in 0..500_000 {
-        let _ = young_leaf();
-        if gc_collection_count() > collections_before {
-            return true;
-        }
-        if crate::arena::arena_total_bytes() >= arena_before + (2 << 20) {
-            return false;
-        }
-    }
-    false
-}
-
 /// Placement changes can make the bootstrap fit inside the current block.
 /// Start it at a nearly full block so its first allocation window must reach
 /// the slow allocation path, independently of the bootstrap's total footprint.
@@ -123,6 +102,8 @@ fn global_this_bootstrap_runs_in_a_no_move_window() {
         arm_one_pending_collection();
         let arena_before = crate::arena::arena_total_bytes();
         let collections_before = gc_collection_count();
+        let exit_probe = &crate::gc::policy::window_exit_probe::COLLECTIONS_AT_WINDOW_EXIT;
+        exit_probe.with(|c| c.set(None));
 
         // THE SUBJECT: the one-shot realm bootstrap.
         let global = crate::object::js_get_global_this();
@@ -143,30 +124,30 @@ fn global_this_bootstrap_runs_in_a_no_move_window() {
              to say anything (before={arena_before} after={arena_after})"
         );
         // THE INVARIANT: nothing collected, and therefore nothing moved, while
-        // the installers held raw pointers.
+        // the installers held raw pointers. Read as the bootstrap's window
+        // closed, before the check it owes ran.
         assert_eq!(
-            collections_after, collections_before,
+            exit_probe.with(std::cell::Cell::get),
+            Some(collections_before),
             "a collection ran inside the globalThis bootstrap — every installer \
              local (`ctor`, `proto`, `ns_obj`, …) is now a from-space address"
         );
+        // LIVE SUBJECT, half 2: the window DEFERRED the request, it did not
+        // drop it. The trigger check it turned away ran as it closed and
+        // serviced the armed collection; dropping it would disable the trigger
+        // until the next block boundary.
+        assert_eq!(
+            collections_after,
+            collections_before + 1,
+            "the check the window owed must run as it closes"
+        );
         assert!(
-            pending_collection_still_owed(),
-            "the window must DEFER the request, not drop it: leaving it \
-             unserviced-and-unset would disable the trigger for the rest of \
-             the thread"
+            !pending_collection_still_owed(),
+            "the armed collection must be serviced at the window's exit"
         );
         assert!(
             !crate::gc::gc_is_suppressed(),
             "the no-move window must close when the bootstrap returns"
-        );
-
-        // LIVE SUBJECT, half 2 — THE CONTROL. Same thread, same armed request,
-        // ordinary allocation. If this does not collect, the arming was inert
-        // and the assertion above is vacuous.
-        assert!(
-            ordinary_allocation_services_the_armed_collection(collections_after),
-            "the armed collection was never serviceable on this thread, so \
-             'the bootstrap did not collect' proved nothing"
         );
 
         clear_pending_collection();

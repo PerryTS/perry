@@ -330,6 +330,7 @@ pub const NATIVE_LAYOUT_DESCRIPTORS: &[&str] = &[
     "EVENT_EMITTER",
     "EVENT_EMITTER_PROTOTYPE",
     "FUNCTION_PROTOTYPE",
+    "GLOBAL_OBJECT",
     "IMMEDIATE",
     "INCOMING_MESSAGE_PROTOTYPE",
     "ITERATOR_RESULT",
@@ -570,7 +571,7 @@ mod tests {
     #[test]
     fn catalog_is_sorted_and_image_is_bounded() {
         assert!(NATIVE_LAYOUT_DESCRIPTORS.windows(2).all(|w| w[0] < w[1]));
-        assert_eq!(NATIVE_LAYOUT_ROWS, 125);
+        assert_eq!(NATIVE_LAYOUT_ROWS, 126);
         assert!(unsafe { PerryLayoutImageV1::RUNTIME.valid() });
         for (i, name) in NATIVE_LAYOUT_DESCRIPTORS.iter().enumerate() {
             assert_eq!(native_layout_row(name).0, 11 + i as u32);

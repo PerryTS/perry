@@ -26,8 +26,9 @@ use super::builtin_proto::{pristine, BuiltinProto};
 use crate::value::{JSValue, POINTER_MASK, POINTER_TAG, TAG_UNDEFINED};
 
 const UNDEFINED: f64 = f64::from_bits(TAG_UNDEFINED);
-/// An array whose header records a named property, a descriptor or its own
-/// `[[Prototype]]` is not answered by `Array.prototype` alone.
+/// An array whose header records a descriptor or its own `[[Prototype]]` is
+/// not answered by `Array.prototype` alone; nor is one with a named layout
+/// (tested beside these bits in [`array_recv`]).
 const ARRAY_NOT_DEFAULT: u16 = crate::gc::GC_ARRAY_KEY_ATTRS | crate::gc::GC_ARRAY_CUSTOM_PROTO;
 
 #[inline(always)]
@@ -87,8 +88,15 @@ unsafe fn array_recv(v: f64) -> Option<f64> {
             return None;
         }
     }
-    (header._reserved & ARRAY_NOT_DEFAULT == 0 && pristine(BuiltinProto::Array))
-        .then(|| f64::from_bits(POINTER_TAG | live as u64))
+    // An own named property (`a.indexOf = f`) lives in the named layout, not
+    // in a header bit: an array that has one is not answered by
+    // `Array.prototype` alone.
+    (header._reserved & ARRAY_NOT_DEFAULT == 0
+        && (*(live as *const crate::array::ArrayHeader))
+            .named
+            .is_null()
+        && pristine(BuiltinProto::Array))
+    .then(|| f64::from_bits(POINTER_TAG | live as u64))
 }
 
 /// The live head a forwarded array alias names, or `None`.
@@ -141,7 +149,8 @@ const WEAKMAP: u32 = crate::weakref::CLASS_ID_WEAKMAP;
 const WEAKSET: u32 = crate::weakref::CLASS_ID_WEAKSET;
 
 mod function_receiver;
-use function_receiver::{function_call, function_ok};
+use function_receiver::function_call;
+pub(super) use function_receiver::function_ok;
 
 /// `Array.prototype.push` on a plain array (the dispatcher's dense arm).
 /// `recv.apply(args…)` on a function `function_ok` admitted: `Get(recv,

@@ -79,6 +79,17 @@ export function isStrippableUiArchive(triple: string, name: string): boolean {
   return !triple.includes('-apple-') && /^(lib)?perry_ui_[a-z0-9_]+\.(a|lib)$/.test(name)
 }
 
+/**
+ * The ext archives (libperry_ext_*.a, perry_ext_*.lib) are rlib+staticlib
+ * crates built under the profile's thin LTO, so every object carries its
+ * LLVM bitcode (.llvmbc) beside the machine code, and the bundled std rlibs
+ * carry theirs: about half of each archive, none of it read by a native link.
+ * Same Apple exclusion as the UI archives.
+ */
+export function isStrippableExtArchive(triple: string, name: string): boolean {
+  return !triple.includes('-apple-') && /^(lib)?perry_ext_[a-z0-9_]+\.(a|lib)$/.test(name)
+}
+
 function stripWithScript(archive: string, repoRoot: string): void {
   execFileSync('python3', [path.join(repoRoot, 'scripts', 'strip-archive-members.py'), archive], {
     stdio: ['ignore', 'inherit', 'inherit'],
@@ -185,6 +196,8 @@ export interface StageExtOptions {
   /** The release's full source revision (PERRY_SOURCE_REVISION); required. */
   revision?: string
   repoRoot?: string
+  /** Strips the bitcode out of one staged archive in place (tests inject a stub). */
+  stripArchive?: (archive: string) => void
 }
 
 /** The native-extension archives of a release archive. */
@@ -193,6 +206,7 @@ const EXT_ARCHIVE = /^(lib)?perry_ext_[a-z0-9_]+\.(a|lib)$/
 /** Write the ext package of a host from its release archive's ext archives. */
 export function stageExt(options: StageExtOptions): TargetJson {
   const { sourceDir, packageDir, triple, version } = options
+  const repoRoot = options.repoRoot ?? rootPath
   const where = extPackageName(triple)
   const revision = options.revision ?? ''
   if (!REVISION.test(revision)) {
@@ -214,7 +228,8 @@ export function stageExt(options: StageExtOptions): TargetJson {
     version,
     revision,
     files,
-    repoRoot: options.repoRoot ?? rootPath,
+    repoRoot,
+    stripArchive: options.stripArchive ?? (archive => stripWithScript(archive, repoRoot)),
   })
 }
 
@@ -228,7 +243,7 @@ interface WritePackage {
   /** Checked files of `sourceDir`, by plain name. */
   files: TargetFile[]
   repoRoot: string
-  /** Target packages: strips a staged UI archive in place, before it is hashed. */
+  /** Strips a staged UI (target) or ext archive in place, before it is hashed. */
   stripArchive?: (archive: string) => void
 }
 
@@ -242,7 +257,8 @@ function writePackage(p: WritePackage): TargetJson {
     copyFileSync(path.join(p.sourceDir, file.path), staged)
     // Strip the copy (the bundle was verified as shipped), then record the
     // hash and size of what the package really contains: perry verifies them.
-    if (p.kind === 'target' && p.stripArchive && isStrippableUiArchive(p.triple, file.path)) {
+    const strippable = p.kind === 'target' ? isStrippableUiArchive : isStrippableExtArchive
+    if (p.stripArchive && strippable(p.triple, file.path)) {
       p.stripArchive(staged)
       file.sha256 = sha256(staged)
       file.size = statSync(staged).size

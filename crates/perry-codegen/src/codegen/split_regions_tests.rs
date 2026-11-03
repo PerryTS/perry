@@ -345,7 +345,7 @@ fn mutable_class_capture_parameters_stay_in_the_parent() {
         assert!(
             f.params
                 .iter()
-                .all(|p| !p.name.starts_with(perry_hir::cap_fields::CAP_FIELD_PREFIX)),
+                .all(|p| !perry_hir::cap_fields::is_cap_field_name(&p.name)),
             "class capture passed by value: {}",
             f.name
         );

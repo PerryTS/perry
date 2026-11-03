@@ -275,12 +275,11 @@ tiers](../testing/ci-tiers.md). The full tier is:
   `cargo test --workspace`, the gap suite, `gc-stress`, Windows x64 + ARM64 builds,
   compiler-output gates, `repsel-census`, `harmonyos-smoke`, `security-audit`),
   plus `binary-size` and
-- `parity` — must clear the threshold in `test-parity/threshold.json` and add no
-  new / stale known-failure entries
+- `parity` — every case of `test-files/` and `test-parity/node-suite/` in
+  auto-optimize mode must match `test-parity/snapshots/linux-auto/` in both
+  directions
 - `compile-smoke` — must compile every file under `test-files/`, plus the UI
   styling matrix, Fastify integration and memory-stability tests
-- the gap suite in its 8-shard **auto-optimize** mode (the PR/sweep tiers use the
-  prebuilt-runtime `fast` mode)
 - `doc-tests` (macOS + Windows) — must compile + run every example under
   `docs/examples/`
 - the package smokes (`drizzle-mysql-smoke`, `ink-link-smoke`, `effect-basic-smoke`)

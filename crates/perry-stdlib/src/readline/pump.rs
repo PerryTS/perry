@@ -666,7 +666,10 @@ pub extern "C" fn js_readline_has_active() -> i32 {
         || LINE_CALLBACK.with(|c| c.borrow().is_some());
     let has_readline_close_cb =
         !CLOSE_FIRED.with(|f| *f.borrow()) && CLOSE_CALLBACK.with(|c| c.borrow().is_some());
+    // `end`/`close` listeners alone do not start the reader, so they hold the
+    // loop only while another consumer has it running.
     let has_stdin_end_cb = !STDIN_END_FIRED.load(Ordering::Acquire)
+        && (started || eof)
         && STDIN_END_CALLBACKS
             .lock()
             .map(|v| !v.is_empty())

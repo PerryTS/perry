@@ -1119,6 +1119,16 @@ pub(crate) fn try_url_search_params_dynamic_dispatch(
     url_search_params_dynamic_call(params, method_name, args_ptr, args_len)
 }
 
+/// The array iterator object over an eager view array (a boxed array).
+fn iterator_over(view: f64) -> f64 {
+    let array = (view.to_bits() & crate::value::POINTER_MASK) as *const crate::array::ArrayHeader;
+    if array.is_null() {
+        return view;
+    }
+    let iterator = crate::array::js_array_values_iter_obj(array);
+    f64::from_bits(crate::value::JSValue::pointer(iterator as usize as *const u8).bits())
+}
+
 pub(crate) fn url_search_params_dynamic_call(
     params: *mut ObjectHeader,
     name: &str,
@@ -1183,14 +1193,16 @@ pub(crate) fn url_search_params_dynamic_call(
                 .join("&");
             create_string_f64(&joined)
         }
-        // Iteration helpers surface as eager arrays, matching the convention
-        // the static lowering uses (`js_get_iterator` wraps an eager array in
-        // the runtime array iterator when driven through for-of). mysql2's
-        // `parseUrl` iterates `url.searchParams` and Node code commonly calls
-        // `.entries()` / `.getAll()` on dynamic receivers.
-        "entries" => js_url_search_params_entries_arr(params),
-        "keys" => js_url_search_params_keys_arr(params),
-        "values" => js_url_search_params_values_arr(params),
+        // mysql2's `parseUrl` iterates `url.searchParams` and Node code
+        // commonly calls `.entries()` / `.getAll()` on dynamic receivers.
+        // WHATWG: entries/keys/values (and [Symbol.iterator]) return an
+        // iterator, not an array — callers drive it with `.next()`. Each one
+        // walks a snapshot of the list with the standard array iterator
+        // object, which is itself iterable, so for-of/spread/Array.from over
+        // the result keep working.
+        "entries" => iterator_over(js_url_search_params_entries_arr(params)),
+        "keys" => iterator_over(js_url_search_params_keys_arr(params)),
+        "values" => iterator_over(js_url_search_params_values_arr(params)),
         "getAll" => {
             // The FFI helper returns RAW pointer bits (the static lowering
             // boxes them); re-box for the dynamic call path.

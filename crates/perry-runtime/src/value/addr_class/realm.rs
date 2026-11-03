@@ -19,14 +19,42 @@ use super::*;
 // `/OPT:REF`, and `bounds()` references it, so whatever needs the bounds
 // brings the section (ld64 cannot synthesize `section$start` for a section
 // it dropped).
+#[cfg(any(target_vendor = "apple", target_os = "windows", target_family = "wasm"))]
 #[used(linker)]
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_realm")]
 #[cfg_attr(target_os = "windows", link_section = ".perryrealm$m")]
-#[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
-    link_section = "perry_realm"
-)]
+#[cfg_attr(target_family = "wasm", link_section = "perry_realm")]
 static mut REALM_SECTION_SENTINEL: [u64; 1] = [0];
+
+// ELF: every `perry_realm` input section is SHF_LINK_ORDER. The compiler ties
+// each cell it emits to the global that names it, and GNU ld before 2.36 (the
+// binutils 2.35 of the glibc 2.31 release floor) fails an output section that
+// has both ordered and unordered inputs ("perry_realm has both ordered [...]
+// and unordered [...] sections"). So the sentinel is tied too, to its owner:
+// a retained byte (`R`, as `used(linker)` marks it) that `bounds()` names, so
+// the link keeps the sentinel exactly when it keeps the owner. Rust cannot
+// put a link-order flag on a static, so both are assembly; the owner comes
+// first because the assembler resolves the linked-to symbol where the
+// section directive stands.
+#[cfg(not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")))]
+std::arch::global_asm!(
+    ".pushsection .rodata.perry_realm_section_owner,\"aR\",%progbits",
+    ".globl perry_realm_section_owner",
+    ".hidden perry_realm_section_owner",
+    "perry_realm_section_owner:",
+    ".byte 0",
+    ".popsection",
+    ".pushsection perry_realm,\"awo\",%progbits,perry_realm_section_owner",
+    ".p2align 3",
+    ".zero 8",
+    ".popsection",
+);
+
+#[cfg(not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")))]
+unsafe extern "C" {
+    /// The sentinel's owner (the assembly above).
+    static perry_realm_section_owner: u8;
+}
 
 #[cfg(target_os = "windows")]
 #[used(linker)]
@@ -41,7 +69,10 @@ static mut REALM_END: [u64; 1] = [0];
 #[inline]
 pub(crate) fn bounds() -> (usize, usize) {
     // A real reference: whatever links this function links the sentinel too.
+    #[cfg(any(target_vendor = "apple", target_os = "windows", target_family = "wasm"))]
     std::hint::black_box(std::ptr::addr_of!(REALM_SECTION_SENTINEL));
+    #[cfg(not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")))]
+    std::hint::black_box(std::ptr::addr_of!(perry_realm_section_owner));
     #[cfg(target_vendor = "apple")]
     {
         // ld64 synthesizes `section$start$SEG$SECT` only under that exact

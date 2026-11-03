@@ -284,3 +284,45 @@ fn async_generator_header_yield_awaits_its_operand() {
         }
     }
 }
+
+/// Async `yield*`: both delegated pulls (`await next.call(iter, v)`) must be
+/// `StateExit::Await` suspend points. Left as inline `Expr::Await` inside a
+/// state body they lowered to codegen's busy-wait await, which never settles
+/// under an embedder event loop (the fixture hung in `yield*` delegation).
+#[test]
+fn async_generator_yield_star_pulls_are_await_states() {
+    super::linearize::set_linearize_async_generator(true);
+    let body = vec![Stmt::Expr(Expr::Yield {
+        value: Some(Box::new(Expr::GlobalGet(0))),
+        delegate: true,
+    })];
+    let mut states = Vec::new();
+    let mut current = Vec::new();
+    let mut state_num = 0;
+    let mut next_id = 100;
+    let mut catches = Vec::new();
+    let mut finallys = Vec::new();
+    linearize_body(
+        &body,
+        &mut states,
+        &mut current,
+        &mut state_num,
+        90,
+        &mut next_id,
+        91,
+        &mut catches,
+        &mut finallys,
+    );
+    super::linearize::set_linearize_async_generator(false);
+    let awaits = states
+        .iter()
+        .filter(|s| matches!(s.exit, StateExit::Await { .. }))
+        .count();
+    assert_eq!(awaits, 2, "the initial and the in-loop pull each suspend");
+    let inline = format!("{:?}", states.iter().map(|s| &s.body).collect::<Vec<_>>())
+        + &format!("{current:?}");
+    assert!(
+        !inline.contains("Await("),
+        "no delegated pull may remain an inline await"
+    );
+}

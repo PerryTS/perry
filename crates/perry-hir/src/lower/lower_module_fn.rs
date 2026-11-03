@@ -933,6 +933,8 @@ pub fn lower_module_full_with_platform_globals(
     // bindings before any initializer/function body can reference them; the
     // declaration pass below still records the imports in source order.
     module_decl::pre_register_static_import_bindings(&mut ctx, ast_module);
+    // An import binding a local declaration repeats is an early error.
+    module_decl::import_redeclaration::check_import_redeclarations(ast_module)?;
     // #6812 (w16): scan the module lowering actually consumes (post-fold) for
     // constant-bounded dynamic-key builder widths; `lower_object` attaches
     // them to the per-site empty-literal classes as alloc_width_hint.

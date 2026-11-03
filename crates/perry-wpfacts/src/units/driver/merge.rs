@@ -109,6 +109,10 @@ pub(in crate::units) fn merge_unit(
     pf.super_unrelinked.extend(u.super_unrelinked);
     pf.interp_guard = pf.interp_guard.take().or(u.interp_guard);
     pf.fnproto_bind_written = pf.fnproto_bind_written.take().or(u.fnproto_bind_written);
+    pf.fnproto_borrow_written = pf
+        .fnproto_borrow_written
+        .take()
+        .or(u.fnproto_borrow_written);
     pf.array_iteration_written = pf
         .array_iteration_written
         .take()

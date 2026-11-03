@@ -141,9 +141,11 @@ unsafe fn note_map_compaction(map: *mut MapHeader, removed: RemovedSlots) {
     {
         let entry = (*(*map).store)
             .compaction
-            .get_or_insert_with(|| MapCompactionLog {
-                records: std::collections::VecDeque::new(),
-                retained: 0,
+            .get_or_insert_with(|| {
+                Box::new(MapCompactionLog {
+                    records: std::collections::VecDeque::new(),
+                    retained: 0,
+                })
             });
         if matches!(removed, RemovedSlots::Prefix(_)) {
             // The extent was discarded: every cursor rebases to 0 through
@@ -796,8 +798,12 @@ impl Hash for MapPtrKey {
 }
 
 impl PartialEq for MapPtrKey {
+    #[inline(always)]
     fn eq(&self, other: &Self) -> bool {
-        jsvalue_eq(self.0, other.0)
+        // A probe that hits matches on bits; only a candidate that differs in
+        // bits (a BigInt by value, a hash-slot neighbour) pays the general
+        // comparison, so the hit path makes no call (#13792).
+        self.0.to_bits() == other.0.to_bits() || jsvalue_eq(self.0, other.0)
     }
 }
 impl Eq for MapPtrKey {}
@@ -1209,6 +1215,9 @@ fn jsvalue_eq(a: f64, b: f64) -> bool {
         }
     }
 
+    // An array under two addresses (growth forwarding) is not decided here:
+    // a lookup that misses asks `array_alias` (#13792), so a compare that
+    // hits or misses on bits pays nothing for it.
     false
 }
 
@@ -1423,6 +1432,8 @@ unsafe fn compact_map_entries(map: *mut MapHeader) {
         }
     }
     rebuild_map_ptr_index(map);
+    // Raw indices moved; array tokens did not (#13792).
+    rebuild_array_tokens(map);
     if !removed.is_empty() {
         note_map_compaction(map, RemovedSlots::Indices(removed));
     }
@@ -1553,7 +1564,7 @@ unsafe fn find_key_index_cold(map: *const MapHeader, key: f64) -> i32 {
                 return i as i32;
             }
         }
-        return -1;
+        return small_map_array_key_miss(map, key_bits);
     }
 
     // Numeric-key fast path: bits-stable values (numbers, bools,
@@ -1612,13 +1623,14 @@ unsafe fn find_key_index_cold(map: *const MapHeader, key: f64) -> i32 {
         // A present-but-missing entry is a definitive miss: every insert
         // path (`js_map_set`), delete (`rebuild_map_index`), clear, GC
         // move, and GC rewrite keeps the table exact.
-        if let Some(slot) = (*map).store.as_ref().map(|store| &store.pointers) {
-            if let Some(&i) = slot.get(&MapPtrKey(key)) {
+        if let Some(store) = (*map).store.as_ref() {
+            if let Some(&i) = store.pointers.get(&MapPtrKey(key)) {
                 if i < used {
                     return i as i32;
                 }
             }
-            return -1;
+            // An array key may be stored under its other address (#13792).
+            return large_map_array_key_miss(store, map, key_bits);
         }
     }
 
@@ -1633,8 +1645,211 @@ unsafe fn find_key_index_cold(map: *const MapHeader, key: f64) -> i32 {
             return i as i32;
         }
     }
+    array_key_miss_any(map, key_bits)
+}
 
+/// A lookup of `key_bits` missed on bits (#13792): is the key an array that
+/// the map holds under its other address? Growth reallocates an array and
+/// leaves a forwarding stub at its old head, so one JS array has two addresses
+/// until a collection heals the references: a stored key can be the stub while
+/// the probe is the live head, or the other way round. Identity is the
+/// forwarding-resolved head, as `===` defines it.
+///
+/// Inline, the miss pays the honest-pointer test and one header load of the
+/// probe, and asks [`find_array_alias`] only when an alias is possible:
+/// - a forwarded probe always (it is resolved and looked up again);
+/// - a small map only when an array grew since it last proved that none of
+///   its stored keys is a stub (`MapStore::array_epoch`);
+/// - a large map only when it indexes an array key (`MapStore::arrays`).
+///
+/// Each lookup branch knows its regime, so the gate reads no extent length.
+#[inline(always)]
+unsafe fn small_map_array_key_miss(map: *const MapHeader, key_bits: u64) -> i32 {
+    match probe_array_state(key_bits) {
+        ProbeArray::NotArray => -1,
+        ProbeArray::Forwarded => find_array_alias(map, key_bits, true),
+        ProbeArray::Live => match (*map).store.as_ref() {
+            Some(store) if store.array_epoch != crate::array::array_growth_epoch() => {
+                find_array_alias(map, key_bits, false)
+            }
+            _ => -1,
+        },
+    }
+}
+
+/// [`small_map_array_key_miss`] for a large map whose store the caller holds.
+#[inline(always)]
+unsafe fn large_map_array_key_miss(
+    store: &MapStore,
+    map: *const MapHeader,
+    key_bits: u64,
+) -> i32 {
+    match probe_array_state(key_bits) {
+        ProbeArray::NotArray => -1,
+        ProbeArray::Forwarded => find_array_alias(map, key_bits, true),
+        ProbeArray::Live if store.arrays.is_some() => find_array_alias(map, key_bits, false),
+        ProbeArray::Live => -1,
+    }
+}
+
+/// The general lookup tail, which serves both regimes.
+#[inline(never)]
+unsafe fn array_key_miss_any(map: *const MapHeader, key_bits: u64) -> i32 {
+    if (*map).used <= SIDE_TABLE_THRESHOLD {
+        return small_map_array_key_miss(map, key_bits);
+    }
+    match (*map).store.as_ref() {
+        Some(store) => large_map_array_key_miss(store, map, key_bits),
+        None => match probe_array_state(key_bits) {
+            ProbeArray::Forwarded => find_array_alias(map, key_bits, true),
+            _ => -1,
+        },
+    }
+}
+
+enum ProbeArray {
+    NotArray,
+    Live,
+    Forwarded,
+}
+
+/// Is the probe an array, and is it a growth stub? A `POINTER_TAG` word names
+/// a GC-headed object (`pointer_value_header`), so one load of the header's
+/// kind and flags answers both.
+#[inline(always)]
+fn probe_array_state(key_bits: u64) -> ProbeArray {
+    match crate::value::addr_class::pointer_value_header(key_bits) {
+        Some(h) if h.obj_type == crate::gc::GC_TYPE_ARRAY => {
+            if h.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
+                ProbeArray::Forwarded
+            } else {
+                ProbeArray::Live
+            }
+        }
+        _ => ProbeArray::NotArray,
+    }
+}
+
+/// The out-of-line half of [`small_map_array_key_miss`] and
+/// [`large_map_array_key_miss`] (#13792).
+///
+/// A forwarded probe is looked up again by its live head. Otherwise a stored
+/// key can only be a stub of the probe: a large map finds it by the array's
+/// identity token, a small one scans its keys for stubs and, finding none,
+/// stamps the proof that spares the next miss the scan.
+#[cold]
+#[inline(never)]
+unsafe fn find_array_alias(map: *const MapHeader, key_bits: u64, probe_forwarded: bool) -> i32 {
+    let addr = (key_bits & crate::value::POINTER_MASK) as usize;
+    let store = (*map).store;
+    if probe_forwarded {
+        let live = crate::value::resolve_forwarding(addr);
+        let found =
+            find_key_index_cold(map, f64::from_bits(crate::value::POINTER_TAG | live as u64));
+        // A forwarded probe that misses is usually about to be inserted as
+        // that stub: withdraw the proof that no stored key is one.
+        if found < 0 {
+            if let Some(store) = store.as_mut() {
+                store.array_epoch = 0;
+            }
+        }
+        return found;
+    }
+    let Some(store) = store.as_mut() else {
+        return -1;
+    };
+    let used = (*map).used;
+    let entries = entries_ptr(map);
+    if used > SIDE_TABLE_THRESHOLD {
+        // No token: the array was never a key of a large map.
+        return match store.arrays.as_ref().and_then(|arrays| {
+            crate::set::key_identity(addr, false).and_then(|token| arrays.get(&token).copied())
+        }) {
+            Some(i)
+                if i < used
+                    && crate::array::arrays_share_identity(
+                        ptr::read(entries.add(i as usize * 2)).to_bits(),
+                        key_bits,
+                    ) =>
+            {
+                i as i32
+            }
+            _ => -1,
+        };
+    }
+    let epoch = crate::array::array_growth_epoch();
+    let mut stub_stored = false;
+    for i in 0..used {
+        let bits = ptr::read(entries.add(i as usize * 2)).to_bits();
+        if bits & !crate::value::POINTER_MASK != crate::value::POINTER_TAG
+            || bits == MAP_HOLE_KEY_BITS
+        {
+            continue;
+        }
+        let stored = (bits & crate::value::POINTER_MASK) as usize;
+        let Some(h) = crate::value::addr_class::try_read_gc_header(stored) else {
+            continue;
+        };
+        if h.obj_type != crate::gc::GC_TYPE_ARRAY || h.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+        {
+            continue;
+        }
+        stub_stored = true;
+        if crate::value::resolve_forwarding(stored) == addr {
+            return i as i32;
+        }
+    }
+    if !stub_stored {
+        store.array_epoch = epoch;
+    }
     -1
+}
+
+/// Index a large map's newest entry by its array identity token (#13792).
+/// At the crossing into the large regime every entry is indexed.
+#[inline(never)]
+unsafe fn index_large_map_array_key(map: *mut MapHeader, key_bits: u64, index: u32) {
+    if index == SIDE_TABLE_THRESHOLD {
+        rebuild_array_tokens(map);
+        return;
+    }
+    if !crate::array::is_array_value_bits(key_bits) {
+        return;
+    }
+    if let Some(token) = crate::array::array_identity_token(key_bits, true) {
+        let store = &mut *(*map).store;
+        let arrays = store.arrays.get_or_insert_with(|| Box::new(crate::fast_hash::new_ptr_hash_map()));
+        let before = hash_index_bytes(arrays);
+        arrays.insert(token, index);
+        note_index_bytes_changed(before, hash_index_bytes(arrays));
+    }
+}
+
+/// Rebuild `MapStore::arrays` from the entries: present only when the map is
+/// large and holds an array key (#13792). Small maps find array aliases by
+/// scanning, so only a large map pays for identity tokens.
+unsafe fn rebuild_array_tokens(map: *mut MapHeader) {
+    let Some(store) = (*map).store.as_mut() else {
+        return;
+    };
+    let before = store.arrays.as_deref().map_or(0, hash_index_bytes);
+    store.arrays = None;
+    let used = (*map).used;
+    if used > SIDE_TABLE_THRESHOLD {
+        let entries = entries_ptr(map);
+        for i in 0..used {
+            let bits = ptr::read(entries.add(i as usize * 2)).to_bits();
+            if crate::array::is_array_value_bits(bits) {
+                if let Some(token) = crate::array::array_identity_token(bits, true) {
+                    store
+                        .arrays
+                        .get_or_insert_with(|| Box::new(crate::fast_hash::new_ptr_hash_map()))
+                        .insert(token, i);
+                }
+            }
+        }
+    }
+    note_index_bytes_changed(before, store.arrays.as_deref().map_or(0, hash_index_bytes));
 }
 
 /// The entry whose key bits equal `key_bits`, if any, in a small map's
@@ -1750,6 +1965,8 @@ unsafe fn ensure_capacity(map: *mut MapHeader) -> bool {
     (*next).numeric = std::mem::replace(&mut (*previous).numeric, NumericIndex::new());
     (*next).strings = std::mem::take(&mut (*previous).strings);
     (*next).pointers = std::mem::take(&mut (*previous).pointers);
+    (*next).array_epoch = (*previous).array_epoch;
+    (*next).arrays = (*previous).arrays.take();
     (*next).compaction = (*previous).compaction.take();
     #[cfg(test)]
     {
@@ -2413,10 +2630,17 @@ unsafe fn forget_map_index_entry(map: *mut MapHeader, deleted_key: f64, deleted_
         return;
     }
     if is_ptr_index_key(deleted_bits) {
-        if let Some(index) = (*map).store.as_mut().map(|store| &mut store.pointers) {
-            let before = hash_index_bytes(index);
-            index.remove(&MapPtrKey(deleted_key));
-            note_index_bytes_changed(before, hash_index_bytes(index));
+        if let Some(store) = (*map).store.as_mut() {
+            let before = hash_index_bytes(&store.pointers);
+            store.pointers.remove(&MapPtrKey(deleted_key));
+            note_index_bytes_changed(before, hash_index_bytes(&store.pointers));
+            if let Some(arrays) = store.arrays.as_mut() {
+                if crate::array::is_array_value_bits(deleted_bits) {
+                    if let Some(token) = crate::array::array_identity_token(deleted_bits, false) {
+                        arrays.remove(&token);
+                    }
+                }
+            }
         }
     }
 }
@@ -2531,10 +2755,13 @@ pub extern "C" fn js_map_clear(map: *mut MapHeader) {
         }
     };
     unsafe {
-        if let Some(slot) = (*map).store.as_mut().map(|store| &mut store.pointers) {
-            let before = hash_index_bytes(slot);
-            slot.clear();
-            note_index_bytes_changed(before, hash_index_bytes(slot));
+        if let Some(store) = (*map).store.as_mut() {
+            let before = hash_index_bytes(&store.pointers);
+            store.pointers.clear();
+            if let Some(arrays) = store.arrays.as_mut() {
+                arrays.clear();
+            }
+            note_index_bytes_changed(before, hash_index_bytes(&store.pointers));
         }
     };
 }

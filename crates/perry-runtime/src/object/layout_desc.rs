@@ -643,7 +643,7 @@ mod atoms;
 ))]
 use atoms::atom_bounds;
 #[cfg(test)]
-use atoms::image_atoms;
+pub(crate) use atoms::image_atoms;
 pub use atoms::StaticAtom;
 pub(crate) use atoms::{atom_bytes, coloured_atoms, seed_static_atoms, shadow_name_descriptor};
 

@@ -1,0 +1,1 @@
+A CommonJS export named like a runtime global (exports.undefined, NaN, Infinity, and any other global) no longer becomes a module-scope binding that shadows the global, which made every read of it a dead-zone read at module init.

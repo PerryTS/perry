@@ -819,3 +819,45 @@ fn private_module_init_field_receiver_does_not_repeat_lookup_after_argument() {
         "a private binding cannot be rebound by user code:\n{ir}"
     );
 }
+
+/// The elements-backed Array-subclass probe (`ObjectMeta.elements`, word 12)
+/// must read nothing the receiver's type has not proven to exist. An Array
+/// receiver branches straight to the inline store; only a GC_TYPE_OBJECT
+/// receiver reads its meta slot, and word 12 is read only through a non-null
+/// meta pointer. The old shape `select`ed the receiver in place of a null meta
+/// pointer and loaded `receiver + 96` unconditionally: a fresh `[]` allocated
+/// at the end of a page faulted (an access violation on Windows).
+#[test]
+fn the_elements_probe_loads_only_behind_the_branch_that_proves_the_address() {
+    let ir = ir_for(push_module(Type::Number, numeric_add_push(), Vec::new()));
+    let block = |prefix: &str| {
+        super::class_field_barrier_tests::block_body(&ir, prefix)
+            .unwrap_or_else(|| panic!("no {prefix} block in:\n{ir}"))
+    };
+    let gate = block("apush.elements.");
+    let object_gate = block("apush.elements.meta.");
+    let meta = block("apush.elements.store.");
+    let elements = block("apush.elements.load.");
+    assert!(
+        !gate.contains("load ") && gate.contains("icmp eq i8"),
+        "the Array test must branch on the already-loaded type byte, loading nothing:\n{gate}"
+    );
+    assert!(
+        !object_gate.contains("load ") && object_gate.contains("icmp eq i8"),
+        "the object test must branch before the meta slot is read:\n{object_gate}"
+    );
+    assert!(
+        meta.matches("load i64").count() == 1 && !meta.contains("i64 12"),
+        "the meta block reads only the meta slot:\n{meta}"
+    );
+    assert!(
+        elements.contains("getelementptr i64, ptr %") && elements.contains(", i64 12"),
+        "word 12 is read in its own block, through the proven meta pointer:\n{elements}"
+    );
+    for body in [&gate, &object_gate, &meta, &elements] {
+        assert!(
+            !body.contains("select "),
+            "no select-guarded probe load:\n{body}"
+        );
+    }
+}

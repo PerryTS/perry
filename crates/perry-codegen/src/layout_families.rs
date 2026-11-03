@@ -631,12 +631,11 @@ fn own_keys(class: &Class, has_parent: bool, fresh: bool) -> Result<OwnKeys, Str
         // field-initialisation phase (`field_init` skips it): the
         // constructor's own `this.__perry_cap_* = <capture param>` stash
         // stores it, so it is a constructor key like any prologue store.
-        if f.origin == ClassFieldOrigin::Definition
+        if f.origin.is_capture()
             && f.key_expr.is_none()
             && f.init.is_none()
             && !f.is_private
             && f.decorators.is_empty()
-            && f.name.starts_with(perry_hir::cap_fields::CAP_FIELD_PREFIX)
         {
             continue;
         }
@@ -644,7 +643,7 @@ fn own_keys(class: &Class, has_parent: bool, fresh: bool) -> Result<OwnKeys, Str
         // storage name. A brand (private methods or accessors) would move
         // the instance off its layout, and a specialized class's elements
         // carry another class's id.
-        if f.origin == ClassFieldOrigin::Definition
+        if f.origin.is_definition()
             && f.is_private
             && f.key_expr.is_none()
             && f.decorators.is_empty()
@@ -668,7 +667,7 @@ fn own_keys(class: &Class, has_parent: bool, fresh: bool) -> Result<OwnKeys, Str
         let plain = f.key_expr.is_none()
             && !f.is_private
             && f.decorators.is_empty()
-            && !f.name.starts_with("__perry_cap_");
+            && !f.origin.is_capture();
         match f.origin {
             // A constructor-store reservation: a key of the family at its
             // place in the class's reservation order (`settle_reservations`:
@@ -718,7 +717,7 @@ fn own_keys(class: &Class, has_parent: bool, fresh: bool) -> Result<OwnKeys, Str
                     "private name (brand, fresh evaluation, specialized class or decorator)"
                 } else if !f.decorators.is_empty() {
                     "decorator"
-                } else if f.name.starts_with("__perry_cap_") {
+                } else if f.origin.is_capture() {
                     "class capture"
                 } else {
                     "reservation with an initializer"

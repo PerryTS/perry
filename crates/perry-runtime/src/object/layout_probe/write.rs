@@ -55,9 +55,26 @@ pub(super) unsafe fn probe_add(
     hash: u64,
     bits: u64,
 ) -> bool {
-    if key_bits & TAG_MASK != STRING_TAG {
+    if key_bits & TAG_MASK != STRING_TAG || !add_admitted(dir, obj, r, key_bits, hash) {
         return false;
     }
+    crate::object::leaf_key_add(
+        obj,
+        (key_bits & POINTER_MASK) as *const crate::StringHeader,
+        bits,
+    )
+}
+
+/// [`probe_add`]'s proof, for any key word (an atom or a symbol): `obj` may
+/// take the key as a new own data property by its flags, its meta and the
+/// layouts of its prototype chain. GC leaf; changes nothing.
+pub(super) unsafe fn add_admitted(
+    dir: *const u8,
+    obj: *mut ObjectHeader,
+    r: *const ShapeRecord,
+    key_bits: u64,
+    hash: u64,
+) -> bool {
     let gc = crate::gc::header_from_trusted_user_ptr(obj as *const u8);
     if (*gc)._reserved
         & (crate::gc::OBJ_FLAG_SEALED
@@ -105,16 +122,8 @@ pub(super) unsafe fn probe_add(
     {
         return false;
     }
-    if object_prototype(dir) == Some(obj as *const ObjectHeader)
-        || !chain_admits_add(dir, obj, r, key_bits, hash)
-    {
-        return false;
-    }
-    crate::object::leaf_key_add(
-        obj,
-        (key_bits & POINTER_MASK) as *const crate::StringHeader,
-        bits,
-    )
+    object_prototype(dir) != Some(obj as *const ObjectHeader)
+        && chain_admits_add(dir, obj, r, key_bits, hash)
 }
 
 /// [`probe_add`]'s question for the generic store's own key-add lane

@@ -146,6 +146,8 @@ pub(crate) use crate::lower_patterns::*;
 pub(crate) use crate::lower_types::*;
 
 #[cfg(test)]
+mod builtin_proto_alias_tests;
+#[cfg(test)]
 mod bun_sql_tests;
 #[cfg(test)]
 mod collection_view_tests;
@@ -162,5 +164,8 @@ mod tests;
 
 #[cfg(test)]
 mod iterator_step_tests;
+
+#[cfg(test)]
+mod wtf8_key_tests;
 
 pub(crate) mod dynamic_eval;

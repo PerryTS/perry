@@ -1451,26 +1451,11 @@ mod tests {
         );
     }
 
-    /// Build a module-wrapper-shaped object stamped with the two enumerable
-    /// compatibility properties, exactly as `make_module_object` does. Only
-    /// the internal wrapper-address registration establishes the brand.
+    /// Build a module-wrapper-shaped object exactly as `make_module_object`
+    /// does: no own properties. Only the internal wrapper-address
+    /// registration establishes the brand.
     fn module_wrapper(module_ptr: usize, register: bool) -> f64 {
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let obj_handle = scope.root_raw_mut_ptr(js_object_alloc(0, 2));
-        let kind_key = scope.root_string_ptr(named_key(b"__wasmKind"));
-        let kind_value = scope.root_nanbox_f64(string_value("module"));
-        js_object_set_field_by_name(
-            obj_handle.get_raw_mut_ptr::<ObjectHeader>(),
-            kind_key.get_raw_const_ptr::<crate::StringHeader>(),
-            kind_value.get_nanbox_f64(),
-        );
-        let ptr_key = scope.root_string_ptr(named_key(b"__wasmModulePtr"));
-        js_object_set_field_by_name(
-            obj_handle.get_raw_mut_ptr::<ObjectHeader>(),
-            ptr_key.get_raw_const_ptr::<crate::StringHeader>(),
-            module_ptr as f64,
-        );
-        let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+        let obj = js_object_alloc(0, 0);
         if register {
             register_module_wrapper(obj as usize, module_ptr);
         }

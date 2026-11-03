@@ -139,6 +139,7 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
         request_handle,
         http_version: (1, 1),
         complete: true,
+        read: Default::default(),
     });
 
     let agent_handle = register_handle(agent::AgentHandle {

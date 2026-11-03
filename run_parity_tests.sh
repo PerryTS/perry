@@ -3,6 +3,8 @@
 # Compares output between Node.js and Perry native compilation
 # Fixture parity-rlimit-as-mb ceilings apply only to native execution;
 # unsupported containment fails before the test binary can run.
+# A test overrides the run timeout (PERRY_RUN_TIMEOUT, default 10 s) for itself
+# only with a header comment in its first 5 lines: `// perry-test: run-timeout=60`.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEST_DIR="$SCRIPT_DIR/test-files"
@@ -81,6 +83,12 @@ if [[ ! "$PERRY_RUN_TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
     echo "Invalid PERRY_RUN_TIMEOUT '$PERRY_RUN_TIMEOUT' (want a positive integer)" >&2
     exit 1
 fi
+# Per-test override of the run timeout: a test whose own work cannot fit the
+# default (for example 300k HTTP requests) says so in a header comment within
+# its first 5 lines, `// perry-test: run-timeout=60` (seconds), and only that
+# test gets the longer budget. The node oracle run and the native run both use
+# it. PERRY_RUN_TIMEOUT stays the default for every other test, and the compile
+# step keeps its own PERRY_COMPILE_TIMEOUT.
 # #10757: the COMPILE step below had no timeout at all (only the executed-
 # binary run did, via PERRY_RUN_TIMEOUT above) — a compiler hang/superlinear
 # blowup on one fixture wedged the whole harness rather than failing that one
@@ -281,7 +289,7 @@ fi
 perry_abnormal_exit() {
     local code=$1
     case "$code" in
-        124) echo "TIMEOUT (killed after ${PERRY_RUN_TIMEOUT:-10}s)" ;;
+        124) echo "TIMEOUT (killed after ${test_run_timeout:-${PERRY_RUN_TIMEOUT:-10}}s)" ;;
         132) echo "SIGILL (exit 132)" ;;
         134) echo "SIGABRT (exit 134)" ;;
         136) echo "SIGFPE (exit 136)" ;;
@@ -620,7 +628,13 @@ if [[ "$PERRY_SKIP_BUILD" == "0" || "$TEST_SUITE" == "all" ]] && ! command -v ca
     echo -e "${RED}Cargo is required to build or auto-optimize parity tests, but it is not on PATH${NC}" >&2
     exit 1
 fi
-BUILD_PACKAGES=(-p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static)
+# The build is `cargo build-perry` (.cargo/config.toml): the compiler and every
+# archive it links -- runtime, stdlib, WebAssembly host and all `perry-ext-*`
+# wrappers -- in one Cargo graph, the set CI's gap-suite-build ships. perry
+# never builds an archive while compiling a program (no cargo at compile time),
+# so a test that routes `http`/`net`/`ws`/`zlib` links the wrapper from here
+# or fails to compile. BUILD_PACKAGES only adds packages beyond that set.
+BUILD_PACKAGES=(-p perry-runtime -p perry-stdlib)
 BUILD_FEATURES=()
 # #7629 — every tokio-using `perry-ext-*` wrapper this run will link from the
 # prebuilt set, by staticlib stem. Two jobs:
@@ -635,9 +649,8 @@ BUILD_FEATURES=()
 #   2. under PERRY_SKIP_BUILD=1 nothing is built at all, so their presence in
 #      PERRY_RUNTIME_DIR is a precondition — checked below with the exact
 #      command instead of leaving the operator to decode a link error per test.
-# The `all` suite adds nothing here on purpose: its ext-routed tests take the
-# auto-optimize path per-test (see `test_routes_to_ext_wrapper`), which builds
-# its own coherent archives, so no prebuilt ext archive is required for it.
+# The `all` suite adds nothing here: `cargo build-perry` already builds every
+# wrapper in the same invocation as the stdlib.
 REQUIRED_EXT_LIBS=()
 needs_wasm_host=0
 # Modules the well-known flip routes to a `perry-ext-*` staticlib. A test that
@@ -729,7 +742,7 @@ if [[ "${#BUILD_FEATURES[@]}" -gt 0 ]]; then
 fi
 if [[ "$PERRY_SKIP_BUILD" == "0" ]]; then
     build_log="$PARITY_TMP/release-build.log"
-    if ! cargo build --release --quiet "${BUILD_PACKAGES[@]}" "${BUILD_FEATURE_ARGS[@]}" >"$build_log" 2>&1; then
+    if ! cargo build-perry --release --quiet "${BUILD_PACKAGES[@]}" "${BUILD_FEATURE_ARGS[@]}" >"$build_log" 2>&1; then
         echo -e "${RED}Failed to build compiler/runtime archives (last 40 lines):${NC}" >&2
         tail -40 "$build_log" >&2
         exit 1
@@ -752,6 +765,12 @@ if [[ "$PERRY_SKIP_BUILD" == "0" ]]; then
     # GC effects sidecars over the final archive bytes (after every build above).
     "$SCRIPT_DIR/scripts/gc_call_effects/sidecars.sh" "${CARGO_TARGET_DIR:-$SCRIPT_DIR/target}/release" >"$PARITY_TMP/sidecars.log" 2>&1 \
         || { tail -40 "$PARITY_TMP/sidecars.log" >&2; exit 1; }
+    # A test whose compile env sets a GC/diagnostic instrument knob links the
+    # instrumented `_instr` variant (scripts/build_instr_runtime.sh), which
+    # perry likewise never builds at compile time.
+    echo "Building instrumented runtime variant (release)..."
+    "$SCRIPT_DIR/scripts/build_instr_runtime.sh" >"$PARITY_TMP/instr-build.log" 2>&1 \
+        || { echo -e "${RED}Failed to build the instrumented archives (last 40 lines):${NC}" >&2; tail -40 "$PARITY_TMP/instr-build.log" >&2; exit 1; }
 fi
 # #7629 — PERRY_SKIP_BUILD=1 exports PERRY_NO_AUTO_OPTIMIZE=1 and then builds
 # NOTHING, so every wrapper archive the run needs must already be in
@@ -784,7 +803,7 @@ if [[ "$PERRY_SKIP_BUILD" == "1" && "${#REQUIRED_EXT_LIBS[@]}" -gt 0 ]]; then
         echo "Build them in ONE invocation with the runtime/stdlib archives — a separate" >&2
         echo "per-crate build gives the wrapper its own tokio compilation and the tests" >&2
         echo "abort with \"there is no reactor running\" (#7629):" >&2
-        echo "  cargo build --release ${BUILD_PACKAGES[*]} ${BUILD_FEATURE_ARGS[*]}" >&2
+        echo "  cargo build-perry --release ${BUILD_PACKAGES[*]} ${BUILD_FEATURE_ARGS[*]}" >&2
         echo "Or re-run with PERRY_SKIP_BUILD=0 to have this script do it." >&2
         exit 1
     fi
@@ -1344,6 +1363,18 @@ for (( selected_i = 0; selected_i < JOURNAL_TOTAL; selected_i++ )); do
         continue
     fi
 
+    test_run_timeout="$PERRY_RUN_TIMEOUT"
+    override_line=$(head -n 5 "$test_file" | grep -m1 -E '^[[:space:]]*//[[:space:]]*perry-test:[[:space:]]*run-timeout=' || true)
+    if [[ -n "$override_line" ]]; then
+        override_value=${override_line##*run-timeout=}
+        override_value=${override_value%%[[:space:]]*}
+        if [[ ! "$override_value" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Invalid run-timeout '$override_value' in $test_file (want a positive integer)" >&2
+            exit 2
+        fi
+        test_run_timeout="$override_value"
+    fi
+
     parity_runtime_prefix=()
     if grep -qE '^[[:space:]]*//[[:space:]]*parity-rlimit-as-mb:' "$test_file"; then
         # Validate before oracle/compile work; enforce only on the native run.
@@ -1374,14 +1405,14 @@ for (( selected_i = 0; selected_i < JOURNAL_TOTAL; selected_i++ )); do
     # `$(...)`, so capturing the exit code requires the file detour
     # rather than a `cmd | cap_output` pipeline.
     node_tmp="$PARITY_TMP/${safe_test_id}.node-output"
-    run_with_timeout "$PERRY_RUN_TIMEOUT" env FORCE_COLOR=0 NO_COLOR=1 NODE_DISABLE_COLORS=1 \
+    run_with_timeout "$test_run_timeout" env FORCE_COLOR=0 NO_COLOR=1 NODE_DISABLE_COLORS=1 \
         node --experimental-strip-types "${node_argv[@]}" "$test_file" "${test_argv[@]}" > "$node_tmp" 2>&1
     node_exit=$?
     if [[ $node_exit -ne 0 ]] && can_retry_node_globals_as_commonjs "$test_id" "$test_file"; then
         parity_test_file="$PARITY_TMP/${safe_test_id}.cts"
         cp "$test_file" "$parity_test_file"
         perry_compile_command=(compile)
-        run_with_timeout "$PERRY_RUN_TIMEOUT" env FORCE_COLOR=0 NO_COLOR=1 NODE_DISABLE_COLORS=1 \
+        run_with_timeout "$test_run_timeout" env FORCE_COLOR=0 NO_COLOR=1 NODE_DISABLE_COLORS=1 \
             node --experimental-strip-types "${node_argv[@]}" "$parity_test_file" "${test_argv[@]}" > "$node_tmp" 2>&1
         node_exit=$?
     fi
@@ -1565,10 +1596,10 @@ for (( selected_i = 0; selected_i < JOURNAL_TOTAL; selected_i++ )); do
         # Git Bash has no enforceable RLIMIT_NPROC (`ulimit -u`) for native
         # Windows processes. The Python-backed timeout starts a fresh process
         # group and kills its tree, even when GNU timeout is unavailable.
-        run_with_timeout "$PERRY_RUN_TIMEOUT" env PERRY_STUB_DIAG=off "${parity_env[@]}" \
+        run_with_timeout "$test_run_timeout" env PERRY_STUB_DIAG=off "${parity_env[@]}" \
             "${parity_runtime_prefix[@]}" "$perry_binary" "${test_argv[@]}" > "$perry_tmp" 2>&1
     else
-        run_with_timeout "$PERRY_RUN_TIMEOUT" "$BASH" -c '
+        run_with_timeout "$test_run_timeout" "$BASH" -c '
             if [ "$(uname -s)" = "Linux" ]; then
                 proc_list=$(ps -u "$(id -u)" -L -o lwp= 2>/dev/null)
             else

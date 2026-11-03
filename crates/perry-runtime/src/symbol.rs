@@ -26,6 +26,7 @@ mod get;
 mod inherited_accessor_tests;
 mod iterator;
 mod properties;
+mod space;
 #[cfg(test)]
 mod test_helpers;
 
@@ -98,9 +99,10 @@ pub const SYMBOL_MAGIC: u32 = crate::codegen_abi::SYMBOL_HEADER_MAGIC; // "SYMB"
 /// The shared symbol payload; descriptions name the runtime string header.
 pub type SymbolHeader = crate::codegen_abi::SymbolHeader<StringHeader>;
 
-/// Box-leaked symbols obey the same p-8 header contract as GC cells. The
-/// prefix is not registered with the collector: identity and lifetime remain
-/// process-wide, and the payload contains no GC pointers.
+/// A persistent symbol's cell in the process immortal symbol space
+/// ([`space`]): the same p-8 header contract as GC cells. The prefix is not
+/// registered with the collector: identity and lifetime are process-wide,
+/// and the payload contains no GC pointers.
 #[repr(C)]
 struct PersistentSymbol {
     header: crate::gc::GcHeader,
@@ -109,8 +111,9 @@ struct PersistentSymbol {
 }
 
 fn leak_symbol(mut symbol: SymbolHeader) -> *mut SymbolHeader {
-    symbol.registered |= 2;
-    let mut cell = Box::new(PersistentSymbol {
+    symbol.registered |= perry_abi::SYMBOL_NATIVE_TEXT;
+    #[allow(unused_mut)]
+    let mut cell = PersistentSymbol {
         header: crate::gc::GcHeader {
             obj_type: crate::gc::GC_TYPE_SYMBOL,
             // This process-lifetime leaf is never censused or swept. It is
@@ -123,20 +126,21 @@ fn leak_symbol(mut symbol: SymbolHeader) -> *mut SymbolHeader {
         },
         symbol,
         description_text: None,
-    });
-    // A Box allocation is outside the moving arena. Use the shared setter
-    // so pin custody remains explicit even for these immortal leaf cells.
-    unsafe { crate::gc::pin_object(std::ptr::addr_of_mut!(cell.header)) };
-    #[cfg(test)]
-    let cell = if crate::buffer::bytes::b4_sabotage("symbol_header") {
-        let mut cell = cell;
-        cell.header.obj_type = crate::gc::GC_TYPE_STRING;
-        cell
-    } else {
-        cell
     };
-    let raw = Box::into_raw(cell);
-    unsafe { std::ptr::addr_of_mut!((*raw).symbol) }
+    #[cfg(test)]
+    if crate::buffer::bytes::b4_sabotage("symbol_header") {
+        cell.header.obj_type = crate::gc::GC_TYPE_STRING;
+    }
+    let raw = space::alloc_cell();
+    // SAFETY: a fresh, zeroed, exclusively owned cell of the space.
+    unsafe {
+        // GC_STORE_AUDIT(INIT): fresh zeroed cell of the immortal symbol space, written once before publication; its description slot is installed afterward through the barriered setter.
+        raw.write(cell);
+        // The space is outside the moving arena. Use the shared setter so
+        // pin custody remains explicit even for these immortal leaf cells.
+        crate::gc::pin_object(std::ptr::addr_of_mut!((*raw).header));
+        std::ptr::addr_of_mut!((*raw).symbol)
+    }
 }
 
 const _: () = assert!(std::mem::offset_of!(PersistentSymbol, symbol) == crate::gc::GC_HEADER_SIZE);
@@ -151,7 +155,7 @@ static SYMBOL_REGISTRY: Mutex<Option<HashMap<String, usize>>> = Mutex::new(None)
 /// symbols have no native tail and answer None before it is addressed.
 pub(crate) fn registered_symbol_description(sym_ptr: usize) -> Option<std::sync::Arc<str>> {
     unsafe {
-        if (*(sym_ptr as *const SymbolHeader)).registered & 2 == 0 {
+        if (*(sym_ptr as *const SymbolHeader)).registered & perry_abi::SYMBOL_NATIVE_TEXT == 0 {
             return None;
         }
         let cell = (sym_ptr - crate::gc::GC_HEADER_SIZE) as *const PersistentSymbol;
@@ -209,7 +213,7 @@ unsafe fn description_bytes_from_header(ptr: *const StringHeader) -> Option<Vec<
 pub(crate) fn record_registered_symbol_description(sym_ptr: usize, description: &str) {
     unsafe {
         let cell = (sym_ptr - crate::gc::GC_HEADER_SIZE) as *mut PersistentSymbol;
-        debug_assert!((*cell).symbol.registered & 2 != 0);
+        debug_assert!((*cell).symbol.registered & perry_abi::SYMBOL_NATIVE_TEXT != 0);
         (*cell).description_text = Some(std::sync::Arc::from(description));
     }
 }
@@ -307,7 +311,7 @@ fn well_known_symbol_slow(short_name: &str) -> *mut SymbolHeader {
     // the SymbolHeader itself is Box-leaked and outlives that arena.
     let sym_ptr = leak_symbol(SymbolHeader {
         magic: SYMBOL_MAGIC,
-        registered: 0,
+        registered: perry_abi::SYMBOL_WELL_KNOWN,
         description: std::ptr::null_mut(),
         id: next_id(),
     });
@@ -352,19 +356,12 @@ pub extern "C" fn js_symbol_well_known_async_iterator() -> f64 {
     f64::from_bits(POINTER_TAG | (symbol as u64 & POINTER_MASK))
 }
 
-/// O(1) check whether a raw pointer is a well-known symbol (Symbol.toPrimitive etc.).
-/// Used by `js_symbol_key_for` so the spec-mandated `undefined` return for
-/// well-known symbols is preserved.
+/// Is `ptr` a well-known symbol (Symbol.toPrimitive etc.)? Its own payload
+/// says so (`SYMBOL_WELL_KNOWN`); `js_symbol_key_for` keeps the spec's
+/// `undefined` for them.
 pub fn is_well_known_symbol(ptr: usize) -> bool {
-    let guard = WELL_KNOWN_SYMBOLS.lock().unwrap();
-    if let Some(cache) = guard.as_ref() {
-        for &p in cache.values() {
-            if p == ptr {
-                return true;
-            }
-        }
-    }
-    false
+    is_registered_symbol(ptr)
+        && unsafe { (*(ptr as *const SymbolHeader)).registered & perry_abi::SYMBOL_WELL_KNOWN != 0 }
 }
 
 /// True when the bytes at `ptr` *could* be a [`SymbolHeader`], i.e. when a
@@ -450,12 +447,20 @@ pub fn intl_legacy_constructed_symbol() -> f64 {
     f64::from_bits(POINTER_TAG | (sym_ptr as u64 & POINTER_MASK))
 }
 
-/// Symbol identity comes from its tracked allocation's dedicated GC type.
-/// Persistent symbols are native immortal allocations already owned by the
-/// named process registries. Only those proven addresses may be dereferenced
-/// outside the tracked heap; arbitrary pointer-shaped values remain safe.
-/// Keep the admission in one shared helper so generic callers do not inherit
-/// the allocator and immortal fallback branches.
+/// Is the raw word `ptr` a symbol? A symbol is known by its GC header
+/// (DECISIONS 243): every symbol is a cell of type `GC_TYPE_SYMBOL` whose
+/// payload starts with `SYMBOL_MAGIC`. No registry is consulted.
+///
+/// `ptr` may be arbitrary bits (a number, an interior address), so the cell
+/// is proven before any read, by where it lives:
+/// - a tracked heap range: the allocator's object-start proof;
+/// - the process immortal symbol space (every well-known, `Symbol.for`, Intl
+///   and runtime symbol): its range and cell stride ([`space::holds`]);
+/// - the realm image (codegen's symbol cells): its bounds.
+///
+/// Any other word is no symbol, and nothing is read. Only then the payload
+/// magic and the header type. A NaN-boxed value takes [`js_is_symbol`], which
+/// reads the honest pointer's header directly.
 #[inline(never)]
 pub fn is_registered_symbol(ptr: usize) -> bool {
     #[cfg(test)]
@@ -465,35 +470,34 @@ pub fn is_registered_symbol(ptr: usize) -> bool {
     {
         return matches && unsafe { (*(ptr as *const SymbolHeader)).magic == SYMBOL_MAGIC };
     }
-    is_persistent_symbol(ptr)
+    let cell = space::holds(ptr) || image_symbol_extent(ptr);
+    // SAFETY: a cell start of the symbol space, or an aligned image address
+    // whose header and payload lie inside the image.
+    cell && unsafe { symbol_cell_at(ptr) }
 }
-#[inline(never)]
-fn is_persistent_symbol(ptr: usize) -> bool {
-    if !crate::value::addr_class::is_plausible_heap_addr(ptr) {
-        return false;
-    }
-    let known = SYMBOL_REGISTRY
-        .lock()
-        .unwrap()
-        .as_ref()
-        .is_some_and(|m| m.values().any(|&value| value == ptr))
-        || WELL_KNOWN_SYMBOLS
-            .lock()
-            .unwrap()
-            .as_ref()
-            .is_some_and(|m| m.values().any(|&value| value == ptr))
-        || INTL_FALLBACK_SYMBOL
-            .lock()
-            .unwrap()
-            .is_some_and(|value| value == ptr)
-        || crate::object::runtime_layouts::is_runtime_symbol(ptr);
-    // No header read until an existing immortal owner proves the address.
-    known
-        && unsafe {
-            crate::value::addr_class::try_read_gc_header(ptr)
-                .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_SYMBOL)
-                && (*(ptr as *const SymbolHeader)).magic == SYMBOL_MAGIC
-        }
+
+/// Could the raw word `ptr` be a symbol cell of the realm image? Its header
+/// and a whole symbol payload lie inside the image section, aligned: bounds
+/// only, no read.
+#[inline(always)]
+fn image_symbol_extent(ptr: usize) -> bool {
+    crate::value::addr_class::realm::is_image_object(ptr)
+        && ptr.is_multiple_of(std::mem::align_of::<crate::gc::GcHeader>())
+        && ptr
+            .checked_add(std::mem::size_of::<SymbolHeader>())
+            .is_some_and(|end| end <= crate::value::addr_class::realm::bounds().1)
+}
+
+/// The header test itself: the payload magic, then the header type.
+///
+/// # Safety
+/// `ptr` is an aligned address of readable memory with a readable word
+/// before it (an honest pointer payload).
+#[inline(always)]
+unsafe fn symbol_cell_at(ptr: usize) -> bool {
+    may_be_symbol_header(ptr as *const u8)
+        && (*((ptr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader)).obj_type
+            == crate::gc::GC_TYPE_SYMBOL
 }
 
 /// True for symbols created through `Symbol.for(...)`. These are known symbols
@@ -505,7 +509,9 @@ pub(crate) fn is_global_registered_symbol(ptr: usize) -> bool {
     }
     unsafe {
         let sym = ptr as *const SymbolHeader;
-        !sym.is_null() && (*sym).magic == SYMBOL_MAGIC && (*sym).registered & 1 != 0
+        !sym.is_null()
+            && (*sym).magic == SYMBOL_MAGIC
+            && (*sym).registered & perry_abi::SYMBOL_GLOBAL_REGISTRY != 0
     }
 }
 
@@ -514,11 +520,11 @@ pub(crate) fn is_global_registered_symbol(ptr: usize) -> bool {
 /// proof, which is what WeakMap/WeakSet/WeakRef key validation sees.
 #[inline]
 pub(crate) fn value_is_global_registered_symbol(value: f64) -> bool {
-    // SAFETY: js_is_symbol proves the allocation before the header is read.
+    // SAFETY: js_is_symbol proves the cell before the payload is read.
     unsafe {
         js_is_symbol(value) != 0
             && (*(((value.to_bits() & POINTER_MASK) as usize) as *const SymbolHeader)).registered
-                & 1
+                & perry_abi::SYMBOL_GLOBAL_REGISTRY
                 != 0
     }
 }
@@ -620,34 +626,21 @@ pub(crate) unsafe fn alloc_symbol(
     ptr
 }
 
-/// Check whether a NaN-boxed JSValue is a Symbol.
-///
-/// The answer comes from the value itself: a pointer tag, then the payload's
-/// first word. Every symbol payload starts with `SYMBOL_MAGIC`, so a word that
-/// differs is an exact "no" with no address classification at all — the
-/// common answer for every object, array and closure receiver. Only a
-/// matching word pays the allocation proof in [`is_registered_symbol`], which
-/// keeps a payload that merely starts with the same bytes from passing.
-///
-/// The payload word is the same one this function always read for a
-/// non-symbol above the handle band; the screen moves that read first.
+/// Check whether a NaN-boxed JSValue is a Symbol: the pointer tag, then the
+/// cell's own header (DECISIONS 243). A `POINTER_TAG` word above the handle
+/// band names a GC-headed cell (`addr_class::pointer_value_header`), in the
+/// arena or in immortal space alike, so no allocation proof and no registry
+/// is consulted. The payload magic is read first: every object, array and
+/// closure receiver answers "no" from its own first word.
 #[no_mangle]
 pub unsafe extern "C" fn js_is_symbol(value: f64) -> i32 {
     let bits = value.to_bits();
-    if bits & 0xFFFF_0000_0000_0000 != POINTER_TAG {
+    const BIAS: u64 = POINTER_TAG | crate::value::addr_class::HANDLE_BAND_MAX as u64;
+    const SPAN: u64 = (1u64 << 48) - crate::value::addr_class::HANDLE_BAND_MAX as u64;
+    if bits.wrapping_sub(BIAS) >= SPAN {
         return 0;
     }
-    let ptr_usize = (bits & POINTER_MASK) as usize;
-    // Registry handles (proxies, fetch/stream handles, …) are POINTER_TAG'd
-    // small ids, NOT heap allocations — dereferencing one for the magic
-    // probe segfaults on Linux (#1843/#4800).
-    if crate::value::addr_class::is_handle_band(ptr_usize) {
-        return 0;
-    }
-    if !may_be_symbol_header(ptr_usize as *const u8) {
-        return 0;
-    }
-    i32::from(is_registered_symbol(ptr_usize))
+    i32::from(symbol_cell_at((bits & POINTER_MASK) as usize))
 }
 
 /// Extract the raw object pointer from a NaN-boxed JSValue. Returns 0 if the
@@ -714,37 +707,6 @@ pub(crate) fn note_symbol_key_installed(sym_key: usize) {
     }
 }
 
-/// #10510: has a symbol-keyed property (data or accessor) EVER been stored
-/// against a small-native-handle owner key? The #5437 `_req` fallback in
-/// `js_object_get_symbol_property` can only return a value the handle holds
-/// in these side tables, so while this is `false` it is a guaranteed miss —
-/// and it is not free: it interns a `"_req"` key and runs a by-name `[[Get]]`
-/// over the receiver's whole prototype chain on EVERY symbol read that misses
-/// the receiver's own table (every implicit `ToPrimitive`'s
-/// `Symbol.toPrimitive` probe, every `[Symbol.iterator]` behind a spread).
-/// Monotonic, like [`CONCAT_SPREADABLE_EVER`]. GC owner rekeys need no note:
-/// they only move heap-object owners, which the fallback rejects.
-static SMALL_HANDLE_SYMBOL_OWNER_EVER: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
-pub(crate) fn small_handle_symbol_owner_ever() -> bool {
-    SMALL_HANDLE_SYMBOL_OWNER_EVER.load(std::sync::atomic::Ordering::Acquire)
-}
-
-/// Note a symbol-keyed install on `obj_key`. Must be called BEFORE the table
-/// insert in every install funnel (same ordering argument as
-/// [`note_symbol_key_installed`]).
-pub(crate) fn note_symbol_owner_installed(obj_key: usize) {
-    // Arrays carry own-key/prototype identity in their existing receiver-local
-    // shape word. Publish the transition before the side-table entry so array
-    // fast paths never need a symbol-name lookup to prove the canonical shape.
-    if crate::value::addr_class::is_small_handle(obj_key)
-        && !SMALL_HANDLE_SYMBOL_OWNER_EVER.load(std::sync::atomic::Ordering::Relaxed)
-    {
-        SMALL_HANDLE_SYMBOL_OWNER_EVER.store(true, std::sync::atomic::Ordering::Release);
-    }
-}
-
 /// The cached well-known symbol pointer if `short_name` was ever
 /// materialized, else null. Unlike [`well_known_symbol`], never allocates.
 pub(crate) fn well_known_symbol_if_cached(short_name: &str) -> *mut SymbolHeader {
@@ -761,7 +723,6 @@ pub(crate) fn store_object_symbol_property_root(
     value_bits: u64,
 ) -> bool {
     note_symbol_key_installed(sym_key);
-    note_symbol_owner_installed(obj_key);
     let _holder_edit = crate::object::descriptor_state::HolderEdit::new(obj_key);
     if unsafe { crate::object::shaped_symbols::owner(obj_key).is_some() } {
         let existed = unsafe { crate::object::shaped_symbols::entry(obj_key, sym_key) };
@@ -840,4 +801,212 @@ pub(crate) fn symbol_registry_census() -> crate::gc::census::SideTableRow {
         }
     }
     ("symbol.registry", 0, 0)
+}
+
+#[cfg(test)]
+mod symbol_identity_is_header {
+    use super::*;
+    use crate::gc::{GcHeader, GC_FLAG_MARKED, GC_FLAG_TENURED, GC_HEADER_SIZE, GC_TYPE_SYMBOL};
+
+    fn header(obj_type: u8, gc_flags: u8) -> GcHeader {
+        GcHeader {
+            obj_type,
+            gc_flags,
+            _reserved: 0,
+            size: (GC_HEADER_SIZE + std::mem::size_of::<SymbolHeader>()) as u32,
+        }
+    }
+
+    fn payload(magic: u32) -> SymbolHeader {
+        SymbolHeader {
+            magic,
+            registered: 0,
+            description: std::ptr::null_mut(),
+            id: 0x5A11,
+        }
+    }
+
+    /// A hand-written cell of the process symbol space (a forgery when the
+    /// type or magic is wrong): the space proves the address, the header
+    /// decides.
+    fn space_cell(obj_type: u8, magic: u32) -> usize {
+        let raw = space::alloc_cell();
+        unsafe {
+            // GC_STORE_AUDIT(INIT): test-only forged cell in a fresh symbol-space slot; description is null and nothing is published before the write.
+            raw.write(PersistentSymbol {
+                header: header(obj_type, GC_FLAG_TENURED | GC_FLAG_MARKED),
+                symbol: payload(magic),
+                description_text: None,
+            });
+            std::ptr::addr_of!((*raw).symbol) as usize
+        }
+    }
+
+    #[repr(C)]
+    struct ImageSymbol {
+        header: GcHeader,
+        symbol: SymbolHeader,
+    }
+
+    const fn image_symbol() -> ImageSymbol {
+        ImageSymbol {
+            header: GcHeader {
+                obj_type: GC_TYPE_SYMBOL,
+                gc_flags: crate::value::addr_class::realm::IMAGE_CELL_FLAGS,
+                _reserved: 0,
+                size: (GC_HEADER_SIZE + std::mem::size_of::<SymbolHeader>()) as u32,
+            },
+            symbol: SymbolHeader {
+                magic: SYMBOL_MAGIC,
+                registered: 0,
+                description: std::ptr::null_mut(),
+                id: 0x5A12,
+            },
+        }
+    }
+
+    /// A codegen-style symbol cell in the realm image section.
+    #[used]
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_realm")]
+    #[cfg_attr(target_os = "windows", link_section = ".perryrealm$m")]
+    #[cfg_attr(
+        not(any(target_vendor = "apple", target_os = "windows")),
+        link_section = "perry_realm"
+    )]
+    static mut IMAGE_SYMBOL: ImageSymbol = image_symbol();
+    /// The same bytes in ordinary data: only the image bounds tell them apart.
+    #[used]
+    static mut COUNTERFEIT_SYMBOL: ImageSymbol = image_symbol();
+
+    fn boxed(ptr: usize) -> f64 {
+        f64::from_bits(POINTER_TAG | ptr as u64)
+    }
+
+    /// The value form (honest header read) and the raw-word form (address
+    /// proof first) agree on every real cell.
+    fn accepted(ptr: usize) -> bool {
+        let by_value = unsafe { js_is_symbol(boxed(ptr)) } != 0;
+        assert_eq!(
+            by_value,
+            is_registered_symbol(ptr),
+            "value and word forms agree"
+        );
+        by_value
+    }
+
+    #[test]
+    fn symbol_identity_is_header() {
+        // SYMBOL_MAGIC in a cell whose header is not a symbol's: rejected.
+        assert!(!accepted(space_cell(
+            crate::gc::GC_TYPE_OBJECT,
+            SYMBOL_MAGIC
+        )));
+        assert!(!accepted(space_cell(
+            crate::gc::GC_TYPE_STRING,
+            SYMBOL_MAGIC
+        )));
+        // A symbol header over a payload without the magic: rejected.
+        assert!(!accepted(space_cell(GC_TYPE_SYMBOL, !SYMBOL_MAGIC)));
+        // A symbol cell no registry owns is a symbol: the header is the proof.
+        // (A registry-membership test rejects this one.)
+        let bare = space_cell(GC_TYPE_SYMBOL, SYMBOL_MAGIC);
+        assert!(accepted(bare));
+        // Every persistent kind, and an arena symbol.
+        let wk = well_known_symbol("iterator") as usize;
+        let rt = persistent_symbol("kNxpaRuntime") as usize;
+        let intl = (intl_legacy_constructed_symbol().to_bits() & POINTER_MASK) as usize;
+        let key = crate::string::js_string_from_bytes(b"nxpa.for".as_ptr(), 8);
+        let for_value = unsafe { js_symbol_for(f64::from_bits(STRING_TAG | key as u64)) };
+        let reg = (for_value.to_bits() & POINTER_MASK) as usize;
+        let local = unsafe { alloc_symbol(std::ptr::null_mut(), false) } as usize;
+        for (name, ptr) in [
+            ("well-known", wk),
+            ("runtime", rt),
+            ("intl", intl),
+            ("for", reg),
+            ("local", local),
+        ] {
+            assert!(accepted(ptr), "{name} symbol is known by its header");
+        }
+        // Every persistent kind lives in the one process symbol space.
+        for (name, ptr) in [
+            ("well-known", wk),
+            ("runtime", rt),
+            ("intl", intl),
+            ("for", reg),
+        ] {
+            assert!(
+                space::holds(ptr),
+                "{name} symbol is a cell of the symbol space"
+            );
+        }
+        assert!(!space::holds(local));
+        // Kinds come from the payload bits.
+        assert!(is_well_known_symbol(wk));
+        assert!(
+            !is_well_known_symbol(rt) && !is_well_known_symbol(reg) && !is_well_known_symbol(local)
+        );
+        assert!(is_global_registered_symbol(reg));
+        assert!(
+            !is_global_registered_symbol(wk)
+                && !is_global_registered_symbol(rt)
+                && !is_global_registered_symbol(local)
+        );
+        // WeakRef / FinalizationRegistry targets: a registered symbol is refused,
+        // the others are held weakly.
+        assert!(!crate::weakref::is_valid_weak_target(for_value));
+        assert!(crate::weakref::is_valid_weak_target(boxed(wk)));
+        assert!(crate::weakref::is_valid_weak_target(boxed(local)));
+
+        // Raw words: the address is proven before anything is read.
+        // Interior and misaligned words of a real space cell: rejected.
+        for raw in [
+            bare - GC_HEADER_SIZE,
+            bare + 8,
+            bare + 16,
+            bare + 1,
+            bare + 4,
+            bare + space::CELL - 8,
+        ] {
+            assert!(!is_registered_symbol(raw), "space interior {raw:#x}");
+        }
+        // The last cell of the range, past the bump (never handed out): rejected.
+        let last = space::base() + (space::CELLS - 1) * space::CELL + GC_HEADER_SIZE;
+        assert!(!is_registered_symbol(last));
+        // An image symbol cell: accepted by the image bounds; the same bytes
+        // in ordinary data are not a cell the raw-word form can prove.
+        let image = unsafe { std::ptr::addr_of!(IMAGE_SYMBOL.symbol) } as usize;
+        assert!(crate::value::addr_class::realm::is_image_object(image));
+        assert!(accepted(image));
+        let counterfeit = unsafe { std::ptr::addr_of!(COUNTERFEIT_SYMBOL.symbol) } as usize;
+        assert!(!is_registered_symbol(counterfeit));
+        assert!(!is_registered_symbol(image + 8) && !is_registered_symbol(image + 4));
+        // Words that are no cell at all, among them a number's magnitude
+        // (bare_receiver's 0x7fff_ffff_f000): rejected without a read.
+        for raw in [
+            0usize,
+            8,
+            0x1000,
+            crate::value::addr_class::HANDLE_BAND_MAX - 8,
+            usize::MAX / 2,
+            0x7fff_ffff_f000,
+        ] {
+            assert!(!is_registered_symbol(raw), "{raw:#x}");
+        }
+        // A readable-looking word on an inaccessible page: a read would fault.
+        #[cfg(unix)]
+        unsafe {
+            let page = libc::mmap(
+                std::ptr::null_mut(),
+                4096,
+                libc::PROT_NONE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                -1,
+                0,
+            );
+            assert_ne!(page, libc::MAP_FAILED);
+            assert!(!is_registered_symbol(page as usize + 64));
+            libc::munmap(page, 4096);
+        }
+    }
 }

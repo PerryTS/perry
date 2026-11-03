@@ -3597,14 +3597,6 @@
    "why": "Registry of thread-exit range-hook function pointers (#11471); code addresses only, never a heap address."
   },
   {
-   "file": "crates/perry-stdlib/src/common/handle_lifecycle.rs",
-   "names": [
-    "ORPHANS"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Holds (Handle, Parked) rows: a Handle is a native-registry id in [1, 0x40000) minted by the process-global shared pool (perry_ffi::shared_handle_id_pool), never an arena address, and Parked is {kind, NativeRegistrationIdentity{domain, serial, numeric_id}, epoch}. Payloads live in the process-global common HANDLES map, not in any thread's arena. A row cannot name a different object after reuse: release() retires only via begin_retirement_of(identity), which rejects any registration whose serial differs, and ids are reissued only after a full trace proves them unreferenced (#11453)."
-  },
-  {
    "file": "crates/perry-runtime/src/object/shapes_store.rs",
    "names": [
     "EMPTY_CHUNK",
@@ -3867,6 +3859,47 @@
    ],
    "verdict": "no_heap_address",
    "why": "Process-global list of the function-record images registered so far (it replaced the old OWNERS map). Each element is either a &'static FunctionRecordBounds (the linker-owned record section of a permanent image) or a leaked &'static [&'static OwnerState] for an unloadable image, whose CopiedEntry holds a static code address and Arc<[u8]> name/source bytes, with overrides keyed by owner ordinal. Nothing in it is allocated in a thread Arena or is a GC-managed pointer, so Arena::drop at thread exit cannot leave it stale."
+  },
+  {
+   "file": "crates/perry-runtime/src/builtins/fn_metadata_owner.rs",
+   "names": [
+    "INDEX"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Function-local cache of (owner key, entries sorted by code address) plus an Arc of (code address, &'static [u8]) pairs: code addresses and static name/source bytes of the image or of a leaked owner, rebuilt when the owner key changes. Nothing in it is allocated in a thread Arena or is a GC-managed pointer, so Arena::drop at thread exit cannot leave it stale."
+  },
+  {
+   "file": "crates/perry-runtime/src/feature_hooks.rs",
+   "names": [
+    "FEATURE_INSTALLERS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Slots of extern \"C\" fn() installers registered by static constructors of linked images: code addresses only, no heap or arena address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/layout_desc/literal_birth.rs",
+   "names": [
+    "START",
+    "END"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Windows-only linker section sentinels (.perrylit$a / .perrylit$z) whose addresses bound the literal descriptor section of the loaded image; the arrays hold the constant 0 and their addresses are image addresses, never an arena allocation."
+  },
+  {
+   "file": "crates/perry-runtime/src/symbol/space.rs",
+   "names": [
+    "BASE"
+   ],
+   "verdict": "process_global_allocation",
+   "why": "Start of the symbol space, mapped once by map_zero_pages (mmap/VirtualAlloc, outside every thread Arena) under a Once and never unmapped; the cells are immortal leaves, so thread exit cannot free the range."
+  },
+  {
+   "file": "crates/perry-runtime/src/value/tags.rs",
+   "names": [
+    "JS_NATIVE_SUBCLASS_INIT"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Holds the code address of the one perry-stdlib router (JsNativeSubclassInitFn) installed at startup, or null; a function pointer, never a heap address."
   }
  ]
 }

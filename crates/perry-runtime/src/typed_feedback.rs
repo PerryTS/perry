@@ -2323,11 +2323,9 @@ pub extern "C" fn js_typed_feedback_array_index_get_fallback_boxed(
         return crate::buffer::js_buffer_get(buf, index) as f64;
     }
 
+    // A Map/Set is no element vector: the ordinary keyed [[Get]].
     if crate::set::is_registered_set(raw_addr) || crate::map::is_registered_map(raw_addr) {
-        let Some(index) = finite_nonnegative_u32_index(index) else {
-            return f64::from_bits(TAG_UNDEFINED);
-        };
-        return crate::array::js_array_get_f64(raw_addr as *const ArrayHeader, index);
+        return crate::value::js_dyn_index_get(receiver, index);
     }
 
     if !crate::object::is_valid_obj_ptr(raw_addr as *const u8) {

@@ -117,7 +117,7 @@ pub(crate) fn lower(
         &state_ptr,
     );
     if let Some(owner) = evaluation_owner {
-        super::static_field_meta::store_evaluation_owner(ctx, owner, &shared);
+        super::static_field_meta::store_evaluation_owner(ctx, owner, &shared, evaluation)?;
     }
     publish_first_evaluation_captures(ctx, template, evaluation, &shared)?;
     lower_expr(ctx, first_init)?;

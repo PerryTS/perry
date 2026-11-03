@@ -1036,7 +1036,10 @@ pub extern "C" fn js_fs_read_callback_options(
     let offset = unsafe { options_number_field(options_value, b"offset") }.unwrap_or(0.0);
     let length = unsafe { options_number_field(options_value, b"length") }
         .unwrap_or_else(|| (buffer_len - offset).max(0.0));
-    let position = unsafe { options_number_field(options_value, b"position") }
+    // A number or a bigint (Node accepts both); absent/null reads at the
+    // current file position.
+    let position = unsafe { crate::fs::dirent::options_field_value(options_value, b"position") }
+        .map(|v| f64::from_bits(v.bits()))
         .unwrap_or(f64::from_bits(crate::value::TAG_NULL));
     let bytes = match crate::fs::read_sync_result(fd_value, buffer_value, offset, length, position)
     {
@@ -1052,6 +1055,28 @@ pub extern "C" fn js_fs_read_callback_options(
         defer_fs_callback(cb, &[f64::from_bits(TAG_NULL), bytes, buffer_value]);
     }
     f64::from_bits(TAG_UNDEFINED)
+}
+
+/// `fs.read(fd, callback)`, `fs.read(fd, options, callback)` and
+/// `fs.read(fd, buffer, callback)`: the buffer is `options.buffer` (or the
+/// buffer argument), else a fresh 16 KiB Buffer, as in Node.
+#[no_mangle]
+pub extern "C" fn js_fs_read_callback_short(fd_value: f64, second: f64, callback: f64) -> f64 {
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let is_buffer = |v: f64| crate::buffer::js_buffer_is_buffer(v.to_bits() as i64) != 0;
+    let (buffer, options) = if is_buffer(second) {
+        (second, undefined)
+    } else {
+        let from_options = unsafe { crate::fs::dirent::options_field_value(second, b"buffer") }
+            .map(|v| f64::from_bits(v.bits()))
+            .filter(|v| is_buffer(*v));
+        let buffer = from_options.unwrap_or_else(|| {
+            let fresh = crate::buffer::js_buffer_alloc(16384, 0);
+            f64::from_bits(crate::value::JSValue::pointer(fresh as *const u8).bits())
+        });
+        (buffer, second)
+    };
+    js_fs_read_callback_options(fd_value, buffer, options, callback)
 }
 
 /// `fs.write(fd, string, callback)` / deterministic string subset.

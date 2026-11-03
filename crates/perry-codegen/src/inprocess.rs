@@ -27,6 +27,8 @@ mod loop_interrupt;
 mod nanbox_operands;
 mod native_homes;
 mod optimize_emit;
+#[cfg(test)]
+mod parse_ir_text_tests;
 use optimize_emit::optimize_and_emit;
 
 use std::ffi::CString;
@@ -339,9 +341,40 @@ pub(crate) fn parse_ir_text<'ctx>(
     ir.extend_from_slice(ll_text.as_bytes());
     ir.push(0);
     let buf = MemoryBuffer::create_from_memory_range_copy(&ir, module_name);
-    context
-        .create_module_from_ir(buf)
-        .map_err(|e| anyhow!("LLVM IR parse error:\n{}", e.to_string()))
+    drop(ir);
+    // Parse with LLVMParseIRInContext2, which does NOT consume the buffer, and
+    // dispose the buffer here. Inkwell's `create_module_from_ir` calls the same
+    // non-consuming function under LLVM 22 but still `forget`s the buffer (it
+    // was written for the consuming LLVMParseIRInContext), leaking one full
+    // copy of the IR text per parse: ~42 MB per codegen unit on a large program, ~5 GiB over
+    // 128 units. The parsed module does not reference the text buffer.
+    let mut module = std::ptr::null_mut();
+    let mut message = std::ptr::null_mut();
+    // SAFETY: valid context and buffer; out-pointers are initialised by LLVM.
+    let failed = unsafe {
+        llvm_sys::ir_reader::LLVMParseIRInContext2(
+            context.raw(),
+            buf.as_mut_ptr(),
+            &mut module,
+            &mut message,
+        )
+    };
+    drop(buf);
+    if failed != 0 {
+        let text = if message.is_null() {
+            String::new()
+        } else {
+            // SAFETY: LLVM returns a NUL-terminated message we must dispose.
+            let text = unsafe { std::ffi::CStr::from_ptr(message) }
+                .to_string_lossy()
+                .into_owned();
+            unsafe { llvm_sys::core::LLVMDisposeMessage(message) };
+            text
+        };
+        return Err(anyhow!("LLVM IR parse error:\n{}", text));
+    }
+    // SAFETY: a successful parse returns an owned module in `context`.
+    Ok(unsafe { inkwell::module::Module::new(module) })
 }
 
 /// Interpret plan argv (same grammar as `compile_ll_to_object_inprocess`) and

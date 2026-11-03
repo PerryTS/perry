@@ -196,6 +196,8 @@ pub struct ProgramFacts {
     /// a base class or a native one). A class whose `extends` value settle could not link
     /// to one class is absent: its construction follows the live superclass.
     pub super_unrelinked: std::collections::BTreeMap<u32, Option<u32>>,
+    /// Compiled code may replace Function.prototype.call/apply; fail closed.
+    pub fnproto_borrow_written: Option<String>,
     pub dynamic_code_reach: perry_hir::dynamic_code::DynamicCodeReach,
     pub sabotage: Option<String>,
     pub relations: Option<Vec<String>>,
@@ -1801,6 +1803,12 @@ fn compute_act<'a>(
             .map(|(mi, id, name)| (sorted[mi as usize].0.to_owned(), id, name))
             .collect()
     });
+    let fnproto_borrow_written = if stats.aborted {
+        Some("solve aborted".to_string())
+    } else {
+        g.m.fnproto_borrow_write
+            .map(|r| g.m.reasons[r as usize].clone())
+    };
     let mut pf = ProgramFacts {
         diag_stream: None,
         diagnostics,
@@ -1811,6 +1819,7 @@ fn compute_act<'a>(
         fnproto_bind_written,
         array_iteration_written,
         array_iterator_close_written,
+        fnproto_borrow_written,
         module_paths: sorted.iter().map(|(p, _)| p.to_string()).collect(),
         templates,
         sites,

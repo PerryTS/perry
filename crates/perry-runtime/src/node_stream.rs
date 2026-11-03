@@ -1122,7 +1122,7 @@ fn schedule_pipe_destination_finish_check(dest: f64) {
         1,
     );
     js_closure_set_capture_f64(closure, 0, dest);
-    crate::timer::js_set_immediate_callback(closure as i64);
+    crate::timer::schedule_native_immediate(closure as i64, &[], "Immediate");
 }
 
 fn request_pipe_destination_finish(dest: f64) {
