@@ -5759,6 +5759,7 @@ dependencies = [
  "perry-dispatch",
  "perry-hex",
  "perry-parser",
+ "perry-runtime",
  "perry-runtime-manifest",
  "rand 0.10.3",
  "rustc-demangle",
