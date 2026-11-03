@@ -64,6 +64,21 @@ pub extern "C" fn js_proxy_has(proxy_boxed: f64, key: f64) -> f64 {
 /// delegate to `js_object_delete_field` on the target.
 #[no_mangle]
 pub extern "C" fn js_proxy_delete(proxy_boxed: f64, key: f64) -> f64 {
+    // `delete proxy[0]` lowers with the raw index value. Proxy [[Delete]]
+    // receives a property key (ToPropertyKey), as [[Get]]/[[Set]] do: the
+    // trap sees "0", not 0.
+    let tag = key.to_bits() & crate::value::TAG_MASK;
+    if tag != crate::value::STRING_TAG
+        && tag != crate::value::SHORT_STRING_TAG
+        && unsafe { crate::symbol::js_is_symbol(key) } == 0
+    {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let proxy = scope.root_nanbox_f64(proxy_boxed);
+        let key = scope.root_nanbox_f64(key);
+        let key = scope
+            .root_nanbox_f64(unsafe { crate::object::js_to_property_key(key.get_nanbox_f64()) });
+        return js_proxy_delete(proxy.get_nanbox_f64(), key.get_nanbox_f64());
+    }
     let _proxy_pin = pin_proxy_for_native_call(proxy_boxed);
     let id = match lookup(proxy_boxed) {
         Some(id) => id,
