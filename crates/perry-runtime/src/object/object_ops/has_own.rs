@@ -53,8 +53,16 @@ pub extern "C" fn js_object_is(a: f64, b: f64) -> f64 {
         return f64::from_bits(TAG_FALSE);
     }
 
-    // For everything else, bit-pattern equality
-    if a_bits == b_bits {
+    // For everything else, identity: bit-pattern equality, or two names of
+    // one object across array-growth / evacuation forwarding, resolved the
+    // way `===` resolves them (`value::resolve_forwarding`). A binding
+    // refreshed after a grow holds the new head while an alias keeps the stub.
+    if a_bits == b_bits
+        || (a_jsval.is_pointer()
+            && b_jsval.is_pointer()
+            && crate::value::resolve_forwarding((a_bits & crate::value::POINTER_MASK) as usize)
+                == crate::value::resolve_forwarding((b_bits & crate::value::POINTER_MASK) as usize))
+    {
         f64::from_bits(TAG_TRUE)
     } else {
         f64::from_bits(TAG_FALSE)

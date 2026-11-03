@@ -1,7 +1,8 @@
 //! Owner-local Set index. Buckets contain only a hash and a raw element index;
 //! equality always reads the authoritative (GC-rewritten) elements buffer.
 //! Strings are never rehashed merely because they move. Pointer keys get a
-//! scalar identity token in their own metadata, shared by every Set.
+//! scalar identity token in their own metadata, shared by every Set (and by
+//! Map and WeakMap/WeakSet for array keys, whose address growth changes).
 //! Only inserting into an index allocates a token; a probe for a key without
 //! one is a definite miss.
 
@@ -16,7 +17,7 @@ crate::perry_thread_local! {
 /// A scalar identity belongs to its key's private metadata. Array and
 /// closure keys use their existing traced property holders; other public
 /// object cells already have a direct metadata edge.
-unsafe fn key_identity(addr: usize, create: bool) -> Option<u64> {
+pub(crate) unsafe fn key_identity(addr: usize, create: bool) -> Option<u64> {
     let header = crate::value::addr_class::try_read_gc_header(addr)?;
     let _no_move = crate::gc::GcSuppressScope::new();
     let meta = match header.obj_type {

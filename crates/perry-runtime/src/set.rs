@@ -10,6 +10,7 @@ use std::cell::RefCell;
 use std::ptr;
 
 mod index;
+pub(crate) use index::key_identity;
 #[cfg(test)]
 pub(crate) use index::{
     test_erase_key_identity, test_index_buckets, test_key_identity,
@@ -584,23 +585,7 @@ fn jsvalue_eq(a: f64, b: f64) -> bool {
     // Installing owner-local state can reserve an array property slot and
     // grow its allocation. Such a forwarding alias still names the same JS
     // array, including when one operand has already been refreshed.
-    if a_bits & !crate::value::POINTER_MASK == crate::value::POINTER_TAG
-        && b_bits & !crate::value::POINTER_MASK == crate::value::POINTER_TAG
-    {
-        unsafe {
-            let a = (a_bits & crate::value::POINTER_MASK) as usize;
-            let b = (b_bits & crate::value::POINTER_MASK) as usize;
-            if crate::value::addr_class::try_read_gc_header(a)
-                .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_ARRAY)
-                && crate::value::addr_class::try_read_gc_header(b)
-                    .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_ARRAY)
-            {
-                return crate::array::clean_arr_ptr(a as *const crate::array::ArrayHeader)
-                    == crate::array::clean_arr_ptr(b as *const crate::array::ArrayHeader);
-            }
-        }
-    }
-    false
+    crate::array::arrays_share_identity(a_bits, b_bits)
 }
 
 /// Find the index of a value in the set, or -1 if not found.
