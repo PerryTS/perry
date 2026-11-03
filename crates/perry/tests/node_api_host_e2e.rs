@@ -697,7 +697,9 @@ exports.loadNewer = () => require("./newer.node")
 /// `process.exit()` ends the process without tearing the Node-API environment
 /// down (Node's `reallyExit` skips `FreeEnvironment`): no thread-safe function
 /// finalizer and no environment cleanup hook runs. The natural end of the loop
-/// still runs both.
+/// runs them in Node's order: the cleanup queue (cleanup hooks, async cleanup
+/// hooks and thread-safe functions) newest first, then the finalizers of the
+/// closed thread-safe functions.
 #[cfg(unix)]
 #[test]
 fn process_exit_skips_node_api_environment_teardown() {
@@ -754,16 +756,6 @@ fn process_exit_skips_node_api_environment_teardown() {
         String::from_utf8_lossy(&compile.stderr)
     );
 
-    // Node runs the cleanup hook before the finalizer; the order of the two is
-    // not what this test checks, so the natural transcript is compared as a set.
-    let natural_lines = |stdout: &[u8]| {
-        let mut lines = String::from_utf8_lossy(stdout)
-            .lines()
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
-        lines.sort();
-        lines
-    };
     let check = |program: &Path, args: &[&Path], subject: &str| {
         let exit = Command::new(program)
             .current_dir(root)
@@ -786,9 +778,9 @@ fn process_exit_skips_node_api_environment_teardown() {
             .output()
             .unwrap_or_else(|error| panic!("could not run {subject}: {error}"));
         assert_eq!(
-            natural_lines(&natural.stdout),
-            ["cleanup", "finalized", "held"],
-            "{subject}: the natural end must run Node-API teardown\nstderr:\n{}",
+            String::from_utf8_lossy(&natural.stdout),
+            "held\ncleanup\nasync-cleanup\ncleanup-first\nfinalized\n",
+            "{subject}: the natural end must run Node-API teardown in Node's order\nstderr:\n{}",
             String::from_utf8_lossy(&natural.stderr)
         );
         assert!(
