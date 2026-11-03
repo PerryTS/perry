@@ -27,9 +27,7 @@ fn run(src_text: &str, whole: bool) -> String {
     clean(&mut cmd)
         .current_dir(dir.path())
         .env("PERRY_NO_CACHE", "1");
-    if whole {
-        cmd.env("PERRY_FACTS_UNITS", "0");
-    }
+    cmd.env("PERRY_FACTS_UNITS", if whole { "0" } else { "1" });
     let out = cmd
         .arg("compile")
         .arg(&src)

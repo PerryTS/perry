@@ -22,12 +22,12 @@
 //! - `PERRY_FACTS_EXPLAIN=1`: diagnostics — each ⊤ site verdict names
 //!   where ⊤ first entered (the precision report groups by it);
 //! - `PERRY_FACTS_ONLY=1`: stop after writing the dump (analysis-only runs);
-//! - `PERRY_FACTS_UNITS=0`: whole-program facts, the reference mode (one
-//!   solve over every module). The default is per-unit facts (decision 151):
-//!   one solve per module, the other modules unknown code
-//!   (`perry_wpfacts::compute_units`), the bounds per unit. Per-unit is the
-//!   default because whole-program exact points-to does not scale (fastify
-//!   does not converge); owner decision 2026-10-23.
+//! - `PERRY_FACTS_UNITS=1`: the retiring per-unit solve (decision 151: one
+//!   solve per module, the other modules unknown code,
+//!   `perry_wpfacts::compute_units`), kept for its tests until it is
+//!   deleted. The facts are solved over the whole program (decision 251:
+//!   one solve over every module, where a body contributes once the program
+//!   can run it, decision 225); owner decision 2026-11-03.
 //!
 //! Interpreted code (`new Function`, `eval`, `vm`) is no program-wide kill
 //! (decision 150): the analysis models it as the ⊤ summary node, and when it
@@ -552,12 +552,13 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
     out
 }
 
-/// Per-unit is the default facts mode: whole-program exact points-to does not
-/// scale (fastify exceeds the work bound and does not converge unbounded);
-/// owner decision 2026-10-23. `PERRY_FACTS_UNITS=0` opts into the
-/// whole-program reference mode.
+/// The facts are solved over the whole program (decision 251, owner
+/// 2026-11-03): one solve over every module, where a body contributes once
+/// the program can run it (decision 225). `PERRY_FACTS_UNITS=1` selects the
+/// retiring per-unit solve, kept for its tests until it is deleted; no other
+/// value selects anything.
 fn per_unit_facts(env: Option<&str>) -> bool {
-    env != Some("0")
+    env == Some("1")
 }
 
 /// The directories compiler-generated modules (the CommonJS support module,
@@ -647,20 +648,19 @@ mod facts_mode_tests {
     use super::per_unit_facts;
 
     #[test]
-    fn per_unit_is_the_default_mode() {
-        // per-unit is the default: whole-program exact points-to does not
-        // scale; owner 2026-10-23.
+    fn whole_program_is_the_default_mode() {
+        // decision 251: the whole solve is the one codegen reads.
         assert!(
-            per_unit_facts(None),
-            "the default facts mode must be per-unit"
+            !per_unit_facts(None),
+            "the default facts mode must be whole-program"
         );
-        assert!(per_unit_facts(Some("1")));
-        assert!(per_unit_facts(Some("")));
+        assert!(!per_unit_facts(Some("0")));
+        assert!(!per_unit_facts(Some("")));
     }
 
     #[test]
-    fn whole_program_is_an_explicit_opt_in() {
-        assert!(!per_unit_facts(Some("0")));
+    fn per_unit_is_an_explicit_opt_in() {
+        assert!(per_unit_facts(Some("1")));
     }
 }
 
