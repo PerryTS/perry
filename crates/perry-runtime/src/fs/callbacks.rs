@@ -977,6 +977,9 @@ pub extern "C" fn js_fs_futimes_callback(
     f64::from_bits(TAG_UNDEFINED)
 }
 
+/// Buffer length Node allocates when `fs.read` is given no buffer.
+const DEFAULT_READ_BUFFER_LEN: i32 = 16384;
+
 /// `fs.read(fd, buffer, offset, length, position, callback)`.
 #[no_mangle]
 pub extern "C" fn js_fs_read_callback(
@@ -1036,8 +1039,10 @@ pub extern "C" fn js_fs_read_callback_options(
     let offset = unsafe { options_number_field(options_value, b"offset") }.unwrap_or(0.0);
     let length = unsafe { options_number_field(options_value, b"length") }
         .unwrap_or_else(|| (buffer_len - offset).max(0.0));
-    let position = unsafe { options_number_field(options_value, b"position") }
-        .unwrap_or(f64::from_bits(crate::value::TAG_NULL));
+    let position = unsafe { options_field_value(options_value, b"position") }
+        .map_or(f64::from_bits(crate::value::TAG_NULL), |v| {
+            f64::from_bits(v.bits())
+        });
     let bytes = match crate::fs::read_sync_result(fd_value, buffer_value, offset, length, position)
     {
         Ok(bytes) => bytes,
@@ -1052,6 +1057,37 @@ pub extern "C" fn js_fs_read_callback_options(
         defer_fs_callback(cb, &[f64::from_bits(TAG_NULL), bytes, buffer_value]);
     }
     f64::from_bits(TAG_UNDEFINED)
+}
+
+/// `fs.read` overload resolution: `(fd, cb)`, `(fd, buffer, cb)`,
+/// `(fd, options, cb)`, `(fd, buffer, options, cb)` and the positional
+/// `(fd, buffer, offset, length, position, cb)` form.
+pub(crate) fn js_fs_read_overloads(args: [f64; 6], args_len: usize) -> f64 {
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let default_buffer = || {
+        crate::value::js_nanbox_pointer(
+            crate::buffer::js_buffer_alloc(DEFAULT_READ_BUFFER_LEN, 0) as i64
+        )
+    };
+    match args_len {
+        2 => js_fs_read_callback_options(args[0], default_buffer(), undefined, args[1]),
+        3 if crate::fs::is_buffer_like_value(args[1]) => {
+            js_fs_read_callback_options(args[0], args[1], undefined, args[2])
+        }
+        3 => {
+            let options = args[1];
+            let is_object = crate::value::JSValue::from_bits(options.to_bits()).is_pointer();
+            let buffer = is_object
+                .then(|| unsafe { options_field_value(options, b"buffer") })
+                .flatten()
+                .map(|v| f64::from_bits(v.bits()))
+                .filter(|v| crate::fs::is_buffer_like_value(*v))
+                .unwrap_or_else(default_buffer);
+            js_fs_read_callback_options(args[0], buffer, options, args[2])
+        }
+        4 => js_fs_read_callback_options(args[0], args[1], args[2], args[3]),
+        _ => js_fs_read_callback(args[0], args[1], args[2], args[3], args[4], args[5]),
+    }
 }
 
 /// `fs.write(fd, string, callback)` / deterministic string subset.

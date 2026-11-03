@@ -1,0 +1,1 @@
+fs.read now accepts Node's `(fd, options, cb)`, `(fd, buffer, cb)` and `(fd, cb)` call forms, and `fs.read`, `fs.readSync` and `fs.write` honour a bigint `position`. Previously these calls failed with `The "cb" argument must be of type function` or silently read from the current file offset.

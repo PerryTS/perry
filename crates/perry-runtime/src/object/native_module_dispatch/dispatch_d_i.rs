@@ -343,7 +343,7 @@ pub(crate) unsafe fn nm_dispatch_fs(ctx: &NmCtx, module_name: &str, method_name:
         ("fs", "openSync") => crate::fs::js_fs_open_sync(arg(0), arg(1)),
         ("fs", "openAsBlob") => crate::fs::js_fs_open_as_blob(arg(0), arg(1)),
         ("fs", "closeSync") => bool_to_f64(crate::fs::js_fs_close_sync(arg(0))),
-        ("fs", "readSync") if args_len == 3 => {
+        ("fs", "readSync") if args_len == 2 || args_len == 3 => {
             crate::fs::js_fs_read_sync_options(arg(0), arg(1), arg(2))
         }
         ("fs", "readSync") => crate::fs::js_fs_read_sync(arg(0), arg(1), arg(2), arg(3), arg(4)),
@@ -357,12 +357,10 @@ pub(crate) unsafe fn nm_dispatch_fs(ctx: &NmCtx, module_name: &str, method_name:
             crate::fs::js_fs_write_sync_options_dispatch(arg(0), arg(1), arg(2))
         }
         ("fs", "writeSync") => crate::fs::js_fs_write_sync(arg(0), arg(1)),
-        ("fs", "read") if args_len == 4 => {
-            crate::fs::js_fs_read_callback_options(arg(0), arg(1), arg(2), arg(3))
-        }
-        ("fs", "read") => {
-            crate::fs::js_fs_read_callback(arg(0), arg(1), arg(2), arg(3), arg(4), arg(5))
-        }
+        ("fs", "read") => crate::fs::js_fs_read_overloads(
+            [arg(0), arg(1), arg(2), arg(3), arg(4), arg(5)],
+            args_len,
+        ),
         ("fs", "write") if args_len >= 6 => {
             crate::fs::js_fs_write_buffer_callback(arg(0), arg(1), arg(2), arg(3), arg(4), arg(5))
         }
