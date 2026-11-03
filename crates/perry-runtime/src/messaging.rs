@@ -164,6 +164,19 @@ struct PortState {
     listeners: Vec<f64>,
 }
 
+/// Consume the runtime transport's existing inbox without scheduling delivery.
+pub fn take_runtime_port_message(receiver: f64) -> Option<f64> {
+    if message_port_id(receiver) != Some(0) {
+        return None;
+    }
+    let address = crate::value::js_nanbox_get_pointer(receiver) as usize;
+    with_port_states(|states| {
+        states
+            .get_mut(&address)
+            .and_then(|state| state.queue.pop_front())
+    })
+}
+
 static PORT_STATES: Mutex<Option<HashMap<usize, PortState>>> = Mutex::new(None);
 
 mod root_guard_tls {

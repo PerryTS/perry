@@ -32,6 +32,8 @@ mod inbox;
 mod message_port;
 #[cfg(test)]
 mod message_port_receiver_tests;
+#[cfg(test)]
+mod receive_tests;
 pub(crate) use message_port::dispatch_core_operation as dispatch_message_port_core_operation;
 mod parent_port;
 #[cfg(test)]
@@ -1271,59 +1273,53 @@ pub extern "C" fn js_worker_threads_move_message_port_to_context(port: f64, _con
 /// `undefined` when the inbox is empty — matching Node (#3157).
 #[no_mangle]
 pub extern "C" fn js_worker_threads_receive_message_on_port(port: f64) -> f64 {
-    let msg = if let Some(port_id) = port_id_from_object(port) {
-        MESSAGE_PORTS.with(|ports| {
-            ports
-                .borrow_mut()
-                .get_mut(&port_id)
-                .and_then(|state| state.inbox.pop_front())
-        })
-    } else if let Some(channel_id) = broadcast_channel_id_from_object(port) {
-        BROADCAST_CHANNELS.with(|channels| {
-            channels
-                .borrow_mut()
-                .get_mut(&channel_id)
-                .and_then(|state| state.inbox.pop_front())
-        })
-    } else {
-        None
-    };
-    match msg {
-        Some(message) => {
-            let value = f64::from_bits(unsafe { deserialize_nanbox_on_current_thread(&message) });
-            let obj = perry_runtime::object::js_object_alloc(0, 0);
-            set_object_field(obj, "message", value);
-            object_value(obj)
+    let message = match perry_runtime::messaging::message_port_id(port) {
+        Some(0) => perry_runtime::messaging::take_runtime_port_message(port),
+        Some(id) => {
+            let packet = MESSAGE_PORTS.with(|ports| {
+                ports
+                    .borrow_mut()
+                    .get_mut(&id)
+                    .filter(|state| state.object_bits == port.to_bits())
+                    .map(|state| state.inbox.pop_front())
+            });
+            deserialize_received_message(packet.unwrap_or_else(|| invalid_receive_port()))
         }
-        None => js_undefined(),
-    }
+        None => {
+            let packet = BROADCAST_CHANNELS.with(|channels| {
+                channels
+                    .borrow_mut()
+                    .values_mut()
+                    .find(|state| !state.closed && state.object_bits == port.to_bits())
+                    .map(|state| state.inbox.pop_front())
+            });
+            deserialize_received_message(packet.unwrap_or_else(|| invalid_receive_port()))
+        }
+    };
+    let Some(message) = message else {
+        return js_undefined();
+    };
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let message = scope.root_nanbox_f64(message);
+    let obj = scope.root_raw_mut_ptr(perry_runtime::object::js_object_alloc(0, 0));
+    set_object_field(obj.get_raw_mut_ptr(), "message", message.get_nanbox_f64());
+    object_value(obj.get_raw_mut_ptr())
+}
+
+fn deserialize_received_message(message: Option<SerializedValue>) -> Option<f64> {
+    message.map(|value| f64::from_bits(unsafe { deserialize_nanbox_on_current_thread(&value) }))
+}
+
+fn invalid_receive_port() -> ! {
+    perry_runtime::fs::validate::throw_type_error_with_code(
+        "The \"port\" argument must be a MessagePort instance",
+        "ERR_INVALID_ARG_TYPE",
+    )
 }
 
 /// Recover the intrinsic private ID without observable property access.
 fn port_id_from_object(port: f64) -> Option<u64> {
     perry_runtime::messaging::message_port_id(port).filter(|id| *id != 0)
-}
-
-fn broadcast_channel_id_from_object(channel: f64) -> Option<u64> {
-    object_u64_field(channel, "__perryBroadcastChannelId")
-}
-
-fn object_u64_field(value: f64, field_name: &str) -> Option<u64> {
-    let js = JSValue::from_bits(value.to_bits());
-    if !js.is_pointer() {
-        return None;
-    }
-    let obj = perry_runtime::value::js_nanbox_get_pointer(value)
-        as *const perry_runtime::object::ObjectHeader;
-    if obj.is_null() {
-        return None;
-    }
-    let key_ptr = js_string_from_bytes(field_name.as_ptr(), field_name.len() as u32);
-    let field = perry_runtime::object::js_object_get_field_by_name_f64(obj, key_ptr);
-    if JSValue::from_bits(field.to_bits()).is_undefined() {
-        return None;
-    }
-    Some(field.to_bits())
 }
 
 /// new worker_threads.MessageChannel()
