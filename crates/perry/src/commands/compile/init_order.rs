@@ -34,6 +34,7 @@ use super::CompilationContext;
 pub(super) fn classify_eager_modules(ctx: &mut CompilationContext, entry_path: &Path) {
     let mut eager: HashSet<PathBuf> = HashSet::new();
     eager.insert(entry_path.to_path_buf());
+    eager.extend(program_cjs_support(ctx));
     // Next.js wall 54 (part 2): the `.next/server/**` page/route/chunk modules
     // have no static importer (loaded by a runtime-computed path). They are left
     // Deferred — eager-initing turbopack chunks at startup runs React-SSR code
@@ -150,6 +151,25 @@ pub(super) fn classify_eager_modules(ctx: &mut CompilationContext, entry_path: &
             perry_hir::ModuleInitKind::Deferred
         };
     }
+}
+
+/// The CommonJS support module (`perry:cjs`) of a program that is not
+/// closed. Its `cache` is the program's `require.cache`, and its
+/// `js_cjs_install` makes it `Module._cache`. In Node that object exists from
+/// process start, so every `createRequire` function's `require.cache` and
+/// `Module._cache` are one object. The module is therefore Eager and
+/// initializes before every other module: a `createRequire` that runs before
+/// the first CommonJS load (the support module would otherwise come in with
+/// the first deferred require) still holds the program's cache. A closed
+/// program reaches none of these (its census has no `createRequire`), so its
+/// support module keeps the init kind its importers give it.
+fn program_cjs_support(ctx: &CompilationContext) -> Option<PathBuf> {
+    if ctx.cjs_closed {
+        return None;
+    }
+    ctx.cjs_support_path
+        .clone()
+        .filter(|path| ctx.native_modules.contains_key(path))
 }
 
 /// Order a module's dependency edges the way ESM evaluation visits them:
@@ -314,6 +334,17 @@ pub(super) fn topo_sort_non_entry_modules(
     // Any module not reachable from the entry through the collected edges
     // (Deferred dynamic-import targets, etc.) is appended afterwards in
     // alphabetical order for determinism.
+    // The CommonJS support module initializes first (`program_cjs_support`).
+    if let Some(support) = program_cjs_support(ctx) {
+        dfs_visit(
+            &support,
+            &deps,
+            &path_to_name,
+            &mut visited,
+            &mut visiting,
+            &mut sorted,
+        );
+    }
     if let Some(entry_module) = ctx.native_modules.get(entry_path) {
         for import in &entry_module.imports {
             if import.is_dynamic
