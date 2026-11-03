@@ -535,7 +535,7 @@ fn begin_with(
         for rv in receivers.iter_mut() {
             let (word, pass, spill) = emit_guard(ctx, rv)?;
             rv.spill = spill;
-            let pass = emit_value_tests(ctx, rv, &word, &pass)?;
+            let pass = emit_value_tests(ctx, rv, &word, &pass, p.recheck != Recheck::Always)?;
             all = ctx.block().and(I1, &all, &pass);
             decode_slots(ctx, rv, &word);
         }
@@ -1221,7 +1221,7 @@ pub(crate) fn lower_split(
                 }
                 let (word, pass, spill) = emit_guard(ctx, rv)?;
                 rv.spill = spill;
-                let pass = emit_value_tests(ctx, rv, &word, &pass)?;
+                let pass = emit_value_tests(ctx, rv, &word, &pass, true)?;
                 all = ctx.block().and(I1, &all, &pass);
                 decode_slots(ctx, rv, &word);
             }
@@ -1434,6 +1434,7 @@ pub(crate) fn lower_split(
             &inline_t,
             &spill_t,
             &slow_l,
+            recheck != Recheck::Always || inner.is_some(),
         )?;
     } else if copies.len() == 2 {
         // Body region: the guard passed -> pick the copy for the word's layout.

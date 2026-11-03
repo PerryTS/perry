@@ -3367,7 +3367,7 @@ pub extern "C" fn js_shape_ordinary_inline_slot_for_key(shape_id: u32, key_bits:
 }
 
 /// Step 4b loop regions: where objects of an ORDINARY, generation-0,
-/// hole-free shape (the caller checked all three) keep `key` — `(false,
+/// tombstone-free shape (the caller checked all three) keep `key` — `(false,
 /// slot)`, the key's storage slot, in the inline block, or `(true, position)` in the spill buffer: a
 /// position at or past the live inline bound IS the key's index in the
 /// buffer. Answered the inline range front to back, then the spill range
@@ -3467,6 +3467,8 @@ const REGION_GUARD_SLOT_BITS: u32 = 6;
 /// classification, and every covered key must be requested as an inline
 /// Number read. A Number read (R) on a lane that is not an identity F64 lane
 /// sets [`REGION_LOOP_WORD_VALUE_TEST`]: the guard then tests the value.
+/// A layout whose keys may hold the hole sets
+/// [`REGION_LOOP_WORD_PRESENCE_TEST`]: the guard then tests each key's slot.
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn js_region_loop_pack(
@@ -3498,7 +3500,8 @@ pub extern "C" fn js_region_loop_pack(
 enum RegionRefusal {
     /// Not an ordinary-band ShapeId (dictionary / exotic), or a bad key count.
     Band,
-    /// A key is an accessor or not writable/enumerable/configurable data.
+    /// A key is an accessor, private, or not writable/enumerable/configurable
+    /// data (a key that may hold the hole is served with a presence test).
     Summary,
     /// Ineligible receiver/read kind, non-zero semantic generation, or tombstones.
     Kind,
@@ -3534,9 +3537,16 @@ fn region_loop_pack(
         return Err(Band);
     }
     let record = shape_record_for_word(shape_id).ok_or(Band)?;
-    if record.summary() != 0 {
-        return Err(Summary);
-    }
+    // A layout whose keys may hold the hole (every class family's, for life)
+    // is served: the shape says "may have holes", the object proves "has this
+    // key" (object model §3.2, `key_view`). The word then carries
+    // `REGION_LOOP_WORD_PRESENCE_TEST` and the emitted guard tests each key's
+    // slot on the object. Every other summary bit still refuses.
+    let holes = match record.summary() {
+        0 => false,
+        crate::object::key_attrs::SUMMARY_HOLES => true,
+        _ => return Err(Summary),
+    };
     // Borrow the same record throughout priming; no descriptor clone or
     // second slab probe, and no allocation/callback in this operation.
     let descriptor = unsafe { &*record.0.as_ptr() };
@@ -3566,6 +3576,10 @@ fn region_loop_pack(
             if stored_mask & (1 << i) != 0 {
                 return Err(SpillStored);
             }
+            // The guard's presence test reads inline slots only.
+            if holes {
+                return Err(SpillUnservable);
+            }
             if position >= super::SPILL_MAX_FIELD_INDEX {
                 return Err(SpillUnservable);
             }
@@ -3583,7 +3597,9 @@ fn region_loop_pack(
         shape_id.0
     };
     let mut word = u64::from(id);
-    let mut value_test = false;
+    // An R key's value test rejects the hole too, so on a holey layout every
+    // R key is value-tested, whatever its lane.
+    let mut value_test = holes && r_mask & ((1u32 << n) - 1) != 0;
     for (i, &(spilled, n_at)) in at.iter().enumerate().take(n as usize) {
         // A canonical Number cannot preserve a ConstFn body identity. Every
         // SPECIAL write must use the checked slot funnel before storing;
@@ -3634,6 +3650,9 @@ fn region_loop_pack(
     if value_test {
         word |= REGION_LOOP_WORD_VALUE_TEST;
     }
+    if holes {
+        word |= REGION_LOOP_WORD_PRESENCE_TEST;
+    }
     Ok(word)
 }
 
@@ -3651,6 +3670,20 @@ pub const REGION_LOOP_WORD_RETIRED: u64 = u64::MAX;
 /// id half is a ShapeId, so a word carrying it is never
 /// [`REGION_LOOP_WORD_RETIRED`].
 pub const REGION_LOOP_WORD_VALUE_TEST: u64 = 1 << 63;
+
+/// Bit 62 of a published loop-region word: the shape's keys may hold the
+/// hole (`SUMMARY_HOLES`, every class family's layout), so the emitted guard
+/// tests, on the object, that each key it does not value-test holds no
+/// `TAG_HOLE` before F runs (an R key's value test already rejects it).
+/// Field indices end at bit 61, so the bit is free.
+///
+/// The guard proves presence once, and inside F no JS runs. A present key of
+/// a holey layout becomes absent only through a delete, which moves the
+/// object to its overflow and so changes its word (`overflow::delete` sets
+/// the shadow bit). A re-check after JS does not re-test presence: a word
+/// with this bit fails the re-check (as a value-tested learned word does),
+/// so F is entered only through the full guard.
+pub const REGION_LOOP_WORD_PRESENCE_TEST: u64 = 1 << 62;
 
 /// Compute a loop region's word ([`js_region_loop_pack`]) and publish it; the
 /// loop-region publisher, with a single atomic word for the id and slots.
