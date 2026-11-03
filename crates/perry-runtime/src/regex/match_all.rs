@@ -96,10 +96,10 @@ pub(super) fn species(receiver: &RuntimeHandle<'_>) -> Result<Option<f64>, Engin
     }
     // #11193: `RegExp[@@species]` answers `RegExp` itself; constructing the
     // intrinsic directly is observationally identical and skips the generic
-    // Construct. Only a fast path: a replaced `globalThis.RegExp` just misses it.
+    // Construct. Only a fast path, against the realm's `%RegExp%`.
     // The lookup can allocate on first use, so `species` is rooted across it.
     let species = scope.root_nanbox_f64(species);
-    let intrinsic = crate::object::js_get_global_this_builtin_value(b"RegExp".as_ptr(), 6);
+    let intrinsic = crate::object::builtin_constructor_value("RegExp");
     let species = species.get_nanbox_f64();
     if species.to_bits() == intrinsic.to_bits() {
         return Ok(None);

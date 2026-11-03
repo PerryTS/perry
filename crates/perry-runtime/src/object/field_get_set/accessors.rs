@@ -931,19 +931,10 @@ pub(crate) unsafe fn primitive_tagged_prototype_property(
     let scope = crate::gc::RuntimeHandleScope::new();
     let key_h = scope.root_nanbox_f64(crate::value::nanbox_string_key(key));
     let receiver_h = scope.root_nanbox_f64(receiver);
-    let ctor_h = scope.root_nanbox_f64(js_get_global_this_builtin_value(
-        builtin_name.as_ptr(),
-        builtin_name.len(),
-    ));
-    let ctor_value = JSValue::from_bits(ctor_h.get_nanbox_u64());
-    if !ctor_value.is_pointer() {
-        return None;
-    }
-    let ctor_ptr = ctor_value.as_pointer::<crate::closure::ClosureHeader>() as usize;
-    let proto_h = scope.root_nanbox_f64(crate::closure::closure_get_dynamic_prop(
-        ctor_ptr,
-        "prototype",
-    ));
+    // The realm entry `%Boolean.prototype%` / `%BigInt.prototype%`, not a
+    // read through the current global binding (`globalThis.Boolean = X`).
+    let name = std::str::from_utf8(builtin_name).ok()?;
+    let proto_h = scope.root_nanbox_f64(crate::object::builtin_prototype_value(name));
     let proto_value = JSValue::from_bits(proto_h.get_nanbox_u64());
     if !proto_value.is_pointer() {
         return None;

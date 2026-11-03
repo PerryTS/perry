@@ -26,7 +26,7 @@ impl LlFunction {
                     {
                         definition = Some(label)
                     }
-                    LlInst::Br { label: target } => {
+                    LlInst::Br { label: target, .. } => {
                         edges.entry(label).or_default().push(target);
                     }
                     LlInst::CondBr { t, f, .. } => {

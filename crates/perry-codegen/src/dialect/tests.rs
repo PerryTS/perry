@@ -64,9 +64,11 @@ fn roundtrip_ir(text: &str, module_name: &str) -> usize {
         predeclare_function_from_text(&ctx, &module, f)
             .unwrap_or_else(|e| panic!("predeclare: {e:#}"));
     }
+    let metadata = NumberedMetadata::from_ir(&skeleton);
     let mut n = 0usize;
     for f in &fns {
-        n += add_function_from_text(&ctx, &module, f).unwrap_or_else(|e| panic!("{e:#}"));
+        n += add_function_from_text_with(&ctx, &module, &metadata, f)
+            .unwrap_or_else(|e| panic!("{e:#}"));
     }
     module
         .verify()
@@ -280,6 +282,22 @@ entry:
 }
 "#;
     assert_eq!(roundtrip_ir(ir, "alias_load"), 2);
+}
+
+/// A Windows x64 executable reads its TLS array through the TEB
+/// (`expr/agent_ptr.rs`): a load from `gs:[0x58]`, an `inttoptr` constant in
+/// address space 256. The reader refused it ("cannot materialize `inttoptr`"),
+/// failing split Windows modules in any unit but the first.
+#[test]
+fn windows_teb_load_round_trips_through_the_reader() {
+    let ir = r#"
+define ptr @tls_array() {
+entry:
+  %r5 = load ptr, ptr addrspace(256) inttoptr (i64 88 to ptr addrspace(256)), align 8
+  ret ptr %r5
+}
+"#;
+    assert_eq!(roundtrip_ir(ir, "teb_load"), 2);
 }
 
 /// `blk.freeze` (typed-array element indices, `expr/typed_element.rs`) is a
@@ -795,6 +813,7 @@ fn emitted_constant_forms() -> Vec<(LlvmType, String)> {
             "getelementptr (i8, ptr @constant_forms_global, i64 8)",
             "getelementptr inbounds (i8, ptr @constant_forms_global, i64 4)",
             "getelementptr (i8, ptr getelementptr (i8, ptr @constant_forms_global, i64 8), i64 20)",
+            "inttoptr (i64 88 to ptr)",
         ],
     );
     push!(
@@ -880,7 +899,9 @@ fn constant_operands_match_llvms_own_parse_on_typed_and_line_paths() {
     let typed_ctx = Context::create();
     let typed_module = crate::inprocess::parse_ir_text(&typed_ctx, &m.skeleton_ir(), "forms_typed")
         .expect("skeleton parses");
-    let mut stream = FnStream::begin(&typed_ctx, &typed_module, header).expect("begin");
+    let no_metadata = NumberedMetadata::none();
+    let mut stream =
+        FnStream::begin(&typed_ctx, &typed_module, &no_metadata, header).expect("begin");
     function
         .for_each_final_item::<anyhow::Error>(&mut |item| stream.item(&item))
         .unwrap_or_else(|e| panic!("typed construction: {e:#}"));

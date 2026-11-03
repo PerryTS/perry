@@ -131,6 +131,16 @@ fn native_parent(module: &str, name: &str) -> Option<fn() -> f64> {
     })
 }
 
+/// A native constructor by export name; a `#`-prefixed name is node's internal
+/// constructor (no public export), minted and attached like a parent.
+pub(crate) fn native_constructor_value(module: &str, name: &str) -> f64 {
+    if name.starts_with('#') {
+        private_parent_value(module, name)
+    } else {
+        bound_native_callable_export_value(module, name)
+    }
+}
+
 #[inline(always)]
 fn private_parent_value(module: &str, name: &str) -> f64 {
     let key = format!("{module}\0{name}");
@@ -285,6 +295,23 @@ pub(crate) fn link_parent(value: f64, parent: f64) -> f64 {
             );
         }
         link_parent(ctor.get_nanbox_f64(), parent.get_nanbox_f64());
+    }
+    if module == "crypto" && matches!(name, "#Hash" | "#Hmac") {
+        // The internal Hash / Hmac constructors own the family prototype:
+        // install its methods when the constructor is created, so reading
+        // `crypto.Hash.prototype` before any `createHash` sees them.
+        let proto = scope.root_nanbox_f64(prototype(ctor.get_nanbox_f64()));
+        let ptr = crate::value::JS_NATIVE_CRYPTO_DISPATCH.load(std::sync::atomic::Ordering::SeqCst);
+        if !ptr.is_null() {
+            let dispatch: crate::value::JsNativeCryptoDispatchFn = std::mem::transmute(ptr);
+            let args = [proto.get_nanbox_f64()];
+            let method: &[u8] = if name == "#Hash" {
+                b"__adopt_hash_prototype"
+            } else {
+                b"__adopt_hmac_prototype"
+            };
+            dispatch(method.as_ptr(), method.len(), args.as_ptr(), args.len());
+        }
     }
     if (module, name) == ("zlib", "#ZlibBase") {
         install_zlib_closed_getter(prototype(ctor.get_nanbox_f64()));

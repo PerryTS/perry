@@ -266,6 +266,39 @@ pub(super) fn constant<'ctx>(
         let source = constant(ctx, module, source_ty, source_value)?.into_pointer_value();
         return Ok(source.const_to_int(destination_ty).into());
     }
+    // The inverse cast. A Windows x64 executable reads its TLS array through
+    // the TEB (`expr/agent_ptr.rs`), a load from a fixed `gs` offset:
+    //
+    //   load ptr, ptr addrspace(256) inttoptr (i64 88 to ptr addrspace(256))
+    //
+    // Without this branch the reader refused that operand, so a split Windows
+    // module whose later unit reads the agent block failed with "cannot
+    // materialize `inttoptr` as PointerType".
+    if let Some(body) = tok
+        .strip_prefix("inttoptr (")
+        .and_then(|body| body.strip_suffix(')'))
+    {
+        let (source, destination) = body
+            .rsplit_once(" to ")
+            .ok_or_else(|| anyhow!("bad inttoptr constant `{tok}`"))?;
+        let (source_ty, source_value) = ty_and_val(source)?;
+        let BasicTypeEnum::IntType(source_ty) = basic_type(ctx, source_ty)? else {
+            bail!("inttoptr source is not an integer in `{tok}`");
+        };
+        let BasicTypeEnum::PointerType(destination_ty) = basic_type(ctx, destination.trim())?
+        else {
+            bail!("inttoptr destination is not a pointer in `{tok}`");
+        };
+        if BasicTypeEnum::PointerType(destination_ty) != ty {
+            bail!(
+                "inttoptr destination type {} disagrees with operand type {}",
+                destination_ty.print_to_string(),
+                ty.print_to_string()
+            );
+        }
+        let source = constant(ctx, module, source_ty.into(), source_value)?.into_int_value();
+        return Ok(source.const_to_pointer(destination_ty).into());
+    }
     // An address inside a global is a constant too. An executable's string
     // literal is an image-resident object, and its address is
     // `getelementptr (i8, ptr @perry_image_literal_…, i64 8)` (past the GC

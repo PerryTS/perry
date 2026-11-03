@@ -15,6 +15,8 @@
 //! IR and flags this pipeline produces objects byte-identical to Homebrew
 //! clang 22's `clang -c`.
 
+mod assemble;
+pub(crate) use assemble::assemble_text;
 mod coff;
 #[cfg(test)]
 mod dead_statepoint_tests;

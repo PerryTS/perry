@@ -162,6 +162,14 @@ ALLOWLIST: list[tuple[str, str, str]] = [
         "interior of a live allocation and there is no object at it. Writing "
         "the bytes as named flags would be a lie about what was measured.",
     ),
+    (
+        "crates/perry-runtime/src/gc/mark/adopt_census_flag_tests.rs",
+        "GC_FLAG_ARENA | GC_FLAG_PINNED,",
+        "a census flag-refresh case table: the header is written into a test "
+        "Vec<u64> (malloc memory, never Eden) to check that a pinned "
+        "header keeps its mark obligation. It originates no pin a copying "
+        "minor could see.",
+    ),
 ]
 
 # Floor: the tree currently carries ~80 `GC_FLAG_PINNED` tokens. A regex that

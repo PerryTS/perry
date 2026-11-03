@@ -177,7 +177,7 @@ pub(crate) fn wire_function_intrinsic_parents() {
         let scope = crate::gc::RuntimeHandleScope::new();
         let ctor = scope.root_raw_mut_ptr(ctor as *mut crate::closure::ClosureHeader);
         let proto = scope.root_raw_mut_ptr(proto as *mut ObjectHeader);
-        let function_ctor = js_get_global_this_builtin_value(b"Function".as_ptr(), 8);
+        let function_ctor = super::builtin_constructor_value("Function");
         if crate::value::JSValue::from_bits(function_ctor.to_bits()).is_pointer() {
             let function_ctor = scope.root_nanbox_f64(function_ctor);
             ctor.with_mut_ptr::<crate::closure::ClosureHeader, _>(|ctor| {

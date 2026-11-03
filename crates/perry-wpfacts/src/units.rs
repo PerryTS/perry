@@ -372,6 +372,12 @@ pub(crate) struct FnContract {
     /// argument into, per parameter (DECISIONS 162): a caller's unit stores
     /// its argument into that cell, as the whole program runs the store.
     pub param_cells: Vec<(u32, String)>,
+    /// DECISIONS 242 (contract half): the defineProperty calls the body
+    /// makes on an argument (parameter, key or `None` for a computed key,
+    /// a data descriptor): the caller's unit runs each on its argument, as
+    /// the whole program does (on `Object.prototype` it is the accessor
+    /// under any key there).
+    pub param_defines: Vec<(u32, Option<String>, bool)>,
     /// The binding name of a closed function (decision 19): a unit that
     /// calls it as a value publishes what it passes under this name.
     pub closed: Option<String>,
@@ -414,6 +420,7 @@ impl FnContract {
             param_calls: Vec::new(),
             param_handovers: Vec::new(),
             param_cells: Vec::new(),
+            param_defines: self.param_defines.clone(),
             closed: self.closed.clone(),
         }
     }
@@ -756,6 +763,8 @@ impl FnContract {
         self.param_handovers.sort();
         union_into(&mut self.param_cells, &o.param_cells);
         self.param_cells.sort();
+        union_into(&mut self.param_defines, &o.param_defines);
+        self.param_defines.sort();
         if self.closed.is_none() {
             self.closed = o.closed.clone();
         }

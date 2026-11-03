@@ -237,7 +237,7 @@ pub(crate) fn begin_store(
     let header =
         crate::target_layout::object_slot_base_bytes(ctx.target_triple, ctx.program_layouts.form());
     let word_idx = ctx.new_block("l2s.word");
-    let meta_idx = ctx.new_block("l2s_meta");
+    let meta_idx = ctx.new_block("l2s.meta");
     let load_idx = ctx.new_block("l2s.load");
     let hit_idx = ctx.new_block("l2s.hit");
     let miss_idx = ctx.new_block("l2s.miss");
