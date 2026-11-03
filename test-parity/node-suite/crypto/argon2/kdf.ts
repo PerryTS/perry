@@ -43,3 +43,30 @@ const asyncHex = await new Promise<string>((resolve, reject) => {
   });
 });
 console.log("argon2 async hex:", asyncHex);
+
+// Argon2's optional inputs are part of the hash, not ignored hints (#13923).
+const pepperParams = {
+  message: Buffer.from("password"),
+  nonce: Buffer.from("0123456789abcdef"),
+  parallelism: 1,
+  tagLength: 16,
+  memory: 8,
+  passes: 1,
+};
+for (const options of [
+  {},
+  { secret: Buffer.from("pepper") },
+  { associatedData: Buffer.from("ad") },
+  { secret: Buffer.from("pepper"), associatedData: Buffer.from("ad") },
+  { secret: Buffer.alloc(0), associatedData: Buffer.alloc(0) },
+  { secret: undefined, associatedData: undefined },
+]) {
+  console.log("argon2 optional sync:", argon2Sync("argon2id", { ...pepperParams, ...options }).toString("hex"));
+  const hex = await new Promise<string>((resolve, reject) => {
+    argon2("argon2id", { ...pepperParams, ...options }, (err, key) => {
+      if (err) { reject(err); return; }
+      resolve(key.toString("hex"));
+    });
+  });
+  console.log("argon2 optional async:", hex);
+}

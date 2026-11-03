@@ -1,0 +1,1 @@
+Fix `node:crypto` `argon2` and `argon2Sync` silently ignoring the optional `secret` (pepper) and `associatedData` parameters. Both inputs now affect the derived key, with owned submission-time copies for asynchronous calls. Associated data longer than the dependency's 32-byte limit throws `ERR_OUT_OF_RANGE` instead of being ignored; this limit differs from Node.

@@ -311,6 +311,8 @@ pub unsafe extern "C" fn js_crypto_scrypt_async(
 struct NodeArgon2Params {
     message: Vec<u8>,
     nonce: Vec<u8>,
+    secret: Vec<u8>,
+    associated_data: Vec<u8>,
     parallelism: u32,
     tag_length: usize,
     memory: u32,
@@ -377,6 +379,22 @@ unsafe fn argon2_bytes_field(params_bits: u64, name: &[u8], display_name: &str) 
     argon2_value_bytes(bits).unwrap_or_else(|| argon2_type_error(display_name))
 }
 
+unsafe fn argon2_optional_bytes_field(
+    params_bits: u64,
+    name: &[u8],
+    display_name: &str,
+) -> Vec<u8> {
+    let object = JSValue::from_bits(params_bits).as_pointer::<ObjectHeader>();
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let value = js_object_get_field_by_name(object, key);
+    // The generic field helper treats every special-value tag as absent,
+    // including null and booleans. Only undefined omits an optional input.
+    if value.is_undefined() {
+        return Vec::new();
+    }
+    argon2_value_bytes(value.bits()).unwrap_or_else(|| argon2_type_error(display_name))
+}
+
 unsafe fn argon2_u32_field(
     params_bits: u64,
     name: &[u8],
@@ -413,9 +431,17 @@ unsafe fn parse_node_argon2_params(params_bits: f64) -> NodeArgon2Params {
     let passes = argon2_u32_field(bits, b"passes", "passes", 1, u32::MAX as u64);
     let tag_length = argon2_u32_field(bits, b"tagLength", "tagLength", 4, u32::MAX as u64) as usize;
 
+    let secret = argon2_optional_bytes_field(bits, b"secret", "secret");
+    if secret.len() > u32::MAX as usize {
+        argon2_range_error("secret.byteLength", 0, u32::MAX as u64, secret.len() as u64);
+    }
+    let associated_data = argon2_optional_bytes_field(bits, b"associatedData", "associatedData");
+
     NodeArgon2Params {
         message,
         nonce,
+        secret,
+        associated_data,
         parallelism,
         tag_length,
         memory,
@@ -429,8 +455,8 @@ unsafe fn parse_node_argon2_params(params_bits: f64) -> NodeArgon2Params {
 unsafe fn node_argon2_plan(
     algorithm_ptr: i64,
     params_bits: f64,
-) -> (argon2::Argon2<'static>, NodeArgon2Params) {
-    use argon2::{Algorithm, Argon2, Params, Version};
+) -> (argon2::Algorithm, argon2::Params, NodeArgon2Params) {
+    use argon2::{Algorithm, AssociatedData, Params, ParamsBuilder};
 
     let algorithm = String::from_utf8_lossy(&bytes_from_ptr(algorithm_ptr)).to_string();
     let algorithm_kind = match algorithm.as_str() {
@@ -441,30 +467,49 @@ unsafe fn node_argon2_plan(
     };
 
     let params = parse_node_argon2_params(params_bits);
-    let argon_params = Params::new(
-        params.memory,
-        params.passes,
-        params.parallelism,
-        Some(params.tag_length),
-    )
-    .unwrap_or_else(|_| {
+    let data = AssociatedData::new(&params.associated_data).unwrap_or_else(|_| {
         argon2_range_error(
-            "memory",
-            (params.parallelism as u64).saturating_mul(8).max(8),
-            u32::MAX as u64,
-            params.memory as u64,
+            "associatedData.byteLength",
+            0,
+            Params::MAX_DATA_LEN as u64,
+            params.associated_data.len() as u64,
         )
     });
-    (
-        Argon2::new(algorithm_kind, Version::V0x13, argon_params),
-        params,
-    )
+    let argon_params = ParamsBuilder::new()
+        .m_cost(params.memory)
+        .t_cost(params.passes)
+        .p_cost(params.parallelism)
+        .output_len(params.tag_length)
+        .data(data)
+        .build()
+        .unwrap_or_else(|_| {
+            argon2_range_error(
+                "memory",
+                (params.parallelism as u64).saturating_mul(8).max(8),
+                u32::MAX as u64,
+                params.memory as u64,
+            )
+        });
+    (algorithm_kind, argon_params, params)
 }
 
 /// The derivation itself: owned data in, owned bytes out, no JS heap. An empty
 /// result is Node's "the derivation failed", which the callers turn into an
 /// empty Buffer exactly as before.
-fn node_argon2_derive(argon: argon2::Argon2<'static>, params: &NodeArgon2Params) -> Vec<u8> {
+fn node_argon2_derive(
+    algorithm: argon2::Algorithm,
+    argon_params: argon2::Params,
+    params: &NodeArgon2Params,
+) -> Vec<u8> {
+    // Borrow the owned secret only while deriving, on whichever thread runs
+    // this job. Neither a leaked secret nor a JS heap pointer crosses threads.
+    let argon = argon2::Argon2::new_with_secret(
+        &params.secret,
+        algorithm,
+        argon2::Version::V0x13,
+        argon_params,
+    )
+    .expect("secret length was validated on the calling thread");
     let mut out = vec![0u8; params.tag_length];
     if argon
         .hash_password_into(&params.message, &params.nonce, &mut out)
@@ -479,8 +524,8 @@ unsafe fn node_argon2_key(
     algorithm_ptr: i64,
     params_bits: f64,
 ) -> *mut perry_runtime::buffer::BufferHeader {
-    let (argon, params) = node_argon2_plan(algorithm_ptr, params_bits);
-    alloc_buffer_from_slice(&node_argon2_derive(argon, &params))
+    let (algorithm, argon_params, params) = node_argon2_plan(algorithm_ptr, params_bits);
+    alloc_buffer_from_slice(&node_argon2_derive(algorithm, argon_params, &params))
 }
 
 #[no_mangle]
@@ -500,10 +545,10 @@ pub unsafe extern "C" fn js_crypto_argon2_async(
     // turnloop P4: argon2 is memory-hard by design, so it is the most expensive
     // thing in this file to run on the thread that owns the JS heap. Argument
     // validation throws and stays here; the derivation goes to the pool.
-    let (argon, params) = node_argon2_plan(algorithm_ptr, params_bits);
+    let (algorithm, argon_params, params) = node_argon2_plan(algorithm_ptr, params_bits);
     perry_runtime::turnloop_pool::submit_or_run_inline_rooted(
         vec![callback_bits.to_bits()],
-        move || node_argon2_derive(argon, &params),
+        move || node_argon2_derive(algorithm, argon_params, &params),
         move |delivery, roots| {
             let callback = roots
                 .first()
@@ -1485,3 +1530,7 @@ mod scrypt_tests {
         assert!(checked_scrypt_params(4096, 8, 1, 4_197_376).is_ok());
     }
 }
+
+#[cfg(test)]
+#[path = "argon2_tests.rs"]
+mod argon2_tests;
