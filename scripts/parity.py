@@ -244,7 +244,8 @@ def process_budget() -> list[str]:
     count = len([line for line in listed.stdout.splitlines() if line.strip()])
     if listed.returncode != 0 or count <= 0:
         raise HarnessError("cannot measure the current user process count")
-    return ["sh", "-c", f'ulimit -u {count + 50} && exec "$@"', "_"]
+    # bash, not sh: dash (Ubuntu's /bin/sh) has no `ulimit -u`.
+    return ["bash", "-c", f'ulimit -u {count + 50} && exec "$@"', "_"]
 
 
 def run_case(ctx: dict, cid: str, path: Path) -> tuple[str, str]:
