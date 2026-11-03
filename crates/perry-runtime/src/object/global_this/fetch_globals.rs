@@ -755,25 +755,6 @@ pub unsafe extern "C-unwind" fn js_fetch_or_value_super(
             }
         }
     }
-    // `class X extends AssertionError`: `super(options)` initializes the
-    // derived receiver (node: `class AssertionError extends Error`), which
-    // keeps the subclass prototype.
-    if bound_native_parent
-        .as_ref()
-        .is_some_and(|(module, method)| {
-            matches!(
-                super::super::native_module::normalize_native_module_alias(module.as_str()),
-                "assert" | "assert/strict"
-            ) && method.as_str() == "AssertionError"
-        })
-    {
-        let options = if args_len >= 1 && !args_ptr.is_null() {
-            *args_ptr
-        } else {
-            undef
-        };
-        return super::super::assert::js_assert_assertion_error_init_receiver(this_box, options);
-    }
     if bound_native_parent
         .as_ref()
         .is_some_and(|(module, method)| {
@@ -869,20 +850,45 @@ pub unsafe extern "C-unwind" fn js_fetch_or_value_super(
     // and a dynamic heritage all build the one instance. An export with no
     // in-place form answers undefined and keeps the paths below.
     if let Some((module, method)) = bound_native_parent.as_ref() {
-        let ptr = crate::value::JS_NATIVE_SUBCLASS_INIT.load(std::sync::atomic::Ordering::SeqCst);
-        if !ptr.is_null() && subclass_this_object_ptr(this_box).is_some() {
-            let init: crate::value::JsNativeSubclassInitFn = std::mem::transmute(ptr);
+        if subclass_this_object_ptr(this_box).is_some() {
             let module =
                 super::super::native_module::normalize_native_module_alias(module.as_str());
-            let initialized = init(
-                module.as_ptr(),
-                module.len(),
-                method.as_ptr(),
-                method.len(),
-                this_box,
-                args_ptr,
-                args_len,
-            );
+            let options = if args_len >= 1 && !args_ptr.is_null() {
+                *args_ptr
+            } else {
+                undef
+            };
+            // Who owns the constructor answers the in-place init: the
+            // runtime's own natives run their init here (installed or not:
+            // the hook below is filled only by the zlib features and a
+            // runtime-only link never fills it); every other export asks the
+            // hook. A second runtime-owned native gets its own arm.
+            let initialized = match (module, method.as_str()) {
+                // `class X extends AssertionError`: node declares
+                // `class AssertionError extends Error`, so `super(options)`
+                // initializes the derived receiver.
+                ("assert" | "assert/strict", "AssertionError") => {
+                    super::super::assert::js_assert_assertion_error_init_receiver(this_box, options)
+                }
+                _ => {
+                    let ptr = crate::value::JS_NATIVE_SUBCLASS_INIT
+                        .load(std::sync::atomic::Ordering::SeqCst);
+                    if ptr.is_null() {
+                        undef
+                    } else {
+                        let init: crate::value::JsNativeSubclassInitFn = std::mem::transmute(ptr);
+                        init(
+                            module.as_ptr(),
+                            module.len(),
+                            method.as_ptr(),
+                            method.len(),
+                            this_box,
+                            args_ptr,
+                            args_len,
+                        )
+                    }
+                }
+            };
             if !crate::value::JSValue::from_bits(initialized.to_bits()).is_undefined() {
                 return undef;
             }
