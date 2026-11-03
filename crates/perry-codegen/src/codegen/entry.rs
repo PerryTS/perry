@@ -192,6 +192,10 @@ pub(super) fn compile_module_entry(
         }
         if std::env::var_os("PERRY_SNAP_CENSUS").is_some_and(|v| !v.is_empty()) {
             llmod.declare_function("js_snap_entry_body", VOID, &[]);
+            llmod.declare_function("js_snap_tls_program", VOID, &[PTR, PTR, PTR, PTR]);
+            for anchor in crate::stubs::SNAP_TLS_ANCHORS {
+                llmod.add_external_tls_global(anchor, "i8", "localexec");
+            }
             if entry_in_init {
                 llmod.declare_function("js_snap_entry_module", VOID, &[]);
             }
@@ -463,6 +467,16 @@ pub(super) fn compile_module_entry(
         let _ = main.create_block("entry");
         {
             let blk = main.block_mut(0).unwrap();
+            // SNAP census: the program's TLS slots lie between the anchors the
+            // driver links before and after the program objects; the runner
+            // protects those pages only (never runtime thread-locals).
+            if std::env::var_os("PERRY_SNAP_CENSUS").is_some_and(|v| !v.is_empty()) {
+                let a = crate::stubs::SNAP_TLS_ANCHORS.map(|n| format!("@{n}"));
+                blk.call_void(
+                    "js_snap_tls_program",
+                    &[(PTR, &a[0]), (PTR, &a[1]), (PTR, &a[2]), (PTR, &a[3])],
+                );
+            }
             if let Some((const_name, byte_len)) = process_entry_path.as_ref() {
                 let path_ptr = format!("@{}", const_name);
                 let len_str = byte_len.to_string();

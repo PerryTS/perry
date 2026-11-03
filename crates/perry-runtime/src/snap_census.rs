@@ -452,6 +452,25 @@ pub extern "C" fn js_snap_entry_module() {
     }
 }
 
+/// The program's TLS slot ranges: census compiles call this first in `main`
+/// with the addresses of the four page-aligned anchors the driver links
+/// before and after the program objects (`.tdata` and `.tbss` each). Only
+/// these pages are protected; runtime thread-locals stay outside them.
+#[cfg(perry_gc_instruments)]
+#[no_mangle]
+pub extern "C" fn js_snap_tls_program(
+    data_begin: *const u8,
+    data_end: *const u8,
+    bss_begin: *const u8,
+    bss_end: *const u8,
+) {
+    crate::effect!(pure);
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    runner::tls_program(data_begin as usize, data_end as usize, bss_begin as usize, bss_end as usize);
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    let _ = (data_begin, data_end, bss_begin, bss_end);
+}
+
 #[cfg(perry_gc_instruments)]
 #[no_mangle]
 pub extern "C" fn js_snap_entry_body() {

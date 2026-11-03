@@ -36,7 +36,7 @@
 //! Linux x86_64 only (the reservation, `REG_ERR`, the trap flag).
 
 use super::Effect;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicUsize, Ordering::Relaxed};
 
 const PAGE: usize = 4096;
 const MAX_INITS: usize = 1 << 16;
@@ -48,15 +48,30 @@ struct Anchor {
     on: AtomicBool,
     started: AtomicU8,
     state: AtomicPtr<State>,
-    _pad: [u8; PAGE - 16],
+    /// The program's TLS slot ranges (`js_snap_tls_program`): data begin,
+    /// data end, bss begin, bss end.
+    tls: [AtomicUsize; 4],
+    _pad: [u8; PAGE - 48],
 }
 
 static ANCHOR: Anchor = Anchor {
     on: AtomicBool::new(false),
     started: AtomicU8::new(0),
     state: AtomicPtr::new(std::ptr::null_mut()),
-    _pad: [0; PAGE - 16],
+    tls: [AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0)],
+    _pad: [0; PAGE - 48],
 };
+
+/// Census compiles call this first in `main` with the addresses of the four
+/// page-aligned anchors the driver links around the program objects
+/// (`__perry_snap_tls_{data,bss}_{begin,end}`): the program's module-global
+/// TLS slots lie in `[data_begin, data_end)` and `[bss_begin, bss_end)`, on
+/// pages of their own. Runtime and libc thread-locals are outside both.
+pub(super) fn tls_program(data_lo: usize, data_hi: usize, bss_lo: usize, bss_hi: usize) {
+    for (i, v) in [data_lo, data_hi, bss_lo, bss_hi].into_iter().enumerate() {
+        ANCHOR.tls[i].store(v, Relaxed);
+    }
+}
 
 #[inline(always)]
 pub(super) fn on() -> bool {
@@ -541,11 +556,10 @@ struct State {
     /// `js_snap_entry_module`: the next evaluation is the entry module's own
     /// (its body is the entry body, design §2.3).
     entry_module_next: bool,
-    /// Global root slots on no tracked page (the thread pointer's page,
+    /// Global root slots on no tracked page (a TLS slot outside the anchors,
     /// or not a binding: a root slot elsewhere): not watched.
     untracked_slots: u64,
-    /// The executable's static TLS block is whole pages (`TLS_PAGE`): every
-    /// module slot in it can be protected.
+    /// The program's TLS slots are anchored on whole pages of their own.
     tls_whole: bool,
     /// `PERRY_SNAP_MODE=top`: every member of D may read and write every
     /// location that exists when it starts (a ⊤ summary). Members run
@@ -564,9 +578,13 @@ struct State {
     regions: Vec<(usize, usize)>,
     heap: PageMap,
     bin: PageMap,
-    /// The main thread's static TLS block: module globals live there in a
-    /// program with a Worker (per-thread init flags and bindings, #10399).
+    /// The main thread's program TLS slots (initialized data): module
+    /// globals live there in a program with a Worker (per-thread init flags
+    /// and bindings, #10399). Only the anchored range (`tls_program`).
     tls: PageMap,
+    /// The same for the program's zero-initialized TLS slots.
+    tlsb: PageMap,
+    tls_ranges: [usize; 4],
     /// Pages opened for the current instruction (the handler's own state is
     /// never in TLS: a TLS page may be protected).
     pending: [usize; 8],
@@ -684,24 +702,18 @@ unsafe fn start(out: String) {
     let (res_lo, res_hi) = crate::arena::snap_reservation_bounds();
     let realm = crate::value::addr_class::realm::bounds();
     let (bin_lo, bin_hi) = writable_image_range(realm.0);
-    let mut fs: usize = 0;
-    libc::syscall(libc::SYS_arch_prctl, 0x1003 /* ARCH_GET_FS */, &mut fs as *mut usize);
-    // The executable's static TLS block sits right below the thread pointer
-    // (x86_64 variant II): [fs - memsz rounded to its alignment, fs).
-    let tls_size = executable_tls_size();
-    // The page holding the thread pointer is never protected: the kernel
-    // writes the thread's rseq area (in the TCB, right above it) on every
-    // return to user space, and a protected page there kills the thread.
-    // `TLS_PAGE` makes the block whole pages (fs page-aligned, size a page
-    // multiple), so no module slot shares a page with libc's TLS or the TCB.
-    std::hint::black_box(std::ptr::addr_of!(TLS_PAGE));
-    let (tls_lo, tls_hi) = if fs != 0 && tls_size != 0 {
-        // Whole pages only: the page below the block holds libc static TLS.
-        ((fs - tls_size + PAGE - 1) & !(PAGE - 1), fs & !(PAGE - 1))
-    } else {
-        (fs, fs)
-    };
-    let tls_whole = tls_size == 0 || (tls_lo == fs - tls_size && tls_hi == fs);
+    // The program's TLS slots: only the anchored ranges, whole pages that hold
+    // program slots and nothing else (runtime thread-locals, libc's TLS, the
+    // TCB and its rseq area are outside them, so the handler path may touch
+    // them freely). Without the anchors (not a census compile) no TLS page is
+    // tracked and every TLS slot counts as untracked.
+    let t: [usize; 4] = std::array::from_fn(|i| ANCHOR.tls[i].load(Relaxed));
+    let tls_whole = t[0] != 0
+        && t.iter().all(|&a| a % PAGE == 0)
+        && t[0] <= t[1]
+        && t[2] <= t[3];
+    let (tls_lo, tls_hi, tlsb_lo, tlsb_hi) =
+        if tls_whole { (t[0], t[1], t[2], t[3]) } else { (0, 0, 0, 0) };
     let mut st = Box::new(State {
         out,
         inits: Vec::with_capacity(4096),
@@ -767,6 +779,8 @@ unsafe fn start(out: String) {
         heap: PageMap::new(res_lo, res_hi),
         bin: PageMap::new(bin_lo, bin_hi),
         tls: PageMap::new(tls_lo, tls_hi),
+        tlsb: PageMap::new(tlsb_lo, tlsb_hi),
+        tls_ranges: t,
         pending: [0; 8],
         stores: [(0, 0, 0); 4],
         rset_word: 0,
@@ -994,39 +1008,6 @@ fn writable_image_range(inside: usize) -> (usize, usize) {
         hi = rows[k].1;
     }
     (lo, hi)
-}
-
-/// `PT_TLS` memsz of the executable, rounded up to its alignment.
-/// One page-aligned TLS byte (census builds only): it raises the executable's
-/// `PT_TLS` alignment to a page, so the static TLS block `[fs - size, fs)`
-/// is whole pages. Without it the block's first page is shared with libc's
-/// static TLS and its last with the TCB (rseq), both never protected, and the
-/// module slots on them were untracked: fastify 276 of 3,520, Supabase 260 of
-/// 44,914, the poison fixture's one binding (TLS offset 0).
-#[repr(C, align(4096))]
-struct TlsPage(u8);
-#[thread_local]
-static TLS_PAGE: TlsPage = TlsPage(0);
-
-fn executable_tls_size() -> usize {
-    unsafe extern "C" fn each(
-        info: *mut libc::dl_phdr_info,
-        _size: libc::size_t,
-        data: *mut libc::c_void,
-    ) -> libc::c_int {
-        let info = &*info;
-        for i in 0..info.dlpi_phnum as usize {
-            let ph = &*info.dlpi_phdr.add(i);
-            if ph.p_type == libc::PT_TLS {
-                let align = (ph.p_align as usize).max(1);
-                *(data as *mut usize) = (ph.p_memsz as usize).div_ceil(align) * align;
-            }
-        }
-        1 // the executable is the first object; stop
-    }
-    let mut size = 0usize;
-    unsafe { libc::dl_iterate_phdr(Some(each), (&mut size as *mut usize).cast()) };
-    size
 }
 
 fn open_instruction_counter() -> i32 {
@@ -1548,7 +1529,12 @@ fn mark_tracked(lo: usize, hi: usize) {
 
 #[inline]
 fn page_flags(st: &State, addr: usize) -> Option<*mut u8> {
-    st.heap.slot(addr).or_else(|| st.bin.slot(addr)).or_else(|| st.tls.slot(addr))
+    st.heap.slot(addr).or_else(|| st.bin.slot(addr)).or_else(|| tls_slot(st, addr))
+}
+
+#[inline]
+fn tls_slot(st: &State, addr: usize) -> Option<*mut u8> {
+    st.tls.slot(addr).or_else(|| st.tlsb.slot(addr))
 }
 
 // ---------------------------------------------------------------------------
@@ -1596,7 +1582,7 @@ unsafe fn for_each_tracked_range(st: &State, mut f: impl FnMut(usize, usize)) {
     for &(b, e) in &st.regions {
         f(b, e);
     }
-    for m in [&st.bin, &st.tls] {
+    for m in [&st.bin, &st.tls, &st.tlsb] {
         let mut i = 0;
         while i < m.pages {
             if *m.flags.add(i) & PF_TRACKED != 0 {
@@ -1894,7 +1880,7 @@ unsafe fn on_segv_inner(
             let uc = ctx as *mut libc::ucontext_t;
             let pc = (*uc).uc_mcontext.gregs[libc::REG_RIP as usize] as u64;
             let flags = page_flags(st, page).map_or(0xff, |f| *f as u64);
-            let range = if st.heap.slot(addr).is_some() { 1 } else if st.bin.slot(addr).is_some() { 2 } else if st.tls.slot(addr).is_some() { 3 } else { 0 };
+            let range = if st.heap.slot(addr).is_some() { 1 } else if st.bin.slot(addr).is_some() { 2 } else if tls_slot(st, addr).is_some() { 3 } else { 0 };
             diag(&[addr as u64, pc, flags, range, st.d_mode as u64, st.top_mode as u64]);
             return chain(std::ptr::addr_of!(PREV_SEGV.0).cast(), sig);
         }
@@ -2038,7 +2024,7 @@ fn note_access(st: &mut State, word: usize, write: bool, pc: usize) {
         }
     }
     // Words of the binary range count only as global slots or realm cells.
-    if (st.bin.slot(word).is_some() || st.tls.slot(word).is_some())
+    if (st.bin.slot(word).is_some() || tls_slot(st, word).is_some())
         && !(word >= st.realm.0 && word < st.realm.1)
         && !st.globals.contains(word as u64)
     {
@@ -2656,7 +2642,7 @@ fn write_report(st: &mut State) {
             (hi == 0x7FFD || hi == 0x7FFC || hi == 0x7FFF || hi == 0x7FFE)
                 && st.heap.slot(a).is_none()
                 && st.bin.slot(a).is_none()
-                && st.tls.slot(a).is_none()
+                && tls_slot(st, a).is_none()
         };
         for (bk, b) in log.iter().enumerate() {
             if (b.init != 0 && st.inits[b.init as usize].in_d) || is_env(b.addr) {
@@ -2800,7 +2786,12 @@ fn write_report(st: &mut State) {
     let _ = writeln!(f, "#transparent\t{}\t{}\t{}", st.transparent.len(), st.transp.len, st.transparent_hits);
     let _ = writeln!(f, "#foreign_thread_faults\t{}", st.foreign_faults);
     let _ = writeln!(f, "#untracked_slots\t{}\tof\t{}", st.untracked_slots, st.globals.len);
-    let _ = writeln!(f, "#tls\twhole={}", st.tls_whole as u8);
+    let r = st.tls_ranges;
+    let _ = writeln!(
+        f,
+        "#tls\twhole={}\tdata={:x}-{:x}\tbss={:x}-{:x}",
+        st.tls_whole as u8, r[0], r[1], r[2], r[3]
+    );
     for (what, pcs) in &st.realm_hosts {
         let pcs: Vec<String> = pcs.iter().map(|p| format!("{p:x}")).collect();
         let _ = writeln!(f, "#realm_host\t{what}\t{}", pcs.join(","));
