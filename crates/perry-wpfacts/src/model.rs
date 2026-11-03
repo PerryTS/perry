@@ -1727,6 +1727,10 @@ pub struct Act {
     /// `Model::act_key`): what can run, module bodies and static
     /// initializers included (`ProgramFacts::active_bodies`).
     pub walked: crate::pts::FxHashSet<(u32, u32, String)>,
+    /// Every function the activation pass generated (by `Model::act_key`).
+    /// A body outside it is one a later pass minted: it is walked (sound),
+    /// the pass never asked whether it can run.
+    pub seen: crate::pts::FxHashSet<(u32, u32, String)>,
     /// The negative control (`PERRY_FACTS_SABOTAGE=activation:<path>`):
     /// one activation path left out, so its refusal fixture proves wrongly.
     pub sabotage: Option<String>,

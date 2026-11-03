@@ -593,7 +593,16 @@ impl Model {
         } else {
             String::new()
         };
-        (fi.module, fi.func_id, name)
+        // A synthetic function (`<resolver>`, `<override .. of ..>`, `<another
+        // unit's accessor>`) belongs to no module: its `module` is a
+        // placeholder, not its identity (it would name another module once
+        // dynamic reach drops the first one).
+        let module = if fi.func_id == u32::MAX && fi.name.starts_with('<') {
+            u32::MAX
+        } else {
+            fi.module
+        };
+        (module, fi.func_id, name)
     }
 
     /// DECISIONS 225: `f` can run: a transfer of an active body solved to
@@ -627,7 +636,10 @@ impl Model {
     pub fn body_active(&self, f: FnIdx) -> bool {
         match &self.act {
             None => true,
-            Some(a) => a.on.contains(&self.act_key(f)),
+            Some(a) => {
+                let k = self.act_key(f);
+                a.on.contains(&k) || (a.fixed && !a.seen.is_empty() && !a.seen.contains(&k))
+            }
         }
     }
 

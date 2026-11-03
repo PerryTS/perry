@@ -115,6 +115,7 @@ pub(crate) fn run(
     wrapped: &std::collections::HashMap<PathBuf, super::types::CjsWrapDebugSource>,
     roots: Vec<String>,
     cache_dir: &Path,
+    activation: Option<perry_wpfacts::Activation>,
 ) -> Option<Arc<perry_wpfacts::ProgramFacts>> {
     if !perry_wpfacts::enabled_from_env() {
         return None;
@@ -183,7 +184,11 @@ pub(crate) fn run(
     let pf = if per_unit_facts(std::env::var("PERRY_FACTS_UNITS").ok().as_deref()) {
         perry_wpfacts::compute_units(&list, &cfg)
     } else {
-        perry_wpfacts::compute(&list, &cfg)
+        // `PERRY_FACTS_ACTIVATION_CHECK=1`: the facts run their own pass over
+        // the final HIR (the `Activation` invariant's detector: both passes'
+        // profile lines must agree).
+        let check = std::env::var("PERRY_FACTS_ACTIVATION_CHECK").is_ok_and(|v| v == "1");
+        perry_wpfacts::compute_with(&list, &cfg, activation.filter(|_| !check))
     };
     let elapsed = started.elapsed().as_secs_f64() * 1000.0;
     if let Some(path) = &dump {
@@ -677,19 +682,27 @@ mod literal_chunks_tests;
 /// `require(expr)` specifiers a body that can run holds, by the whole
 /// program's activation pass over `modules`, as (module path, specifier).
 /// `None` when facts are off or past their bounds (every site may run).
-pub(crate) fn live_dynamic_imports(
+/// The compile's one activation pass (DECISIONS 225, `perry_wpfacts::
+/// Activation`): dynamic reach reads its live `import()` sites, the facts
+/// take it over (`run`). `None` with the facts off.
+pub(crate) fn activation(
     modules: &BTreeMap<PathBuf, perry_hir::Module>,
     export_sources: perry_wpfacts::ExportSources,
     dynamic_code: bool,
     interpreted_sources: bool,
     dynamic_code_reach: &perry_hir::dynamic_code::DynamicCodeReach,
     roots: Vec<String>,
-) -> Option<std::collections::BTreeSet<(String, String)>> {
+) -> Option<perry_wpfacts::Activation> {
     if !perry_wpfacts::enabled_from_env() {
         return None;
     }
     let cfg = perry_wpfacts::FactsConfig {
         roots,
+        // The facts' negative controls act on this pass (it is theirs).
+        sabotage: std::env::var("PERRY_FACTS_SABOTAGE")
+            .ok()
+            .filter(|s| !s.is_empty()),
+        profile: std::env::var("PERRY_FACTS_PROFILE").is_ok_and(|v| v == "1"),
         budget_secs: std::env::var("PERRY_FACTS_BUDGET_SECS")
             .ok()
             .and_then(|v| v.parse().ok())
@@ -724,7 +737,7 @@ pub(crate) fn live_dynamic_imports(
         .iter()
         .map(|(p, m)| (p.clone(), m.as_ref()))
         .collect();
-    perry_wpfacts::live_dynamic_imports(&list, &cfg)
+    Some(perry_wpfacts::activation(&list, &cfg))
 }
 
 fn facts_inputs(
