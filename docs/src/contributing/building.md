@@ -14,6 +14,13 @@
   the runtime still prints its message and location; `RUST_BACKTRACE` has no
   effect. Tests build with `panic=abort` like everything else, so libtest runs
   each test in its own process and `catch_unwind` catches nothing.
+  This applies to Perry's own archives and to every program without a Rust
+  native library. A user's Rust native-library crate (the `perry.nativeLibrary`
+  crates Perry builds with plain `cargo`) is built with the user's own toolchain
+  and keeps that toolchain's std, symbolizer included; Perry does not impose
+  `-Zbuild-std` on it (the user's toolchain may be stable or lack `rust-src`).
+  The std-symbolizer gate covers every Perry archive and every program that
+  links no user Rust library.
 - System C compiler (`cc` on macOS/Linux, MSVC on Windows)
 - **libclang** — the `libsqlite3-sys` build script runs `bindgen`. Missing it
   aborts the build with `Unable to find libclang`. Install `libclang-dev`

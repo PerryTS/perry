@@ -71,23 +71,32 @@ fn run_once_program_proof_is_revoked_by_loader_escape_or_repeated_structure() {
     // Deferred dynamic-code capability state belongs to a whole compilation
     // and is shared with parallel lowering. Run this whole-program proof in
     // a fresh process so unrelated compilation fixtures cannot change it.
-    let child_args = [
-        "--exact",
-        "codegen::static_prototype::tests::run_once_program_proof_is_revoked_by_loader_escape_or_repeated_structure",
-        "--nocapture",
-    ];
-    let is_child = std::env::args()
-        .skip(1)
-        .eq(child_args.iter().map(|arg| arg.to_string()));
-    if !is_child {
+    // The child is started the way libtest's runner starts a per-test process
+    // under the workspace's `panic-abort-tests` (`__RUST_TEST_INVOKE=<libtest
+    // name>`, no arguments; exit 50, libtest's `TR_OK`, is a pass). The marker
+    // variable is what makes it the child: libtest runs every test in a
+    // re-executed process, so arguments or the test name are the same in every
+    // generation and cannot tell the child from its parent.
+    const CHILD: &str = "PERRY_TEST_RUN_ONCE_PROOF_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let module = module_path!()
+            .split_once("::")
+            .map_or("", |(_crate, module)| module);
         let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(child_args)
+            .env(
+                "__RUST_TEST_INVOKE",
+                format!(
+                    "{module}::run_once_program_proof_is_revoked_by_loader_escape_or_repeated_structure"
+                ),
+            )
+            .env(CHILD, "1")
             .output()
             .unwrap();
-        assert!(String::from_utf8_lossy(&output.stdout).contains("running 1 test"));
-        assert!(
-            output.status.success(),
-            "{}\n{}",
+        assert_eq!(
+            output.status.code(),
+            Some(50),
+            "run-once program proof child failed ({}): {}\n{}",
+            output.status,
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );

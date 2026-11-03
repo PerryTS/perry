@@ -1946,10 +1946,15 @@ pub(super) fn dedup_runtime_for_tier3(
 }
 
 /// Tier-3 Apple (tvOS/watchOS) dedup for a per-crate native binding staticlib.
-/// Same `-Zbuild-std` std-duplication as [`dedup_stdlib_for_tier3`] (alloc/
-/// panic/eh runtime: `__rust_drop_panic`, `__rdl_alloc`, …) colliding with
-/// perry-runtime's std at the final link. Skips shared libs (`.so`, Android)
-/// and every non-tier-3 target (ios/macos use prebuilt std and don't hit this).
+/// The crate is built by plain `cargo` with the user's own `+nightly` and
+/// `-Zbuild-std` (Perry's workspace `[unstable]` table does not apply to it),
+/// so it carries its own std, with the user's toolchain's features. Like
+/// [`dedup_stdlib_for_tier3`] this removes the duplicated std objects (alloc/
+/// panic/eh runtime: `__rust_drop_panic`, `__rdl_alloc`, ...) that would
+/// collide with perry-runtime's source-built std at the final link. Skips
+/// shared libs (`.so`, Android) and every non-tier-3 target (ios/macos use
+/// prebuilt std and don't hit this). The user's std keeps its symbolizer;
+/// the symbolizer gate does not cover user Rust libraries.
 /// A strip failure is non-fatal and falls back to the original lib.
 pub(super) fn dedup_native_lib_for_tier3(
     target: Option<&str>,
