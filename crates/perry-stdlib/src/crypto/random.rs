@@ -1309,6 +1309,22 @@ mod tests {
         assert!(catch_runtime_throw(|| {
             call(1.0, 32.0, Some(256.0));
         }));
+        // Node accepts the digests Perry implements and rejects the rest:
+        // an unknown (or empty) name must not silently derive SHA-256.
+        assert_eq!(
+            to_hex(&call(1.0, 16.0, Some(js_str("md5")))),
+            "f31afb6d931392daa5e3130f47f9a9b6"
+        );
+        assert_eq!(
+            to_hex(&call(1.0, 16.0, Some(js_str("SHA512-256")))),
+            "4b6a63117d3ec0032624616082c1c191"
+        );
+        assert!(catch_runtime_throw(|| {
+            call(1.0, 16.0, Some(js_str("not-a-digest")));
+        }));
+        assert!(catch_runtime_throw(|| {
+            call(1.0, 16.0, Some(js_str("")));
+        }));
     }
 
     /// #13619: the two argon2 VALUE arms must reach the real KDF, not

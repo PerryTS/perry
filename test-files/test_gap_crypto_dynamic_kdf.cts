@@ -34,6 +34,7 @@ for (const [label, call] of [
   ["iterations 0", () => pbkdf2Sync("password", "salt", 0, 32, "sha256")],
   ["digest not a string", () => pbkdf2Sync("password", "salt", 1, 32, 256)],
   ["digest omitted", () => pbkdf2Sync("password", "salt", 1, 32)],
+  ["digest unknown", () => pbkdf2Sync("password", "salt", 1, 32, "not-a-digest")],
 ] as [string, () => unknown][]) {
   try {
     call();

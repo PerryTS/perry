@@ -7,6 +7,8 @@ import { pbkdf2Sync } from "node:crypto";
 const notAString: any = 256;
 
 console.log("sha256", pbkdf2Sync("password", "salt", 1, 16, "sha256").toString("hex"));
+console.log("md5", pbkdf2Sync("password", "salt", 1, 16, "md5").toString("hex"));
+console.log("sha512-256", pbkdf2Sync("password", "salt", 1, 16, "sha512-256").toString("hex"));
 
 try {
   pbkdf2Sync("password", "salt", 1, 16);
@@ -27,4 +29,19 @@ try {
   console.log("iterations 0 no throw");
 } catch (error: any) {
   console.log("iterations 0", error.code);
+}
+
+// A name Perry does not implement is an error, not a SHA-256 key.
+try {
+  pbkdf2Sync("password", "salt", 1, 16, "not-a-digest");
+  console.log("digest unknown no throw");
+} catch (error: any) {
+  console.log("digest unknown", error.code);
+}
+
+try {
+  pbkdf2Sync("password", "salt", 1, 16, "");
+  console.log("digest empty no throw");
+} catch (error: any) {
+  console.log("digest empty", error.code);
 }
