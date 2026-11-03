@@ -263,12 +263,16 @@ fn a_class_of_a_run_once_factory_is_a_contract() {
             u.broken
         );
     }
-    // Per unit 10, none stronger than whole-program: five of the wrapper
-    // sites (a module's factory call is not a per-unit site), each module's
-    // `module.require` call of its `require` (dead whole-program, DECISIONS
-    // 225), and in the class bodies `this.v` in `S::get`, the read `this.k`
-    // in `T::run` (E0) and `b.get()` (`b` is `S.make(2)`).
-    assert_cjs_per_unit(&w, &u, 10);
+    // Per unit 5, none stronger than whole-program (DECISIONS 247: a body
+    // runs per unit only once the program can run it): the records' and the
+    // `newInstance` export reads of whole-program's seven. The two factory
+    // calls leave: the view flattens the wrapper (`run_once_flat`), no call
+    // is left, and the site came from walking the unflattened IIFE copy.
+    // The sites main counted beyond whole-program's (each module's
+    // `module.require` call, `this.v` in `S::get`, `this.k` in `T::run`,
+    // `b.get()`) were proven in bodies the whole program never runs
+    // (DECISIONS 225) and nothing per unit runs either.
+    assert_cjs_per_unit(&w, &u, 5);
     let k_kind = |pf: &ProgramFacts| {
         pf.templates
             .iter()
@@ -278,13 +282,11 @@ fn a_class_of_a_run_once_factory_is_a_contract() {
     };
     // Whole program `T`'s constructor is dead: no writer, no kind.
     assert_eq!(k_kind(&w), Some((false, 0, 0)), "T.k whole-program");
-    // Per unit `T.k` holds the class object `S` beside `undefined`, and is
-    // not ⊤: `T` does not escape.
-    assert_eq!(
-        k_kind(&u),
-        Some((false, crate::model::prim::UNDEF, 1)),
-        "T.k per unit"
-    );
+    // Per unit likewise: `T` is never constructed, and a field no value
+    // reached holds nothing (DECISIONS 247, `units::plain_prims`), so the
+    // reader takes no kind from it (before: the class object `S` beside
+    // `undefined`).
+    assert_eq!(k_kind(&u), Some((false, 0, 0)), "T.k per unit");
 }
 
 /// DECISIONS 171: every unit names the CommonJS registry union `cjs:*`,
