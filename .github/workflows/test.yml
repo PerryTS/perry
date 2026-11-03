@@ -3609,16 +3609,19 @@ jobs:
         run: npm ci --ignore-scripts --no-audit --no-fund
 
       # Two harness modes, chosen by the plan (see ci_plan.py GAP_SUITE):
-      #   fast: PERRY_SKIP_BUILD=1 so every test links the prebuilt archives
-      #         (~1.5 s/test) that gap-suite-build compiled ONCE and shared
-      #         below. PR + sweep tiers.
+      #   fast: scripts/parity.py links every test against the prebuilt
+      #         archives that gap-suite-build compiled ONCE and shared below.
+      #         Only ext-routed tests (http/net/ws/zlib/events) still take the
+      #         per-test auto-optimize path, because no single prebuilt stdlib
+      #         can serve them (#7629). PR + sweep tiers.
       #   full: the harness's default -- each shard builds the same archive
       #         set itself (`cargo build-perry` + the instrumented variant;
       #         perry never builds an archive at compile time) and compiles
       #         with auto-optimize on. Nightly/release tier, 24 shards, never
       #         downloads a shared build.
-      # Both compare against the SAME committed Linux snapshot; a divergence
-      # between them is a real auto-optimize-specific finding, not noise.
+      # Each mode has its own committed Linux snapshot: fast is judged by
+      # test-parity/snapshots/linux-fast/test-files.json, full still by
+      # test-parity/gap_snapshot.json through run_gap_tests.sh.
       - name: Download the shared fast-mode build
         if: fromJSON(needs.plan.outputs.plan).gap.mode == 'fast'
         uses: ./.github/actions/perry/actions/download-artifact # v8
