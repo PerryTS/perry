@@ -1440,6 +1440,16 @@ pub(super) fn install_class_decl_prototype_symbol_member(
     crate::symbol::set_symbol_property_attrs(owner, sym_key, PropertyAttrs::new(true, false, true));
 }
 
+/// A class evaluation's own prototype (`ClassExprFresh`: a class declared in a
+/// function with private elements, computed fields or a dynamic parent) gets
+/// the same symbol-keyed instance members as the declaration prototype; the
+/// evaluation's generator methods are installed afterwards with their home.
+pub(crate) fn install_evaluation_prototype_symbol_members(proto: *mut ObjectHeader, class_id: u32) {
+    if !proto.is_null() {
+        install_class_decl_prototype_symbol_members(proto, class_id);
+    }
+}
+
 fn install_class_decl_prototype_symbol_members(proto: *mut ObjectHeader, class_id: u32) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto_h = scope.root_raw_mut_ptr(proto);
