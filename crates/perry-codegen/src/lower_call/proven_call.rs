@@ -8,10 +8,13 @@
 //! `arguments`), so the runtime's own plain call (`info.code(closure, this,
 //! args…)`, `closure::dispatch::calln`) is the call:
 //!
-//! * one body: a direct call of its symbol (a closure's
-//!   `perry_closure_<prefix>__<id>`, a declaration's `__perry_wrap_*`
-//!   value wrapper), the arguments padded with `undefined` to its
-//!   parameters or cut to them (it reads no `arguments`);
+//! * one body: a direct call of it, the arguments padded with `undefined`
+//!   to its parameters or cut to them (it reads no `arguments`). A closure
+//!   is called as the closure-typed local's direct arm calls it
+//!   (`early_branches::emit_known_closure_body_call`): its typed entry
+//!   behind the guards of its typed parameters, the generic body on a miss,
+//!   or `perry_closure_<prefix>__<id>` when it has no typed entry for these
+//!   arguments; a declaration through its `__perry_wrap_*` value wrapper;
 //! * two to [`ARMS_CAP`] bodies: one load of the callee's `info` word and a
 //!   direct call of the body that info names. A body has exactly one info,
 //!   `@<body>$info`, defined by the module that defines the body and named
@@ -19,7 +22,7 @@
 //!   closures of one body (two environments) are one arm. Each body but the
 //!   last is compared with the info; the set is complete, so the last body
 //!   is called without a compare and there is no other arm. Each arm is the
-//!   one-body call (arguments padded or cut to that body's parameters);
+//!   one-body call of its body;
 //! * more bodies: one load of the `info` word, one of the body's `code`
 //!   word, and an indirect call with the arguments padded to the widest
 //!   declaration (over-application is safe on native ABIs, which is why a
@@ -123,6 +126,7 @@ pub(crate) fn try_lower_proven_value_call(
         &callee_box,
         JS_THIS_UNDEFINED,
         &lowered,
+        args,
     );
     group.release(ctx);
     Ok(Some(v))
@@ -199,7 +203,7 @@ pub(crate) fn try_lower_proven_field_call(
         lowered.push(group.reread(ctx, r)?);
     }
     let this_bits = ctx.block().bitcast_double_to_i64(&recv_box);
-    let v = emit_proven_call(ctx, &bodies, &symbols, &callee_box, &this_bits, &lowered);
+    let v = emit_proven_call(ctx, &bodies, &symbols, &callee_box, &this_bits, &lowered, args);
     group.release(ctx);
     Ok(Some(v))
 }
@@ -286,7 +290,7 @@ pub(crate) fn try_lower_proven_static_call(
 
 /// The call of the proven bodies `bodies` (symbols `symbols`) through the
 /// function object `callee_box`, receiver `this_bits`, over lowered
-/// arguments.
+/// arguments `args` (`hir_args` their HIR).
 fn emit_proven_call(
     ctx: &mut FnCtx<'_>,
     bodies: &[FactsBody],
@@ -294,6 +298,7 @@ fn emit_proven_call(
     callee_box: &str,
     this_bits: &str,
     args: &[String],
+    hir_args: &[Expr],
 ) -> String {
     let undefined = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
     // The arguments as a call of a body declaring `width` parameters
@@ -317,14 +322,21 @@ fn emit_proven_call(
         emit_call_witness(ctx, symbols, callee_box, width);
     }
     let handle = unbox_to_i64(ctx.block(), callee_box);
-    if let [sym] = symbols {
-        return emit_js_body_call(
-            ctx.block(),
-            JsBody::Symbol(sym),
-            &handle,
-            this_bits,
-            &fit(width),
-        );
+    // The call of one known body: a closure's through its typed entry
+    // where it has one for these arguments (the closure-typed local's
+    // direct arm, decision 129), a declaration's value wrapper directly.
+    let body_call = |ctx: &mut FnCtx<'_>, b: &FactsBody, sym: &str| -> String {
+        let call_args = fit(b.params as usize);
+        if b.closure {
+            super::early_branches::emit_known_closure_body_call(
+                ctx, b.func_id, sym, &handle, this_bits, &call_args, hir_args,
+            )
+        } else {
+            emit_js_body_call(ctx.block(), JsBody::Symbol(sym), &handle, this_bits, &call_args)
+        }
+    };
+    if let ([b], [sym]) = (bodies, symbols) {
+        return body_call(ctx, b, sym);
     }
     let info_offset = crate::target_layout::closure_info_offset_bytes(ctx.target_triple);
     let blk = ctx.block();
@@ -353,24 +365,12 @@ fn emit_proven_call(
             let is = blk.icmp_eq(PTR, &info, &want);
             blk.cond_br(&is, &arm_label, &next_label);
             ctx.current_block = arm_idx;
-            let v = emit_js_body_call(
-                ctx.block(),
-                JsBody::Symbol(sym),
-                &handle,
-                this_bits,
-                &fit(b.params as usize),
-            );
+            let v = body_call(ctx, b, sym);
             incoming.push((v, ctx.block().label.clone()));
             ctx.block().br(&join_label);
             ctx.current_block = next_idx;
         } else {
-            let v = emit_js_body_call(
-                ctx.block(),
-                JsBody::Symbol(sym),
-                &handle,
-                this_bits,
-                &fit(b.params as usize),
-            );
+            let v = body_call(ctx, b, sym);
             incoming.push((v, ctx.block().label.clone()));
             ctx.block().br(&join_label);
         }
