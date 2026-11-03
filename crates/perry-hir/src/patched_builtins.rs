@@ -312,13 +312,45 @@ impl Scanner<'_> {
         self.record_write(&m.obj, key);
     }
 
+    /// The target of a simple assignment. A parenthesized or TS-typed target
+    /// (`(Object as any) = w`, `Object! = w`) is the target it wraps: the
+    /// lowering peels it to the same store (`simple_ident_target_name`), so
+    /// the scan reads the same store (DEC 255).
+    fn record_simple_target(&mut self, t: &ast::SimpleAssignTarget) {
+        let inner = match t {
+            ast::SimpleAssignTarget::Member(m) => return self.record_member_target(m),
+            ast::SimpleAssignTarget::Ident(id) => return self.record_ident_target(&id.id),
+            ast::SimpleAssignTarget::Paren(x) => &x.expr,
+            ast::SimpleAssignTarget::TsAs(x) => &x.expr,
+            ast::SimpleAssignTarget::TsNonNull(x) => &x.expr,
+            ast::SimpleAssignTarget::TsTypeAssertion(x) => &x.expr,
+            ast::SimpleAssignTarget::TsSatisfies(x) => &x.expr,
+            _ => return,
+        };
+        self.record_target_expr(inner);
+    }
+
+    /// An assignment target given as an expression: under parentheses or a
+    /// TS cast, or an element of a destructuring assignment.
+    fn record_target_expr(&mut self, e: &ast::Expr) {
+        match peel(e) {
+            ast::Expr::Member(m) => self.record_member_target(m),
+            ast::Expr::Ident(id) => self.record_ident_target(id),
+            _ => {}
+        }
+    }
+
+    /// `console = {…}`: the bare name rebinds the global (sloppy: a property
+    /// set on the global object; strict: the existing-global store).
+    fn record_ident_target(&mut self, id: &ast::Ident) {
+        if is_builtin_namespace(id.sym.as_ref()) {
+            self.add(id.sym.to_string(), None);
+        }
+    }
+
     fn record_pat(&mut self, pat: &ast::Pat) {
         match pat {
-            ast::Pat::Expr(e) => {
-                if let ast::Expr::Member(m) = peel(e) {
-                    self.record_member_target(m);
-                }
-            }
+            ast::Pat::Expr(e) => self.record_target_expr(e),
             ast::Pat::Array(a) => {
                 for p in a.elems.iter().flatten() {
                     self.record_pat(p);
@@ -416,20 +448,7 @@ impl Visit for Scanner<'_> {
 
     fn visit_assign_expr(&mut self, a: &ast::AssignExpr) {
         match &a.left {
-            ast::AssignTarget::Simple(ast::SimpleAssignTarget::Member(m)) => {
-                self.record_member_target(m)
-            }
-            ast::AssignTarget::Simple(ast::SimpleAssignTarget::Paren(p)) => {
-                if let ast::Expr::Member(m) = peel(&p.expr) {
-                    self.record_member_target(m);
-                }
-            }
-            ast::AssignTarget::Simple(ast::SimpleAssignTarget::Ident(id))
-                if is_builtin_namespace(id.id.sym.as_ref()) =>
-            {
-                // Sloppy `console = {…}` rebinding the global.
-                self.add(id.id.sym.to_string(), None);
-            }
+            ast::AssignTarget::Simple(t) => self.record_simple_target(t),
             ast::AssignTarget::Pat(p) => match p {
                 ast::AssignTargetPat::Array(a) => {
                     for e in a.elems.iter().flatten() {
@@ -445,7 +464,6 @@ impl Visit for Scanner<'_> {
                 }
                 ast::AssignTargetPat::Invalid(_) => {}
             },
-            _ => {}
         }
         a.visit_children_with(self);
     }
