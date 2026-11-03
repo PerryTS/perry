@@ -2310,17 +2310,17 @@ jobs:
       - name: Windows runtime regressions against pinned Node
         run: python scripts/run_windows_runtime_regressions.py
 
-      # Small deterministic subset: verifies the Git Bash driver itself,
-      # `.exe`/`.lib` discovery, native TEMP paths, compilation, execution,
-      # and Node/Perry comparison on a real Windows host.
+      # One deterministic case: parity.py's `.exe`/`.lib` discovery, native TEMP
+      # paths, compilation, execution and Node/Perry comparison on Windows.
       - name: Install the npm packages the parity oracle resolves
         run: npm ci --ignore-scripts --no-audit --no-fund
 
       - name: Windows parity harness smoke
         shell: bash
         run: |
-          PERRY_BIN="$PWD/target/debug/perry.exe" \
-          PERRY_RUNTIME_DIR="$PWD/target/debug" \
+          # Relative paths: native Python does not read Git Bash's /d/... form.
+          PERRY_BIN=target/debug/perry.exe \
+          PERRY_RUNTIME_DIR=target/debug \
           python scripts/parity.py run test-parity/node-suite/process/env/access.ts --mode fast
 
       - name: Verify perry.exe VERSIONINFO resource

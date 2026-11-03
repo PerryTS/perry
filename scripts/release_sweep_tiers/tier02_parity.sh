@@ -13,8 +13,13 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 run_parity() {
     local report="${PERRY_TEST_SUMMARY_OUT%/*}/report.json" rc
+    # The instrumented archives serve the cases whose parity-env sets a GC knob;
+    # without them those cases fail to compile, which the pass rate never counts.
     (cd "$REPO_ROOT" && cargo build-perry --release --quiet \
-        && scripts/gc_call_effects/sidecars.sh target/release) || return 2
+        && scripts/gc_call_effects/sidecars.sh target/release \
+        && scripts/build_instr_runtime.sh \
+        && npm ci --ignore-scripts --no-audit --no-fund --silent) || return 2
+    rm -f "$report"
     python3 "$REPO_ROOT/scripts/parity.py" run --mode auto --report "$report"
     [[ $? -eq 2 || ! -f "$report" ]] && return 2
     python3 - "$report" "$PERRY_TEST_SUMMARY_OUT" <<'PY'
