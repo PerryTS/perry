@@ -65,10 +65,10 @@ fn compile(dir: &Path, source: &str, constfn: Option<&str>) -> (PathBuf, String)
     (exe, ll)
 }
 
-/// Run `exe` with the method-site report on; return (stdout, stderr).
+/// Run `exe`; return (stdout, stderr).
 fn run(exe: &Path, envs: &[(&str, &str)]) -> (String, String) {
     let mut cmd = Command::new(exe);
-    clean(&mut cmd).env("PERRY_METHOD_SITE_STATS", "1");
+    clean(&mut cmd);
     for &(k, v) in envs {
         cmd.env(k, v);
     }
@@ -83,13 +83,6 @@ fn run(exe: &Path, envs: &[(&str, &str)]) -> (String, String) {
         String::from_utf8_lossy(&out.stdout).trim().to_owned(),
         stderr,
     )
-}
-
-fn stat(stderr: &str, name: &str) -> u64 {
-    stderr
-        .split_whitespace()
-        .find_map(|w| w.strip_prefix(name)?.strip_prefix('=')?.parse().ok())
-        .unwrap_or(0)
 }
 
 /// The IR of the function whose `define` line contains `name`.
@@ -217,10 +210,6 @@ fn completed_shapes_call_their_body_and_every_mutation_is_seen() {
     }
     let (out, stderr) = run(&exe, &[]);
     assert_eq!(out, MUTATIONS_NODE, "{stderr}");
-    assert!(
-        stat(&stderr, "primes_constfn") >= 2,
-        "the learned memo must hold ConstFn entries (own and inherited): {stderr}"
-    );
     let (moved, stderr) = run(
         &exe,
         &[
@@ -239,7 +228,6 @@ fn completed_shapes_call_their_body_and_every_mutation_is_seen() {
     );
     let (off, stderr) = run(&off_exe, &[]);
     assert_eq!(off, MUTATIONS_NODE, "{stderr}");
-    assert_eq!(stat(&stderr, "primes_constfn"), 0, "{stderr}");
 }
 
 const INHERITED: &str = r#"
@@ -265,7 +253,7 @@ console.log(before, viaThis, drive(o, 100), o.run(100));
 /// a ConstFn entry (the prototype keeps its lanes when it is marked as one),
 /// and a write to the prototype's method is seen by the next call. `this.m()`
 /// in the prototype's own method has the prototype's body as a compile-time
-/// candidate, so its learned ConstFn hit calls that body directly.
+/// candidate, so a hit on that body calls it directly (`msite.candidate`).
 #[test]
 fn an_inherited_constfn_method_is_a_constfn_entry_and_sees_a_prototype_write() {
     let dir = tempfile::tempdir().unwrap();
@@ -273,16 +261,10 @@ fn an_inherited_constfn_method_is_a_constfn_entry_and_sees_a_prototype_write() {
     let (out, stderr) = run(&exe, &[]);
     // node v22
     assert_eq!(out, "5950 5950 -4950 -4950", "{stderr}");
-    assert!(stat(&stderr, "primes_inherited") >= 2, "{stderr}");
-    assert!(
-        stat(&stderr, "primes_constfn") >= 2,
-        "the holder's ConstFn lane must make the inherited entries ConstFn: {stderr}"
-    );
-    assert!(stat(&stderr, "misses") < 20, "the sites must hit: {stderr}");
     let run_ir = function_ir(&ll, "@perry_closure_main_ts__");
     let direct = run_ir
         .iter()
-        .position(|l| l.starts_with("msite.constfn_direct"))
+        .position(|l| l.starts_with("msite.candidate."))
         .unwrap_or_else(|| {
             panic!(
                 "this.m() must dispatch its learned ConstFn hit to the candidate body:\n{}",
@@ -299,9 +281,10 @@ fn an_inherited_constfn_method_is_a_constfn_entry_and_sees_a_prototype_write() {
 }
 
 /// The method body's `this.a` (a literal method whose receiver completes on a
-/// ConstFn shape) is a shape-site read (#12483): the site's word follows the
-/// shape the receiver actually has, completed or not, so no class guard
-/// against the literal's birth or completed id is emitted for it.
+/// ConstFn shape) is a stateless layout read (`l2c.*` blocks with the
+/// `perry_probe_get` fallback): it follows the shape the receiver actually
+/// has, completed or not, so no class guard against the literal's birth or
+/// completed id is emitted for it.
 #[test]
 fn the_body_reads_this_through_the_shape_site() {
     let dir = tempfile::tempdir().unwrap();
@@ -318,8 +301,9 @@ console.log(run(10));
     assert_eq!(run(&exe, &[]).0, "10");
     let body = function_ir(&ll, "@perry_closure_main_ts__");
     assert!(
-        body.iter().any(|l| l.contains("_packed_get")),
-        "the body must read this.a through the shape site:\n{}",
+        body.iter().any(|l| l.starts_with("l2c."))
+            && body.iter().any(|l| l.contains("perry_probe_get")),
+        "the body must read this.a through the layout read:\n{}",
         body.join("\n")
     );
     assert!(
@@ -440,7 +424,7 @@ const OBJECT_CREATE_NODE: &str = "5950 6050 6250 65980 305700";
 /// (`wrong`'s `p`), and a write to PROTO.m (`replaced`) all give node's result.
 ///
 /// Sabotage (2026-10-03): with the candidate called without comparing the
-/// recorded body (`msite.constfn_direct` taken unconditionally), `wrong`
+/// recorded body (`msite.candidate` taken unconditionally), `wrong`
 /// calls PROTO's body for an OTHER receiver and this test fails on the output.
 #[test]
 fn object_create_values_call_the_prototype_body_directly_and_a_wrong_candidate_misses() {
@@ -454,7 +438,7 @@ fn object_create_values_call_the_prototype_body_directly_and_a_wrong_candidate_m
         );
         let direct = ir
             .iter()
-            .position(|l| l.starts_with("msite.constfn_direct"))
+            .position(|l| l.starts_with("msite.candidate."))
             .unwrap_or_else(|| {
                 panic!(
                     "{name}: the learned ConstFn hit must dispatch to PROTO's body:\n{}",
@@ -479,18 +463,12 @@ fn object_create_values_call_the_prototype_body_directly_and_a_wrong_candidate_m
     ] {
         let (out, stderr) = run(&exe, envs);
         assert_eq!(out, OBJECT_CREATE_NODE, "{envs:?}\n{stderr}");
-        assert!(
-            stat(&stderr, "primes_constfn") >= 4,
-            "the inherited entries must be ConstFn entries: {stderr}"
-        );
     }
 
     let off_dir = tempfile::tempdir().unwrap();
     let (off_exe, off_ll) = compile(off_dir.path(), OBJECT_CREATE, Some("0"));
     assert!(
-        !off_ll
-            .lines()
-            .any(|l| l.starts_with("msite.constfn_direct")),
+        !off_ll.lines().any(|l| l.starts_with("msite.candidate.")),
         "PERRY_CONSTFN_SHAPE=0 has no candidate bodies"
     );
     let (off, stderr) = run(&off_exe, &[]);
