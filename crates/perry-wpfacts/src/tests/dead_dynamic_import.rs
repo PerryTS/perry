@@ -447,13 +447,31 @@ fn imports_formatter_with_mods(
     let main = format!(
         "import {{ typescript }} from \"./lang\";\nimport {{ make }} from \"./mk\";\nconst host = {CLI_HOST};\n{main_tail}\n[typescript].map((l: any) => l.generate({{ name: \"db\" }}, {{ detect: process.argv.length > 5, schema: \"public\" }}, host)).forEach((p: any) => p.then((s: string) => console.log(s)));\n"
     );
-    let mut hirs = hirs(&main);
+    // As the driver does (`collect_modules`): every module is scanned for
+    // builtin writes before any is lowered, so a program store into a global
+    // namespace binding guards that namespace's calls in every module.
+    let mk_src = format!("{MAKE}{extra}");
     let mut pb = perry_hir::patched_builtins::PatchedBuiltins::new();
     pb.dynamic_code_reach = reach.clone();
+    let sources: Vec<(String, &str)> = [
+        ("fmtlib", FMT),
+        ("gen", GEN),
+        ("lang", LANG),
+        ("main", main.as_str()),
+        ("mk", mk_src.as_str()),
+    ]
+    .into_iter()
+    .chain(mods.iter().copied())
+    .map(|(name, src)| (format!("{name}.ts"), src))
+    .collect();
+    for (path, src) in &sources {
+        let m = perry_parser::parse_typescript(src, path).expect("parses");
+        perry_hir::scan_patched_builtins(&m, &mut pb);
+    }
     perry_hir::patched_builtins::set_patched_builtins(std::sync::Arc::new(pb));
-    let m = perry_parser::parse_typescript(&format!("{MAKE}{extra}"), "mk.ts").expect("parses");
+    let mut hirs = hirs(&main);
+    let m = perry_parser::parse_typescript(&mk_src, "mk.ts").expect("parses");
     let h = perry_hir::lower_module(&m, "mk", "mk.ts").expect("lowers");
-    perry_hir::patched_builtins::clear_patched_builtins();
     hirs.push(("mk.ts".to_string(), h));
     for (name, src) in mods {
         let path = format!("{name}.ts");
@@ -487,6 +505,7 @@ fn imports_formatter_with_mods(
         }
         hirs.push((path.clone(), h));
     }
+    perry_hir::patched_builtins::clear_patched_builtins();
     for (_, h) in hirs.iter_mut() {
         for imp in &mut h.imports {
             if imp.source == "./mk" {
@@ -1290,4 +1309,14 @@ fn a_marked_value_in_a_guarded_generic_arm_joins() {
     let tail = rule_p_tail("unknown.fn({}); Object.assign({}, unknown.r().__proto__);");
     assert!(!imports_formatter_with_make(RULE_P, &tail, false));
     assert!(!imports_formatter_with_make(RULE_P, &tail, true));
+}
+
+/// DECISIONS 254 (amendment B): compiled code that stores an unknown value
+/// into the binding makes the generic arm's callee that value (the namespace
+/// is patched, so every module's `Object.assign` is the guarded form), and
+/// the marker escaping there joins.
+#[test]
+fn a_marked_value_in_a_guarded_arm_of_a_stored_binding_joins() {
+    let stored = rule_p_tail("unknown.fn({}); (globalThis as any).Object = unknown.o; Object.assign({}, unknown.r().__proto__);");
+    assert!(imports_formatter_with_make(RULE_P, &stored, true), "an unknown value in the binding");
 }
