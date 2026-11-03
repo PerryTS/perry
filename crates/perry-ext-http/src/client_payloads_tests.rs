@@ -7,10 +7,13 @@ use perry_runtime::gc::RuntimeHandleScope;
 const UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 
 /// Two full collections: the first ages every parked id past its young
-/// epoch, the second decides by reachability alone.
+/// epoch, the second decides by reachability alone. The trace proves the dead
+/// records; the mutator releases them outside the pause, so the test releases
+/// them as the next turn would.
 fn collect() {
     perry_runtime::gc::js_gc_collect();
     perry_runtime::gc::js_gc_collect();
+    perry_ffi::handle_lifecycle::release_all_proven();
 }
 
 /// Each test runs on its own mutator: the GC, its roots and the parked set
