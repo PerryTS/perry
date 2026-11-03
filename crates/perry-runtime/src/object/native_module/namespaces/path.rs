@@ -78,3 +78,81 @@ crate::realm_decl! {
         }
     }
 }
+
+crate::realm_decl! {
+    namespace NM_PATH = "path" {
+        births = [Object];
+        members = {
+            _makeLong = (ref("node:path._makeLong"));
+            basename = (ref("node:path.basename"));
+            default = (ref("node:path.default"));
+            delimiter = (":");
+            dirname = (ref("node:path.dirname"));
+            extname = (ref("node:path.extname"));
+            format = (ref("node:path.format"));
+            isAbsolute = (ref("node:path.isAbsolute"));
+            join = (ref("node:path.join"));
+            matchesGlob = (ref("node:path.matchesGlob"));
+            normalize = (ref("node:path.normalize"));
+            parse = (ref("node:path.parse"));
+            posix = (ref("node:path.posix"));
+            relative = (ref("node:path.relative"));
+            resolve = (ref("node:path.resolve"));
+            sep = ("/");
+            toNamespacedPath = (ref("node:path._makeLong"));
+            win32 = (ref("node:path.win32"));
+        }
+    }
+}
+
+crate::realm_decl! {
+    namespace NM_PATH_POSIX = "path.posix" {
+        births = [Object];
+        members = {
+            _makeLong = (ref("node:path/posix._makeLong"));
+            basename = (ref("node:path/posix.basename"));
+            default = (ref("node:path.posix"));
+            delimiter = (":");
+            dirname = (ref("node:path/posix.dirname"));
+            extname = (ref("node:path/posix.extname"));
+            format = (ref("node:path/posix.format"));
+            isAbsolute = (ref("node:path/posix.isAbsolute"));
+            join = (ref("node:path/posix.join"));
+            matchesGlob = (ref("node:path/posix.matchesGlob"));
+            normalize = (ref("node:path/posix.normalize"));
+            parse = (ref("node:path/posix.parse"));
+            posix = (ref("node:path.posix"));
+            relative = (ref("node:path/posix.relative"));
+            resolve = (ref("node:path/posix.resolve"));
+            sep = ("/");
+            toNamespacedPath = (ref("node:path/posix._makeLong"));
+            win32 = (ref("node:path.win32"));
+        }
+    }
+}
+
+crate::realm_decl! {
+    namespace NM_PATH_WIN32 = "path.win32" {
+        births = [Object];
+        members = {
+            _makeLong = (ref("node:path/win32._makeLong"));
+            basename = (ref("node:path/win32.basename"));
+            default = (ref("node:path.win32"));
+            delimiter = (";");
+            dirname = (ref("node:path/win32.dirname"));
+            extname = (ref("node:path/win32.extname"));
+            format = (ref("node:path/win32.format"));
+            isAbsolute = (ref("node:path/win32.isAbsolute"));
+            join = (ref("node:path/win32.join"));
+            matchesGlob = (ref("node:path/win32.matchesGlob"));
+            normalize = (ref("node:path/win32.normalize"));
+            parse = (ref("node:path/win32.parse"));
+            posix = (ref("node:path.posix"));
+            relative = (ref("node:path/win32.relative"));
+            resolve = (ref("node:path/win32.resolve"));
+            sep = ("\\");
+            toNamespacedPath = (ref("node:path/win32._makeLong"));
+            win32 = (ref("node:path.win32"));
+        }
+    }
+}

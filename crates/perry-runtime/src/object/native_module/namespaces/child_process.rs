@@ -18,3 +18,21 @@ crate::realm_decl! {
         }
     }
 }
+
+crate::realm_decl! {
+    namespace NM_CHILD_PROCESS = "child_process" {
+        births = [Object];
+        members = {
+            ChildProcess = (ref("node:child_process.ChildProcess"));
+            _forkChild = (ref("node:child_process._forkChild"));
+            default = (ref("node:child_process.default"));
+            exec = (ref("node:child_process.exec"));
+            execFile = (ref("node:child_process.execFile"));
+            execFileSync = (ref("node:child_process.execFileSync"));
+            execSync = (ref("node:child_process.execSync"));
+            fork = (ref("node:child_process.fork"));
+            spawn = (ref("node:child_process.spawn"));
+            spawnSync = (ref("node:child_process.spawnSync"));
+        }
+    }
+}

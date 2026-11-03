@@ -15,3 +15,17 @@ crate::realm_decl! {
         }
     }
 }
+
+crate::realm_decl! {
+    namespace NM_REPL = "repl" {
+        births = [Object];
+        members = {
+            REPLServer = (ref("node:repl.REPLServer"));
+            REPL_MODE_SLOPPY = (Symbol.for("nodejs.repl.mode.sloppy"));
+            REPL_MODE_STRICT = (Symbol.for("nodejs.repl.mode.strict"));
+            Recoverable = (ref("node:repl.Recoverable"));
+            builtinModules = (ref("node:module.builtinModules"));
+            start = (ref("node:repl.start"));
+        }
+    }
+}

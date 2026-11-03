@@ -14,3 +14,17 @@ crate::realm_decl! {
         }
     }
 }
+
+crate::realm_decl! {
+    namespace NM_SEA = "sea" {
+        births = [Object];
+        members = {
+            default = (ref("node:sea.default"));
+            getAsset = (ref("node:sea.getAsset"));
+            getAssetAsBlob = (ref("node:sea.getAssetAsBlob"));
+            getAssetKeys = (ref("node:sea.getAssetKeys"));
+            getRawAsset = (ref("node:sea.getRawAsset"));
+            isSea = (ref("node:sea.isSea"));
+        }
+    }
+}

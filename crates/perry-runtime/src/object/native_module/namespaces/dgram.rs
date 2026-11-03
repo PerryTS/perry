@@ -11,3 +11,14 @@ crate::realm_decl! {
         }
     }
 }
+
+crate::realm_decl! {
+    namespace NM_DGRAM = "dgram" {
+        births = [Object];
+        members = {
+            Socket = (ref("node:dgram.Socket"));
+            createSocket = (ref("node:dgram.createSocket"));
+            default = (ref("node:dgram.default"));
+        }
+    }
+}

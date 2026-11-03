@@ -16,3 +16,19 @@ crate::realm_decl! {
         }
     }
 }
+
+crate::realm_decl! {
+    namespace NM_QUERYSTRING = "querystring" {
+        births = [Object];
+        members = {
+            decode = (ref("node:querystring.decode"));
+            default = (ref("node:querystring.default"));
+            encode = (ref("node:querystring.encode"));
+            escape = (ref("node:querystring.escape"));
+            parse = (ref("node:querystring.decode"));
+            stringify = (ref("node:querystring.encode"));
+            unescape = (ref("node:querystring.unescape"));
+            unescapeBuffer = (ref("node:querystring.unescapeBuffer"));
+        }
+    }
+}

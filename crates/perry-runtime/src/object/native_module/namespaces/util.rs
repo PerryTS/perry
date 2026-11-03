@@ -88,3 +88,45 @@ crate::realm_decl! {
         }
     }
 }
+
+crate::realm_decl! {
+    namespace NM_UTIL = "util" {
+        births = [Object];
+        members = {
+            _errnoException = (ref("node:sys._errnoException"));
+            _exceptionWithHostPort = (ref("node:sys._exceptionWithHostPort"));
+            _extend = (ref("node:sys._extend"));
+            aborted = (ref("node:sys.aborted"));
+            callbackify = (ref("node:sys.callbackify"));
+            convertProcessSignalToExitCode = (ref("node:sys.convertProcessSignalToExitCode"));
+            debug = (ref("node:sys.default.debug"));
+            debuglog = (ref("node:sys.debug"));
+            default = (ref("node:sys.default"));
+            deprecate = (ref("node:sys.deprecate"));
+            diff = (ref("node:sys.diff"));
+            format = (ref("node:sys.format"));
+            formatWithOptions = (ref("node:sys.formatWithOptions"));
+            getCallSites = (ref("node:sys.getCallSites"));
+            getSystemErrorMap = (ref("node:sys.getSystemErrorMap"));
+            getSystemErrorName = (ref("node:sys.getSystemErrorName"));
+            getSystemErrorMessage = (ref("node:sys.getSystemErrorMessage"));
+            inherits = (ref("node:sys.inherits"));
+            inspect = (ref("node:sys.inspect"));
+            isArray = (ref("node:sys.isArray"));
+            isDeepStrictEqual = (ref("node:sys.isDeepStrictEqual"));
+            promisify = (ref("node:sys.promisify"));
+            stripVTControlCharacters = (ref("node:sys.stripVTControlCharacters"));
+            styleText = (ref("node:sys.styleText"));
+            toUSVString = (ref("node:sys.toUSVString"));
+            setTraceSigInt = (ref("node:sys.setTraceSigInt"));
+            types = (ref("node:sys.types"));
+            parseArgs = (ref("node:sys.parseArgs"));
+            MIMEParams = (ref("node:sys.MIMEParams"));
+            MIMEType = (ref("node:sys.MIMEType"));
+            TextDecoder = (ref(TextDecoder));
+            TextEncoder = (ref(TextEncoder));
+            transferableAbortController = (ref("node:sys.transferableAbortController"));
+            transferableAbortSignal = (ref("node:sys.transferableAbortSignal"));
+        }
+    }
+}

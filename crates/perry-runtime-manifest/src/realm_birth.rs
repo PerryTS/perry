@@ -612,7 +612,21 @@ pub(super) fn birth_at(
         },
         descriptors: members.descriptors,
         typed_array_prototype,
-        integrity,
+        // The properties of a native namespace stay behind its vtable, but
+        // js_create_native_module_namespace seals some births: the header
+        // carries that integrity, the same derivation as their births-only
+        // entries.
+        integrity: match native_namespace.as_deref() {
+            Some(module)
+                if facts::sealed_native_namespaces(include_str!(
+                    "../../perry-runtime/src/object/native_module.rs"
+                ))?
+                .contains(&module) =>
+            {
+                Integrity::Sealed
+            }
+            _ => integrity,
+        },
     };
     let class_id = if native {
         u64::from(perry_abi::realm_header::object_class_id(

@@ -201,3 +201,35 @@ crate::realm_decl! {
         }
     }
 }
+
+crate::realm_decl! {
+    namespace NM_OS = "os" {
+        births = [Object];
+        members = {
+            EOL = ("\n");
+            arch = (ref("node:os.arch"));
+            availableParallelism = (ref("node:os.availableParallelism"));
+            constants = (ref("node:os.constants"));
+            cpus = (ref("node:os.cpus"));
+            default = (ref("node:os.default"));
+            devNull = ("/dev/null");
+            endianness = (ref("node:os.endianness"));
+            freemem = (ref("node:os.freemem"));
+            getPriority = (ref("node:os.getPriority"));
+            homedir = (ref("node:os.homedir"));
+            hostname = (ref("node:os.hostname"));
+            loadavg = (ref("node:os.loadavg"));
+            machine = (ref("node:os.machine"));
+            networkInterfaces = (ref("node:os.networkInterfaces"));
+            platform = (ref("node:os.platform"));
+            release = (ref("node:os.release"));
+            setPriority = (ref("node:os.setPriority"));
+            tmpdir = (ref("node:os.tmpdir"));
+            totalmem = (ref("node:os.totalmem"));
+            type = (ref("node:os.type"));
+            uptime = (ref("node:os.uptime"));
+            userInfo = (ref("node:os.userInfo"));
+            version = (ref("node:os.version"));
+        }
+    }
+}

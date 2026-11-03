@@ -10,3 +10,13 @@ crate::realm_decl! {
         }
     }
 }
+
+crate::realm_decl! {
+    namespace NM_WASI = "wasi" {
+        births = [Object];
+        members = {
+            WASI = (ref("node:wasi.WASI"));
+            default = (ref("node:wasi.default"));
+        }
+    }
+}

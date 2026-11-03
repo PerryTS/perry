@@ -16,3 +16,13 @@ crate::realm_decl! {
         }
     }
 }
+
+crate::realm_decl! {
+    namespace NM_READLINE_PROMISES = "readline/promises" {
+        members = {
+            Interface = (ref("node:readline/promises.Interface"));
+            Readline = (ref("node:readline/promises.Readline"));
+            createInterface = (ref("node:readline/promises.createInterface"));
+        }
+    }
+}

@@ -26,3 +26,28 @@ crate::realm_decl! {
         }
     }
 }
+
+crate::realm_decl! {
+    namespace NM_CLUSTER = "cluster" {
+        births = [Object];
+        members = {
+            SCHED_NONE = (1.0);
+            SCHED_RR = (2.0);
+            Worker = (ref("node:cluster.Worker"));
+            _events = (ref("node:cluster.default._events"));
+            _eventsCount = (0.0);
+            _maxListeners = (undefined);
+            default = (ref("node:cluster.default"));
+            disconnect = (ref("node:cluster.disconnect"));
+            fork = (ref("node:cluster.fork"));
+            isMaster = (true);
+            isPrimary = (true);
+            isWorker = (false);
+            schedulingPolicy = (2.0);
+            settings = (ref("node:cluster.settings"));
+            setupMaster = (ref("node:cluster.setupMaster"));
+            setupPrimary = (ref("node:cluster.setupMaster"));
+            workers = (ref("node:cluster.workers"));
+        }
+    }
+}

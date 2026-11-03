@@ -113,3 +113,117 @@ crate::realm_decl! {
         }
     }
 }
+
+crate::realm_decl! {
+    namespace NM_DNS = "dns" {
+        births = [Object];
+        members = {
+            ADDRCONFIG = (32.0);
+            ADDRGETNETWORKPARAMS = ("EADDRGETNETWORKPARAMS");
+            ALL = (16.0);
+            BADFAMILY = ("EBADFAMILY");
+            BADFLAGS = ("EBADFLAGS");
+            BADHINTS = ("EBADHINTS");
+            BADNAME = ("EBADNAME");
+            BADQUERY = ("EBADQUERY");
+            BADRESP = ("EBADRESP");
+            BADSTR = ("EBADSTR");
+            CANCELLED = ("ECANCELLED");
+            CONNREFUSED = ("ECONNREFUSED");
+            DESTRUCTION = ("EDESTRUCTION");
+            EOF = ("EOF");
+            FILE = ("EFILE");
+            FORMERR = ("EFORMERR");
+            LOADIPHLPAPI = ("ELOADIPHLPAPI");
+            NODATA = ("ENODATA");
+            NOMEM = ("ENOMEM");
+            NONAME = ("ENONAME");
+            NOTFOUND = ("ENOTFOUND");
+            NOTIMP = ("ENOTIMP");
+            NOTINITIALIZED = ("ENOTINITIALIZED");
+            REFUSED = ("EREFUSED");
+            Resolver = (ref("node:dns.Resolver"));
+            SERVFAIL = ("ESERVFAIL");
+            TIMEOUT = ("ETIMEOUT");
+            V4MAPPED = (8.0);
+            default = (ref("node:dns.default"));
+            getDefaultResultOrder = (ref("node:dns.getDefaultResultOrder"));
+            getServers = (ref("node:dns.getServers"));
+            lookup = (ref("node:dns.lookup"));
+            lookupService = (ref("node:dns.lookupService"));
+            promises = (ref("node:dns.promises"));
+            resolve = (ref("node:dns.resolve"));
+            resolve4 = (ref("node:dns.resolve4"));
+            resolve6 = (ref("node:dns.resolve6"));
+            resolveAny = (ref("node:dns.resolveAny"));
+            resolveCaa = (ref("node:dns.resolveCaa"));
+            resolveCname = (ref("node:dns.resolveCname"));
+            resolveMx = (ref("node:dns.resolveMx"));
+            resolveNaptr = (ref("node:dns.resolveNaptr"));
+            resolveNs = (ref("node:dns.resolveNs"));
+            resolvePtr = (ref("node:dns.resolvePtr"));
+            resolveSoa = (ref("node:dns.resolveSoa"));
+            resolveSrv = (ref("node:dns.resolveSrv"));
+            resolveTlsa = (ref("node:dns.resolveTlsa"));
+            resolveTxt = (ref("node:dns.resolveTxt"));
+            reverse = (ref("node:dns.reverse"));
+            setDefaultResultOrder = (ref("node:dns.setDefaultResultOrder"));
+            setServers = (ref("node:dns.setServers"));
+        }
+    }
+}
+
+crate::realm_decl! {
+    namespace NM_DNS_PROMISES = "dns/promises" {
+        births = [Object];
+        members = {
+            ADDRGETNETWORKPARAMS = ("EADDRGETNETWORKPARAMS");
+            BADFAMILY = ("EBADFAMILY");
+            BADFLAGS = ("EBADFLAGS");
+            BADHINTS = ("EBADHINTS");
+            BADNAME = ("EBADNAME");
+            BADQUERY = ("EBADQUERY");
+            BADRESP = ("EBADRESP");
+            BADSTR = ("EBADSTR");
+            CANCELLED = ("ECANCELLED");
+            CONNREFUSED = ("ECONNREFUSED");
+            DESTRUCTION = ("EDESTRUCTION");
+            EOF = ("EOF");
+            FILE = ("EFILE");
+            FORMERR = ("EFORMERR");
+            LOADIPHLPAPI = ("ELOADIPHLPAPI");
+            NODATA = ("ENODATA");
+            NOMEM = ("ENOMEM");
+            NONAME = ("ENONAME");
+            NOTFOUND = ("ENOTFOUND");
+            NOTIMP = ("ENOTIMP");
+            NOTINITIALIZED = ("ENOTINITIALIZED");
+            REFUSED = ("EREFUSED");
+            Resolver = (ref("node:dns/promises.Resolver"));
+            SERVFAIL = ("ESERVFAIL");
+            TIMEOUT = ("ETIMEOUT");
+            default = (ref("node:dns.promises"));
+            getDefaultResultOrder = (ref("node:dns/promises.getDefaultResultOrder"));
+            getServers = (ref("node:dns/promises.getServers"));
+            lookup = (ref("node:dns/promises.lookup"));
+            lookupService = (ref("node:dns/promises.lookupService"));
+            resolve = (ref("node:dns/promises.resolve"));
+            resolve4 = (ref("node:dns/promises.resolve4"));
+            resolve6 = (ref("node:dns/promises.resolve6"));
+            resolveAny = (ref("node:dns/promises.resolveAny"));
+            resolveCaa = (ref("node:dns/promises.resolveCaa"));
+            resolveCname = (ref("node:dns/promises.resolveCname"));
+            resolveMx = (ref("node:dns/promises.resolveMx"));
+            resolveNaptr = (ref("node:dns/promises.resolveNaptr"));
+            resolveNs = (ref("node:dns/promises.resolveNs"));
+            resolvePtr = (ref("node:dns/promises.resolvePtr"));
+            resolveSoa = (ref("node:dns/promises.resolveSoa"));
+            resolveSrv = (ref("node:dns/promises.resolveSrv"));
+            resolveTlsa = (ref("node:dns/promises.resolveTlsa"));
+            resolveTxt = (ref("node:dns/promises.resolveTxt"));
+            reverse = (ref("node:dns/promises.reverse"));
+            setDefaultResultOrder = (ref("node:dns/promises.setDefaultResultOrder"));
+            setServers = (ref("node:dns/promises.setServers"));
+        }
+    }
+}

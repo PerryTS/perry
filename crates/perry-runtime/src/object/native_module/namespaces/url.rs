@@ -23,3 +23,26 @@ crate::realm_decl! {
         }
     }
 }
+
+crate::realm_decl! {
+    namespace NM_URL = "url" {
+        births = [Object];
+        members = {
+            URL = (ref(URL));
+            URLSearchParams = (ref(URLSearchParams));
+            URLPattern = (ref(URLPattern));
+            Url = (ref("node:url.Url"));
+            default = (ref("node:url.default"));
+            domainToASCII = (ref("node:url.domainToASCII"));
+            domainToUnicode = (ref("node:url.domainToUnicode"));
+            fileURLToPath = (ref("node:url.fileURLToPath"));
+            fileURLToPathBuffer = (ref("node:url.fileURLToPathBuffer"));
+            format = (ref("node:url.format"));
+            parse = (ref("node:url.parse"));
+            pathToFileURL = (ref("node:url.pathToFileURL"));
+            resolve = (ref("node:url.resolve"));
+            resolveObject = (ref("node:url.resolveObject"));
+            urlToHttpOptions = (ref("node:url.urlToHttpOptions"));
+        }
+    }
+}

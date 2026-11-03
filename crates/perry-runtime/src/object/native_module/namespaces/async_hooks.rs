@@ -16,3 +16,19 @@ crate::realm_decl! {
         }
     }
 }
+
+crate::realm_decl! {
+    namespace NM_ASYNC_HOOKS = "async_hooks" {
+        births = [Object];
+        members = {
+            AsyncLocalStorage = (ref("node:async_hooks.AsyncLocalStorage"));
+            AsyncResource = (ref("node:async_hooks.AsyncResource"));
+            asyncWrapProviders = (ref("node:async_hooks.asyncWrapProviders"));
+            createHook = (ref("node:async_hooks.createHook"));
+            default = (ref("node:async_hooks.default"));
+            executionAsyncId = (ref("node:async_hooks.executionAsyncId"));
+            executionAsyncResource = (ref("node:async_hooks.executionAsyncResource"));
+            triggerAsyncId = (ref("node:async_hooks.triggerAsyncId"));
+        }
+    }
+}

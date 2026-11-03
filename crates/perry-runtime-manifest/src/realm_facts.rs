@@ -461,7 +461,7 @@ pub(super) fn constant(ts: &[Token<'_>]) -> Result<Value, String> {
 
 /// The modules js_create_native_module_namespace seals after the birth:
 /// `if module_name == "m" { crate::object::js_object_seal(value); }`.
-fn sealed_native_namespaces(source: &str) -> Result<Vec<&str>, String> {
+pub(super) fn sealed_native_namespaces(source: &str) -> Result<Vec<&str>, String> {
     let body = source
         .split_once("pub extern \"C\" fn js_create_native_module_namespace(")
         .ok_or("missing native namespace birth")?

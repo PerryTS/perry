@@ -75,3 +75,37 @@ crate::realm_decl! {
         }
     }
 }
+
+crate::realm_decl! {
+    namespace NM_INSPECTOR = "inspector" {
+        births = [Object];
+        members = {
+            open = (ref("node:inspector.open"));
+            close = (ref("node:inspector.close"));
+            url = (ref("node:inspector.url"));
+            waitForDebugger = (ref("node:inspector.waitForDebugger"));
+            console = (ref("node:inspector.console"));
+            Session = (ref("node:inspector.Session"));
+            Network = (ref("node:inspector.Network"));
+            NetworkResources = (ref("node:inspector.default.NetworkResources"));
+            DOMStorage = (ref("node:inspector.default.DOMStorage"));
+        }
+    }
+}
+
+crate::realm_decl! {
+    namespace NM_INSPECTOR_PROMISES = "inspector/promises" {
+        births = [Object];
+        members = {
+            open = (ref("node:inspector.open"));
+            close = (ref("node:inspector.close"));
+            url = (ref("node:inspector.url"));
+            waitForDebugger = (ref("node:inspector.waitForDebugger"));
+            console = (ref("node:inspector.console"));
+            Session = (ref("node:inspector/promises.Session"));
+            Network = (ref("node:inspector.Network"));
+            NetworkResources = (ref("node:inspector.default.NetworkResources"));
+            DOMStorage = (ref("node:inspector.default.DOMStorage"));
+        }
+    }
+}
