@@ -74,6 +74,7 @@ mod client_abort;
 // #10428: erased-receiver dispatch for client handles without the stdlib pump.
 mod client_dispatch_ext;
 mod client_events;
+mod client_incoming_read;
 mod client_surface;
 pub(crate) use client_surface::*;
 
@@ -162,6 +163,13 @@ pub(crate) enum PendingHttpEvent {
     /// The streamed body finished — `'end'` on the message, `'close'` on
     /// the request.
     ResponseEnd { request_handle: Handle },
+    /// Deferred Readable-state evaluation for a client `IncomingMessage`
+    /// (late `'readable'`/`'data'` listener, `resume()`, a `read()` that drained
+    /// the buffer): Node emits these edges on a later tick.
+    IncomingDrain {
+        request_handle: Handle,
+        incoming: Handle,
+    },
     /// #10468 — a `101` fires `'upgrade'` instead of `'response'`.
     Upgrade {
         request_handle: Handle,
@@ -509,6 +517,8 @@ pub struct IncomingMessageHandle {
     pub http_version: (u8, u8),
     /// `res.complete` (#10467) — set once the body is fully received.
     pub complete: bool,
+    /// Paused-mode Readable state (`read()`, `'readable'`, `pause()`).
+    pub read: client_incoming_read::ReadState,
 }
 
 unsafe impl Send for IncomingMessageHandle {}
@@ -760,6 +770,7 @@ fn pending_request_handle(event: &PendingHttpEvent) -> Handle {
         | PendingHttpEvent::ResponseHead { request_handle, .. }
         | PendingHttpEvent::ResponseChunk { request_handle, .. }
         | PendingHttpEvent::ResponseEnd { request_handle }
+        | PendingHttpEvent::IncomingDrain { request_handle, .. }
         | PendingHttpEvent::Error { request_handle, .. }
         | PendingHttpEvent::CodedError { request_handle, .. }
         | PendingHttpEvent::TransportError { request_handle, .. }
@@ -1801,8 +1812,14 @@ pub unsafe extern "C" fn js_http_once(
     });
     if !matched {
         with_handle_mut::<IncomingMessageHandle, _, _>(handle, |response| {
-            response.listeners.entry(event).or_default().push(wrapper);
+            response
+                .listeners
+                .entry(event.clone())
+                .or_default()
+                .push(wrapper);
+            response.read.once_targets.push((wrapper, callback.get()));
         });
+        client_incoming_read::on_listener_added(handle, &event);
     }
     handle
 }
@@ -1829,8 +1846,12 @@ unsafe fn http_on_impl(handle: Handle, event_ptr: *const StringHeader, callback:
         return handle;
     }
     with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| {
-        res.listeners.entry(event).or_default().push(callback);
+        res.listeners
+            .entry(event.clone())
+            .or_default()
+            .push(callback);
     });
+    client_incoming_read::on_listener_added(handle, &event);
     handle
 }
 
