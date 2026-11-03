@@ -230,7 +230,7 @@
     {
       "path": "crates/perry-runtime/src/map/string_key.rs",
       "function": "matches_indexed",
-      "body_sha256": "5ef1d095a556ecf5f663598ab2818a009ced60c28f521f1b79926d01f0dc10d2",
+      "body_sha256": "19147ed55bd79577782c0edc32ecd3c1283876ef5acd3f577afce199b0e1ec3f",
       "claim": "Only an entry whose upper 16 bits equal STRING_TAG>>48 (a heap string) is masked and read as a StringHeader. An inline-string entry carries SHORT_STRING_TAG, skips that branch and is compared by the masked-tail equality below, so no inline payload is dereferenced as a header; the query side is already split into StrKey::Short and StrKey::Heap.",
       "rule": "mask-cast",
       "support_files": []
