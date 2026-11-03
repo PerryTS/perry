@@ -701,6 +701,9 @@ impl Drop for PendingRequireParentGuard {
 
 fn require_path(path: &std::path::Path, parent_filename: &str) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
+    // `Module._cache`: the program's `require.cache` from program start (the
+    // CommonJS support module initializes first, `init_order`), the object
+    // the module stores its record in during the load below.
     let cache_handle = scope.root_nanbox_f64(crate::object::module_cjs_cache_value());
     let filename = path.to_string_lossy();
     if let Some((record, exports)) = cached_record(cache_handle.get_nanbox_f64(), &filename) {
@@ -729,13 +732,6 @@ fn require_path(path: &std::path::Path, parent_filename: &str) -> f64 {
         let result = js_require_path_module(string_value(&filename));
         registered_path_module_value(&filename).unwrap_or(result)
     });
-    // `Module._cache` is read again: the load may have run the CommonJS
-    // support module (deferred together with its first module), whose
-    // `js_cjs_install` makes the program's `require.cache` the cache. The
-    // record the module just stored is in that object. A miss in the object
-    // read before the load would count as `delete require.cache[path]` and
-    // run the module a second time.
-    let cache_handle = scope.root_nanbox_f64(crate::object::module_cjs_cache_value());
     if let Some((record, exports)) = cached_record(cache_handle.get_nanbox_f64(), &filename) {
         link_parent(cache_handle.get_nanbox_f64(), record, parent_filename);
         run_custom_extension(path, record, &filename);
