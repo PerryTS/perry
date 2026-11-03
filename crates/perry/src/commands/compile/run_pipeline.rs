@@ -1042,6 +1042,21 @@ pub fn run_with_parse_cache(
             );
         }
     }
+    // A `perry.nativeAddons` grant for a package Perry implements natively has
+    // nothing to grant: every loader of that specifier gets the native module,
+    // so the package's own files and its Node-API addon are never reached.
+    if matches!(format, OutputFormat::Text) {
+        for pkg in &ctx.native_addon_packages {
+            if perry_hir::is_native_module_specifier(pkg) && !ctx.compile_packages.contains(pkg) {
+                eprintln!(
+                    "  note: `perry.nativeAddons` lists `{pkg}`, which Perry implements \
+                     natively; the entry has no effect. Add `{pkg}` to \
+                     `perry.compilePackages` to compile the package and host its Node-API \
+                     addon instead."
+                );
+            }
+        }
+    }
 
     collect_modules::reexport_prune::finish(&mut ctx);
     run_post_collect_preflight(&args, &mut ctx, format)?;
