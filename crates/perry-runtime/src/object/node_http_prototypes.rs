@@ -788,8 +788,7 @@ unsafe fn message_init(this: f64, req: Option<f64>) {
                 this.get_nanbox_f64(),
             )
             .is_some_and(|obj| {
-                crate::node_stream::instance_birth::instance_layout(obj)
-                    == Some(layouts::SERVER_RESPONSE::desc())
+                on_server_response_layout(crate::node_stream::instance_birth::instance_layout(obj))
             })
     };
     let put = |slot: u32, name: &'static [u8], value: f64| {
@@ -994,8 +993,9 @@ mod tests {
     }
 
     unsafe fn on_layout(obj: usize) -> bool {
-        crate::node_stream::instance_birth::instance_layout(obj as *const ObjectHeader)
-            == Some(crate::object::runtime_layouts::SERVER_RESPONSE::desc())
+        super::on_server_response_layout(crate::node_stream::instance_birth::instance_layout(
+            obj as *const ObjectHeader,
+        ))
     }
 
     #[test]
@@ -1095,4 +1095,15 @@ mod incoming_init_tests {
             );
         }
     }
+}
+
+/// Whether an object's instance layout is `ServerResponse`'s. A probe, not a
+/// birth: a program whose realm does not reach the layout has no object on it.
+fn on_server_response_layout(
+    layout: Option<*const crate::object::layout_desc::PerryLayoutDesc>,
+) -> bool {
+    layout.is_some_and(|layout| {
+        crate::object::runtime_layouts::SERVER_RESPONSE::reached()
+            .is_some_and(|desc| std::ptr::eq(layout, desc))
+    })
 }

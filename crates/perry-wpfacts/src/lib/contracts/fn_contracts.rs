@@ -130,6 +130,19 @@ pub(crate) fn fn_contract_of(
                 .filter(|&(_, u)| u != 0)
                 .map(|(a, u)| (g.m.atoms[a as usize].clone(), u))
                 .collect();
+            // DECISIONS 242 (contract half): every key the body reads on
+            // the argument (a miss site where the argument does not own
+            // it), `STAR_KEY` for a computed key; a key with uses is a
+            // read too.
+            for &k in g.m.param_reads.get(&mk).into_iter().flatten() {
+                let k = match k {
+                    model::Key::Named(a) => g.m.atoms[a as usize].clone(),
+                    model::Key::Any => crate::STAR_KEY.to_string(),
+                };
+                if !v.iter().any(|(x, _)| *x == k) {
+                    v.push((k, 0));
+                }
+            }
             v.sort();
             v
         })
@@ -324,6 +337,19 @@ pub(crate) fn fn_contract_of(
             .unwrap_or_default();
     this_calls.sort();
     let (name, closed) = fn_contract_name(g, f);
+    // DECISIONS 242 (contract half): the defineProperty calls on each
+    // argument, run by the caller on it.
+    let mut param_defines: Vec<(u32, Option<String>, bool)> = Vec::new();
+    for i in 0..fi.params.len() as u32 {
+        let Some(&mk) = g.m.marker_of.get(&(f, i)) else {
+            continue;
+        };
+        for &(k, data) in g.m.param_defines.get(&mk).into_iter().flatten() {
+            param_defines.push((i, k.map(|a| g.m.atoms[a as usize].clone()), data));
+        }
+    }
+    param_defines.sort();
+    param_defines.dedup();
     // DECISIONS 162: the array cells it stores an argument into.
     let param_cells: Vec<(u32, String)> = g
         .cell_flows
@@ -345,6 +371,7 @@ pub(crate) fn fn_contract_of(
         param_calls,
         param_handovers,
         param_cells,
+        param_defines,
         name,
         closed,
         params,
@@ -442,5 +469,6 @@ pub(crate) fn fn_named(g: &gen::Gen, f: model::FnIdx) -> units::FnContract {
         param_calls: Vec::new(),
         param_handovers: Vec::new(),
         param_cells: Vec::new(),
+        param_defines: Vec::new(),
     }
 }

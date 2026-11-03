@@ -352,7 +352,7 @@ pub(crate) const RULE3_KINDS: &[(u8, &str, &str, Rule3Word)] = &[
     (
         gc::GC_TYPE_WEAK_STORAGE,
         "WeakStorage",
-        "len: u32 <= capacity; storage::grow bounds capacity by the u32 allocation size / 28",
+        "len: u32 <= capacity; storage::grow bounds capacity by the u32 allocation size / 32",
         Rule3Word::BoundedBelowRange,
     ),
     (

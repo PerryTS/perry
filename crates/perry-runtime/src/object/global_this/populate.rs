@@ -576,6 +576,19 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
             }
             finish_builtin_prototype(declaration, proto_obj);
         }
+        // The realm's [[Intrinsics]] entry for this family: the constructor
+        // and what its instances inherit from, whatever `globalThis.<name>`
+        // later holds.
+        let ctor = JSValue::from_bits(ctor_value.to_bits());
+        crate::array::note_realm_intrinsic(
+            declaration.identity,
+            proto_obj as usize,
+            if ctor.is_pointer() {
+                ctor.as_pointer::<u8>() as usize
+            } else {
+                0
+            },
+        );
         let name_bytes = name.as_bytes();
         let name_key =
             crate::string::js_string_from_bytes(name_bytes.as_ptr(), name_bytes.len() as u32);

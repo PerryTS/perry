@@ -14,7 +14,7 @@ pub extern "C" fn js_promise_static_function_value(name_ptr: *const u8, name_len
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
 
-    let ctor_value = js_get_global_this_builtin_value(b"Promise".as_ptr(), 7);
+    let ctor_value = super::builtin_constructor_value("Promise");
     let ctor_ptr =
         crate::value::js_nanbox_get_pointer(ctor_value) as *mut crate::closure::ClosureHeader;
     if !ctor_ptr.is_null() {

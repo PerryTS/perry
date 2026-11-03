@@ -65,15 +65,20 @@ fn is_int32_bitwise_result(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         || crate::type_analysis::is_provably_not_bigint(ctx, right))
 }
 
-/// (Issue #50) If `IndexGet { object, index }` is a flat-const access
-/// (inline `X[i][j]` or aliased `krow[j]`), lower it directly against
-/// the `[N x i32]` global and return the NaN-boxed-double form of the
-/// element. Returns `Ok(None)` when the pattern doesn't apply.
-pub(crate) fn try_lower_flat_const_index_get(
-    ctx: &mut FnCtx<'_>,
+/// The flat-const table, row and column an `IndexGet { object, index }`
+/// reads when [`try_lower_flat_const_index_get`] lowers it: an inline
+/// `X[i][j]` or an aliased `krow[j]` (`krow = X[i]`) over a folded flat-const
+/// 2D int array `X`, at keys that are not strings. `None` means that lowering
+/// does not take the read.
+///
+/// This is the single admission for that lowering and for the Number proof
+/// `type_analysis` gives the same read (the lowering always yields
+/// `sitofp i32 -> double`, a raw Number), so the two cannot disagree.
+pub(crate) fn flat_const_index_get_target(
+    ctx: &FnCtx<'_>,
     object: &Expr,
     index: &Expr,
-) -> Result<Option<String>> {
+) -> Option<(FlatConstInfo, Box<Expr>, Box<Expr>)> {
     let (info, row_expr, col_expr): (FlatConstInfo, Box<Expr>, Box<Expr>) = match object {
         // Inline: IndexGet(IndexGet(LocalGet(X), i), j)
         Expr::IndexGet {
@@ -81,30 +86,20 @@ pub(crate) fn try_lower_flat_const_index_get(
             index: outer_idx,
             ..
         } => {
-            if let Expr::LocalGet(id) = outer_obj.as_ref() {
-                if let Some(info) = ctx.flat_const_arrays.get(id).cloned() {
-                    (info, outer_idx.clone(), Box::new(index.clone()))
-                } else {
-                    return Ok(None);
-                }
-            } else {
-                return Ok(None);
-            }
+            let Expr::LocalGet(id) = outer_obj.as_ref() else {
+                return None;
+            };
+            let info = ctx.flat_const_arrays.get(id).cloned()?;
+            (info, outer_idx.clone(), Box::new(index.clone()))
         }
         // Aliased: IndexGet(LocalGet(krow), j) where krow was init'd
         // as `IndexGet(LocalGet(X), i)` for a flat-const X.
         Expr::LocalGet(alias_id) => {
-            if let Some((const_id, row_expr)) = ctx.array_row_aliases.get(alias_id).cloned() {
-                if let Some(info) = ctx.flat_const_arrays.get(&const_id).cloned() {
-                    (info, row_expr, Box::new(index.clone()))
-                } else {
-                    return Ok(None);
-                }
-            } else {
-                return Ok(None);
-            }
+            let (const_id, row_expr) = ctx.array_row_aliases.get(alias_id).cloned()?;
+            let info = ctx.flat_const_arrays.get(&const_id).cloned()?;
+            (info, row_expr, Box::new(index.clone()))
         }
-        _ => return Ok(None),
+        _ => return None,
     };
 
     // A string-keyed access (`m["1"]["0"]`) must NOT take the integer flat
@@ -119,8 +114,23 @@ pub(crate) fn try_lower_flat_const_index_get(
     let col_is_string = matches!(col_expr.as_ref(), Expr::String(_))
         || crate::type_analysis::is_string_expr(ctx, &col_expr);
     if row_is_string || col_is_string {
-        return Ok(None);
+        return None;
     }
+    Some((info, row_expr, col_expr))
+}
+
+/// (Issue #50) If `IndexGet { object, index }` is a flat-const access
+/// (inline `X[i][j]` or aliased `krow[j]`), lower it directly against
+/// the `[N x i32]` global and return the NaN-boxed-double form of the
+/// element. Returns `Ok(None)` when the pattern doesn't apply.
+pub(crate) fn try_lower_flat_const_index_get(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    index: &Expr,
+) -> Result<Option<String>> {
+    let Some((info, row_expr, col_expr)) = flat_const_index_get_target(ctx, object, index) else {
+        return Ok(None);
+    };
 
     // Compute `row_i32` and `col_i32` as i32 SSA values. Use the existing
     // integer lowering when possible (both operands are likely small

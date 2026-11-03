@@ -22,6 +22,8 @@ use crate::types::LlvmType;
 
 mod linkage;
 pub(crate) use linkage::*;
+mod metadata;
+pub use metadata::BufferAliasScopes;
 
 #[cfg(test)]
 mod unit_partition_tests;
@@ -92,14 +94,16 @@ pub struct LlModule {
     /// Module-wide counter for inline cache globals (`perry_ic_N`).
     /// Must be unique across all functions in the module.
     pub ic_counter: u32,
-    /// Module-wide counter for buffer alias-scope ids. Each function's
-    /// `FnCtx` reads this as its `buffer_alias_base` at creation, then
-    /// after the function lowers its body the counter is bumped by the
-    /// number of scopes that function allocated. Must be unique across
-    /// every function in the module so `!alias.scope !201` references
-    /// emitted on loads/stores match the metadata nodes emitted once
-    /// at the end of `compile_module` (closes #71).
-    pub buffer_alias_counter: u32,
+    /// The module's one numbered-metadata id counter (`!0 = !{}` is fixed;
+    /// ids start at 1). Every numbered node the module emits takes its id
+    /// from here: buffer alias scopes (three ids each, see
+    /// [`BufferAliasScopes`]), the alias domain, and loop IDs
+    /// ([`Self::number_loop_metadata`]). No table has a fixed base, so no
+    /// two tables can overlap however many nodes they hold.
+    next_metadata_id: u32,
+    /// Scope-node ids of every buffer alias scope committed by a lowered
+    /// function, in allocation order (closes #71: one module-wide table).
+    buffer_alias_scopes: Vec<u32>,
     pub(crate) native_rep_records: Vec<NativeRepRecord>,
     fp_flags: FpFlags,
     /// #8175: symbols that must be defined, declared, AND called with the
@@ -187,7 +191,8 @@ impl LlModule {
             symbol_prefix: String::new(),
             metadata_lines: Vec::new(),
             ic_counter: 0,
-            buffer_alias_counter: 0,
+            next_metadata_id: 1,
+            buffer_alias_scopes: Vec::new(),
             native_rep_records: Vec::new(),
             fp_flags,
             preserve_none_fns: Rc::new(RefCell::new(HashSet::new())),
@@ -1961,4 +1966,18 @@ fn has_js_call_abi(function: &LlFunction) -> bool {
         && function.params[2..]
             .iter()
             .all(|(ty, _)| *ty == crate::types::DOUBLE)
+}
+
+/// An LLVM metadata string body: printable ASCII except `"` and `\\` as-is,
+/// every other byte as `\\XX`.
+fn llvm_metadata_string(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for byte in text.bytes() {
+        if (0x20..0x7f).contains(&byte) && byte != b'"' && byte != b'\\' {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("\\{byte:02X}"));
+        }
+    }
+    out
 }

@@ -249,6 +249,8 @@ pub use ctor_arity::{
 };
 mod checked_integer;
 #[cfg(test)]
+mod buffer_alias_metadata_tests;
+#[cfg(test)]
 mod declared_string_add_tests;
 #[cfg(test)]
 mod emission_order_tests;
@@ -2231,6 +2233,10 @@ fn lower_module(
         })
         .collect();
     module_dispatch_facts.install_imported_return_shapes(imported_return_shapes);
+    module_dispatch_facts.install_array_record_protocol_dead(
+        crate::expr::array_iteration_facts(&opts.program_facts.elision) == 0
+            && opts.program_facts.elision.array_iterator_close_unwritten,
+    );
     // Representation-selection Phase 5a: proven-`this` method clones.
     let mut pshape_methods: std::collections::HashMap<
         (String, String),
@@ -4460,8 +4466,8 @@ fn lower_module(
     // function's count emit `!alias.scope !N` references with no matching
     // metadata definition (issue #71).
     closed_targets::apply(&mut llmod);
-    let total_buffer_scopes = llmod.buffer_alias_counter;
-    emit_buffer_alias_metadata(&mut llmod, total_buffer_scopes);
+    emit_buffer_alias_metadata(&mut llmod);
+    llmod.number_loop_metadata();
     llmod
         .native_rep_records
         .extend(typed_clone_rejection_records);

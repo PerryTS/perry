@@ -432,3 +432,41 @@ fn split_shared_helpers_keep_their_owner_without_local_users() {
     }
     fs::remove_dir_all(scratch).unwrap();
 }
+
+/// ld64's `section$start` / `section$end` symbols are spelled quoted
+/// (`@"\01section$start$..."`). A unit that emits a global naming them must
+/// declare them too; the reference scan once read only unquoted names, so
+/// every unit but the first failed to parse ("use of undefined value").
+#[test]
+fn quoted_external_declarations_follow_their_users_into_every_unit() {
+    let mut refs = std::collections::HashSet::new();
+    super::collect_symbol_refs(
+        "@b = constant { ptr, ptr } { ptr @\"\\01section$start$__TEXT$__s\", ptr @plain }, c\"x@\"",
+        &mut refs,
+    );
+    assert!(
+        refs.contains("@\"\\01section$start$__TEXT$__s\""),
+        "{refs:?}"
+    );
+    assert!(refs.contains("@plain"), "{refs:?}");
+
+    let mut module = LlModule::new("x86_64-apple-macosx13.0.0");
+    module.add_raw_global("@\"\\01section$start$__TEXT$__s\" = external hidden global i8".into());
+    module
+        .add_raw_global("@bounds = internal constant ptr @\"\\01section$start$__TEXT$__s\"".into());
+    for name in ["first", "second"] {
+        module
+            .define_function(name, PTR, vec![])
+            .create_block("entry")
+            .ret(PTR, "@bounds");
+    }
+    let units = module.render_codegen_units(2);
+    assert_eq!(units.len(), 2);
+    for unit in &units {
+        assert!(unit.contains("@bounds = "), "{unit}");
+        assert!(
+            unit.contains("@\"\\01section$start$__TEXT$__s\" = external hidden global i8"),
+            "{unit}"
+        );
+    }
+}

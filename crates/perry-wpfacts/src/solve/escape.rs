@@ -419,6 +419,7 @@ impl Model {
             parent_value: None,
             parent_links: Vec::new(),
             null_proto: false,
+            chain_miss: false,
             species: None,
         });
         let recv = self.tok(TokKind::Obj(rt, NO_CTX));
@@ -978,6 +979,22 @@ impl Model {
         }
     }
 
+    /// DECISIONS 242(1): `Object.prototype` holds an accessor under any key
+    /// (`STAR_KEY` in its `accessor_keys`): a key read there may run unknown
+    /// code and yield anything.
+    pub(crate) fn objproto_any_accessor(&mut self) {
+        let op = self.tok(TokKind::ObjectProto);
+        let star = self.atom(crate::STAR_KEY);
+        let ks = self.accessor_keys.entry(op).or_default();
+        if ks.contains(&star) {
+            return;
+        }
+        ks.push(star);
+        let fa = self.any_key_node(op);
+        self.add_top(fa, |_| "accessor under a computed key".into());
+        self.add_prim(fa, prim::ALL);
+    }
+
     pub fn mark_hard(&mut self, t: Tok, kind: Hard, reason: u32) {
         self.virt_revoke(t, None);
         // DECISIONS 234: under a computed key, a defineProperty on a
@@ -1071,6 +1088,15 @@ impl Model {
         // DECISIONS 217: another unit's lookups see a HARD shared object.
         if let Some(s) = self.shared_of(t) {
             self.note_shared(SharedWrite::Hard(s, kind));
+        }
+        // DECISIONS 242(1): a defineProperty under a computed key on
+        // `Object.prototype` is an accessor under any key there, in every
+        // mode (another unit's arrives as `Hard(ObjectProto, E5)` and runs
+        // here too): it reaches an object only through a key the object does
+        // not own (derive), never as a HARD chain.
+        if kind == Hard::E5DefineProperty && matches!(self.toks[t as usize], TokKind::ObjectProto) {
+            self.objproto_any_accessor();
+            return;
         }
         if self.hard.contains_key(&t) {
             return;

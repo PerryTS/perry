@@ -17,42 +17,30 @@
     }
   },
   "crates/perry-runtime/src/object/class_family_birth.rs::LAYOUT": {
-    "claim": "Release re-audit 2026-10-28: descriptor layout_id, keys, index and prototype metadata are immutable image facts. load_layout_id reads the template word; descriptor shape identity is allocated atomically and per-agent shape installation does not mutate these fields. Birth and store paths use the agent shape table. The tests assert semantic layout/shape behavior without resetting a shared identity.",
+    "claim": "Release re-audit 2026-10-28: descriptor layout_id, keys, index and prototype metadata are immutable image facts. load_layout_id reads the template word; descriptor shape identity is allocated atomically and per-agent shape installation does not mutate these fields. Birth and store paths use the agent shape table. The tests assert semantic layout/shape behavior without resetting a shared identity. Re-audited 2026-11-02 (RELPREP) against the source diffs since b1c9a11af9: the layout_desc split (registration/diagnostics/store), the A1 header accessors and the keys_view/ObjectKeys changes add no descriptor writer. The only runtime writes to a PerryLayoutDesc remain the once-only compare_exchange(0, id) installs of shape_id and of the prototype family serial; key-list registration writes a freshly allocated list, and the diagnostics/store counters are separate statics. A test's static LAYOUT therefore carries only image facts plus an idempotent identity, and no test resets it. Re-audited 2026-11-03 (RPX) against the diffs since ab8fc9070: runtime layouts are now their own emitted symbols (runtime_layouts::NAME::desc()) with no section position, so they request no id and draw one at their first install; that install is the same once-only compare_exchange(0, id) on the descriptor word (registration.rs register_bound, layout_desc.rs allocate), and the wasm inventory enumeration is deleted. cold_sort and optimize(size) edits touch ordering of diagnostics and codegen only. No new descriptor writer.",
     "source_sha256": {
-      "crates/perry-runtime/src/object/class_family_birth.rs": "6dd0e24c33d3b73d3fe79b799ea14171b352bf9598853d91c559fd1b632521fb",
-      "crates/perry-runtime/src/object/layout_desc.rs": "39cd67205ce2b03c53d693ad19a9415f9e938476cf51557a3a25cbe826eab9df",
-      "crates/perry-runtime/src/object/layout_desc/registration.rs": "07c93c3c65f2575ec13692ff8d29abe20a72e97c1b0b348bfdb9022747938e89",
-      "crates/perry-runtime/src/object/layout_desc/diagnostics.rs": "d9addb82c0bd301f11684388586bd30a80d25785f65631b4092cb9dd7797f36f",
-      "crates/perry-runtime/src/object/layout_desc/store.rs": "f8cda8a84357b40450d0db58a4b7d8ce6b5398a402a833d85ed6a3e5b24e8b27"
+      "crates/perry-runtime/src/object/class_family_birth.rs": "3e9b4a886dc1f945a0458e9e85d35a5da28d90427ae9e5e24ddea557b99d9e81",
+      "crates/perry-runtime/src/object/layout_desc.rs": "b639c15f2bdcb5e5b0dafd785d785d4f00c14b2895096795f0716de185c38b07",
+      "crates/perry-runtime/src/object/layout_desc/registration.rs": "dba028773015e302543a2a2cf99ea4e921ff7817b8b56d44b75b8b5ba1e5c32f",
+      "crates/perry-runtime/src/object/layout_desc/diagnostics.rs": "03381f73ffc06906c296d995730b39829051f3c11814cd86ae79d100a1a28314",
+      "crates/perry-runtime/src/object/layout_desc/store.rs": "155a51ddf4b2814d94ec4f421eb23905f0032fafa3e96e25480056c1fc0656b9"
     }
   },
   "crates/perry-runtime/src/object/function_family_birth_tests.rs::LAYOUT": {
-    "claim": "Release re-audit 2026-10-28: descriptor layout_id, keys, index and prototype metadata are immutable image facts. load_layout_id reads the template word; descriptor shape identity is allocated atomically and per-agent shape installation does not mutate these fields. Birth and store paths use the agent shape table. The tests assert semantic layout/shape behavior without resetting a shared identity.",
+    "claim": "Release re-audit 2026-10-28: descriptor layout_id, keys, index and prototype metadata are immutable image facts. load_layout_id reads the template word; descriptor shape identity is allocated atomically and per-agent shape installation does not mutate these fields. Birth and store paths use the agent shape table. The tests assert semantic layout/shape behavior without resetting a shared identity. Re-audited 2026-11-02 (RELPREP) against the source diffs since b1c9a11af9: the layout_desc split (registration/diagnostics/store), the A1 header accessors and the keys_view/ObjectKeys changes add no descriptor writer. The only runtime writes to a PerryLayoutDesc remain the once-only compare_exchange(0, id) installs of shape_id and of the prototype family serial; key-list registration writes a freshly allocated list, and the diagnostics/store counters are separate statics. A test's static LAYOUT therefore carries only image facts plus an idempotent identity, and no test resets it. Re-audited 2026-11-03 (RPX) against the diffs since ab8fc9070: runtime layouts are now their own emitted symbols (runtime_layouts::NAME::desc()) with no section position, so they request no id and draw one at their first install; that install is the same once-only compare_exchange(0, id) on the descriptor word (registration.rs register_bound, layout_desc.rs allocate), and the wasm inventory enumeration is deleted. cold_sort and optimize(size) edits touch ordering of diagnostics and codegen only. No new descriptor writer.",
     "source_sha256": {
-      "crates/perry-runtime/src/object/function_family_birth_tests.rs": "1ecfe5adbc2c09ab0c9dbfdbee7f1035476dd072ca50dafa2a038c79470bfb33",
-      "crates/perry-runtime/src/object/layout_desc.rs": "39cd67205ce2b03c53d693ad19a9415f9e938476cf51557a3a25cbe826eab9df",
-      "crates/perry-runtime/src/object/layout_desc/registration.rs": "07c93c3c65f2575ec13692ff8d29abe20a72e97c1b0b348bfdb9022747938e89",
-      "crates/perry-runtime/src/object/layout_desc/diagnostics.rs": "d9addb82c0bd301f11684388586bd30a80d25785f65631b4092cb9dd7797f36f",
-      "crates/perry-runtime/src/object/layout_desc/store.rs": "f8cda8a84357b40450d0db58a4b7d8ce6b5398a402a833d85ed6a3e5b24e8b27"
+      "crates/perry-runtime/src/object/function_family_birth_tests.rs": "43bd87ba08ab4d0eb838899d74b09870dcf02758f8e58f7f98227b6c3dab06bf",
+      "crates/perry-runtime/src/object/layout_desc.rs": "b639c15f2bdcb5e5b0dafd785d785d4f00c14b2895096795f0716de185c38b07",
+      "crates/perry-runtime/src/object/layout_desc/registration.rs": "dba028773015e302543a2a2cf99ea4e921ff7817b8b56d44b75b8b5ba1e5c32f",
+      "crates/perry-runtime/src/object/layout_desc/diagnostics.rs": "03381f73ffc06906c296d995730b39829051f3c11814cd86ae79d100a1a28314",
+      "crates/perry-runtime/src/object/layout_desc/store.rs": "155a51ddf4b2814d94ec4f421eb23905f0032fafa3e96e25480056c1fc0656b9"
     }
   },
   "crates/perry-runtime/src/object/own_override.rs::PERRY_OWN_NAMED_PROP_INSTALLED": {
-    "claim": "Exported monotonic ABI latch is intentionally process-wide; the fixture forcing it runs in an isolated child process. Rechecked the current interned_key_abi_tests fixture: isolated_process_guard still re-execs the assertion in a fresh process; prototype modifications only set the monotonic flag.",
+    "claim": "Exported monotonic ABI latch is intentionally process-wide; the fixture forcing it runs in an isolated child process. Rechecked the current interned_key_abi_tests fixture: isolated_process_guard still re-execs the assertion in a fresh process; prototype modifications only set the monotonic flag. Re-pinned 2026-11-03 (RPX): the only change to own_override.rs since the previous pin is an #[optimize(size)] attribute on a cold helper; the latch is still only set, never reset.",
     "source_sha256": {
-      "crates/perry-runtime/src/object/own_override.rs": "6c112095932e32ce0d165850b73813bf530adbf494c22c17e2ad12d36b49f8b0",
+      "crates/perry-runtime/src/object/own_override.rs": "4280fb7515ff5699bdf9294f8c1679f3a6bc3a0c32fe3a63736046aeeb5da355",
       "crates/perry-runtime/src/test_support.rs": "eda6b41d7531bbf515d3b34ed133285ead5fed492accd5ad8aee966bb4210cb2"
-    }
-  },
-  "crates/perry-runtime/src/object/runtime_layouts.rs::READABLE_STATE": {
-    "claim": "Release re-audit 2026-10-28: descriptor layout_id, keys, index and prototype metadata are immutable image facts. load_layout_id reads the template word; descriptor shape identity is allocated atomically and per-agent shape installation does not mutate these fields. Birth and store paths use the agent shape table. The tests assert semantic layout/shape behavior without resetting a shared identity.",
-    "source_sha256": {
-      "crates/perry-runtime/src/object/runtime_layouts.rs": "a9d6928788e97ef4730e58c57174f3bdb1c84ce5e5c449d07b38709c50c41591",
-      "crates/perry-runtime/src/object/layout_desc.rs": "39cd67205ce2b03c53d693ad19a9415f9e938476cf51557a3a25cbe826eab9df",
-      "crates/perry-runtime/src/object/layout_desc_tests.rs": "bd26b3fabeb7f9d0bd41266e08a5ee4dedc383a9b0155c860a9401eb22fc64ac",
-      "crates/perry-runtime/src/object/layout_desc/registration.rs": "07c93c3c65f2575ec13692ff8d29abe20a72e97c1b0b348bfdb9022747938e89",
-      "crates/perry-runtime/src/object/layout_desc/diagnostics.rs": "d9addb82c0bd301f11684388586bd30a80d25785f65631b4092cb9dd7797f36f",
-      "crates/perry-runtime/src/object/layout_desc/store.rs": "f8cda8a84357b40450d0db58a4b7d8ce6b5398a402a833d85ed6a3e5b24e8b27",
-      "crates/perry-runtime/src/object/runtime_layouts/literal_atoms.rs": "2ecc5215cc794d9a3e842240915f6e4de4e9e986a00b58116355504a41d108ec"
     }
   },
   "crates/perry-runtime/src/tls_os_pool/tests.rs::DROPS": {
@@ -62,9 +50,9 @@
     }
   },
   "crates/perry-runtime/src/exception.rs::ON": {
-    "claim": "Immutable OnceLock diagnostic flag: initialized once from PERRY_TRACE_THROW and only read by trace_throw_enabled; no reset or assertion depends on a mutable shared counter. Throw state itself is thread-local.",
+    "claim": "Immutable OnceLock diagnostic flag: initialized once from PERRY_TRACE_THROW and only read by trace_throw_enabled; no reset or assertion depends on a mutable shared counter. Throw state itself is thread-local. Re-pinned 2026-11-03 (RPX): the only change to exception.rs since the previous pin is an #[optimize(size)] attribute; the OnceLock flag is still initialized once and only read.",
     "source_sha256": {
-      "crates/perry-runtime/src/exception.rs": "e4a2ab99bf43e37d7ad9eb37bfb0144a165d7ca7f28d76bb13484fb81fb5ee17"
+      "crates/perry-runtime/src/exception.rs": "59adf02fb192031fee0a11cd80109e794e13492abeef76ed9a33130e72656933"
     }
   },
   "crates/perry-runtime/src/tls/roots/macos.rs::API": {
@@ -84,6 +72,12 @@
     "claim": "The lexical audit joins assertion names across all files. This private WASIp1 allocator static collides with unrelated STATE/CALLS test names, but wasm_discard.rs contains no tests or child modules and no assertion reads this static. Private visibility prevents another module from reading it. The source pin forces review if that visibility, a child module, or a test is added; production discard state remains process-wide.",
     "source_sha256": {
       "crates/perry-runtime/src/wasm_discard.rs": "2cb2446f1d2fe25896efde527a274a7953f7a1983802ac1fc8b20e0d9aac4a23"
+    }
+  },
+  "crates/perry-runtime/src/gc/roots/stack_maps_frame_walk.rs::ON": {
+    "claim": "Immutable OnceLock diagnostic flag: walk_trace_enabled initializes it once from PERRY_GC_STACKMAP_TRACE and only reads it afterwards; nothing resets it and no test asserts a value that a sibling test can change. The frame-walk test sabotage (SKIP_ONE_CFI_STEP) is thread-local.",
+    "source_sha256": {
+      "crates/perry-runtime/src/gc/roots/stack_maps_frame_walk.rs": "42fdf08b20c95f6fc55c66f94c695611f4da2c63d89c1546c82133e67ae0f88b"
     }
   }
 }

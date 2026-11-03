@@ -104,7 +104,7 @@
     {
       "path": "crates/perry-runtime/src/string/concat.rs",
       "function": "concat_chain_all_heap_strings_no_collect",
-      "body_sha256": "112fbb007ba5c76a68fb91fc48a721fad736273606dfd0a0c874768e49d3884d",
+      "body_sha256": "cd53748a877b7d63ebca7409e753063110393111942e50634b300c97086077ed",
       "claim": "The admission pass returns None for every non-heap tag before dereferencing; concat_chain_sized continues into the rooted full-coercion path.",
       "rule": "mask-cast",
       "support_files": [
@@ -114,7 +114,7 @@
     {
       "path": "crates/perry-runtime/src/string/concat.rs",
       "function": "concat_chain_all_heap_strings_no_collect",
-      "body_sha256": "112fbb007ba5c76a68fb91fc48a721fad736273606dfd0a0c874768e49d3884d",
+      "body_sha256": "cd53748a877b7d63ebca7409e753063110393111942e50634b300c97086077ed",
       "claim": "The admission pass returns None for every non-heap tag before dereferencing; concat_chain_sized continues into the rooted full-coercion path.",
       "rule": "heap-tag-only",
       "support_files": [
@@ -132,7 +132,7 @@
     {
       "path": "crates/perry-runtime/src/object/canonical_keys.rs",
       "function": "publish_canonical",
-      "body_sha256": "779cb716c0bfed3cc22edc5a106ee332475bfb0df413cc0c3556b34047e3b704",
+      "body_sha256": "a841593e90a63cb4d1cb557ed352cf922bdac9ec00a8382f8fcf4a980265be4f",
       "claim": "Only heap strings are replaced by heap atoms. Inline slots remain unchanged; layout rebuild and publication still run for the whole backing.",
       "rule": "heap-tag-only",
       "support_files": []
@@ -221,18 +221,34 @@
       "path": "crates/perry-runtime/src/array/join.rs",
       "function": "direct_string",
       "body_sha256": "4296c7d6019e966ddce720e9cb2bae11d4c65ab5b8e32a0fb567a1548f5f3634",
-      "claim": "Both well_formed_join_size and its proven copy pass handle is_short_string first, counting or writing inline payload bytes. direct_string handles only the remaining heap-string case; pointer_tagged_string rejects non-pointer tags before checking allocator ownership. A declined size proof takes the ordinary join path.",
+      "claim": "Both well_formed_join_size and its proven copy pass handle is_short_string first, counting or writing inline payload bytes. direct_string handles only the remaining heap-string case; pointer_tagged_string rejects non-pointer tags before checking allocator ownership. A declined size proof takes the ordinary join path. Re-audited 2026-11-02: both passes now test the exact heap STRING_TAG first (the is_string arm of direct_string) and read that header; inline strings carry a different tag and still reach the is_short_string arm, so no inline payload is dereferenced as a header.",
       "rule": "heap-tag-only",
       "support_files": [
         "crates/perry-runtime/src/array/join.rs"
       ]
+    },
+    {
+      "path": "crates/perry-runtime/src/map/string_key.rs",
+      "function": "matches_indexed",
+      "body_sha256": "19147ed55bd79577782c0edc32ecd3c1283876ef5acd3f577afce199b0e1ec3f",
+      "claim": "Only an entry whose upper 16 bits equal STRING_TAG>>48 (a heap string) is masked and read as a StringHeader. An inline-string entry carries SHORT_STRING_TAG, skips that branch and is compared by the masked-tail equality below, so no inline payload is dereferenced as a header; the query side is already split into StrKey::Short and StrKey::Heap.",
+      "rule": "mask-cast",
+      "support_files": []
+    },
+    {
+      "path": "crates/perry-runtime/src/string/concat_parts.rs",
+      "function": "concat_parts_general",
+      "body_sha256": "789e94bde8a9fe6da107c3d2bdf9967d185717885454b07aebb68e349eeb00ed",
+      "claim": "Only a part tagged exactly 0x7FFF (STRING_TAG) that passes is_valid_string_ptr is read as a StringHeader. Inline strings carry SHORT_STRING_TAG, miss that arm and the number/int32 arms, and reach js_jsvalue_to_string, which materializes a heap string that is then rooted; no inline payload is dereferenced as a header.",
+      "rule": "mask-cast",
+      "support_files": []
     }
   ],
   "support_files": {
-    "crates/perry-runtime/src/node_stream_event_emitter.rs": "8d6a9d72d9cf1111db024b271c51e32a7f937942d7d1ac75da12a69b803d2e92",
-    "crates/perry-runtime/src/string/concat.rs": "f42fde2d1033fa7854d7972ced6865c3502b0f497b28de70b1d6a4195e2f2d74",
+    "crates/perry-runtime/src/node_stream_event_emitter.rs": "baa7cfaf0c74b3d5af0cb6bfa34ada7ee09048db7fcba858f3283a942b820c38",
+    "crates/perry-runtime/src/string/concat.rs": "f90806f73bc87bf676ecc8992c31cb7c95a4768c0402fb9e478a15029007b0ad",
     "crates/perry-runtime/src/object/builtin_proto_entries.rs": "7a042517091eb0dd104d97acb44dbb8dbcb8c97c1051a9ab8af3359f7db28626",
-    "crates/perry-runtime/src/object/property_ops/put_value.rs": "ae738e2022442a63e7057c81623798e4d081983c4c3bc9085439d8133643d477",
-    "crates/perry-runtime/src/array/join.rs": "2d787ac0b51390f859464b0b88a133e573980c082e2f9d648d041ee11614e2be"
+    "crates/perry-runtime/src/object/property_ops/put_value.rs": "e57e8490eabfb2890307ddb19a84dc16a4a30db909bae1413867baa81f6bb75b",
+    "crates/perry-runtime/src/array/join.rs": "f04eaf908431566f39e5d11360bfb729ca9fc58d5ce2da3aa22ba07acd4f948a"
   }
 }

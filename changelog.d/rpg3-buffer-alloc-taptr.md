@@ -1,0 +1,1 @@
+A sealed module binding of `Buffer.alloc(size)` (no fill, no encoding) is passed to a specialized callee as a raw Uint8 pointer argument, like a fresh typed array, so a callee loop over the buffer runs on the proven native view instead of the byte-cell slow arm.

@@ -171,8 +171,6 @@ handle-floor | crates/perry-runtime/src/typedarray_props.rs | 2
 handle-floor | crates/perry-runtime/src/url/search_params.rs | 1
 handle-floor | crates/perry-runtime/src/util_call_sites.rs | 1
 handle-floor | crates/perry-runtime/src/util_inherits.rs | 2
-handle-floor | crates/perry-runtime/src/util_parse_args.rs | 1
-handle-floor | crates/perry-runtime/src/util_style_text.rs | 1
 handle-floor | crates/perry-runtime/src/value/dyn_index.rs | 2
 handle-floor | crates/perry-runtime/src/value/dynamic_arith.rs | 2
 handle-floor | crates/perry-runtime/src/value/dynamic_object.rs | 2
@@ -233,6 +231,5 @@ lone-valid-obj-ptr | crates/perry-runtime/src/typedarray/access.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/util_call_sites.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/util_inherits.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/util_mime.rs | 1
-lone-valid-obj-ptr | crates/perry-runtime/src/util_style_text.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/value/dyn_index.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/value/to_string_primitive.rs | 1
