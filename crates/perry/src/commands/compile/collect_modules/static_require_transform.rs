@@ -28,6 +28,14 @@ pub(super) fn transform_static_literal_requires_with_bunfs(
     let create_require_aliases = collect_create_require_aliases(source);
     let mut require_aliases =
         collect_create_require_aliases_from_decls(source, &create_require_aliases);
+    // `createRequire(import.meta.url)("pkg")` with no binding in between: the
+    // call expression itself is the module-relative require.
+    for create_alias in &create_require_aliases {
+        let immediate = format!("{create_alias}(import.meta.url)");
+        if source.contains(&immediate) {
+            require_aliases.insert(immediate);
+        }
+    }
     // #9202: `const require = createRequire(import.meta.url)` binds a
     // module-relative alias, not the ambient global — it must not take the
     // bare-global JSON replacement below (whose whole point is that a global
@@ -103,6 +111,29 @@ pub(super) fn transform_static_literal_requires_with_bunfs(
                 continue;
             }
             let specifier = cap.name("spec").map(|m| m.as_str()).unwrap_or_default();
+            // A package Perry implements natively is one module for every
+            // loader: the resolver sends the specifier to the native bucket,
+            // and the call binds the value a bare `require` literal lowers to
+            // (`register_require_namespace_binding`). That is the module's
+            // CommonJS default namespace when it has one (`import x from`
+            // binds the same view), else its namespace. The package's npm
+            // files are not part of the program.
+            if is_native_package_specifier(specifier, compile_packages) {
+                let temp = imported_specs
+                    .entry(specifier.to_string())
+                    .or_insert_with(|| {
+                        let temp = unique_temp_name(source, &mut next_id);
+                        imports.push(if perry_dispatch::has_cjs_default_namespace(specifier) {
+                            format!("import {temp} from {:?};", specifier)
+                        } else {
+                            format!("import * as {temp} from {:?};", specifier)
+                        });
+                        temp
+                    })
+                    .clone();
+                replacements.push((full.start(), full.end(), temp));
+                continue;
+            }
             let require_target = resolve_static_require(module_dir, specifier, bunfs_root);
             if should_leave_runtime_require(specifier, compile_packages) {
                 if let Some(target) = require_target.as_ref() {
@@ -478,6 +509,20 @@ fn collect_create_require_aliases(source: &str) -> HashSet<String> {
     });
 
     let mut aliases = HashSet::new();
+    // `import * as NodeModule from "node:module"`: `NodeModule.createRequire`
+    // (bundlers emit this form for `import * as NodeModule` sources).
+    static NAMESPACE_RE: OnceLock<Regex> = OnceLock::new();
+    let namespace_re = NAMESPACE_RE.get_or_init(|| {
+        Regex::new(
+            r#"(?m)^\s*import\s*\*\s*as\s+(?P<ns>[A-Za-z_$][A-Za-z0-9_$]*)\s+from\s*['"](?:node:)?module['"]\s*;?"#,
+        )
+        .expect("module namespace import regex")
+    });
+    for cap in namespace_re.captures_iter(source) {
+        if let Some(namespace) = cap.name("ns") {
+            aliases.insert(format!("{}.createRequire", namespace.as_str()));
+        }
+    }
     for cap in import_re.captures_iter(source) {
         let Some(specs) = cap.name("specs") else {
             continue;
@@ -537,6 +582,18 @@ fn literal_require_resolve_call_re(require_alias: &str) -> Regex {
         perry_perex::tooling::escape(require_alias)
     ))
     .expect("static require.resolve literal call regex")
+}
+
+/// A package (not a Node builtin) that Perry implements natively and the
+/// project did not opt into `perry.compilePackages`. The static resolver
+/// sends such a specifier to the native bucket (`resolve.rs`). Builtins stay
+/// runtime requires: the runtime loader resolves them by name.
+fn is_native_package_specifier(specifier: &str, compile_packages: &HashSet<String>) -> bool {
+    if specifier.starts_with("node:") || perry_hir::is_node_builtin_module(specifier) {
+        return false;
+    }
+    let (package_name, _) = parse_package_specifier(specifier);
+    perry_hir::is_native_module_specifier(specifier) && !compile_packages.contains(&package_name)
 }
 
 fn should_leave_runtime_require(specifier: &str, compile_packages: &HashSet<String>) -> bool {
@@ -926,6 +983,42 @@ const path = require("node:path");
     }
 
     #[test]
+    fn supports_namespace_and_immediate_create_require() {
+        let dir = tempfile::tempdir().unwrap();
+        let package = dir.path().join("node_modules/demo-js");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(
+            package.join("package.json"),
+            r#"{"name":"demo-js","main":"index.js"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            package.join("index.js"),
+            "module.exports = { answer: 42 };\n",
+        )
+        .unwrap();
+        let source = r#"import * as NodeModule from "node:module";
+const requireDemo = NodeModule.createRequire(import.meta.url);
+const a = requireDemo("demo-js");
+const { answer } = NodeModule.createRequire(import.meta.url)("demo-js");
+"#;
+        let compile_packages: HashSet<String> = ["demo-js".to_string()].into_iter().collect();
+        let got = transform_static_literal_requires_with_bunfs(
+            source,
+            &compile_packages,
+            dir.path(),
+            None,
+            false,
+        );
+        // Both forms make the package part of the AOT graph.
+        assert!(got.contains("import "), "got:\n{got}");
+        assert!(
+            got.contains("demo-js") && got.matches("index.js").count() >= 1,
+            "got:\n{got}"
+        );
+    }
+
+    #[test]
     fn supports_create_require_aliases() {
         let source = r#"
 import { createRequire as makeRequire } from "module";
@@ -941,6 +1034,94 @@ const { Client } = req("mini");
         );
         assert!(got.contains(r#"import * as __perry_static_require_0 from "mini";"#));
         assert!(got.contains("const { Client } = __perry_static_require_0;"));
+    }
+
+    /// A `createRequire` call of a package Perry implements natively binds the
+    /// same namespace a static import gets; the package's npm files on disk
+    /// must not join the program.
+    #[test]
+    fn create_require_of_native_package_binds_the_native_namespace() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let package = dir.path().join("node_modules/node-pty");
+        std::fs::create_dir_all(&package).expect("create stub package");
+        std::fs::write(
+            package.join("package.json"),
+            r#"{"name":"node-pty","version":"1.0.0","main":"index.js"}"#,
+        )
+        .expect("write stub manifest");
+        std::fs::write(
+            package.join("index.js"),
+            "exports.spawn = function () {};\n",
+        )
+        .expect("write stub entry");
+        let source = r#"
+import * as NodeModule from "node:module";
+const requirePty = NodeModule.createRequire(import.meta.url);
+const pty = requirePty("node-pty");
+const again = requirePty("node-pty").spawn;
+const third = NodeModule.createRequire(import.meta.url)("node-pty");
+"#;
+        let got = transform_static_literal_requires(source, &HashSet::new(), dir.path());
+        assert!(
+            got.contains(r#"import __perry_static_require_0 from "node-pty";"#),
+            "the call must bind the CommonJS default namespace, got:\n{got}"
+        );
+        assert!(got.contains("const pty = __perry_static_require_0;"));
+        assert!(got.contains("const again = __perry_static_require_0.spawn;"));
+        assert!(got.contains("const third = __perry_static_require_0;"));
+        assert!(
+            !got.contains("node_modules"),
+            "the stub package files must not be imported, got:\n{got}"
+        );
+
+        // A native package without a distinct CommonJS default namespace
+        // binds its namespace.
+        let source = r#"
+import { createRequire } from "node:module";
+const req = createRequire(import.meta.url);
+const ws = req("ws");
+"#;
+        let got = transform_static_literal_requires(source, &HashSet::new(), dir.path());
+        assert!(
+            got.contains(r#"import * as __perry_static_require_0 from "ws";"#),
+            "got:\n{got}"
+        );
+        assert!(got.contains("const ws = __perry_static_require_0;"));
+    }
+
+    /// Opting the package into `perry.compilePackages` keeps its npm files
+    /// (and a Node-API addon they load) as the module.
+    #[test]
+    fn create_require_of_compiled_native_package_keeps_its_files() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let package = dir.path().join("node_modules/node-pty");
+        std::fs::create_dir_all(&package).expect("create stub package");
+        std::fs::write(
+            package.join("package.json"),
+            r#"{"name":"node-pty","version":"1.0.0","main":"index.js"}"#,
+        )
+        .expect("write stub manifest");
+        std::fs::write(
+            package.join("index.js"),
+            "exports.spawn = function () {};\n",
+        )
+        .expect("write stub entry");
+        let source = r#"
+import { createRequire } from "node:module";
+const req = createRequire(import.meta.url);
+const pty = req("node-pty");
+"#;
+        let mut compile_packages = HashSet::new();
+        compile_packages.insert("node-pty".to_string());
+        let got = transform_static_literal_requires(source, &compile_packages, dir.path());
+        assert!(
+            !got.contains(r#"from "node-pty";"#),
+            "a compiled package is not the native module, got:\n{got}"
+        );
+        assert!(
+            got.contains("node_modules/node-pty/index.js"),
+            "the compiled package's entry joins the program, got:\n{got}"
+        );
     }
 
     #[test]

@@ -28,6 +28,7 @@ swc_ecma_ast.workspace = true
 swc_ecma_transforms_base.workspace = true
 swc_ecma_visit.workspace = true
 perry-hir.workspace = true
+perry-dispatch.workspace = true
 perry-transform.workspace = true
 perry-codegen.workspace = true
 perry-wpfacts.workspace = true
