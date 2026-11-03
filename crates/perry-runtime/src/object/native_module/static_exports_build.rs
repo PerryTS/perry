@@ -1,6 +1,8 @@
 //! Build-time emission of independently linkable builtin export declarations.
 use std::{fmt::Write, path::Path};
-pub fn emit(out: &Path) {
+/// `vtable_of` names the vtable static (a path) the namespace of a module is
+/// born with; each export body carries it to the birth of its receiver.
+pub fn emit(out: &Path, vtable_of: &dyn Fn(&str) -> String) {
     use perry_dispatch::native_callable_exports::{
         canonical_native_callable_module, canonical_native_callable_property, export_bucket,
         export_value_symbol, CALLABLE_EXPORT_TABLE,
@@ -21,6 +23,7 @@ pub fn emit(out: &Path) {
             } else {
                 module
             };
+            let vtable = vtable_of(module);
             let attach = match bucket {
                 "child_process" | "cluster" | "crypto" | "dgram" | "domain" | "events" | "fs"
                 | "http" | "inspector" | "net" | "readline" | "repl" | "stream" | "tls" | "tty"
@@ -100,7 +103,7 @@ pub extern "C" fn {symbol}(observe_writes: i32) -> f64 {{
         info.flags |= crate::codegen_abi::FN_NATIVE_EXPORT | crate::codegen_abi::FN_BUILTIN;
         info
     }}, construct }};
-    export_value({raw_module:?}, {raw_property:?}, &INFO.function, observe_writes != 0,
+    export_value(&{vtable}, {raw_module:?}, {raw_property:?}, &INFO.function, observe_writes != 0,
         |_name, value, addr| unsafe {{ {attach}({property:?}, value, addr) }})
 }}
 "#

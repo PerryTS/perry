@@ -46,6 +46,7 @@ enum ExportStep {
 /// published (undecorated) callable. One copy serves every export.
 #[inline(never)]
 fn export_begin(
+    vt: &'static NativeModuleVtable,
     module: &'static str,
     property: &'static str,
     info: &'static JsFunctionInfo,
@@ -82,7 +83,7 @@ fn export_begin(
         return ExportStep::Existing(value.get_nanbox_f64());
     }
     install_native_module_vtable();
-    let ns = scope.root_nanbox_f64(native_namespace_by_name(module));
+    let ns = scope.root_nanbox_f64(create_native_module_namespace(vt, module));
     let closure = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(info, 3));
     closure.with_mut_ptr(|c| {
         crate::closure::js_closure_set_capture_f64(c, 0, ns.get_nanbox_f64());
@@ -126,6 +127,7 @@ fn export_finish(module: &str, property: &str, value: f64) -> f64 {
 /// specialized by its names, so an undecorated export links none of them.
 #[inline(always)]
 fn export_value(
+    vt: &'static NativeModuleVtable,
     module: &'static str,
     property: &'static str,
     info: &'static JsFunctionInfo,
@@ -135,6 +137,7 @@ fn export_value(
     let canonical_property = canonical_native_callable_property(module, property);
     let canonical_module = canonical_native_callable_module(module, canonical_property);
     match export_begin(
+        vt,
         module,
         property,
         info,

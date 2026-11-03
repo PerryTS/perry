@@ -929,12 +929,14 @@ pub(crate) fn native_module_vtable_by_name(
 }
 
 /// The namespace of a module named by a runtime string: the module's
-/// namespace when one is born, else one born with the program's row vtable;
-/// with no row, an unkeyed namespace that is never cached (it serves as a
-/// bound callable's receiver and is never handed out as the module's
-/// namespace, so a later import still births the keyed one).
+/// namespace when one is born, else one born with the vtable the program's
+/// row names. A module with no row is one the program never names, and its
+/// namespace is `undefined`: no birth takes a vtable from a name.
 pub(crate) fn native_namespace_by_name(module_name: &str) -> f64 {
-    create_native_module_namespace_in(native_module_vtable_by_name(module_name), module_name)
+    match native_module_vtable_by_name(module_name) {
+        Some(vt) => create_native_module_namespace(vt, module_name),
+        None => f64::from_bits(crate::value::TAG_UNDEFINED),
+    }
 }
 
 /// The namespace of `module_name` born with the vtable its birth site names.
@@ -958,19 +960,9 @@ pub extern "C" fn js_create_native_module_namespace_vt(
     create_native_module_namespace(vt, module_name)
 }
 
-/// The namespace of `module_name`, whose vtable the caller names.
+/// The namespace of `module_name` born with `vt`, the vtable the caller names.
 pub(crate) fn create_native_module_namespace(
     vt: &'static NativeModuleVtable,
-    module_name: &str,
-) -> f64 {
-    create_native_module_namespace_in(Some(vt), module_name)
-}
-
-/// The namespace of `module_name` born with `vt`; `None` (the vtable is not
-/// known at this birth) births an unkeyed namespace and leaves the
-/// per-module cache to the keyed birth.
-pub(crate) fn create_native_module_namespace_in(
-    vt: Option<&'static NativeModuleVtable>,
     module_name: &str,
 ) -> f64 {
     let module_name = normalize_native_module_alias(module_name);
@@ -1002,11 +994,10 @@ pub(crate) fn create_native_module_namespace_in(
     crate::array::js_array_push(keys_array, JSValue::string_ptr(key_str));
     js_object_set_keys(obj, keys_array);
     // The module's vtable is a fact of the namespace's shape.
-    let known = vt.is_some();
     let vt = if module_name == "vm" && crate::node_vm::vm_modules_enabled() {
         native_module::vm_modules_vtable()
     } else {
-        vt.unwrap_or(&NATIVE_MODULE_VTABLE_IMPL)
+        vt
     };
     let obj = unsafe { brand_native_namespace(obj, vt) };
 
@@ -1015,7 +1006,7 @@ pub(crate) fn create_native_module_namespace_in(
     if module_name == "module" {
         crate::object::js_object_seal(value);
     }
-    if known && should_cache_native_module_namespace(module_name) {
+    if should_cache_native_module_namespace(module_name) {
         NATIVE_MODULE_NAMESPACES.with(|cache| {
             cache
                 .borrow_mut()

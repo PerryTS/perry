@@ -17,14 +17,17 @@ fn cjs_default_namespace_name(module_name: &str) -> Option<&'static str> {
 }
 
 /// `module_name`'s `<mod>.default` namespace, born with the default vtable
-/// the module's own vtable `base` carries (unkeyed when it carries none).
+/// the module's own vtable `base` carries; `None` when the program names no
+/// vtable for the module.
 fn create_cjs_default_namespace(
     module_name: &str,
     base: Option<&'static NativeModuleVtable>,
 ) -> Option<f64> {
     let name = cjs_default_namespace_name(module_name)?;
-    let vt = base.map(|base| base.default_namespace.unwrap_or(&NATIVE_MODULE_VTABLE_IMPL));
-    Some(create_native_module_namespace_in(vt, name))
+    let vt = base?
+        .default_namespace
+        .unwrap_or(&NATIVE_MODULE_VTABLE_IMPL);
+    Some(create_native_module_namespace(vt, name))
 }
 
 /// The CommonJS `module.exports` of `module_name`. `base` is the module's own

@@ -46,7 +46,7 @@ fn each_module_namespace_has_its_own_shape() {
 }
 
 #[test]
-fn an_unmatched_name_is_unkeyed_not_empty() {
+fn a_vtable_without_a_key_table_is_not_empty() {
     // A module with no key table enumerates its key list; it must not read
     // as a declared module with zero exports.
     let opaque = born(&NATIVE_MODULE_VTABLE_IMPL, "perry/gc");

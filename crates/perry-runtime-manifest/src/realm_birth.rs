@@ -613,7 +613,7 @@ pub(super) fn birth_at(
         descriptors: members.descriptors,
         typed_array_prototype,
         // The properties of a native namespace stay behind its vtable, but
-        // the native namespace birth (create_native_module_namespace_in) seals some births: the header
+        // the native namespace birth (create_native_module_namespace) seals some births: the header
         // carries that integrity, the same derivation as their births-only
         // entries.
         integrity: match native_namespace.as_deref() {
