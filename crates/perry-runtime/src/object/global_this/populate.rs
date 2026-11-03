@@ -69,7 +69,7 @@ pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeade
         populate_global_this_builtins_inner(singleton_at_entry)
     })
 }
-crate::realm_decl! { Infinity, value = Infinity; NaN, value = NaN; crypto, attrs = 6, get = "crypto.<get>", births = [ArrayBuffer, Crypto, CryptoKey, Promise, SubtleCrypto]; global, attrs = 7, alias = "%Global%"; globalThis, alias = "%Global%"; localStorage, attrs = 6, get = "localStorage.<get>", set = "localStorage.<set>"; sessionStorage, attrs = 6, get = "sessionStorage.<get>", set = "sessionStorage.<set>"; undefined, value = undefined; }
+crate::realm_decl! { Infinity, value = Infinity; NaN, value = NaN; crypto, attrs = 6, get = "crypto.<get>", births = [ArrayBuffer, Crypto, CryptoKey, Promise, SubtleCrypto]; global, attrs = 7, alias = "%Global%"; globalThis, alias = "%Global%"; localStorage, attrs = 4, get = "localStorage.<get>", set = "localStorage.<set>"; sessionStorage, attrs = 6, get = "sessionStorage.<get>", set = "sessionStorage.<set>"; undefined, value = undefined; }
 // Compact the once-per-realm installer, not the methods it installs. Blanket
 // Oz also shrinks/outlines hot array and iterator helpers (#13662).
 #[optimize(size)]
@@ -145,7 +145,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
     let singleton = || singleton_handle.get_raw_mut_ptr::<ObjectHeader>();
     {
         let name = b"globalThis";
-        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let key = super::global_name_key(name);
         let value = crate::value::js_nanbox_pointer(singleton() as i64);
         super::super::define_builtin_data_property(
             singleton(),
@@ -161,7 +161,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
         // `global` / `(global as any).x` reads resolve to the real singleton
         // instead of the unknown-identifier sentinel.
         let name = b"global";
-        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let key = super::global_name_key(name);
         let value = crate::value::js_nanbox_pointer(singleton() as i64);
         super::super::define_builtin_data_property(
             singleton(),
@@ -190,8 +190,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
         let name = declaration.name;
         if name == "Buffer" {
             let name_bytes = name.as_bytes();
-            let name_key =
-                crate::string::js_string_from_bytes(name_bytes.as_ptr(), name_bytes.len() as u32);
+            let name_key = super::global_name_key(name_bytes);
             let ctor_value = super::super::native_module::buffer_constructor_value();
 
             // #9173: Buffer instances resolve to Buffer.prototype, whose own
@@ -242,7 +241,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
             // realm global adopts them, a `vm`/eval realm gets its own pair.
             let (object_ctor, _) = object_intrinsics_for_realm(singleton());
             if !object_ctor.is_null() {
-                let name_key = crate::string::js_string_from_bytes(b"Object".as_ptr(), 6);
+                let name_key = super::global_name_key(b"Object");
                 super::super::define_builtin_data_property(
                     singleton(),
                     name_key,
@@ -590,8 +589,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
             },
         );
         let name_bytes = name.as_bytes();
-        let name_key =
-            crate::string::js_string_from_bytes(name_bytes.as_ptr(), name_bytes.len() as u32);
+        let name_key = super::global_name_key(name_bytes);
         super::super::define_builtin_data_property(
             singleton(),
             name_key,
@@ -783,8 +781,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
         // */A5.6/A5.7/A2.6/A2.7/A7.6/A7.7).
         super::super::native_module::set_builtin_closure_non_constructable(closure_ptr as usize);
         let name_bytes = name.as_bytes();
-        let name_key =
-            crate::string::js_string_from_bytes(name_bytes.as_ptr(), name_bytes.len() as u32);
+        let name_key = super::global_name_key(name_bytes);
         let fn_value = crate::value::js_nanbox_pointer(closure_ptr as i64);
         super::super::define_builtin_data_property(
             singleton(),
@@ -807,8 +804,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
     // Namespaces: plain ObjectHeader so typeof is "object" per spec.
     for name in GLOBAL_THIS_BUILTIN_NAMESPACES.iter().copied() {
         let name_bytes = name.as_bytes();
-        let name_key =
-            crate::string::js_string_from_bytes(name_bytes.as_ptr(), name_bytes.len() as u32);
+        let name_key = super::global_name_key(name_bytes);
         let ns_value = if matches!(name, "console" | "process") {
             // #6230: dynamic method calls on the namespace *value* (`const p =
             // process; p.exit(1)`, `process["exit"](1)`, dynamic `console.log`)
@@ -870,7 +866,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
     // require("perf_hooks").performance` (#1327). typeof stays "object".
     {
         let pname = b"performance";
-        let pkey = crate::string::js_string_from_bytes(pname.as_ptr(), pname.len() as u32);
+        let pkey = super::global_name_key(pname);
         let pval = crate::perf_hook_slots::performance_namespace();
         js_object_set_field_by_name(singleton(), pkey, pval);
     }
@@ -884,12 +880,11 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
         "PerformanceObserverEntryList",
         "PerformanceResourceTiming",
     ] {
-        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let key = super::global_name_key(name);
         let value =
             super::super::native_module::bound_native_callable_export_value("perf_hooks", name);
         js_object_set_field_by_name(singleton(), key, value);
     }
-    super::super::native_module::install_global_webcrypto(singleton());
     let getter = crate::closure::js_closure_alloc(
         crate::fn_info!(#[realm("crypto.<get>", provider = closure_alloc)] export crate::object::global_this::ctor_thunks::global_this_crypto_getter_thunk, 0; with_declared(0)),
         0,
@@ -943,7 +938,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
     {
         let non_writable = super::super::PropertyAttrs::new(false, false, false);
         for (name, value) in [("NaN", f64::NAN), ("Infinity", f64::INFINITY)] {
-            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            let key = super::global_name_key(name);
             super::super::define_builtin_data_property(
                 singleton(),
                 key,
@@ -952,7 +947,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
                 non_writable,
             );
         }
-        let undef_key = crate::string::js_string_from_bytes(b"undefined".as_ptr(), 9);
+        let undef_key = super::global_name_key(b"undefined");
         let undef_val = f64::from_bits(crate::value::TAG_UNDEFINED);
         super::super::define_builtin_data_property(
             singleton(),
@@ -1053,7 +1048,7 @@ fn alias_number_static_to_global_function(singleton_at_entry: *mut ObjectHeader,
     let singleton_handle = scope.root_raw_mut_ptr(singleton_at_entry);
     let singleton = || singleton_handle.get_raw_mut_ptr::<ObjectHeader>();
 
-    let global_key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let global_key = super::global_name_key(name);
     let global_fn = js_object_get_field_by_name(singleton(), global_key);
     if (global_fn.bits() >> 48) != 0x7FFD {
         return;
@@ -1071,7 +1066,7 @@ fn alias_number_static_to_global_function(singleton_at_entry: *mut ObjectHeader,
     }
     let ctor_handle = scope.root_raw_mut_ptr(ctor_ptr);
 
-    let static_key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let static_key = super::global_name_key(name);
     let ctor_ptr = ctor_handle.get_raw_mut_ptr::<ObjectHeader>();
     js_object_set_field_by_name(
         ctor_ptr,
@@ -1186,7 +1181,7 @@ fn install_error_static_fn(
         return;
     }
     super::super::native_module::set_bound_native_closure_name(closure, name);
-    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let key = super::global_name_key(name);
     let value = crate::value::js_nanbox_pointer(closure as i64);
     super::super::define_builtin_data_property(
         ctor as *mut ObjectHeader,

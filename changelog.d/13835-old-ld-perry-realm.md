@@ -1,0 +1,1 @@
+Perry programs link again with GNU ld older than 2.36 (binutils 2.35, the linker on glibc 2.31 systems). Every `perry_realm` input section is now link-ordered to the global that owns it, so the old linker no longer rejects a mix of ordered and unordered sections.

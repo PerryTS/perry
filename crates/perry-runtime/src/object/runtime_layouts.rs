@@ -205,8 +205,7 @@ macro_rules! runtime_layout {
                 usize,
                 u32,
                 fn() -> *mut PerryLayoutDesc,
-                fn() -> Option<*mut PerryLayoutDesc>,
-            ) = (ATOMS, SLOT_COUNT, WORD, desc, reached);
+            ) = (ATOMS, SLOT_COUNT, WORD, desc);
             const _: () = {
                 let _: (u8, u32, u16) = ($kind, $family, $variant);
                 let _ = $proto;
@@ -220,23 +219,6 @@ macro_rules! runtime_layout {
                         < crate::object::runtime_layouts::RUNTIME_LAYOUT_ROWS,
                 "a runtime layout word lies outside the runtime layout rows"
             );
-            /// The descriptor when the program's realm reaches this layout,
-            /// `None` when the program carries no definition. For code that
-            /// asks whether an object is on this layout: such a probe is not
-            /// a birth and must not abort for a layout the realm never names.
-            #[inline(always)]
-            pub fn reached() -> Option<*mut PerryLayoutDesc> {
-                #[cfg(not(any(test, feature = "test-layout-descriptors")))]
-                {
-                    // SAFETY: as in `desc`.
-                    let desc = unsafe { DEFINITION };
-                    (!desc.is_null()).then_some(desc)
-                }
-                #[cfg(any(test, feature = "test-layout-descriptors"))]
-                {
-                    Some(std::ptr::addr_of_mut!(super::$name))
-                }
-            }
             /// The descriptor a birth of this layout names. A program whose
             /// realm does not reach the layout carries no definition, and a
             /// birth there aborts naming the layout.
@@ -701,7 +683,15 @@ runtime_layout!(
     0,
     crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
     [ATOM_26, ATOM_25],
-    realm = ["ReadableStream", "node:sqlite", "node:better-sqlite3"]
+    // `fetch`: its response body stream resolves a pending `read()` from the
+    // body bridge (turnloop_bridge::response_chunk), with no ReadableStream
+    // constructor in the program.
+    realm = [
+        "ReadableStream",
+        "fetch",
+        "node:sqlite",
+        "node:better-sqlite3"
+    ]
 );
 
 runtime_layout!(
@@ -729,6 +719,8 @@ runtime_layout!(
 
 pub(crate) const URL_CLASS_ID: u32 = 0xFFFF0063;
 
+mod global_atoms;
+pub(crate) use global_atoms::{builtin_global_atom, GLOBAL_OBJECT};
 mod stream_prototypes;
 pub(crate) use stream_prototypes::*;
 mod stream_instances;
@@ -1031,6 +1023,9 @@ const fn runtime_layout_word(name: &str) -> u32 {
     }
     if same(name, "NATIVE_CTOR_WRITABLE") {
         return crate::codegen_abi::native_layout_word("NATIVE_CTOR_WRITABLE", 2);
+    }
+    if same(name, "GLOBAL_OBJECT") {
+        return crate::codegen_abi::native_layout_word("GLOBAL_OBJECT", 0);
     }
     if same(name, "OBJECT_PROTOTYPE") {
         return crate::codegen_abi::native_layout_word("OBJECT_PROTOTYPE", 2);

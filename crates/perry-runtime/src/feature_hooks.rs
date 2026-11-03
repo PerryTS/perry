@@ -101,15 +101,42 @@ macro_rules! perry_install_once {
     }};
 }
 
-/// The installer the program's generated object registered.
-static FEATURE_INSTALLER: Hook<extern "C" fn()> = Hook::empty();
+/// Most installers one process registers: one per Perry image linked in.
+const MAX_FEATURE_INSTALLERS: usize = 64;
+
+/// The installers the programs' generated objects registered. One process can
+/// link several Perry images (an embedder's main program plus precompiled
+/// worker programs, each compiled with its own feature set), and every image's
+/// static constructor registers its installer. The hooks are process-global,
+/// so the process needs the union: each registration is kept, and all of them
+/// run (a single slot let the last constructor to run silently drop the other
+/// images' features).
+static FEATURE_INSTALLERS: [Hook<extern "C" fn()>; MAX_FEATURE_INSTALLERS] =
+    [const { Hook::empty() }; MAX_FEATURE_INSTALLERS];
+static FEATURE_INSTALLER_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 /// Called from a static constructor in the object perry's link step generates.
-/// Only stores the pointer: it runs before `main`; installing happens from
-/// [`crate::gc::js_gc_init`].
+/// Only records the pointer: it runs before `main`; installing happens from
+/// [`crate::gc::js_gc_init`]. A repeated registration of the same installer is
+/// kept once.
 #[no_mangle]
 pub extern "C" fn js_runtime_register_feature_installer(installer: extern "C" fn()) {
-    FEATURE_INSTALLER.set(installer);
+    let count = FEATURE_INSTALLER_COUNT.load(Ordering::Acquire);
+    if FEATURE_INSTALLERS[..count.min(MAX_FEATURE_INSTALLERS)]
+        .iter()
+        .any(|slot| {
+            slot.peek()
+                .is_some_and(|known| known as usize == installer as usize)
+        })
+    {
+        return;
+    }
+    let index = FEATURE_INSTALLER_COUNT.fetch_add(1, Ordering::AcqRel);
+    assert!(
+        index < MAX_FEATURE_INSTALLERS,
+        "more than {MAX_FEATURE_INSTALLERS} Perry images registered feature installers"
+    );
+    FEATURE_INSTALLERS[index].set(installer);
 }
 
 /// Run the registered installer; called at the end of `js_gc_init`.
@@ -127,8 +154,17 @@ pub extern "C" fn js_runtime_register_feature_installer(installer: extern "C" fn
 /// `#[inline(never)]` keeps the indirect call in this named symbol.
 #[inline(never)]
 pub(crate) fn run_feature_installer() {
-    if let Some(installer) = FEATURE_INSTALLER.get() {
-        installer();
+    let count = FEATURE_INSTALLER_COUNT
+        .load(Ordering::Acquire)
+        .min(MAX_FEATURE_INSTALLERS);
+    let mut ran = false;
+    for slot in &FEATURE_INSTALLERS[..count] {
+        if let Some(installer) = slot.peek() {
+            installer();
+            ran = true;
+        }
+    }
+    if ran {
         return;
     }
     #[cfg(test)]
@@ -544,4 +580,41 @@ pub extern "C" fn js_runtime_install_event_target() {
 #[no_mangle]
 pub extern "C" fn js_runtime_install_typedarray() {
     crate::typedarray_hook_slots::install();
+}
+
+#[cfg(test)]
+mod installer_registration_tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static A_RUNS: AtomicUsize = AtomicUsize::new(0);
+    static B_RUNS: AtomicUsize = AtomicUsize::new(0);
+    extern "C" fn image_a() {
+        A_RUNS.fetch_add(1, Ordering::SeqCst);
+    }
+    extern "C" fn image_b() {
+        B_RUNS.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// A process linking several Perry images (a main program and precompiled
+    /// worker programs) registers one installer per image; every one of them
+    /// runs, so no image loses the features only it uses.
+    #[test]
+    fn every_registered_image_installer_runs() {
+        crate::test_support::isolated_test(|| {
+            super::js_runtime_register_feature_installer(image_a);
+            super::js_runtime_register_feature_installer(image_b);
+            super::js_runtime_register_feature_installer(image_a);
+            super::run_feature_installer();
+            assert_eq!(
+                A_RUNS.load(Ordering::SeqCst),
+                1,
+                "the first image's installer ran once"
+            );
+            assert_eq!(
+                B_RUNS.load(Ordering::SeqCst),
+                1,
+                "the last image's installer ran"
+            );
+        });
+    }
 }

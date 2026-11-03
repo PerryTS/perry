@@ -24,6 +24,7 @@ pub(in crate::array) unsafe fn install_array_growth_forwarding_with(
         return false;
     }
     gc::set_forwarding_address(header, new_user_addr);
+    crate::array::forwarding::note_array_growth_stub();
     true
 }
 

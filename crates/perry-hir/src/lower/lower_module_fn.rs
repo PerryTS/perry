@@ -1277,6 +1277,15 @@ pub fn lower_module_full_with_platform_globals(
                         if ctx.proxy_locals.contains(&name) && decl_init_is_proxy_new(decl) {
                             ctx.register_proxy_local(pre_id);
                         }
+                        // #3144, same forward-reference reason: a function
+                        // body lowered before this module-level declarator
+                        // resolves `m` to `pre_id`, so `m.call(...)` there must
+                        // already see the alias. The declarator re-registers.
+                        if let Some(method) = decl.init.as_deref().and_then(|init| {
+                            crate::destructuring::var_decl::builtin_proto_method_alias(&ctx, init)
+                        }) {
+                            ctx.builtin_proto_method_local_ids.insert(pre_id, method);
+                        }
                         ctx.pre_registered_module_vars.insert(name);
                         if var_decl.kind == ast::VarDeclKind::Var {
                             ctx.pre_registered_module_var_decls

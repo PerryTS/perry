@@ -51,6 +51,8 @@ pub(super) mod support;
 mod wrap;
 
 #[cfg(test)]
+mod global_export_binding_tests;
+#[cfg(test)]
 mod issue_10435_tests;
 #[cfg(test)]
 mod issue_10662_tests;
@@ -81,8 +83,7 @@ use extract_exports::{
 // #8547: the stdlib-link decision needs the literal `require()` specifiers.
 pub(crate) use extract_requires::extract_require_specifiers;
 use extract_requires::{
-    extract_export_star_specs, extract_require_aliases_with_ranges, identifier_is_declared_binding,
-    identifier_is_reassigned,
+    extract_export_star_specs, extract_require_aliases_with_ranges, identifier_is_reassigned,
 };
 use hoist_classes::{
     extract_top_level_class_decls_with_exports, rewrite_module_exports_class_expression,

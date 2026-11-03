@@ -53,16 +53,12 @@ pub(super) unsafe fn derive_word(rec: &ShapeRecord) -> u64 {
             Some(a) if crate::string::is_program_atom(a) => {
                 canon.push((STRING_TAG | a as u64, Some(h), false))
             }
-            // A runtime object whose keys were installed as plain strings
-            // before the program's atoms existed (the global object, the
-            // startup namespaces) may answer reads outside its list (a lazy
-            // global): its TEXT entries answer hits only. An ordinary layout
-            // and `%Object.prototype%` (whose unlisted names the walk knows)
-            // prove absence by text.
-            _ if !text_proves_absence(rec) => {
-                atoms = false;
-                canon.push((bits, Some(h), true))
-            }
+            // A TEXT entry: no program atom names the text yet. Its index
+            // entry answers a site key by text, so the list still proves
+            // absence. A receiver whose reads answer beyond its list (a native
+            // alias, a namespace, an exotic read receiver) is not walked from
+            // (`inherited::walks_from`); that is decided by its kind and meta,
+            // never by how its keys were spelled (DEC 243(5)).
             _ => canon.push((bits, Some(h), true)),
         }
     }

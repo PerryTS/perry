@@ -61,6 +61,11 @@ pub(super) fn scan_http_roots(visitor: &mut GcRootVisitor<'_>) {
         for dest in &mut msg.pipes {
             visitor.visit_nanbox_u64_slot(dest);
         }
+        visitor.visit_nanbox_u64_slot(&mut msg.read.pending_error);
+        for (wrapper, original) in &mut msg.read.once_targets {
+            visitor.visit_i64_slot(wrapper);
+            visitor.visit_i64_slot(original);
+        }
     });
 
     agent::scan_agent_roots(visitor);
@@ -93,6 +98,8 @@ pub(super) extern "C" fn retire_client_roots(agent: u64) {
         msg.socket_handle = 0;
         msg.listeners.clear();
         msg.pipes.clear();
+        msg.read.once_targets.clear();
+        msg.read.pending_error = 0;
     });
     if let Ok(mut queue) = HTTP_PENDING_EVENTS.lock() {
         queue.retain(|(owner, _)| *owner != agent);

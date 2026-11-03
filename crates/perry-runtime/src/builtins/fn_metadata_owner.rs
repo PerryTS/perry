@@ -456,6 +456,7 @@ impl BundleFunctionNames<'_> {
         }
     }
     /// The entry the key order picks: the greatest under `better`.
+    #[cfg(test)]
     fn best(
         &self,
         keep: &dyn Fn(usize) -> bool,
@@ -470,33 +471,81 @@ impl BundleFunctionNames<'_> {
         });
         best
     }
-    pub(crate) fn len(&self) -> usize {
-        let mut count = 0;
-        self.visit(&mut |_, _| {
-            count += 1;
+    /// The images' identities and entry counts: images are only appended and
+    /// an unloadable image's copies are set once, so this names the view's
+    /// exact contents.
+    fn owner_key(&self) -> Vec<(usize, usize)> {
+        let mut key = vec![(self.0.as_ptr() as usize, self.0.len())];
+        key.extend(self.0.iter().map(|image| {
+            match *image {
+                ImageRecords::Image(bounds) => (bounds as *const FunctionRecordBounds as usize, 0),
+                ImageRecords::Copied(states) => (
+                    states.as_ptr() as usize,
+                    states
+                        .iter()
+                        .map(|state| state.copied.get().map_or(0, |c| c.len()))
+                        .sum(),
+                ),
+            }
+        }));
+        key
+    }
+    /// Every named body in visit order (later registrations last).
+    fn entries(&self) -> Vec<(usize, &'static [u8])> {
+        let mut out = Vec::new();
+        self.visit(&mut |code, bytes| {
+            out.push((code, bytes));
             false
         });
-        count
+        out
+    }
+    /// The view's entries ordered by code address, built on the first stack
+    /// query (never at startup) and reused until an owner is added. A stack
+    /// capture resolves every raw frame: scanning all descriptors per frame
+    /// made each `new Error` cost frames x functions (a 50k-function program
+    /// spent seconds per error). Stable sort: among equal addresses the
+    /// later-registered entry stays last, as the scans' `max_by_key` chose it.
+    fn sorted(&self) -> Arc<Vec<(usize, &'static [u8])>> {
+        type Index = (Vec<(usize, usize)>, Arc<Vec<(usize, &'static [u8])>>);
+        static INDEX: Mutex<Option<Index>> = Mutex::new(None);
+        let key = self.owner_key();
+        let mut cached = INDEX.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((k, index)) = cached.as_ref() {
+            if *k == key {
+                return index.clone();
+            }
+        }
+        let mut entries = self.entries();
+        entries.sort_by_key(|(code, _)| *code);
+        let index = Arc::new(entries);
+        *cached = Some((key, index.clone()));
+        index
+    }
+    pub(crate) fn len(&self) -> usize {
+        self.sorted().len()
     }
     #[cfg(test)]
     pub(crate) fn contains_key(&self, address: &usize) -> bool {
-        let mut found = false;
-        self.visit(&mut |code, _| {
-            found = code == *address;
-            found
-        });
-        found
+        let index = self.sorted();
+        let at = index.partition_point(|(code, _)| *code < *address);
+        index.get(at).is_some_and(|(code, _)| code == address)
     }
     /// The named body at the greatest code address at or below `ip` (the
     /// last such entry on a tie, as `max_by_key` picks).
     pub(crate) fn predecessor(&self, ip: usize) -> Option<(usize, &'static [u8])> {
-        self.best(&|code| code <= ip, &|code, seen| code >= seen)
+        let index = self.sorted();
+        let at = index.partition_point(|(code, _)| *code <= ip);
+        at.checked_sub(1).map(|i| index[i])
     }
     pub(crate) fn first_key_value(&self) -> Option<(usize, &'static [u8])> {
-        self.best(&|_| true, &|code, seen| code < seen)
+        self.sorted().first().copied()
     }
     pub(crate) fn last_key_value(&self) -> Option<(usize, &'static [u8])> {
-        self.best(&|_| true, &|code, seen| code >= seen)
+        self.sorted().last().copied()
+    }
+    #[cfg(test)]
+    fn scan_predecessor(&self, ip: usize) -> Option<(usize, &'static [u8])> {
+        self.best(&|code| code <= ip, &|code, seen| code >= seen)
     }
 }
 pub(crate) fn with_bundle_function_names<R>(

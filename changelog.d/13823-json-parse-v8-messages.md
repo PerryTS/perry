@@ -1,0 +1,1 @@
+JSON.parse SyntaxErrors now carry V8's messages (Expected ',' or ']' after array element in JSON at position N (line L column C), Unexpected token ..., with V8's source context), and JSON.rawJSON returns a frozen object and checks the JSON number grammar.

@@ -338,3 +338,215 @@ fn global_patch_fixture_reaches_top_through_the_program_patch_signal() {
     assert_eq!(r.top, BTreeSet::from([RealmTop::GlobalAnyMember]));
     assert_eq!(r.names.len(), CATALOG.len());
 }
+
+#[test]
+fn create_require_results_are_require_for_reach() {
+    // A literal call through a const alias, or in place, adds the module.
+    for source in [
+        "import { createRequire } from \"node:module\"; const req = createRequire(__filename); req(\"fs\");",
+        "const m = require(\"module\"); const req = m.createRequire(__filename); req(\"node:fs\");",
+        "import { createRequire } from \"node:module\"; createRequire(__filename)(\"fs\");",
+        "import { createRequire } from \"node:module\"; const req = createRequire(__filename); const again = req; again(\"fs\");",
+    ] {
+        let partial = reach(source);
+        assert!(!partial.is_full(), "{source}: {partial:?}");
+        assert!(partial.names.contains("node:fs"), "{source}: {partial:?}");
+    }
+    // A non-literal argument is top, exactly as for `require`.
+    let dynamic = reach(
+        "import { createRequire } from \"node:module\"; const req = createRequire(__filename); req(name);",
+    );
+    assert!(
+        dynamic.top.contains(&RealmTop::DynamicModule),
+        "{dynamic:?}"
+    );
+    // A made require function that escapes (not a const alias, not called in
+    // place) has calls the scan cannot see: top.
+    for source in [
+        "import { createRequire } from \"node:module\"; let req = createRequire(__filename); req(\"fs\");",
+        "import { createRequire } from \"node:module\"; use(createRequire(__filename));",
+    ] {
+        assert!(reach(source).top.contains(&RealmTop::DynamicModule), "{source}");
+    }
+    // Without createRequire the same call names nothing and stays partial.
+    let plain = reach("const req = make(); req(\"fs\");");
+    assert!(
+        !plain.is_full() && !plain.names.contains("node:fs"),
+        "{plain:?}"
+    );
+}
+
+#[test]
+fn get_builtin_module_is_require_for_reach() {
+    let partial = reach("const fs = process.getBuiltinModule(\"node:fs\");");
+    assert!(!partial.is_full(), "{partial:?}");
+    assert!(partial.names.contains("node:fs"), "{partial:?}");
+    let dynamic = reach("process.getBuiltinModule(name);");
+    assert!(
+        dynamic.top.contains(&RealmTop::DynamicModule),
+        "{dynamic:?}"
+    );
+    // A parameter called `process` can be the real one (`f(process)`): a
+    // `getBuiltinModule` member is matched on any object.
+    let local = reach("function f(process) { process.getBuiltinModule(name); }");
+    assert!(local.top.contains(&RealmTop::DynamicModule), "{local:?}");
+    // Through a global object, as test_gap_worker_zlib_stream.ts's helper does.
+    for source in [
+        "const s = globalThis.process.getBuiltinModule(\"node:fs\");",
+        "const s = (globalThis as any).process.getBuiltinModule(\"node:fs\");",
+    ] {
+        let global = reach(source);
+        assert!(!global.is_full(), "{source}: {global:?}");
+        assert!(global.names.contains("node:fs"), "{source}: {global:?}");
+    }
+    let global_dynamic = reach("(globalThis as any).process.getBuiltinModule(name);");
+    assert!(
+        global_dynamic.top.contains(&RealmTop::DynamicModule),
+        "{global_dynamic:?}"
+    );
+    // The same holds through a local `globalThis`.
+    let shadowed = reach("function f(globalThis) { globalThis.process.getBuiltinModule(name); }");
+    assert!(
+        shadowed.top.contains(&RealmTop::DynamicModule),
+        "{shadowed:?}"
+    );
+}
+
+/// Each source loads node:fs with a literal: the scan must add it and stay
+/// partial. The same source with a non-literal argument must be top.
+fn assert_loads_fs(form: &str, literal: &str) {
+    let partial = reach(literal);
+    assert!(!partial.is_full(), "{form}: {literal}: {partial:?}");
+    assert!(partial.names.contains("node:fs"), "{form}: {literal}: {partial:?}");
+    let dynamic_source = literal.replace("\"node:fs\"", "name").replace("\"fs\"", "name");
+    assert_ne!(dynamic_source, literal, "{form}: fixture has no literal");
+    let dynamic = reach(&dynamic_source);
+    assert!(
+        dynamic.top.contains(&RealmTop::DynamicModule),
+        "{form}: {dynamic_source}: {dynamic:?}"
+    );
+}
+
+fn assert_escapes(form: &str, source: &str) {
+    let r = reach(source);
+    assert!(r.top.contains(&RealmTop::DynamicModule), "{form}: {source}: {r:?}");
+}
+
+#[test]
+fn optional_chain_get_builtin_module_loads_the_module() {
+    assert_loads_fs("optional call", "const fs = process.getBuiltinModule?.(\"node:fs\");");
+    assert_loads_fs(
+        "optional member",
+        "const fs = globalThis.process?.getBuiltinModule(\"node:fs\");",
+    );
+    assert_loads_fs(
+        "optional member and call",
+        "const fs = globalThis.process?.getBuiltinModule?.(\"node:fs\");",
+    );
+}
+
+#[test]
+fn optional_call_of_a_require_loads_the_module() {
+    assert_loads_fs(
+        "optional createRequire result",
+        "import { createRequire } from \"node:module\"; const req = createRequire(__filename); req?.(\"fs\");",
+    );
+}
+
+#[test]
+fn renamed_create_require_import_is_resolved_by_binding() {
+    assert_loads_fs(
+        "renamed import",
+        "import { createRequire as cr } from \"node:module\"; const req = cr(__filename); req(\"fs\");",
+    );
+    assert_loads_fs(
+        "renamed import called in place",
+        "import { createRequire as cr } from \"node:module\"; cr(__filename)(\"fs\");",
+    );
+    assert_escapes(
+        "renamed import result escapes",
+        "import { createRequire as cr } from \"node:module\"; use(cr(__filename));",
+    );
+}
+
+#[test]
+fn destructured_create_require_is_resolved_by_binding() {
+    assert_loads_fs(
+        "destructured require(\"module\")",
+        "const { createRequire: cr } = require(\"node:module\"); const req = cr(__filename); req(\"fs\");",
+    );
+}
+
+#[test]
+fn imported_process_default_loads_the_module() {
+    assert_loads_fs(
+        "default import",
+        "import proc from \"node:process\"; proc.getBuiltinModule(\"node:fs\");",
+    );
+    assert_loads_fs(
+        "namespace import",
+        "import * as proc from \"node:process\"; proc.getBuiltinModule(\"node:fs\");",
+    );
+}
+
+#[test]
+fn imported_get_builtin_module_loads_the_module() {
+    assert_loads_fs(
+        "named import",
+        "import { getBuiltinModule } from \"node:process\"; getBuiltinModule(\"node:fs\");",
+    );
+    assert_loads_fs(
+        "renamed named import",
+        "import { getBuiltinModule as load } from \"node:process\"; load(\"node:fs\");",
+    );
+    assert_loads_fs(
+        "destructured",
+        "const { getBuiltinModule } = process; getBuiltinModule(\"node:fs\");",
+    );
+    assert_loads_fs(
+        "const alias",
+        "const load = process.getBuiltinModule; load(\"node:fs\");",
+    );
+}
+
+#[test]
+fn computed_get_builtin_module_loads_the_module() {
+    assert_loads_fs("computed key", "process[\"getBuiltinModule\"](\"node:fs\");");
+    assert_loads_fs(
+        "constant computed key",
+        "const k = \"getBuiltinModule\"; process[k](\"node:fs\");",
+    );
+}
+
+#[test]
+fn create_require_result_used_as_a_value_is_top() {
+    let head = "import { createRequire } from \"node:module\"; const req = createRequire(__filename);";
+    assert_escapes("map argument", &format!("{head} [\"fs\"].map(req);"));
+    assert_escapes("helper argument", &format!("{head} helper(req);"));
+    assert_escapes("stored", &format!("{head} const o = {{ load: req }};"));
+    assert_escapes("shorthand", &format!("{head} const o = {{ req }};"));
+    assert_escapes("call", &format!("{head} req.call(null, \"fs\");"));
+    assert_escapes("exported", "import { createRequire } from \"node:module\"; export const req = createRequire(__filename);");
+    assert_escapes("export list", &format!("{head} export {{ req }};"));
+    assert_escapes("maker as a value", "import { createRequire } from \"node:module\"; helper(createRequire);");
+}
+
+#[test]
+fn require_used_as_a_value_is_top() {
+    assert_escapes("alias map argument", "const req = require; [\"fs\"].map(req);");
+    assert_escapes("alias helper argument", "const req = require; helper(req);");
+    assert_escapes("free require argument", "helper(require);");
+    assert_escapes("let alias", "let req = require; req(\"fs\");");
+    assert_escapes("getBuiltinModule value", "[\"fs\"].map(process.getBuiltinModule);");
+    // Uses that do not let the loader escape stay partial.
+    for source in [
+        "const p = require.resolve(\"node:fs\"); require(\"node:fs\");",
+        "if (typeof require === \"function\" && require.main === module) require(\"node:fs\");",
+        "const req = require; req(\"fs\");",
+        "if (typeof process.getBuiltinModule === \"function\") process.getBuiltinModule(\"fs\");",
+    ] {
+        let r = reach(source);
+        assert!(!r.is_full(), "{source}: {r:?}");
+        assert!(r.names.contains("node:fs"), "{source}: {r:?}");
+    }
+}

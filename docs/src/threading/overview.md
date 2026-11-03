@@ -238,9 +238,15 @@ listener sequence before closing. Repeated registrations preserve listener order
 and callback deduplication; non-callable callback values are ignored. This does
 not change queued-message flushing, endpoint close ordering or runtime-only
 fallback close-event support.
-Worker event-loop utilization and CPU usage share the existing perf-hooks and
-process result layouts. Worker ownership keeps those result births in sparse
-realms without retaining unrelated diagnostic layouts.
+Worker event-loop utilization and CPU usage directly own their shared perf-hooks
+and process result layouts. Notifications additionally retain the canonical process
+namespace and its declared process-result layouts, without selecting the full realm
+or unrelated perf-hooks layouts.
+Worker construction schedules the creating process's `worker` notification through
+its public `nextTick` method. The anonymous callback retains the exact Worker,
+reads `process.emit` when invoked and returns that call's result. Scheduler and
+emitter overrides therefore remain observable; no separate notification queue is
+used. The Worker realm declaration includes this canonical process capability.
 Other worker API parity gaps remain.
 
 ## Next Steps

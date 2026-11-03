@@ -69,6 +69,14 @@ pub extern "C" fn js_put_value_set(
     }
     let target_bits = target.to_bits();
     let key_bits = key.to_bits();
+    // DEC 243(3): a symbol key on an ordinary receiver takes the probe store,
+    // as an atom key does.
+    if target_bits == receiver.to_bits()
+        && unsafe { crate::symbol::js_is_symbol(key) } != 0
+        && unsafe { crate::object::layout_probe::symbol_store(target_bits, key_bits, value) }
+    {
+        return value;
+    }
     if target_bits == receiver.to_bits()
         && (target_bits & !POINTER_MASK) == POINTER_TAG
         && (key_bits & !POINTER_MASK) == crate::value::STRING_TAG

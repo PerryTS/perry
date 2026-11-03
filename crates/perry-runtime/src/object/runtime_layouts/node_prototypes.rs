@@ -540,16 +540,6 @@ pub(crate) unsafe fn runtime_symbol_of_atom(
     }
 }
 
-/// Is `ptr` one of the runtime symbols bound so far? Their immortal owner,
-/// the way the registry and the well-known cache own theirs
-/// (`symbol::is_persistent_symbol`).
-pub(crate) fn is_runtime_symbol(ptr: usize) -> bool {
-    ptr != 0
-        && RUNTIME_SYMBOLS
-            .iter()
-            .any(|bound| bound.load(std::sync::atomic::Ordering::Acquire) == ptr)
-}
-
 /// The NaN-boxed symbol runtime symbol atom `atom` names.
 pub(crate) fn runtime_symbol_value(atom: &'static StaticAtom) -> f64 {
     // SAFETY: a static atom.
@@ -756,7 +746,7 @@ runtime_layout!(OUTGOING_MESSAGE_PROTOTYPE, kind = LAYOUT_KIND_UNMARKED, 0x53500
     NP_ATOM_FLUSH_HEADERS,
     NP_ATOM_PIPE,
     NP_SYMBOL_NODEJS_REJECTION,
-], realm = ["node:http.OutgoingMessage.prototype"]);
+], realm = ["node:http.OutgoingMessage.prototype", "node:http2.Http2ServerResponse.prototype"]);
 
 // `ServerResponse.prototype`: node's own keys, in node's order.
 runtime_layout!(SERVER_RESPONSE_PROTOTYPE, kind = LAYOUT_KIND_UNMARKED, 0x53500017, 0,
@@ -773,7 +763,7 @@ runtime_layout!(SERVER_RESPONSE_PROTOTYPE, kind = LAYOUT_KIND_UNMARKED, 0x535000
     NP_ATOM_WRITE_EARLY_HINTS,
     NP_ATOM_U_IMPLICIT_HEADER,
     NP_ATOM_WRITE_HEAD,
-], realm = ["node:http.ServerResponse.prototype"]);
+], realm = ["node:http.ServerResponse.prototype", "node:http2.Http2ServerResponse.prototype"]);
 
 // `IncomingMessage.prototype`: node's own keys, in node's order.
 runtime_layout!(INCOMING_MESSAGE_PROTOTYPE, kind = LAYOUT_KIND_UNMARKED, 0x53500018, 0,

@@ -24,6 +24,11 @@ const ADDON_V10_C: &str = include_str!("fixtures/node_api_host/addon_v10.c");
 const ADDON_V10_MAIN: &str = include_str!("fixtures/node_api_host/addon_v10_main.js");
 #[cfg(unix)]
 const ADDON_V10_EXPECTED: &str = include_str!("fixtures/node_api_host/addon_v10_expected.txt");
+#[cfg(unix)]
+const ADDON_EXIT_FINALIZER_C: &str = include_str!("fixtures/node_api_host/addon_exit_finalizer.c");
+#[cfg(unix)]
+const ADDON_EXIT_FINALIZER_MAIN: &str =
+    include_str!("fixtures/node_api_host/addon_exit_finalizer_main.js");
 #[cfg(windows)]
 const ADDON_DEF: &str = include_str!("fixtures/node_api_host/addon.def");
 const HOST_SYMBOLS: &str =
@@ -678,6 +683,117 @@ exports.loadNewer = () => require("./newer.node")
             );
         }
         _ => eprintln!("SKIP: Node with Node-API 10 is unavailable for the differential"),
+    }
+}
+
+/// `process.exit()` ends the process without tearing the Node-API environment
+/// down (Node's `reallyExit` skips `FreeEnvironment`): no thread-safe function
+/// finalizer and no environment cleanup hook runs. The natural end of the loop
+/// still runs both.
+#[cfg(unix)]
+#[test]
+fn process_exit_skips_node_api_environment_teardown() {
+    if !require_tool("clang") {
+        return;
+    }
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let package = root.join("node_modules/fixture-exit-finalizer");
+    std::fs::create_dir_all(&package).expect("create fixture package");
+    std::fs::write(
+        root.join("package.json"),
+        r#"{
+  "name": "perry-node-api-exit-e2e",
+  "private": true,
+  "perry": {
+    "compilePackages": ["fixture-exit-finalizer"],
+    "allow": { "compilePackages": ["fixture-exit-finalizer"] },
+    "nativeAddons": ["fixture-exit-finalizer"]
+  }
+}"#,
+    )
+    .expect("write project manifest");
+    std::fs::write(
+        package.join("package.json"),
+        r#"{"name":"fixture-exit-finalizer","version":"1.0.0","main":"index.js"}"#,
+    )
+    .expect("write addon manifest");
+    std::fs::write(
+        package.join("index.js"),
+        "module.exports = require(\"./addon.node\")\n",
+    )
+    .expect("write addon wrapper");
+    let source = root.join("addon_exit_finalizer.c");
+    std::fs::write(&source, ADDON_EXIT_FINALIZER_C).expect("write exit finalizer fixture");
+    let mut clang = Command::new("clang");
+    clang.current_dir(root).arg("-shared");
+    #[cfg(not(target_os = "macos"))]
+    clang.arg("-fPIC");
+    #[cfg(target_os = "macos")]
+    clang.args(["-undefined", "dynamic_lookup"]);
+    clang.arg("-o").arg(package.join("addon.node")).arg(&source);
+    run(clang, "exit finalizer fixture build");
+    let entry = root.join("main.js");
+    std::fs::write(&entry, ADDON_EXIT_FINALIZER_MAIN).expect("write exit finalizer entry");
+
+    let executable = root.join("app");
+    let compile = compile_app(root, &entry, &executable);
+    assert!(
+        compile.status.success(),
+        "exit finalizer compile failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    // Node runs the cleanup hook before the finalizer; the order of the two is
+    // not what this test checks, so the natural transcript is compared as a set.
+    let natural_lines = |stdout: &[u8]| {
+        let mut lines = String::from_utf8_lossy(stdout)
+            .lines()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        lines.sort();
+        lines
+    };
+    let check = |program: &Path, args: &[&Path], subject: &str| {
+        let exit = Command::new(program)
+            .current_dir(root)
+            .args(args)
+            .env("FIXTURE_MODE", "exit")
+            .output()
+            .unwrap_or_else(|error| panic!("could not run {subject}: {error}"));
+        assert_eq!(
+            String::from_utf8_lossy(&exit.stdout),
+            "held\n",
+            "{subject}: process.exit() must not run Node-API teardown\nstderr:\n{}",
+            String::from_utf8_lossy(&exit.stderr)
+        );
+        assert_eq!(exit.status.code(), Some(3), "{subject}: exit status");
+
+        let natural = Command::new(program)
+            .current_dir(root)
+            .args(args)
+            .env("FIXTURE_MODE", "natural")
+            .output()
+            .unwrap_or_else(|error| panic!("could not run {subject}: {error}"));
+        assert_eq!(
+            natural_lines(&natural.stdout),
+            ["cleanup", "finalized", "held"],
+            "{subject}: the natural end must run Node-API teardown\nstderr:\n{}",
+            String::from_utf8_lossy(&natural.stderr)
+        );
+        assert!(
+            natural.status.success(),
+            "{subject}: status {:?}",
+            natural.status
+        );
+    };
+    check(&executable, &[], "compiled Node-API exit program");
+    if command_available("node") {
+        check(Path::new("node"), &[entry.as_path()], "Node differential");
+    } else {
+        eprintln!("SKIP: node is unavailable for the differential");
     }
 }
 

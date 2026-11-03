@@ -243,7 +243,9 @@ mod tests {
     /// while a whole block of bytes landed elsewhere. Every step asserts where
     /// the allocator went, so a change in allocation policy fails the test
     /// instead of making it vacuous.
-    fn return_to_the_primed_block() {
+    /// Returns the suppression scope: the caller keeps it alive so the check the
+    /// window owes does not collect (and reset the blocks) before it asserts.
+    fn return_to_the_primed_block() -> crate::gc::GcSuppressScope {
         let _no_gc = crate::gc::GcSuppressScope::new();
         // libtest runs each test on a fresh thread, so this is a fresh arena.
         assert_eq!(
@@ -283,11 +285,12 @@ mod tests {
             "the forward scan must return to the primed block"
         );
         assert!(copying_from_space_in_use_bytes_walked() >= primed + other_size);
+        _no_gc
     }
 
     #[test]
     fn cached_occupancy_matches_the_walk_after_returning_to_the_primed_block() {
-        return_to_the_primed_block();
+        let _no_gc = return_to_the_primed_block();
         assert_eq!(
             cache_hit(),
             None,
@@ -304,8 +307,11 @@ mod tests {
     /// the fresh block's bytes.
     #[test]
     fn without_set_current_invalidation_the_cache_goes_stale() {
+        // Declared first, so it drops last: the check the window owes must run
+        // after the fault injection is undone, not on the stale cache.
+        let _no_gc = crate::gc::GcSuppressScope::new();
         let _skip = SkipInvalidation::new();
-        return_to_the_primed_block();
+        let _inner = return_to_the_primed_block();
         let walked = copying_from_space_in_use_bytes_walked();
         let stale = cache_hit().expect("with invalidation skipped the primed entry still matches");
         assert!(

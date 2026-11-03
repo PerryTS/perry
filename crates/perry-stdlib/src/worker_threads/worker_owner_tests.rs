@@ -59,3 +59,58 @@ fn worker_scanner_keeps_owner_roots_and_excludes_another_agents_heap() {
     .join()
     .unwrap();
 }
+
+#[test]
+fn process_notification_callback_retains_its_worker_on_the_creating_threads_tick_queue() {
+    std::thread::spawn(|| {
+        enter_worker_agent();
+        perry_runtime::gc::gc_init();
+        let (callback_bits, worker_bits) = {
+            let scope = RuntimeHandleScope::new();
+            let worker = scope.root_raw_mut_ptr(perry_runtime::object::js_object_alloc(0, 0));
+            let callback = scope.root_nanbox_f64(worker_surface::process_worker_callback(
+                object_value(worker.get_raw_mut_ptr()),
+            ));
+            let ptr = || {
+                JSValue::from_bits(callback.get_nanbox_f64().to_bits())
+                    .as_pointer::<ClosureHeader>()
+            };
+            assert!(perry_runtime::closure::closure_is_arrow(ptr()));
+            assert_eq!(perry_runtime::closure::closure_arity(ptr()), Some(0));
+            let name = perry_runtime::closure::closure_get_dynamic_prop(ptr() as usize, "name");
+            assert_eq!(string_value_to_string(name).as_deref(), Some(""));
+            unsafe {
+                perry_runtime::builtins::js_queue_next_tick_args(ptr() as i64, std::ptr::null(), 0);
+            }
+            (
+                callback.get_nanbox_f64().to_bits(),
+                object_value(worker.get_raw_mut_ptr()).to_bits(),
+            )
+        };
+        let mut roots = Vec::new();
+        perry_runtime::builtins::scan_queued_microtask_roots(&mut |value| {
+            roots.push(value.to_bits())
+        });
+        assert!(roots.contains(&callback_bits));
+        let ptr = JSValue::from_bits(callback_bits).as_pointer::<ClosureHeader>();
+        assert_eq!(
+            perry_runtime::closure::js_closure_get_capture_f64(ptr, 0).to_bits(),
+            worker_bits
+        );
+        let foreign = std::thread::spawn(|| {
+            enter_worker_agent();
+            perry_runtime::gc::gc_init();
+            let mut roots = Vec::new();
+            perry_runtime::builtins::scan_queued_microtask_roots(&mut |value| {
+                roots.push(value.to_bits())
+            });
+            roots
+        })
+        .join()
+        .unwrap();
+        assert!(!foreign.contains(&callback_bits));
+        assert!(!foreign.contains(&worker_bits));
+    })
+    .join()
+    .unwrap();
+}

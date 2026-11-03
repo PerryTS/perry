@@ -88,6 +88,7 @@ extern "C" {
     fn js_v8_get_heap_statistics() -> f64;
     fn js_process_cpu_usage(prior: f64) -> f64;
     fn js_perf_event_loop_utilization(util1: f64, util2: f64) -> f64;
+    fn js_nm_install_process();
 }
 
 /// Handle for parentPort (always 1)
@@ -166,6 +167,10 @@ struct MessagePortState {
     /// writes use the ordinary object path, so hasRef() folds a transition in
     /// this slot into the handle state lazily.
     onmessage_callable: bool,
+    /// The port's `MESSAGEPORT` async resource (node: a MessagePort is its own
+    /// async resource; its message callbacks run inside it, in the context the
+    /// port was created in). `None` for ports that carry no resource of their own.
+    async_ids: Option<perry_runtime::async_hook_slots::AsyncResourceIds>,
 }
 
 #[derive(Default)]
@@ -1344,12 +1349,43 @@ pub extern "C" fn js_worker_threads_message_channel_new() -> f64 {
             },
         );
     });
-    let obj = perry_runtime::object::js_object_alloc(0, 0);
-    set_object_prototype(obj, constructor_prototype("MessageChannel"));
-    set_object_field(obj, "constructor", get_global_constructor("MessageChannel"));
-    set_object_field(obj, "port1", object_value(message_port_object(id1)));
-    set_object_field(obj, "port2", object_value(message_port_object(id2)));
-    object_value(obj)
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let mut port_values = Vec::with_capacity(2);
+    for id in [id1, id2] {
+        let port = scope.root_nanbox_f64(object_value(message_port_object(id)));
+        let ids = perry_runtime::async_hook_slots::init_resource(
+            "MESSAGEPORT",
+            port.get_nanbox_f64(),
+            true,
+        );
+        MESSAGE_PORTS.with(|ports| {
+            if let Some(state) = ports.borrow_mut().get_mut(&id) {
+                state.async_ids = Some(ids);
+            }
+        });
+        port_values.push(port);
+    }
+    let obj = scope.root_raw_mut_ptr(perry_runtime::object::js_object_alloc(0, 0));
+    set_object_prototype(
+        obj.get_raw_mut_ptr(),
+        constructor_prototype("MessageChannel"),
+    );
+    set_object_field(
+        obj.get_raw_mut_ptr(),
+        "constructor",
+        get_global_constructor("MessageChannel"),
+    );
+    set_object_field(
+        obj.get_raw_mut_ptr(),
+        "port1",
+        port_values[0].get_nanbox_f64(),
+    );
+    set_object_field(
+        obj.get_raw_mut_ptr(),
+        "port2",
+        port_values[1].get_nanbox_f64(),
+    );
+    object_value(obj.get_raw_mut_ptr())
 }
 
 #[no_mangle]
@@ -1359,6 +1395,20 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
 }
 
 fn worker_new_prepared(
+    entry_ptr: i64,
+    options: f64,
+    options_state: WorkerOptions,
+    source: Option<String>,
+) -> f64 {
+    // Scheduling calls user code; finish owned preparation before entering it.
+    let worker = worker_new_started(entry_ptr, options, options_state, source);
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let worker = scope.root_nanbox_f64(worker);
+    worker_surface::queue_process_worker_event(worker.get_nanbox_f64());
+    worker.get_nanbox_f64()
+}
+
+fn worker_new_started(
     entry_ptr: i64,
     options: f64,
     mut options_state: WorkerOptions,
@@ -1386,8 +1436,8 @@ fn worker_new_prepared(
     let sender = WorkerSender::new(tx);
     let published_agent = sender.agent.clone();
     let termination = sender.termination.clone();
-    let worker_obj = worker_object(worker_id, &options_state);
     let resource_scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let worker_obj = resource_scope.root_raw_mut_ptr(worker_object(worker_id, &options_state));
     let mut async_resources = [perry_runtime::async_hook_slots::AsyncResourceIds {
         async_id: 0,
         trigger_async_id: 0,
@@ -1415,7 +1465,7 @@ fn worker_new_prepared(
     let mut record = WorkerRecord {
         owner_agent: perry_runtime::agent::current_agent(),
         sender: sender.clone(),
-        object_bits: object_value(worker_obj).to_bits(),
+        object_bits: object_value(worker_obj.get_raw_mut_ptr()).to_bits(),
         listeners: HashMap::new(),
         alive: false,
         refed: false,
@@ -1596,7 +1646,7 @@ fn worker_new_prepared(
         push_parent_event(parent_agent, WorkerEvent::Exit(worker_id, 1));
     }
 
-    object_value(worker_obj)
+    object_value(worker_obj.get_raw_mut_ptr())
 }
 
 pub use environment_data::{
