@@ -7,6 +7,7 @@ import { pbkdf2Sync } from "node:crypto";
 const notAString: any = 256;
 
 console.log("sha256", pbkdf2Sync("password", "salt", 1, 16, "sha256").toString("hex"));
+console.log("sha-256", pbkdf2Sync("password", "salt", 1, 16, "sha-256").toString("hex"));
 console.log("md5", pbkdf2Sync("password", "salt", 1, 16, "md5").toString("hex"));
 console.log("sha512-256", pbkdf2Sync("password", "salt", 1, 16, "sha512-256").toString("hex"));
 
@@ -44,4 +45,13 @@ try {
   console.log("digest empty no throw");
 } catch (error: any) {
   console.log("digest empty", error.code);
+}
+
+// Node accepts only OpenSSL's registered spellings; a name that merely looks
+// like one after deleting hyphens is an error, not an alias.
+try {
+  pbkdf2Sync("password", "salt", 1, 16, "m-d5");
+  console.log("digest misspelled no throw");
+} catch (error: any) {
+  console.log("digest misspelled", error.code);
 }

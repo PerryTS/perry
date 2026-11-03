@@ -1325,6 +1325,24 @@ mod tests {
         assert!(catch_runtime_throw(|| {
             call(1.0, 16.0, Some(js_str("")));
         }));
+        // node accepts only OpenSSL's registered spellings, case-insensitively;
+        // deleting hyphens would accept `m-d5` and `sha-512-256`.
+        assert_eq!(
+            to_hex(&call(1.0, 16.0, Some(js_str("sha2-512/256")))),
+            "4b6a63117d3ec0032624616082c1c191"
+        );
+        assert_eq!(
+            to_hex(&call(1.0, 16.0, Some(js_str("sha-256")))),
+            "120fb6cffcf8b32c43e7225256c4f837"
+        );
+        for rejected in ["m-d5", "sha-512-256", "sha512256", "sha--256"] {
+            assert!(
+                catch_runtime_throw(|| {
+                    call(1.0, 16.0, Some(js_str(rejected)));
+                }),
+                "{rejected} must be rejected like node does"
+            );
+        }
     }
 
     /// #13619: the two argon2 VALUE arms must reach the real KDF, not

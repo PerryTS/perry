@@ -49,27 +49,38 @@ pub(super) fn pbkdf2_derive(
 /// Normalize and validate the digest-name argument. `digest_ptr` may be a
 /// null/sentinel pointer (no argument passed at all) — the empty string then
 /// selects SHA-256 for the async callback form, which node itself rejects but
-/// which predates this module. A digest string that Perry does not implement
-/// throws node's `TypeError [ERR_CRYPTO_INVALID_DIGEST]` instead of deriving a
-/// SHA-256 key the caller never asked for; the message names the value as the
-/// caller wrote it, like `createHmac` does.
+/// which predates this module.
+///
+/// OpenSSL registers a fixed set of spellings per digest and node accepts
+/// exactly those, case-insensitively. Stripping every hyphen instead (the
+/// first version of this check) accepted names node rejects — `m-d5` became
+/// `md5`, `sha-512-256` became `sha512256` — so match the registered
+/// spellings. A name Perry does not implement throws node's
+/// `TypeError [ERR_CRYPTO_INVALID_DIGEST]` instead of deriving a SHA-256 key
+/// the caller never asked for; the message names the value as the caller wrote
+/// it, like `createHmac` does.
 unsafe fn pbkdf2_digest_name(digest_ptr: i64) -> String {
     if (digest_ptr as usize) < 0x1000 {
         return String::new();
     }
     let raw = String::from_utf8_lossy(&bytes_from_ptr(digest_ptr)).to_string();
-    let digest = raw.to_ascii_lowercase().replace('-', "");
-    match digest.as_str() {
-        // `md5`, `sha1`, `sha224`, `sha256`, `sha384`, `sha512` and
-        // `sha512-256` are the PBKDF2 digests Perry implements; node accepts
-        // any OpenSSL digest name, so the rest of its set (sha3-*, shake*,
-        // blake2*, ripemd160, …) reports this error rather than a wrong key.
-        "md5" | "sha1" | "sha224" | "sha256" | "sha384" | "sha512" | "sha512256" => digest,
+    match raw.to_ascii_lowercase().as_str() {
+        // The seven PBKDF2 digests Perry implements, under the spellings node
+        // accepts. node's remaining set (sha3-*, shake*, blake2*, ripemd160,
+        // sha512-224, …) reports this error rather than a wrong key.
+        "md5" => "md5",
+        "sha1" | "sha-1" => "sha1",
+        "sha224" | "sha-224" | "sha2-224" => "sha224",
+        "sha256" | "sha-256" | "sha2-256" => "sha256",
+        "sha384" | "sha-384" | "sha2-384" => "sha384",
+        "sha512" | "sha-512" | "sha2-512" => "sha512",
+        "sha512-256" | "sha2-512/256" | "sha-512/256" => "sha512256",
         _ => perry_runtime::fs::validate::throw_type_error_with_code(
             &format!("Invalid digest: {raw}"),
             "ERR_CRYPTO_INVALID_DIGEST",
         ),
     }
+    .to_string()
 }
 
 #[no_mangle]
