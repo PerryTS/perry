@@ -213,7 +213,11 @@ mod attach_reach_tests {
                 b"Serializer".as_ptr(),
                 10,
             ) as i64);
-            let from_namespace = crate::object::js_native_module_esm_export_value(module, property);
+            let from_namespace = crate::object::js_native_module_esm_export_value_vt(
+                &crate::object::native_module::namespaces::v8::NM_V8,
+                module,
+                property,
+            );
             assert_eq!(
                 from_namespace.to_bits(),
                 ctor.to_bits(),

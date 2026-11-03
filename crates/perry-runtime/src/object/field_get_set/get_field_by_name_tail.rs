@@ -1215,7 +1215,7 @@ pub(crate) fn get_field_by_name_object_tail(
         // `fs.constants.F_OK` lowers to `PropertyGet { PropertyGet { fs,
         // "constants" }, "F_OK" }` — the inner expression's runtime value
         // is a NATIVE_MODULE_CLASS_ID-tagged ObjectHeader produced by
-        // `js_create_native_module_namespace`; the outer PropertyGet then
+        // `js_create_native_module_namespace_vt`; the outer PropertyGet then
         // arrives here with the sub-namespace as receiver. Pre-fix the
         // lookup fell through to the field-bag scan (which only stores
         // `__module__`) and returned undefined. Now we route through

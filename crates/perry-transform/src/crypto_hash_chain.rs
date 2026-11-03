@@ -497,7 +497,7 @@ fn count_placeholder_lets(module: &Module) -> Counts {
 /// (`crates/perry/src/commands/compile/cjs_wrap`): a `const require =
 /// function(specifier) { .. }` directly in the body of the closure bound to
 /// `__perry_cjs_factory`, which no user code can name. Its builtin arm
-/// returns `js_create_native_module_namespace("crypto")`. The alias must have
+/// returns `js_create_native_module_namespace_vt("crypto")`. The alias must have
 /// exactly one value-carrying definition — that `require('crypto')` call —
 /// and otherwise only `undefined` placeholder declarations: no other `Let`,
 /// no `LocalSet`, no `++`/`--`.

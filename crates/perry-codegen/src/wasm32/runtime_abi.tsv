@@ -1041,7 +1041,6 @@ js_create_cjs_namespace	f64	i32s,ptr,ptr,ptr,ptr
 js_create_family_contract_check	void	ptr,f64
 js_create_namespace	f64	i32s,ptr,ptr,ptr,ptr
 js_create_namespace_layout	f64	ptr,ptr
-js_create_native_module_namespace	f64	ptr,usize
 js_cron_timer_has_pending	i32s	
 js_cron_timer_tick	i32s	
 js_crypto_aes256_decrypt	ptr	ptr,ptr,ptr
@@ -2257,8 +2256,6 @@ js_native_handle_unwrap	i64	f64,i64,i32s,i32s,i32s
 js_native_memory_copy	void	i64,i64
 js_native_memory_fill_u32	void	i64,f64
 js_native_module_bind_method	f64	f64,ptr,usize
-js_native_module_esm_export_value	f64	f64,f64
-js_native_module_named_esm_export_value	f64	f64,f64
 js_native_module_property_by_name	f64	ptr,usize,ptr,usize
 js_native_pod_view	ptr	i64,i64,i64,i64,i64,i64
 js_native_pod_view_length	f64	f64

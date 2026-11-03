@@ -1,5 +1,5 @@
 //! Every native cell has exactly one owner: the `native_namespace` its birth
-//! declares (the module js_create_native_module_namespace stores in slot 0).
+//! declares (the module js_create_native_module_namespace_vt stores in slot 0).
 //! A native cell is a `%NativeNamespace:` receiver, a cell whose header has
 //! the native-module class id, a cell dispatched by the native-module
 //! vtable, or a cell that records a `native_namespace`. A

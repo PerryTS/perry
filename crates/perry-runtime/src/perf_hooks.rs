@@ -237,7 +237,7 @@ pub(crate) fn is_performance_object_value(value: f64) -> bool {
     }
     // #3871: `performance` (global + `node:perf_hooks` import) resolves to the
     // `perf_hooks` native-module namespace object via
-    // `js_create_native_module_namespace`, whose pointer may differ from the
+    // `js_create_native_module_namespace_vt`, whose pointer may differ from the
     // `PERFORMANCE_NS` cell (the cell is only set by `performance_namespace()`).
     // Recognize any `perf_hooks` namespace object by its stored module name so
     // `performance instanceof Performance` holds — mirrors the field-0 name

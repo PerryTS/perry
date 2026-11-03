@@ -678,7 +678,7 @@ pub(super) fn birth_at(
         );
     }
     // The owner: the module whose namespace this is, which
-    // js_create_native_module_namespace stores in slot 0 and the vtable
+    // js_create_native_module_namespace_vt stores in slot 0 and the vtable
     // serves. Every native birth declares it; nothing infers it.
     if let Some(namespace) = native_namespace {
         map.insert("native_namespace".into(), string(namespace));

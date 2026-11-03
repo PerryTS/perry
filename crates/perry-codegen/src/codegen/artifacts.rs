@@ -605,7 +605,7 @@ pub(super) fn emit_module_artifacts(
         for prefix in foreign_prefixes {
             // #3938: `__native_mod__<name>` / `__node_submod__<key>` sentinel
             // prefixes are resolved at the `Expr::DynamicImport` dispatch site
-            // via runtime namespace builders (`js_create_native_module_namespace`
+            // via runtime namespace builders (`js_create_native_module_namespace_vt`
             // / `js_node_submodule_namespace`); they have no compiled-module
             // `@__perry_ns_<prefix>` global or `<prefix>__init` function, so the
             // extern decls below are dead. Worse, for slash-bearing submodule

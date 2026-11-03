@@ -380,7 +380,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         module.add_external_declaration(format!("@{symbol} = external global i8"));
     }
     // Per-module native-module dispatch-install symbols (devirt). Codegen emits
-    // the matching one at each js_create_native_module_namespace site.
+    // the matching one at each js_create_native_module_namespace_vt site.
     module.declare_function("js_nm_install_assert", VOID, &[]);
     module.declare_function("js_nm_install_async_hooks", VOID, &[]);
     module.declare_function("js_nm_install_bigint", VOID, &[]);

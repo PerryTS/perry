@@ -551,7 +551,7 @@ pub(super) fn logical(
             declaration.insert("module".into(), string(module));
             declaration.insert(
                 "body".into(),
-                string("crate::object::native_module::js_create_native_module_namespace"),
+                string("crate::object::native_module::js_create_native_module_namespace_vt"),
             );
             (module, "namespace")
         } else if let Some(module) = facts
@@ -560,7 +560,7 @@ pub(super) fn logical(
             .and_then(|s| s.strip_suffix('%'))
         {
             // The receiver's physical birth: an ordinary object allocated with the
-            // native-module class id (js_create_native_module_namespace).
+            // native-module class id (js_create_native_module_namespace_vt).
             let gc = info::gc_constants()?;
             let source = include_str!("../../perry-runtime/src/object/native_module.rs");
             let birth = perry_abi::realm_header::ObjectBirth {

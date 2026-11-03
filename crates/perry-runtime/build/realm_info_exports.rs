@@ -339,7 +339,7 @@ fn write_native_owner_truth(declarations: &[Value], out: &Path) -> Result<(), St
         let provider = declaration
             .get("body")
             .and_then(Value::string)
-            .is_some_and(|body| body.ends_with("::js_create_native_module_namespace"));
+            .is_some_and(|body| body.ends_with("::js_create_native_module_namespace_vt"));
         // One object, one declaration: each of its names is an access path,
         // and every path yields the declared owner (a `%…%` name has none).
         let names = declaration
@@ -454,7 +454,7 @@ fn native_module_keys_test(declarations: &[Value]) -> String {
             || declaration
                 .get("body")
                 .and_then(Value::string)
-                .is_some_and(|body| body.ends_with("::js_create_native_module_namespace"))
+                .is_some_and(|body| body.ends_with("::js_create_native_module_namespace_vt"))
         {
             continue;
         }

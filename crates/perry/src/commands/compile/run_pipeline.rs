@@ -3407,7 +3407,7 @@ pub fn run_with_parse_cache(
                         // `import('node:util')` targets a general native builtin
                         // that is NOT in the node-submodule table and has no
                         // compiled-source backing. The runtime builds its
-                        // namespace object via `js_create_native_module_namespace`
+                        // namespace object via `js_create_native_module_namespace_vt`
                         // (the same object `require('node:crypto')` and `import *
                         // as` produce). Record a `__native_mod__<name>` sentinel,
                         // keyed by the `node:`-stripped module name, that the

@@ -169,7 +169,7 @@ pub(crate) fn supported_builtin_module_name(specifier: &str) -> Option<&str> {
 /// Builtin modules the dynamic resolvers must route through the
 /// `node_submodules` registry (submodule-spec exports) instead of a
 /// native-module namespace. These have no native-module dispatch bucket —
-/// `js_create_native_module_namespace` would hand back a method-dead object.
+/// `js_create_native_module_namespace_vt` would hand back a method-dead object.
 /// The registry key differs from the module name (`/` → `_`).
 pub(crate) fn builtin_submodule_key(module_name: &str) -> Option<&'static str> {
     match module_name {

@@ -1,5 +1,5 @@
 //! GENERATED (native-module devirtualization, #5256): dispatch-install symbol selection.
-//! Mirrors perry-runtime `nm_module_index`. `js_create_native_module_namespace`
+//! Mirrors perry-runtime `nm_module_index`. `js_create_native_module_namespace_vt`
 //! sites emit the returned symbol so the per-module dispatch bucket is registered
 //! before any method call; unimported modules are never named → dead-stripped.
 

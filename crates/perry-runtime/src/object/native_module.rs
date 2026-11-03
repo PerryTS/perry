@@ -1,4 +1,4 @@
-//! Native-module namespace machinery: allocator (`js_create_native_module_namespace`),
+//! Native-module namespace machinery: allocator (`js_create_native_module_namespace_vt`),
 //! property/method bindings (`js_native_module_property_by_name`,
 //! `js_native_module_bind_method`, `js_class_method_bind`), and the
 //! per-module constant/sub-namespace tables consumed from
@@ -209,7 +209,7 @@ pub(crate) fn native_namespace_prop_override_get(module: &str, prop: &str) -> Op
 /// writes (`process.chdir = fn`) reach the generic store path and land as an
 /// OWN dynamic field on the canonical namespace object. The name-keyed read
 /// entries (`js_native_module_property_by_name`,
-/// `js_native_module_esm_export_value`) carry no object pointer, so they only
+/// `js_native_module_esm_export_value_vt`) carry no object pointer, so they only
 /// consulted the override table — a static write was invisible to them and
 /// the read handed back the canonical BOUND_METHOD closure again. graceful-fs
 /// then did `Object.setPrototypeOf(process.chdir, chdir)` with the SAME
@@ -854,34 +854,6 @@ pub(crate) unsafe fn call_native_module_dispatch_hook(
     }
 }
 
-/// Create a native module namespace object
-/// This is used for `import * as X from 'module'` patterns
-/// The returned object identifies itself as an object (typeof returns "object")
-/// and stores the module name for debugging purposes
-///
-/// module_name_ptr: pointer to the module name string bytes
-/// module_name_len: length of the module name
-/// Returns the object as a NaN-boxed f64
-#[no_mangle]
-pub extern "C" fn js_create_native_module_namespace(
-    module_name_ptr: *const u8,
-    module_name_len: usize,
-) -> f64 {
-    // Invariant: every caller passes the bytes of a Rust `&str` -- codegen
-    // emits the specifier through `strings.intern(&str)`/`add_string_constant`
-    // with that str's `len()`, runtime callers pass literals -- so the bytes
-    // are UTF-8 by construction and are not validated again on each call.
-    let module_name = unsafe {
-        let bytes = std::slice::from_raw_parts(module_name_ptr, module_name_len);
-        debug_assert!(
-            std::str::from_utf8(bytes).is_ok(),
-            "native module name is not UTF-8"
-        );
-        std::str::from_utf8_unchecked(bytes)
-    };
-    native_namespace_by_name(module_name)
-}
-
 /// One row of the program's `(name, vtable)` array: the namespaces a program
 /// with a dynamic `require(expr)` / `getBuiltinModule(id)` can reach by a
 /// runtime string. Codegen emits the array (`@perry_native_modules`) only in
@@ -941,8 +913,8 @@ pub(crate) fn native_namespace_by_name(module_name: &str) -> f64 {
 
 /// The namespace of `module_name` born with the vtable its birth site names.
 /// A site that names its module statically passes the module's vtable; the
-/// shape carries it from here on. The name bytes are as for
-/// [`js_create_native_module_namespace`].
+/// shape carries it from here on. Every caller passes the bytes of a Rust
+/// `&str` (codegen interns the specifier), so they are UTF-8 by construction.
 #[no_mangle]
 pub extern "C" fn js_create_native_module_namespace_vt(
     vt: &'static NativeModuleVtable,
@@ -1077,7 +1049,7 @@ pub(crate) fn subtle_crypto_namespace() -> f64 {
 /// # Safety
 /// `obj_ptr` must point to a live `ObjectHeader` with
 /// `class_id == NATIVE_MODULE_CLASS_ID` (i.e. one produced by
-/// [`js_create_native_module_namespace`]).
+/// [`js_create_native_module_namespace_vt`]).
 pub(crate) unsafe fn read_native_module_name(
     obj_ptr: *const crate::object::ObjectHeader,
 ) -> Option<String> {
@@ -1416,15 +1388,7 @@ fn native_module_export_value(
 
 /// Mutable property read used by native-module default and namespace objects.
 /// User writes to the CommonJS namespace are observable immediately here.
-#[no_mangle]
-pub extern "C" fn js_native_module_esm_export_value(module: f64, property: f64) -> f64 {
-    let base =
-        native_module_string_arg(module).and_then(|module| native_module_vtable_by_name(&module));
-    native_module_export_value(module, property, true, base)
-}
-
-/// [`js_native_module_esm_export_value`] from a codegen site: `vt` is the
-/// vtable of the module's own namespace.
+/// `vt` is the vtable of the module's own namespace, named by the codegen site.
 #[no_mangle]
 pub extern "C" fn js_native_module_esm_export_value_vt(
     vt: &'static NativeModuleVtable,
@@ -1436,14 +1400,7 @@ pub extern "C" fn js_native_module_esm_export_value_vt(
 
 /// Snapshot-backed value used for named ESM imports from builtins. CommonJS
 /// namespace writes stay isolated until `syncBuiltinESMExports()` copies them.
-#[no_mangle]
-pub extern "C" fn js_native_module_named_esm_export_value(module: f64, property: f64) -> f64 {
-    let base =
-        native_module_string_arg(module).and_then(|module| native_module_vtable_by_name(&module));
-    native_module_export_value(module, property, false, base)
-}
-
-/// [`js_native_module_named_esm_export_value`] from a codegen site.
+/// `vt` is the vtable of the module's own namespace, named by the codegen site.
 #[no_mangle]
 pub extern "C" fn js_native_module_named_esm_export_value_vt(
     vt: &'static NativeModuleVtable,
