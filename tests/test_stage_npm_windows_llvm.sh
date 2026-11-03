@@ -19,6 +19,8 @@ mkdir -p \
   "$WIN_ARTIFACT"
 
 cp "$REPO_ROOT/scripts/stage-npm.sh" "$FIXTURE_REPO/scripts/stage-npm.sh"
+# stage-target.mts strips LLVM bitcode from each ext archive with this script.
+cp "$REPO_ROOT/scripts/strip-archive-members.py" "$FIXTURE_REPO/scripts/strip-archive-members.py"
 # stage-npm.sh reads the target and ext triples from constants.mts, which
 # reads npm/packaged-triples.json (SKIP_MISSING=1 skips their absent inputs).
 cp "$REPO_ROOT/scripts/publish/constants.mts" "$REPO_ROOT/scripts/publish/stage-target.mts" \
@@ -38,7 +40,8 @@ printf 'fixture LLVM runtime\n' > "$WIN_ARTIFACT/LLVM-C.dll"
 # stages @perryts/perry-ext-x86_64-pc-windows-msvc too: that needs a
 # perry_ext_*.lib archive and the release revision CI passes in as
 # PERRY_SOURCE_REVISION (needs.preflight.outputs.checkout-sha).
-printf 'fixture ext archive\n' > "$WIN_ARTIFACT/perry_ext_fixture.lib"
+# An empty ar archive: staging strips each ext archive's bitcode members.
+printf '!<arch>\n' > "$WIN_ARTIFACT/perry_ext_fixture.lib"
 export PERRY_SOURCE_REVISION="$(printf 'a%.0s' $(seq 40))"
 
 SKIP_MISSING=1 PERRY_NPM_NO_COMPRESS=1 \
@@ -56,7 +59,8 @@ rm "$WIN_ARTIFACT/LLVM-C.dll"
 # stages @perryts/perry-ext-x86_64-pc-windows-msvc too: that needs a
 # perry_ext_*.lib archive and the release revision CI passes in as
 # PERRY_SOURCE_REVISION (needs.preflight.outputs.checkout-sha).
-printf 'fixture ext archive\n' > "$WIN_ARTIFACT/perry_ext_fixture.lib"
+# An empty ar archive: staging strips each ext archive's bitcode members.
+printf '!<arch>\n' > "$WIN_ARTIFACT/perry_ext_fixture.lib"
 export PERRY_SOURCE_REVISION="$(printf 'a%.0s' $(seq 40))"
 if SKIP_MISSING=1 PERRY_NPM_NO_COMPRESS=1 \
     "$FIXTURE_REPO/scripts/stage-npm.sh" "$ARTIFACTS" \
