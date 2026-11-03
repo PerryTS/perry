@@ -1,12 +1,19 @@
-use super::super::handle::{
-    common_handle_registry_domain, drop_handle, handle_exists, register_handle,
-    register_reclaimable_handle, with_handle,
+//! The shared-band lifecycle (`perry_ffi::handle_lifecycle`) driven by the
+//! common registry's reclaimable and retired ids, on a real collector.
+use super::handle::{
+    common_handle_registry_domain, drop_handle, handle_exists, parked_handle_count,
+    register_handle, register_reclaimable_handle, retain_strongly, with_handle, Handle,
+    REGISTRATIONS,
 };
-use super::*;
+use perry_ffi::handle_lifecycle::{is_parked, BAND_RESERVE};
 use perry_runtime::gc::RuntimeHandleScope;
 
-fn is_parked(id: Handle) -> bool {
-    PARKED.with(|map| map.borrow().0.contains_key(&id))
+fn full_traces() -> usize {
+    perry_ffi::handle_lifecycle::finished_full_traces()
+}
+
+fn phase(phase: u32) -> bool {
+    perry_ffi::handle_lifecycle::trace_phase_for_tests(phase)
 }
 
 const UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
@@ -25,7 +32,7 @@ fn collect() {
 /// Each test runs on its own mutator: the GC, its roots and the parked set
 /// are per-thread, so unrelated fixtures' unrooted locals stay out of it.
 fn on_mutator(f: impl FnOnce() + Send + 'static) {
-    let _serial = super::super::handle::REGISTRATION_TEST_LOCK
+    let _serial = super::handle::REGISTRATION_TEST_LOCK
         .lock()
         .unwrap_or_else(|p| p.into_inner());
     std::thread::spawn(move || {
@@ -39,14 +46,11 @@ fn on_mutator(f: impl FnOnce() + Send + 'static) {
 #[test]
 fn an_unreachable_reclaimable_payload_is_dropped_and_its_id_recycled() {
     on_mutator(|| {
-        let traces = FULL_TRACES.with(|n| n.get());
+        let traces = full_traces();
         let id = register_reclaimable_handle(11_u64);
         assert!(is_parked(id));
         collect();
-        assert!(
-            FULL_TRACES.with(|n| n.get()) >= traces + 2,
-            "no full trace ran"
-        );
+        assert!(full_traces() >= traces + 2, "no full trace ran");
         assert!(
             !handle_exists(id),
             "nothing names the id, so its payload must go"

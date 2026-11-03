@@ -227,7 +227,7 @@ fn index_note_removed(payload: &(dyn Any + Send + Sync), handle: Handle) {
 const FFI_HANDLE_ID_END: Handle = 0x40000;
 
 const FREE_HANDLES_CAP: usize = 64 * 1024;
-static REGISTRATIONS: Lazy<NativeRegistrationRegistry> = Lazy::new(|| {
+pub(crate) static REGISTRATIONS: Lazy<NativeRegistrationRegistry> = Lazy::new(|| {
     NativeRegistrationRegistry::new(FFI_HANDLE_ID_START, FFI_HANDLE_ID_END, FREE_HANDLES_CAP)
 });
 
