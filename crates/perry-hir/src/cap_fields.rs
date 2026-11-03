@@ -81,7 +81,14 @@ mod tests {
 
     #[test]
     fn unsalted_and_user_spellings_are_ordinary_names() {
-        for n in ["__perry_cap_7", "__perry_cap_user", "__perry_cap_7mine", "__perry_cap_7m0000331fa6789", "__perry_cap_7m0000331fa67g", "__perry_cap_m0000331fa678"] {
+        for n in [
+            "__perry_cap_7",
+            "__perry_cap_user",
+            "__perry_cap_7mine",
+            "__perry_cap_7m0000331fa6789",
+            "__perry_cap_7m0000331fa67g",
+            "__perry_cap_m0000331fa678",
+        ] {
             assert_eq!(cap_field_outer_id(n), None, "{n}");
             assert!(!is_cap_field_name(n), "{n}");
         }

@@ -505,7 +505,10 @@ impl ClassFieldOrigin {
     /// The field defines its property at birth (a source definition or a
     /// compiler capture field).
     pub fn is_definition(self) -> bool {
-        matches!(self, ClassFieldOrigin::Definition | ClassFieldOrigin::Capture)
+        matches!(
+            self,
+            ClassFieldOrigin::Definition | ClassFieldOrigin::Capture
+        )
     }
 
     /// The field is a compiler capture field.
