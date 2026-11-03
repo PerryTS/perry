@@ -39,7 +39,10 @@ impl CtorAbi {
     /// snapshot rather than from the call, so a capturing constructor reports
     /// no packable slot and keeps positional marshaling.
     pub(crate) fn from_params(params: &[perry_hir::Param]) -> Self {
-        if params.iter().any(|p| perry_hir::cap_fields::is_cap_field_name(&p.name)) {
+        if params
+            .iter()
+            .any(|p| perry_hir::cap_fields::is_cap_field_name(&p.name))
+        {
             return CtorAbi::positional(params.len());
         }
         CtorAbi {
@@ -320,7 +323,11 @@ mod tests {
         // The capture params trail the arrays, so the packed slots are not the
         // last ones and every caller binds positionally instead.
         let mut params = arguments_ctor_params();
-        params.push(param(&perry_hir::cap_fields::cap_field_name(1, 4), false, false));
+        params.push(param(
+            &perry_hir::cap_fields::cap_field_name(1, 4),
+            false,
+            false,
+        ));
         assert_eq!(CtorAbi::from_params(&params), CtorAbi::positional(4));
     }
 

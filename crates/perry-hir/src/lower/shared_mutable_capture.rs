@@ -1576,7 +1576,9 @@ fn rewrite_expr(expr: &mut Expr, shared: &HashSet<LocalId>, index_uses: &HashSet
         // handle on the instance field so methods snapshot the shared array.
         Expr::PropertySet {
             object, property, ..
-        } if matches!(object.as_ref(), Expr::This) && crate::cap_fields::is_cap_field_name(property) => {
+        } if matches!(object.as_ref(), Expr::This)
+            && crate::cap_fields::is_cap_field_name(property) =>
+        {
             return;
         }
         // Constructor PUBLISH `ClassEnvSet { value: LocalGet(param) }`: the

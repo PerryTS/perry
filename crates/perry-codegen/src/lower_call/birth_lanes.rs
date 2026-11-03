@@ -93,8 +93,7 @@ pub(crate) fn chain_birth_f64_fields(
     let mut candidate: HashSet<String> = HashSet::new();
     for class in &resolved {
         for f in &class.fields {
-            if (f.origin.is_definition()
-                || crate::typed_shape::type_is_raw_f64_candidate(&f.ty))
+            if (f.origin.is_definition() || crate::typed_shape::type_is_raw_f64_candidate(&f.ty))
                 && f.key_expr.is_none()
                 && !f.is_private
                 && f.decorators.is_empty()

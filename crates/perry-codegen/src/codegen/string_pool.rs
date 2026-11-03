@@ -1345,7 +1345,9 @@ pub(super) fn emit_string_pool(
                     ctor.params
                         .iter()
                         .take_while(|p| {
-                            !p.is_rest && p.default.is_none() && !perry_hir::cap_fields::is_cap_field_name(&p.name)
+                            !p.is_rest
+                                && p.default.is_none()
+                                && !perry_hir::cap_fields::is_cap_field_name(&p.name)
                         })
                         .count() as u32
                 })

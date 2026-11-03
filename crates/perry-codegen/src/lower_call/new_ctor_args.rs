@@ -212,7 +212,9 @@ fn inline_constructor_param_values_with_class(
         params
             .iter()
             .filter(|p| {
-                perry_hir::cap_fields::is_cap_field_name(&p.name) && !p.is_rest && p.arguments_object.is_none()
+                perry_hir::cap_fields::is_cap_field_name(&p.name)
+                    && !p.is_rest
+                    && p.arguments_object.is_none()
             })
             .count()
             .min(lowered_args.len())
