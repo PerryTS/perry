@@ -901,6 +901,38 @@ fn uint8array_constructor_proves_typed_array_binding() {
 }
 
 #[test]
+fn uint8array_from_a_plain_array_literal_keeps_the_length_constant() {
+    // `const src = [1, 2, 3]; const a = new Uint8Array(src)`: the ctor-arg
+    // position COPIES `src` instead of resizing it, so `src` stays length-safe
+    // and the constant propagates. Dropping the `Uint8ArrayNew` arm of
+    // `record_expr_use` makes `src` length-unsafe, which keeps the binding
+    // proven but demotes `const_len` to `None` — the silent shape this pins.
+    let m = module_with_init(vec![
+        let_stmt(
+            1,
+            false,
+            Expr::Array(
+                vec![Expr::Integer(1), Expr::Integer(2), Expr::Integer(3)],
+                None,
+            ),
+        ),
+        let_stmt(2, false, u8_new(Some(Expr::LocalGet(1)))),
+        Stmt::Expr(call(7, vec![Expr::LocalGet(2)])),
+    ]);
+    let facts = collect_spec_abi_facts(&m);
+    let proven = facts.ta_bindings.get(&2).expect("binding proven");
+    assert_eq!(proven.kind, TYPED_ARRAY_KIND_UINT8);
+    assert_eq!(proven.const_len, Some(3));
+    assert_eq!(
+        facts.call_sites.get(&7).unwrap()[0],
+        vec![SpecParamRep::TaPtr {
+            kind: TYPED_ARRAY_KIND_UINT8,
+            const_len: Some(3)
+        }]
+    );
+}
+
+#[test]
 fn uint8array_with_an_unproven_source_or_a_buffer_read_is_rejected() {
     // `new Uint8Array(x)` with an unknown `x` may be a view over an
     // ArrayBuffer, and a `.buffer` read rebinds the storage: neither proves.
