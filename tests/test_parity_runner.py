@@ -341,6 +341,19 @@ class Accept(Repo):
         self.assertFalse((self.root / "test-parity/snapshots").exists())
 
 
+class Lanes(unittest.TestCase):
+    def test_port_and_timing_cases_run_serially(self):
+        self.assertTrue(parity.runs_serially("node-suite/timers/a", "", "fast"))
+        self.assertTrue(parity.runs_serially("test_gap_x", 'import net from "node:net";', "fast"))
+        self.assertFalse(parity.runs_serially("test_gap_x", "console.log(1);", "fast"))
+
+    def test_fast_mode_ext_routed_cases_run_serially(self):
+        zlib = 'import zlib from "node:zlib";'
+        self.assertTrue(parity.runs_serially("test_gap_x", zlib, "fast"))
+        self.assertFalse(parity.runs_serially("test_gap_x", zlib, "auto"))
+        self.assertFalse(parity.runs_serially("node-suite/zlib/a", zlib, "fast"))
+
+
 @unittest.skipIf(os.name == "nt" or not Path("/bin/dash").exists(), "needs a POSIX host with dash")
 class ProcessBudget(unittest.TestCase):
     def test_fork_cap_applies_when_sh_is_dash(self):

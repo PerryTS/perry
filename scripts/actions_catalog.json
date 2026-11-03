@@ -54,7 +54,7 @@
                   "default": "full"
                 },
                 "update_gap_snapshot": {
-                  "description": "Re-baseline test-parity/gap_snapshot.json: run the whole gap suite as ONE shard with UPDATE_SNAPSHOT=1 and upload the resulting snapshot as an artifact (`gap-snapshot-update`) for you to commit. Nothing else about the run changes.",
+                  "description": "Re-baseline test-parity/snapshots/linux-fast/test-files.json: run the whole gap suite as ONE shard with --update and upload the resulting snapshot as an artifact (`gap-snapshot-update`) for you to commit. Nothing else about the run changes.",
                   "type": "boolean",
                   "default": false
                 }
@@ -73,7 +73,7 @@
               "default": "full"
             },
             "update_gap_snapshot": {
-              "description": "Re-baseline test-parity/gap_snapshot.json: run the whole gap suite as ONE shard with UPDATE_SNAPSHOT=1 and upload the resulting snapshot as an artifact (`gap-snapshot-update`) for you to commit. Nothing else about the run changes.",
+              "description": "Re-baseline test-parity/snapshots/linux-fast/test-files.json: run the whole gap suite as ONE shard with --update and upload the resulting snapshot as an artifact (`gap-snapshot-update`) for you to commit. Nothing else about the run changes.",
               "type": "boolean",
               "default": "false"
             }
@@ -223,7 +223,7 @@
           "default": "full"
         },
         "update_gap_snapshot": {
-          "description": "Re-baseline test-parity/gap_snapshot.json: run the whole gap suite as ONE shard with UPDATE_SNAPSHOT=1 and upload the resulting snapshot as an artifact (`gap-snapshot-update`) for you to commit. Nothing else about the run changes.",
+          "description": "Re-baseline test-parity/snapshots/linux-fast/test-files.json: run the whole gap suite as ONE shard with --update and upload the resulting snapshot as an artifact (`gap-snapshot-update`) for you to commit. Nothing else about the run changes.",
           "type": "boolean",
           "default": false
         },
