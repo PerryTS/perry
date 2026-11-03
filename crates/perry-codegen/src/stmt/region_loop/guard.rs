@@ -122,6 +122,7 @@ pub(super) fn emit_body_guard_direct(
     inline_l: &str,
     spill_l: &str,
     fail_l: &str,
+    tested_words_enter: bool,
 ) -> Result<()> {
     let live = ctx.block().icmp_ne(I64, word, RETIRED_WORD);
     let open = ctx.new_block("rloop.guard.open");
@@ -171,21 +172,30 @@ pub(super) fn emit_body_guard_direct(
             }
         };
     // A word carrying VALUE_TEST_BIT enters F only once the object's R
-    // slots hold Numbers; the matched ShapeId makes the word's slots its own.
-    let (inline_to, spill_to) = if may_value_test(rv) {
+    // slots hold Numbers, and one carrying the presence bit only once its
+    // keys are present; the matched ShapeId makes the word's slots its own.
+    // Such a word fails every re-check (`emit_recheck_eq`), so a loop that
+    // re-checks every iteration (`tested_words_enter` false) would leave F
+    // after one iteration and pay the re-check in G on every later one: it
+    // takes the plain loop instead.
+    let (inline_to, spill_to) = if may_test_object(rv) {
         let mut targets = Vec::with_capacity(2);
         for target in [inline_l, spill_l] {
-            let vt = ctx.new_block("rloop.guard.value");
-            let test = ctx.new_block("rloop.guard.value.test");
+            let vt = ctx.new_block(&object_test_label(rv, ""));
             let vt_l = ctx.block_label(vt);
-            let test_l = ctx.block_label(test);
             let saved = ctx.current_block;
             ctx.current_block = vt;
-            let need = ctx.block().icmp_slt(I64, word, "0");
-            ctx.block().cond_br(&need, &test_l, target);
-            ctx.current_block = test;
-            let ok = value_tests_on(ctx, rv, word, &handle);
-            ctx.block().cond_br(&ok, target, fail_l);
+            let need = ctx.block().icmp_uge(I64, word, OBJECT_TESTS_FROM_I64);
+            if tested_words_enter {
+                let test = ctx.new_block(&object_test_label(rv, ".test"));
+                let test_l = ctx.block_label(test);
+                ctx.block().cond_br(&need, &test_l, target);
+                ctx.current_block = test;
+                let ok = object_tests_on(ctx, rv, word, &handle);
+                ctx.block().cond_br(&ok, target, fail_l);
+            } else {
+                ctx.block().cond_br(&need, fail_l, target);
+            }
             ctx.current_block = saved;
             targets.push(vt_l);
         }
@@ -363,6 +373,77 @@ pub(super) fn slot_of(ctx: &mut FnCtx<'_>, rv: &Receiver, word: &str, i: usize) 
 /// carrier, so the guard tests the R slots' values on the object.
 pub(super) const VALUE_TEST_BIT: u64 = 1 << 63;
 
+/// Bit 62 of a learned region word, `REGION_LOOP_WORD_PRESENCE_TEST`: the
+/// shape's keys may hold the hole (a class family's layout), so the guard
+/// tests that each key it does not value-test is present on the object. The
+/// runtime value-tests every R key of such a word, and that test rejects the
+/// hole. A static word never carries it: the static supplier never names a
+/// family layout (`class_instances_keep_birth_shape`).
+const PRESENCE_TEST_BIT_I64: &str = "4611686018427387904";
+
+/// A learned word at or above this asks the guard to test the object
+/// (`VALUE_TEST_BIT` or the presence bit).
+const OBJECT_TESTS_FROM_I64: &str = PRESENCE_TEST_BIT_I64;
+
+/// May `rv`'s word ask the guard to test the object itself: an R slot's
+/// value, or (a learned word) a key's presence?
+pub(super) fn may_test_object(rv: &Receiver) -> bool {
+    may_value_test(rv) || rv.static_slots.is_none()
+}
+
+/// The label of a guard block that tests the object: `rloop.guard.value*`
+/// when the word may ask for the R slots' value test, `rloop.guard.object*`
+/// when it can only ask for the presence test.
+fn object_test_label(rv: &Receiver, part: &str) -> String {
+    let kind = if may_value_test(rv) { "value" } else { "object" };
+    format!("rloop.guard.{kind}{part}")
+}
+
+/// The guard's tests on the object `handle`, once its ShapeId matched `word`
+/// and `word` asked for tests: the R slots' value test, and, when `word`
+/// carries the presence bit, `slot != TAG_HOLE` for every other key.
+fn object_tests_on(ctx: &mut FnCtx<'_>, rv: &Receiver, word: &str, handle: &str) -> String {
+    let ok = if may_value_test(rv) {
+        value_tests_on(ctx, rv, word, handle)
+    } else {
+        "true".to_string()
+    };
+    let tested = rv.r_mask & rv.vt_mask;
+    let untested: Vec<usize> = (0..rv.keys.len())
+        .filter(|i| tested & (1 << i) == 0)
+        .collect();
+    if rv.static_slots.is_some() || untested.is_empty() {
+        return ok;
+    }
+    let bit = ctx.block().and(I64, word, PRESENCE_TEST_BIT_I64);
+    let need = ctx.block().icmp_ne(I64, &bit, "0");
+    let test = ctx.new_block("rloop.guard.presence");
+    let join = ctx.new_block("rloop.guard.presence.join");
+    let test_l = ctx.block_label(test);
+    let join_l = ctx.block_label(join);
+    let from = ctx.block().label.clone();
+    ctx.block().cond_br(&need, &test_l, &join_l);
+    ctx.current_block = test;
+    let mut present = "true".to_string();
+    for i in untested {
+        let slot = slot_of(ctx, rv, word, i);
+        let p = super::bare::slot_ptr(ctx, rv.form(), handle, &slot);
+        let v = ctx.block().load(I64, &p);
+        let here = ctx
+            .block()
+            .icmp_ne(I64, &v, crate::nanbox::TAG_HOLE_I64);
+        present = ctx.block().and(I1, &present, &here);
+    }
+    let test_end = ctx.block().label.clone();
+    ctx.block().br(&join_l);
+    ctx.current_block = join;
+    let present = ctx.block().phi(
+        I1,
+        &[("true", from.as_str()), (&present, test_end.as_str())],
+    );
+    ctx.block().and(I1, &ok, &present)
+}
+
 /// The R slots' value test: each slot `rv.vt_mask` names (decoded from
 /// `word`) of the object `handle` holds a raw canonical Number now — the
 /// strict test the number entry tests use (no tag, no INT32 box, no mirror
@@ -396,58 +477,71 @@ pub(super) fn may_value_test(rv: &Receiver) -> bool {
 /// compare. Its bit is known only at run time, so the compare is against a
 /// loop-invariant id that a word WITH the bit replaces by `EMPTY` (which no
 /// object carries): such a word fails the re-check and the loop continues in
-/// G (today's code), never in an F whose R facts were not re-proven. A static
-/// word knows its bit when compiled: one with the bit re-tests the values,
-/// one without pays nothing.
+/// G (today's code), never in an F whose R facts were not re-proven. A
+/// learned word with the presence bit fails the same way: presence is proven
+/// by the full guard only (a nested body region's retry re-checks a loop
+/// whose entry may have refused a hole). A static word knows its bit when
+/// compiled: one with the bit re-tests the values, one without pays nothing.
 pub(super) fn emit_recheck_eq(
     ctx: &mut FnCtx<'_>,
     rv: &Receiver,
     sid: &str,
     exp: &str,
 ) -> Result<String> {
-    if !may_value_test(rv) {
+    if !may_test_object(rv) {
         return Ok(ctx.block().icmp_eq(I32, sid, exp));
     }
     if rv.expected_shape.is_some() {
         let eq = ctx.block().icmp_eq(I32, sid, exp);
         let word = rv.word.clone();
-        return emit_value_tests(ctx, rv, &word, &eq);
+        return emit_value_tests(ctx, rv, &word, &eq, true);
     }
-    let need = ctx.block().icmp_slt(I64, &rv.word, "0");
+    let need = ctx.block().icmp_uge(I64, &rv.word, OBJECT_TESTS_FROM_I64);
     let exp_fast = ctx.block().select(I1, &need, I32, "-1", exp);
     Ok(ctx.block().icmp_eq(I32, sid, &exp_fast))
 }
 
-/// `pass` and, when it holds and `word` carries [`VALUE_TEST_BIT`], the R
-/// slots' value test on the receiver (re-derived from its binding: `pass`
-/// proves it is an object whose ShapeId `word` names). A word without the bit
-/// costs one sign test; a receiver with no testable R costs nothing.
+/// `pass` and, when it holds and `word` carries [`VALUE_TEST_BIT`] or the
+/// presence bit, the object tests on the receiver (re-derived from its
+/// binding: `pass` proves it is an object whose ShapeId `word` names). A word
+/// without either bit costs one compare; a static word with no testable R
+/// costs nothing.
+///
+/// `tested_words_enter` false: the loop re-checks every iteration, and a
+/// learned word with either bit fails every re-check (`emit_recheck_eq`), so
+/// F would run one iteration and G would pay the re-check on every later one.
+/// Such a word fails here and the loop takes the plain loop.
 pub(super) fn emit_value_tests(
     ctx: &mut FnCtx<'_>,
     rv: &Receiver,
     word: &str,
     pass: &str,
+    tested_words_enter: bool,
 ) -> Result<String> {
-    if !may_value_test(rv) {
+    if !may_test_object(rv) {
         return Ok(pass.to_string());
     }
-    // Branch on `pass` first, then on the word's sign bit: a failing compare
-    // keeps its one branch, and a word without the bit pays one sign test.
-    let chk = ctx.new_block("rloop.guard.value.need");
-    let vt = ctx.new_block("rloop.guard.value");
-    let join = ctx.new_block("rloop.guard.value.join");
+    if !tested_words_enter && rv.static_slots.is_none() {
+        let untested = ctx.block().icmp_ult(I64, word, OBJECT_TESTS_FROM_I64);
+        return Ok(ctx.block().and(I1, pass, &untested));
+    }
+    // Branch on `pass` first, then on the word's test bits: a failing compare
+    // keeps its one branch, and a word without them pays one compare.
+    let chk = ctx.new_block(&object_test_label(rv, ".need"));
+    let vt = ctx.new_block(&object_test_label(rv, ""));
+    let join = ctx.new_block(&object_test_label(rv, ".join"));
     let chk_l = ctx.block_label(chk);
     let vt_l = ctx.block_label(vt);
     let join_l = ctx.block_label(join);
     let from = ctx.block().label.clone();
     ctx.block().cond_br(pass, &chk_l, &join_l);
     ctx.current_block = chk;
-    let need = ctx.block().icmp_slt(I64, word, "0");
+    let need = ctx.block().icmp_uge(I64, word, OBJECT_TESTS_FROM_I64);
     ctx.block().cond_br(&need, &vt_l, &join_l);
     ctx.current_block = vt;
     let recv_box = lower_recv(ctx, rv.recv)?;
     let handle = handle_of(ctx, &recv_box);
-    let ok = value_tests_on(ctx, rv, word, &handle);
+    let ok = object_tests_on(ctx, rv, word, &handle);
     let vt_end = ctx.block().label.clone();
     ctx.block().br(&join_l);
     ctx.current_block = join;

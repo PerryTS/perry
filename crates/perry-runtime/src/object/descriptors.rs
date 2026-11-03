@@ -1020,6 +1020,13 @@ pub(crate) unsafe fn own_property(obj_value: f64, key_value: f64) -> Option<OwnP
         }
 
         if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
+            if let Some(name) = key_rust.as_deref() {
+                if let Some(property @ OwnProperty::Accessor(..)) =
+                    ordinary_own_property(obj, name.as_bytes())
+                {
+                    return Some(property);
+                }
+            }
             // Namespace-object descriptors route through the armed ops table
             // (see `nm_namespace_hooks`) so binaries without module imports
             // don't statically link the namespace/exports web. Unarmed +

@@ -6,7 +6,7 @@ use swc_ecma_visit::{Visit, VisitWith};
 fn name(m: &ast::MemberExpr) -> Option<String> {
     perry_hir::patched_builtins::static_member_name(&m.prop)
 }
-fn native_capability(source: &str) -> bool {
+pub(super) fn native_capability(source: &str) -> bool {
     source.ends_with(".node")
         || source.starts_with("data:")
         || matches!(
@@ -26,7 +26,7 @@ fn native_capability(source: &str) -> bool {
                 | "bun:ffi"
         )
 }
-fn loader_property(name: &str) -> bool {
+pub(super) fn loader_property(name: &str) -> bool {
     matches!(
         name,
         "cache"
@@ -168,6 +168,33 @@ pub(super) fn module_capability_uses(module: &ast::Module) -> u32 {
     let mut uses = Uses::default();
     module.visit_with(&mut uses);
     uses.0
+}
+/// A direct intrinsic descriptor call is eligible for the HIR provenance
+/// proof. An aliased/reflected method remains an ordinary capability use.
+pub(super) fn descriptor_capability_uses(module: &ast::Module) -> u32 {
+    #[derive(Default)]
+    struct Candidates {
+        count: u32,
+    }
+    impl Visit for Candidates {
+        fn visit_call_expr(&mut self, c: &ast::CallExpr) {
+            if let ast::Callee::Expr(e) = &c.callee {
+                if let ast::Expr::Member(m) = e.as_ref() {
+                    if matches!(m.obj.as_ref(), ast::Expr::Ident(i) if i.sym == *"Object")
+                        && name(m).as_deref() == Some("getOwnPropertyDescriptor")
+                        && c.args.len() == 2
+                        && c.args.iter().all(|a| a.spread.is_none())
+                    {
+                        self.count += 1;
+                    }
+                }
+            }
+            c.visit_children_with(self);
+        }
+    }
+    let mut candidates = Candidates::default();
+    module.visit_with(&mut candidates);
+    candidates.count
 }
 #[cfg(test)]
 mod tests {

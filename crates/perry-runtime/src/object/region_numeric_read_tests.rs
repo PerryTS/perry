@@ -342,3 +342,66 @@ fn unmarked_numeric_read_refuses_spill_even_when_the_generic_value_is_number() {
         assert_eq!(prime(&site, obj, bits(last)), REGION_GUARD_WORD_EMPTY);
     }
 }
+
+/// R1: a shape whose keys may hold the hole (`SUMMARY_HOLES` alone, every
+/// class family's layout) is served, with the presence bit and with every R
+/// key value-tested (the value test rejects the hole), whatever its lane.
+/// Any other summary bit still refuses, with or without holes.
+#[test]
+fn holes_alone_are_served_with_the_presence_test_and_other_summary_bits_refuse() {
+    use crate::object::key_attrs::{
+        SUMMARY_ACCESSOR, SUMMARY_HOLES, SUMMARY_NON_CONFIGURABLE, SUMMARY_NON_ENUMERABLE,
+        SUMMARY_NON_WRITABLE, SUMMARY_PRIVATE,
+    };
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _gc = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let (obj, key) = record("rnr_holes");
+        let d = object_shape_descriptor(obj).unwrap();
+        let mint = |summary| {
+            publish_shape_result(shape_descriptor_ensure_with_rep(
+                d.keys as usize as *const ArrayHeader,
+                d.logical_key_count,
+                d.live_inline_slot_count,
+                0,
+                d.object_kind,
+                0,
+                d.proto_id,
+                crate::object::shapes::ReceiverFacts::summary(summary),
+                d.rep,
+                None,
+            ))
+        };
+        let plain = region_loop_pack(object_shape_stamp(obj), 1, [bits(key), 0, 0, 0, 0], 0, 0, 1)
+            .expect("the identity F64 lane is served");
+        assert_eq!(plain & REGION_LOOP_WORD_PRESENCE_TEST, 0, "no holes, no presence test");
+        assert_eq!(plain & REGION_LOOP_WORD_VALUE_TEST, 0, "an identity F64 lane needs no value test");
+        let holey = mint(SUMMARY_HOLES);
+        assert_eq!(shape_record_for_word(holey).unwrap().summary(), SUMMARY_HOLES);
+        let word = region_loop_pack(holey, 1, [bits(key), 0, 0, 0, 0], 0, 0, 1)
+            .expect("a holey layout is served");
+        assert_eq!(LayoutWord(word as u32), holey);
+        assert_ne!(word & REGION_LOOP_WORD_PRESENCE_TEST, 0);
+        assert_ne!(
+            word & REGION_LOOP_WORD_VALUE_TEST,
+            0,
+            "an R key of a holey layout is value-tested even on an F64 lane"
+        );
+        assert_eq!((word >> 32) & 63, 1, "the presence bit leaves the slot fields alone");
+        for extra in [
+            SUMMARY_ACCESSOR,
+            SUMMARY_NON_WRITABLE,
+            SUMMARY_NON_ENUMERABLE,
+            SUMMARY_NON_CONFIGURABLE,
+            SUMMARY_PRIVATE,
+        ] {
+            for summary in [extra, extra | SUMMARY_HOLES] {
+                assert_eq!(
+                    region_loop_pack(mint(summary), 1, [bits(key), 0, 0, 0, 0], 0, 0, 1),
+                    Err(RegionRefusal::Summary),
+                    "summary {summary:#x}"
+                );
+            }
+        }
+    }
+}

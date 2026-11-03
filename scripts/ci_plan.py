@@ -32,8 +32,8 @@ THE THREE TIERS
   full   nightly, release tags, `workflow_dispatch` (the release pipeline's
          `await-tests` dispatches this and waits for the `full-suite-gate` job),
          and PRs carrying the `run-extended-tests` label. The sweep plus the
-         slow/opt-in suites (parity, compile-smoke, doc-tests, package smokes,
-         the gap suite in its 24-shard auto-optimize mode).
+         slow/opt-in suites (parity in auto-optimize mode, compile-smoke,
+         doc-tests, package smokes).
 
 PR SCOPE
 --------
@@ -95,13 +95,8 @@ JOBS: dict[str, tuple[str, ...]] = {
     "repsel_census": ("sweep", "full"),
     "harmonyos_smoke": ("sweep", "full"),
     "binary_size": ("full",),  # ELF/Mach-O link absence + macOS linked-size budget; full-tier required gate
+    # Every program case, test-files and node-suite, in auto-optimize mode.
     "parity": ("full",),
-    # The per-module node-compatibility corpus (test-parity/node-suite/**), scored
-    # against test-parity/node_suite_baseline.json. compiler-runtime.yml still
-    # runs it on the merge queue, but that workflow's jobs cannot be `needs:`-ed
-    # by `full-suite-gate` -- and a corpus no release waits for is a corpus
-    # nobody reads. See the job comment in test.yml.
-    "node_suite_guard": ("full",),
     "test262": ("full",),
     "compile_smoke": ("full",),
     "native_abi_evidence_packet": ("full",),
@@ -113,44 +108,25 @@ JOBS: dict[str, tuple[str, ...]] = {
 
 TIERS = ("pr", "sweep", "full")
 
-# The gap suite: shard count and harness mode per tier.
-#   fast = PERRY_SKIP_BUILD=1 against one prebuilt release compiler + runtime
-#          archives; ~1.5 s/test. Only ext-routed tests (http/net/ws/zlib/
-#          events) still take the per-test auto-optimize path.
-#   full = the harness's default: every test compiles through auto-optimize,
-#          which rebuilds a feature-stripped runtime per distinct feature set
-#          (~200 s each, redundantly per shard). ~40 min/shard. This is the
-#          arm that sees auto-optimize-only link bugs, so it stays in the
-#          nightly/release tier.
-#
-# Shard counts, measured 2026-08-16 on ubuntu-latest in fast mode: the release
-# build is ~8 min per shard, non-ext tests are ~2 s each (~18 min for the whole
-# suite), and every ext-routed test whose feature set the shard has not seen
-# yet costs a ~4-5 min auto-optimize runtime rebuild (23 such tests, spread
-# round-robin). At 4 shards the slowest shard was 39.5 min (6 rebuilds); at 6
-# it is ~28 min, level with gc-stress, for ~170 job-minutes -- against 480 for
-# the old 8 x auto-optimize shards.
+# The gap suite: shard count per tier, in `fast` mode (parity.py against one
+# prebuilt release compiler + runtime archives; ~1.5 s/test). Only ext-routed
+# tests (http/net/ws/zlib/events) take the per-test auto-optimize path. The
+# full tier's auto-optimize coverage of these cases is the `parity` job.
 GAP_SUITE = {
     # Fast PR shard 1 in run36981459549 exhausted its 110-minute bound.
     # Twelve modulo slices halve each former six-way slice; the worker and
     # no-new-untriaged snapshot gate retain the same complete corpus.
     "pr": {"mode": "fast", "total": 12},
     "sweep": {"mode": "fast", "total": 3},
-    # Twelve-way run 36967233926 still hit the 110-minute job bound:
-    # shard 3 completed only 79/102 fixtures and shard 4 only 82/102.
-    # Doubling the modulo partition halves each existing slice without
-    # dropping fixtures or changing auto-optimize and snapshot acceptance.
-    "full": {"mode": "full", "total": 24},
+    "full": {"mode": "fast", "total": 3},
 }
 
-# Parity: full tier only, sharded. The unsharded job was killed by GitHub's
-# 6-hour job cap on 2026-08-16 (run 31935729773). The corpus subsequently
-# outgrew the original 8-way split: release run 32922022811 reached only
-# 152/173 tests in shard 8 before its 150-minute cap. Twelve shards restore
-# wall-time margin without exceeding the org's 20-runner pool once the other
-# full-tier jobs drain. `parity-aggregate` (not in JOBS: it keys off
-# `jobs.parity`) merges the shard reports and runs the aggregate-only gates.
-PARITY_SHARDS = 12
+# Parity: full tier only, every case of test-files and node-suite through
+# `parity.py run --suite all --mode auto`, one verdict per shard.
+# 16: ~7,930 cases, ~496 per shard, ~170 of them serial. The old serial job ran
+# ~95-135 cases per shard-hour, so (326/4 workers + 170)/100 ~= 2.5 h per shard
+# at worst, inside the 300-minute timeout.
+PARITY_SHARDS = 16
 
 # test262: full tier only. The full corpus (~53k cases, judged by Perry alone)
 # is ~1.1 CPU-s per case, so sixteen 4-core shards run about an hour each after
@@ -497,8 +473,8 @@ def _self_test() -> int:
             "shards": list(range(1, PERRY_INTEGRATION_SHARDS + 1)),
         },
     )
-    check("full: 24 auto-optimize gap shards", full["gap"] == {"mode": "full", "total": 24, "shards": list(range(1, 25)), "update_snapshot": False})
-    check("full: parity sharded (6h-cap kill, 2026-08-16)", full["parity"]["total"] >= 2 and full["parity"]["shards"][0] == 1)
+    check("full: gap lane runs like the sweep", full["gap"] == sweep["gap"])
+    check("full: parity sharded", full["parity"]["shards"] == list(range(1, PARITY_SHARDS + 1)))
     check("full: full GC matrix has four shards", full["gc_stress"] == {"mode": "all", "total": 4, "shards": [1, 2, 3, 4]})
 
     labelled = plan("pull_request", "refs/pull/1/merge", labels=[EXTENDED_LABEL], changed=["README.md"])

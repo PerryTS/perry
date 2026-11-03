@@ -292,6 +292,11 @@ snapshot_tool_artifacts() {
     local runtime_name
     runtime_name="$(basename "$runtime_archive")"
     cp "$runtime_archive" "$tools_dir/$runtime_name"
+    # perry reads <archive>.gc-effects beside the archive it links; an archive
+    # copied without its sidecar is rejected ("... .gc-effects does not exist").
+    if [[ -f "$runtime_archive.gc-effects" ]]; then
+      cp "$runtime_archive.gc-effects" "$tools_dir/$runtime_name.gc-effects"
+    fi
     RUNTIME_ARCHIVE_RESOLVED="$tools_dir/$runtime_name"
   fi
 }

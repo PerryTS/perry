@@ -7,6 +7,7 @@ use anyhow::Result;
 use swc_common::Spanned;
 use swc_ecma_ast as ast;
 mod default_export_binding;
+pub(super) mod import_redeclaration;
 mod namespace;
 pub(super) mod native_default_import;
 pub(super) mod native_profile_import;

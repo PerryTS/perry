@@ -15,6 +15,9 @@ pub struct ClassFamilySyntax {
     /// Original-source uses that can expose a loader/cache or global code.
     /// Generated CommonJS scaffolding is deliberately outside this census.
     pub module_capability_uses: u32,
+    /// Direct descriptor reads included above, eligible for an own-property
+    /// provenance proof on lowered HIR before transformations.
+    pub descriptor_capability_uses: u32,
 
     /// Child class name -> (literal require specifier, named export).
     pub parents: std::collections::BTreeMap<String, (String, String)>,
@@ -214,6 +217,8 @@ pub struct Module {
     /// is recorded here. Keyed by ClassId; consumed by codegen when
     /// emitting `js_register_class_name`.
     pub class_display_names: std::collections::HashMap<crate::ClassId, String>,
+    /// Ordinary methods/accessors have [[Call]] but no [[Construct]].
+    pub non_constructor_funcs: std::collections::HashSet<crate::types::FuncId>,
     /// #4101: original source text for each user function, keyed by HIR
     /// FuncId. Populated at lowering by slicing the module source against the
     /// AST span of every function declaration / expression / arrow. Consumed
@@ -302,6 +307,7 @@ impl Module {
             async_step_closures: std::collections::HashSet::new(),
             closure_display_names: std::collections::HashMap::new(),
             class_display_names: std::collections::HashMap::new(),
+            non_constructor_funcs: Default::default(),
             closure_source_text: std::collections::HashMap::new(),
             class_source_text: std::collections::HashMap::new(),
             async_generator_funcs: std::collections::HashSet::new(),
@@ -317,7 +323,15 @@ impl Module {
     /// inside `const _cjs = (function(){…})()`, and what it exports are
     /// properties of `module.exports`, not bindings of its own.
     pub fn is_commonjs_wrap(&self) -> bool {
+        // Closed wrappers discard their loader import. The support record
+        // import remains the CommonJS identity (and preserves nextTick order).
         self.imports.iter().any(|import| {
+            import.source == "perry:cjs"
+                && import.specifiers.iter().any(|specifier| {
+                    matches!(specifier, crate::ir::ImportSpecifier::Named { imported, local }
+                    if imported == "cache" && local == "__perry_cjs_cache")
+                })
+        }) || self.imports.iter().any(|import| {
             import
                 .source
                 .strip_prefix("node:")

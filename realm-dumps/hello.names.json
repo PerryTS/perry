@@ -8,6 +8,7 @@
 "%Layout:ARRAY_NAMED%",
 "%Layout:ARRAY_PROTOTYPE_NAMED%",
 "%Layout:FUNCTION_PROTOTYPE%",
+"%Layout:GLOBAL_OBJECT%",
 "%Layout:ITERATOR_RESULT%",
 "%Layout:OBJECT_PROTOTYPE%",
 "%Layout:RECORD_F327_0%",

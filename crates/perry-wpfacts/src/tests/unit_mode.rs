@@ -632,3 +632,27 @@ mod foreign_fn_own_key;
 
 #[path = "unit_mode/chain_fact.rs"]
 mod chain_fact;
+
+#[test]
+fn borrowed_function_methods_merge_writes_from_units() {
+    for (source, written) in [
+        ("console.log((function() { return 1; }).call(null));", false),
+        ("Function.prototype.bind = function() {};", false),
+        (
+            "const p = Function.prototype; p.call = function() {};",
+            true,
+        ),
+        (
+            "const p = Function.prototype; p.apply = function() {};",
+            true,
+        ),
+        ("const p = missing(); p.call = function() {};", true),
+    ] {
+        let pf = units(source);
+        assert!(
+            !pf.stats.aborted,
+            "fixture must complete its solve: {source}"
+        );
+        assert_eq!(pf.fnproto_borrow_written.is_some(), written, "{source}");
+    }
+}

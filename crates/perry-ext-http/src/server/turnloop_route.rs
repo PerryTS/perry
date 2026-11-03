@@ -79,10 +79,25 @@ pub(crate) fn send_interim(connection: &RootedConnection, seq: u64, bytes: &[u8]
 
 /// `res.end(body)` on a fully buffered response.
 pub(crate) fn send_response(conn: &RootedConnection, seq: u64, shape: ResponseShape) {
+    send_response_notified(conn, seq, shape, None);
+}
+
+/// [`send_response`] on an HTTP/1.1 connection that asks `notify` for a
+/// callback to run once the response bytes have reached the OS. Returns
+/// whether it was armed; HTTP/2 never arms it.
+pub(crate) fn send_response_notified(
+    conn: &RootedConnection,
+    seq: u64,
+    shape: ResponseShape,
+    notify: Option<&mut dyn FnMut() -> f64>,
+) -> bool {
     if let Some(h2) = conn.h2() {
         crate::server::turnloop_h2::h2_send_response(h2, seq as u32, shape);
+        false
     } else if let Some(socket) = conn.socket() {
-        crate::server::turnloop_serve::send_response(socket, seq, shape);
+        crate::server::turnloop_serve::send_response_notified(socket, seq, shape, notify)
+    } else {
+        false
     }
 }
 
@@ -110,10 +125,23 @@ pub(crate) fn send_body(conn: &RootedConnection, seq: u64, bytes: &[u8]) -> Opti
 
 /// A streaming `res.end()`: close the body framing and finish the stream.
 pub(crate) fn finish_body(conn: &RootedConnection, seq: u64, trailers: &[(String, String)]) {
+    finish_body_notified(conn, seq, trailers, None);
+}
+
+/// [`finish_body`] with the callback contract of [`send_response_notified`].
+pub(crate) fn finish_body_notified(
+    conn: &RootedConnection,
+    seq: u64,
+    trailers: &[(String, String)],
+    notify: Option<&mut dyn FnMut() -> f64>,
+) -> bool {
     if let Some(h2) = conn.h2() {
         crate::server::turnloop_h2::h2_finish_body(h2, seq as u32, trailers);
+        false
     } else if let Some(socket) = conn.socket() {
-        crate::server::turnloop_serve::finish_body(socket, seq, trailers);
+        crate::server::turnloop_serve::finish_body_notified(socket, seq, trailers, notify)
+    } else {
+        false
     }
 }
 

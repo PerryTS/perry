@@ -94,6 +94,7 @@ mod old_free_intrusive;
 mod oldgen;
 mod os_tag;
 mod pinned_roots;
+mod pool_handle_weak_keys;
 mod precise_root_contract;
 mod precise_root_ownership;
 mod promise_owner_all;
