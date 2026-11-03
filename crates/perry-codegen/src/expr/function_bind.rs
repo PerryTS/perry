@@ -124,4 +124,3 @@ pub(crate) fn emit_bind_call(
     }
     value
 }
-

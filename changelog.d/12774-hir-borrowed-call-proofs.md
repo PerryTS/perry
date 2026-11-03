@@ -12,3 +12,7 @@ methods: those copies hid prototype replacement from reflective borrowed calls
 and gave the methods different function identities. Added dynamic-code sabotage,
 own-wrapper, array-like apply, lexical-shadow, function-kind, and evaluation-order
 parity coverage plus a runtime prototype identity/mutation test.
+
+Per-unit fact aggregation preserves call/apply write invalidation, including
+writes through aliases and unknown receivers. Compiler realm metadata models
+these Object methods as inherited, matching the runtime installation.
