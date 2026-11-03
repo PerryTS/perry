@@ -3507,8 +3507,8 @@ jobs:
     # both shipped through green required checks). This job runs the gap
     # suite — every test-files/test_gap_*.ts AOT-compiled and diffed
     # byte-for-byte against `node --experimental-strip-types` — and fails on
-    # any failure NOT already triaged in test-parity/known_failures.json
-    # (run_gap_tests.sh's no-new-untriaged gate).
+    # any divergence, in either direction, from
+    # test-parity/snapshots/linux-fast/test-files.json (scripts/parity.py).
     #
     # THE ORACLE VERSION IS LOAD-BEARING. Node is what we diff against, so a
     # test whose feature the pinned Node lacks makes *node* exit non-zero, the
@@ -3520,7 +3520,7 @@ jobs:
     # it deliberately, and re-measure the delta when you do (see #6364).
     #
     # Sharded (--shard N/M, M from the plan). Each shard's snapshot gate
-    # (run_gap_tests.sh) covers only its own slice, which is exactly the right
+    # (parity.py) covers only its own slice, which is exactly the right
     # per-shard semantics; the `gate` fan-in job is the one status branch
     # protection requires. Every tier uses `fast` mode against one prebuilt
     # release build (~1.5 s/test): auto-optimize spends ~200 s rebuilding a
@@ -3682,16 +3682,17 @@ jobs:
         with:
           name: gap-suite-fast-build
           path: target/release
+      # With lint failed there is no shared build to download, so build here.
       - name: Install Rust toolchain
-        if: fromJSON(needs.plan.outputs.plan).gap.mode != 'fast'
+        if: needs.lint.result == 'failure'
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
-        if: fromJSON(needs.plan.outputs.plan).gap.mode != 'fast'
+        if: needs.lint.result == 'failure'
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: false
-      - name: Build runtime archives (no shared build in this tier)
-        if: fromJSON(needs.plan.outputs.plan).gap.mode != 'fast' || needs.lint.result == 'failure'
+      - name: Build runtime archives
+        if: needs.lint.result == 'failure'
         run: |
           cargo build-perry --release
           scripts/gc_call_effects/sidecars.sh target/release

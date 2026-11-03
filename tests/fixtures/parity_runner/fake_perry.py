@@ -8,6 +8,8 @@ args = sys.argv[1:]
 out = args[args.index("-o") + 1]
 source = next(a for a in args if re.search(r"\.(m|c)?ts$|\.cjs$", a))
 text = open(source, encoding="utf-8").read()
+if "// perry-compile-signal" in text:
+    os.kill(os.getpid(), __import__("signal").SIGSEGV)
 if "// perry-compile-fail" in text:
     print("error: cannot compile")
     sys.exit(1)
