@@ -16,7 +16,12 @@ references in `realm-dumps/`, byte for byte:
   built without it fails by construction. It walks only the roots in R (the
   names are handed to it as `realm-dump.names`), and its dump, restricted to
   the names, must equal `<p>.jsonl`, which is main's full walk restricted to
-  the same names.
+  the same names. Both dumpers are built from one source, the restricted one
+  (`dumper_source(names)`): only R differs between the reference and the
+  check. The plain source's namespace imports run every module's init, and
+  those inits rewrite cells in R (console, process: own `prototype` keys and
+  lengths; Math, SyntaxError.prototype), so a reference built from it
+  recorded the dumper's own imports, not the realm.
 * Full: the dumper compiled with no input (R is top); its dump must equal
   `full.jsonl`.
 
@@ -171,11 +176,12 @@ def main():
             names_file = REFS / f"{program}.names.json"
             reference = REFS / f"{program}.jsonl"
             if args.regenerate:
-                # Main populates every cell: its plain dump restricted to the
-                # names is the reference.
+                # Main populates every cell: its full realm (R top), dumped by
+                # the restricted dumper's source and restricted to the names,
+                # is the reference.
                 names_file.write_text(json.dumps({"names": names}, indent=0) + "\n")
                 binary = out / f"dump-{program}" / "realm-dump"
-                compile_ts(args.perry, dumper_source(), binary, {})
+                compile_ts(args.perry, dumper_source(set(names)), binary, {})
                 reference.write_text(dump(binary, set(names)))
                 print(f"realm_diff_gate: regenerated {program} ({len(names)} names)")
                 continue
@@ -209,7 +215,7 @@ def main():
                     print("FAIL self-test: a dumper built without the input passed the restricted check")
                     ok = False
                 except GateError as e:
-                    print(f"realm_diff_gate: self-test refused the plain dumper ({e})")
+                    print(f"realm_diff_gate: self-test ok: the restricted check refused the plain dumper ({e})")
     except GateError as e:
         print(f"FAIL {e}")
         ok = False

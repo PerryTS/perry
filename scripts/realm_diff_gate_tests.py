@@ -64,5 +64,33 @@ class RestrictedSource(unittest.TestCase):
         self.assertEqual(text, gate.DUMPER.read_text())
         self.assertNotIn("is outside R", text)
 
+
+class OneSource(unittest.TestCase):
+    def test_reference_and_check_compile_the_same_dumper_source(self):
+        import shutil, sys, tempfile
+        sources = {}
+        tmp = Path(tempfile.mkdtemp(prefix="realm-diff-gate-test-"))
+        refs = tmp / "realm-dumps"
+        refs.mkdir()
+        saved = (gate.REFS, gate.witness_names, gate.compile_ts, gate.dump, sys.argv)
+        def compile_ts(perry, source, binary, extra_env):
+            mode = "check" if "PERRY_REALM_REACH_NAMES" in extra_env else "reference"
+            sources[mode] = Path(source).read_text()
+            return log().replace(str(NAMES_FILE), str(refs / "hello.names.json"))
+        try:
+            gate.REFS = refs
+            gate.witness_names = lambda perry, program, out: list(NAMES)
+            gate.compile_ts = compile_ts
+            gate.dump = lambda binary, names=None, walk=False: "{}\n"
+            for extra in (["--regenerate"], []):
+                sys.argv = ["gate", "--perry", "perry", "--output", str(tmp / "out"), "--only", "hello"] + extra
+                gate.main()
+        finally:
+            gate.REFS, gate.witness_names, gate.compile_ts, gate.dump, sys.argv = saved
+            shutil.rmtree(tmp)
+        self.assertEqual(set(sources), {"reference", "check"})
+        self.assertIn("is outside R", sources["reference"])
+        self.assertEqual(sources["reference"], sources["check"])
+
 if __name__ == "__main__":
     unittest.main()
