@@ -556,9 +556,19 @@ struct State {
     /// `js_snap_entry_module`: the next evaluation is the entry module's own
     /// (its body is the entry body, design §2.3).
     entry_module_next: bool,
-    /// Global root slots on no tracked page (a TLS slot outside the anchors,
-    /// or not a binding: a root slot elsewhere): not watched.
+    /// Global root slots on no tracked page that are not the runtime's own
+    /// thread-locals (a program slot the census does not watch): must be 0.
     untracked_slots: u64,
+    /// The first of them (0: none), for the report.
+    untracked_first: usize,
+    /// Roots the runtime registers in its own thread-locals (inside the
+    /// static TLS block, outside the program's anchored pages, e.g. the realm
+    /// global's cache word): representation, counted on their own report
+    /// line, never protected.
+    runtime_tls_roots: u64,
+    runtime_tls_first: usize,
+    /// The executable's static TLS block `[fs - PT_TLS size, fs)`.
+    tls_block: (usize, usize),
     /// The program's TLS slots are anchored on whole pages of their own.
     tls_whole: bool,
     /// `PERRY_SNAP_MODE=top`: every member of D may read and write every
@@ -714,6 +724,10 @@ unsafe fn start(out: String) {
         && t[2] <= t[3];
     let (tls_lo, tls_hi, tlsb_lo, tlsb_hi) =
         if tls_whole { (t[0], t[1], t[2], t[3]) } else { (0, 0, 0, 0) };
+    // x86-64 variant II: the static TLS block ends at the thread pointer.
+    let mut fs = 0usize;
+    libc::syscall(libc::SYS_arch_prctl, 0x1003 /* ARCH_GET_FS */, &mut fs as *mut usize);
+    let tls_block = (fs.saturating_sub(executable_tls_size()), fs);
     let mut st = Box::new(State {
         out,
         inits: Vec::with_capacity(4096),
@@ -765,6 +779,10 @@ unsafe fn start(out: String) {
         marks: 0,
         entry_module_next: false,
         untracked_slots: 0,
+        untracked_first: 0,
+        runtime_tls_roots: 0,
+        runtime_tls_first: 0,
+        tls_block,
         tls_whole,
         top_mode: std::env::var("PERRY_SNAP_MODE").is_ok_and(|v| v == "top"),
         pre_bits: map_zeroed::<u64>(((res_hi - res_lo) / 8).div_ceil(64).max(1)),
@@ -872,9 +890,7 @@ unsafe fn start(out: String) {
     let mut slots = Vec::new();
     crate::gc::for_each_global_root_slot(|slot| slots.push(slot));
     for slot in slots {
-        if page_flags(st, slot).is_none() {
-            st.untracked_slots += 1;
-        }
+        count_unwatched_root(&mut *st, slot);
         st.globals.insert(slot as u64);
         st.globals_log.push(slot);
         st.slot_owner.push(0);
@@ -1493,9 +1509,7 @@ pub(super) fn region_mapped(base: usize, len: usize) {
 
 pub(super) fn global_root(slot: usize) {
     let st = state();
-    if page_flags(st, slot).is_none() {
-        st.untracked_slots += 1;
-    }
+    count_unwatched_root(st, slot);
     st.globals.insert(slot as u64);
     st.globals_log.push(slot);
     st.slot_owner.push(st.frames.last().map_or(0, |f| f.init));
@@ -1525,6 +1539,49 @@ fn mark_tracked(lo: usize, hi: usize) {
         }
         p += PAGE;
     }
+}
+
+/// A registered root slot on no tracked page: inside the static TLS block it
+/// is one of the runtime's own thread-locals (the program's TLS slots all lie
+/// on the anchored pages), representation with its own count; anywhere else
+/// it is a program slot the census misses.
+fn count_unwatched_root(st: &mut State, slot: usize) {
+    if page_flags(st, slot).is_some() {
+        return;
+    }
+    if slot >= st.tls_block.0 && slot < st.tls_block.1 {
+        st.runtime_tls_roots += 1;
+        if st.runtime_tls_first == 0 {
+            st.runtime_tls_first = slot;
+        }
+    } else {
+        st.untracked_slots += 1;
+        if st.untracked_first == 0 {
+            st.untracked_first = slot;
+        }
+    }
+}
+
+/// `PT_TLS` memsz of the executable, rounded up to its alignment.
+fn executable_tls_size() -> usize {
+    unsafe extern "C" fn each(
+        info: *mut libc::dl_phdr_info,
+        _size: libc::size_t,
+        data: *mut libc::c_void,
+    ) -> libc::c_int {
+        let info = &*info;
+        for i in 0..info.dlpi_phnum as usize {
+            let ph = &*info.dlpi_phdr.add(i);
+            if ph.p_type == libc::PT_TLS {
+                let align = (ph.p_align as usize).max(1);
+                *(data as *mut usize) = (ph.p_memsz as usize).div_ceil(align) * align;
+            }
+        }
+        1 // the executable is the first object; stop
+    }
+    let mut size = 0usize;
+    unsafe { libc::dl_iterate_phdr(Some(each), (&mut size as *mut usize).cast()) };
+    size
 }
 
 #[inline]
@@ -2785,7 +2842,16 @@ fn write_report(st: &mut State) {
     let _ = writeln!(f, "#silent_stores\t{}", st.silent_stores);
     let _ = writeln!(f, "#transparent\t{}\t{}\t{}", st.transparent.len(), st.transp.len, st.transparent_hits);
     let _ = writeln!(f, "#foreign_thread_faults\t{}", st.foreign_faults);
-    let _ = writeln!(f, "#untracked_slots\t{}\tof\t{}", st.untracked_slots, st.globals.len);
+    let _ = writeln!(
+        f,
+        "#untracked_slots\t{}\tof\t{}\tfirst={:x}",
+        st.untracked_slots, st.globals.len, st.untracked_first
+    );
+    let _ = writeln!(
+        f,
+        "#runtime_tls_roots\t{}\tfirst={:x}\tblock={:x}-{:x}",
+        st.runtime_tls_roots, st.runtime_tls_first, st.tls_block.0, st.tls_block.1
+    );
     let r = st.tls_ranges;
     let _ = writeln!(
         f,
