@@ -375,6 +375,7 @@ impl<'a> Gen<'a> {
             null_proto: false,
             chain_miss: false,
             species: None,
+            per_evaluation: false,
         });
         let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
         (tm, t)
@@ -1507,6 +1508,11 @@ impl<'a> Gen<'a> {
                 ..
             } => {
                 let cv = self.class_value(mi, template);
+                // Rule C (DECISIONS 251): one template, one class object per
+                // evaluation.
+                if let Some(tm) = self.resolve_class_name(mi, template) {
+                    self.m.tmpls[tm as usize].per_evaluation = true;
+                }
                 if let Some(id) = evaluation_owner {
                     // The class's self binding gets the class before its
                     // statics run. A binding the HIR made a cell (codegen's

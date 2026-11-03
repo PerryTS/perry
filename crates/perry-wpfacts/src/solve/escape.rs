@@ -421,6 +421,7 @@ impl Model {
             null_proto: false,
             chain_miss: false,
             species: None,
+            per_evaluation: false,
         });
         let recv = self.tok(TokKind::Obj(rt, NO_CTX));
         let any = self.field_any(recv);

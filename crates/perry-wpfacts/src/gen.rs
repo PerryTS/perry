@@ -1219,6 +1219,7 @@ impl<'a> Gen<'a> {
             null_proto: c.declared_keys_null_proto(),
             chain_miss: false,
             species: None,
+            per_evaluation: false,
         });
         self.mods[mi as usize].classes.insert(c.name.clone(), tm);
         for a in &c.aliases {
@@ -1742,6 +1743,7 @@ impl<'a> Gen<'a> {
             null_proto: false,
             chain_miss: false,
             species: None,
+            per_evaluation: false,
         });
         tm
     }
@@ -1781,6 +1783,7 @@ impl<'a> Gen<'a> {
             null_proto: false,
             chain_miss: false,
             species: None,
+            per_evaluation: false,
         });
         tm
     }

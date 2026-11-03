@@ -1692,6 +1692,7 @@ impl Model {
             null_proto: false,
             chain_miss: false,
             species: None,
+            per_evaluation: false,
         });
         tm
     }
@@ -1730,6 +1731,7 @@ impl Model {
             null_proto: false,
             chain_miss: false,
             species: None,
+            per_evaluation: false,
         });
         let t = self.tok(TokKind::Obj(tm, NO_CTX));
         // What the argument reaches has its own marker (fields of fields

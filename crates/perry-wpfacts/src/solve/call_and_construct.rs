@@ -785,6 +785,7 @@ impl Model {
             null_proto: false,
             chain_miss: false,
             species: None,
+            per_evaluation: false,
         });
         self.fn_inst.insert(f, id);
         // DECISIONS 210: a layout made for a function that already left.
