@@ -604,8 +604,10 @@ fn a_number_read_guard_value_tests_a_word_that_asks() {
     assert!(
         bl.iter()
             .filter(|(l, _)| l.starts_with("rloop.guard.value.need"))
-            .all(|(_, (insts, _))| insts.iter().any(|i| i.contains("icmp slt i64"))),
-        "the value test must be selected by the word's sign bit"
+            .all(|(_, (insts, _))| insts
+                .iter()
+                .any(|i| i.contains("icmp uge i64") && i.contains("4611686018427387904"))),
+        "the object tests must be selected by the word's test bits (63: value, 62: presence)"
     );
 }
 
