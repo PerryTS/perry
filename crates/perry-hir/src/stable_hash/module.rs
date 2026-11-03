@@ -49,6 +49,7 @@ impl SH for Module {
             local_source_spans: _,
             gen_param_prologue_len,
             requested_modules,
+            locally_redeclared_imports,
         } = self;
         name.hash(h);
         match class_family_syntax {
@@ -78,6 +79,7 @@ impl SH for Module {
         imports.hash(h);
         exports.hash(h);
         requested_modules.hash(h);
+        locally_redeclared_imports.hash(h);
         classes.hash(h);
         interfaces.hash(h);
         type_aliases.hash(h);

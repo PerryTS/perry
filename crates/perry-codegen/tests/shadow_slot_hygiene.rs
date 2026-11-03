@@ -194,6 +194,7 @@ fn shadow_hygiene_module() -> Module {
         gen_param_prologue_len: std::collections::HashMap::new(),
         class_family_syntax: None,
         requested_modules: Vec::new(),
+        locally_redeclared_imports: Vec::new(),
     }
 }
 
@@ -259,6 +260,7 @@ fn top_level_shadow_module(name: &str) -> Module {
         gen_param_prologue_len: std::collections::HashMap::new(),
         class_family_syntax: None,
         requested_modules: Vec::new(),
+        locally_redeclared_imports: Vec::new(),
     }
 }
 
@@ -394,6 +396,7 @@ fn flat_const_row_alias_shadow_module() -> Module {
         gen_param_prologue_len: std::collections::HashMap::new(),
         class_family_syntax: None,
         requested_modules: Vec::new(),
+        locally_redeclared_imports: Vec::new(),
     }
 }
 
@@ -461,6 +464,7 @@ fn reassigned_any_shadow_module() -> Module {
         gen_param_prologue_len: std::collections::HashMap::new(),
         class_family_syntax: None,
         requested_modules: Vec::new(),
+        locally_redeclared_imports: Vec::new(),
     }
 }
 
@@ -543,6 +547,7 @@ fn mixed_any_alias_shadow_module() -> Module {
         gen_param_prologue_len: std::collections::HashMap::new(),
         class_family_syntax: None,
         requested_modules: Vec::new(),
+        locally_redeclared_imports: Vec::new(),
     }
 }
 
@@ -633,6 +638,7 @@ fn closure_captured_write_shadow_module() -> Module {
         gen_param_prologue_len: std::collections::HashMap::new(),
         class_family_syntax: None,
         requested_modules: Vec::new(),
+        locally_redeclared_imports: Vec::new(),
     }
 }
 
@@ -1246,6 +1252,7 @@ fn canonical_str_shadow_module() -> Module {
         gen_param_prologue_len: std::collections::HashMap::new(),
         class_family_syntax: None,
         requested_modules: Vec::new(),
+        locally_redeclared_imports: Vec::new(),
     }
 }
 

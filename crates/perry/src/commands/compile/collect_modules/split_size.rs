@@ -38,15 +38,7 @@ fn resolved<'a>(ctx: &'a CompilationContext, from: &Path, source: &str) -> Optio
 }
 
 fn type_only(module: &perry_hir::Module, name: &str) -> bool {
-    let is_type = module.interfaces.iter().any(|t| t.name == name)
-        || module.type_aliases.iter().any(|t| t.name == name);
-    is_type
-        && !(module.functions.iter().any(|f| f.name == name)
-            || module.exported_functions.iter().any(|(n, _)| n == name)
-            || module.exported_objects.iter().any(|n| n == name)
-            || module.classes.iter().any(|c| c.name == name)
-            || module.enums.iter().any(|e| e.name == name)
-            || module.globals.iter().any(|g| g.name == name))
+    module.is_type_only_export_binding(name)
 }
 
 fn exports(

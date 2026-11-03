@@ -50,6 +50,7 @@ fn concat_probe_ir(property: &str) -> String {
         name: "alias_string_concat.ts".to_string(),
         imports: Vec::new(),
         requested_modules: Vec::new(),
+        locally_redeclared_imports: Vec::new(),
         exports: Vec::new(),
         classes: Vec::new(),
         interfaces: Vec::new(),

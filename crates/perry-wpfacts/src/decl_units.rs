@@ -470,6 +470,7 @@ fn beside(module: &Module, init: Vec<Stmt>, inlined: &FxHashSet<u32>) -> Module 
         local_source_spans,
         gen_param_prologue_len,
         requested_modules,
+        locally_redeclared_imports,
     } = module;
     Module {
         name: name.clone(),
@@ -513,6 +514,7 @@ fn beside(module: &Module, init: Vec<Stmt>, inlined: &FxHashSet<u32>) -> Module 
         local_source_spans: local_source_spans.clone(),
         gen_param_prologue_len: gen_param_prologue_len.clone(),
         requested_modules: requested_modules.clone(),
+        locally_redeclared_imports: locally_redeclared_imports.clone(),
     }
 }
 
