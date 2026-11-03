@@ -4,9 +4,9 @@
 //! Until its exchange ends a request is owned by the native side: the
 //! transport, the agent and the event queue hold its id, and its payload's
 //! edges are roots. Once `'close'` fired, [`park_client_exchange`] parks both
-//! ids with [`CLIENT_PAYLOADS`]. From then on a full trace marks a payload's
-//! edges only through a traced word naming its id
-//! (`ParkedPayloadOwner::edges`), and the trace that finds no such word drops
+//! ids with [`CLIENT_PAYLOADS`]. From then on a full trace marks an old
+//! payload's edges only through a traced word naming its id
+//! (`ParkedRecordOwner::visit`), and the trace that finds no such word drops
 //! the payload and gives the id back. User code keeps reading a finished
 //! response (`res.statusCode`, `res.req`, a late `'data'` reader) for as long
 //! as it holds it, as in Node.
@@ -18,38 +18,30 @@
 //! on the loop thread) holds an operation lease instead, so the id is not
 //! reissued while it can still act on it.
 use super::*;
-use perry_ffi::handle_lifecycle::ParkedPayloadOwner;
+use perry_ffi::handle_lifecycle::ParkedRecordOwner;
 
 /// The ffi payload map as the owner of parked client ids.
 pub(crate) struct ClientPayloads;
 
 pub(crate) static CLIENT_PAYLOADS: ClientPayloads = ClientPayloads;
 
-impl ParkedPayloadOwner for ClientPayloads {
-    fn release(&self, identity: perry_ffi::NativeRegistrationIdentity) {
-        // A payload holds strings, vectors and closure addresses; dropping
-        // it runs no JS and allocates nothing on the GC heap.
-        drop(perry_ffi::release_reclaimed_payload(identity));
-    }
-
-    fn edges(&self, id: Handle, out: &mut Vec<u64>) {
-        out.extend(perry_ffi::native_handle_props(id));
-        let request =
-            perry_ffi::with_handle::<ClientRequestHandle, _, _>(id, |req| request_edges(req, out));
-        if request.is_none() {
-            perry_ffi::with_handle::<IncomingMessageHandle, _, _>(id, |msg| {
-                incoming_edges(msg, out)
-            });
+impl ParkedRecordOwner for ClientPayloads {
+    // A payload holds strings, vectors and closure addresses; perry-ffi's
+    // drop of it runs no JS and allocates nothing on the GC heap.
+    fn visit(
+        &self,
+        payload: &mut (dyn std::any::Any + Send + Sync),
+        visitor: &mut perry_ffi::GcRootVisitor<'_>,
+    ) {
+        let mut named = Vec::new();
+        if let Some(req) = payload.downcast_mut::<ClientRequestHandle>() {
+            crate::root_scanner::scan_client_request_roots(req, visitor, &mut named);
+        } else if let Some(msg) = payload.downcast_mut::<IncomingMessageHandle>() {
+            crate::root_scanner::scan_client_incoming_roots(msg, visitor, &mut named);
         }
-    }
-}
-
-/// A raw closure or object address as a JSValue word (`0` stays absent).
-pub(crate) fn address_word(address: i64) -> u64 {
-    if address > 0 {
-        POINTER_TAG | (address as u64 & PTR_MASK)
-    } else {
-        0
+        for mut word in named {
+            visitor.visit_nanbox_u64_slot(&mut word);
+        }
     }
 }
 
@@ -72,54 +64,6 @@ pub(crate) fn handle_capture(id: Handle) -> f64 {
 /// `closure` must be a live closure with a capture at `index`.
 pub(crate) unsafe fn capture_handle_at(closure: *const RawClosureHeader, index: u32) -> Handle {
     (perry_ffi::closure_capture_f64(closure, index).to_bits() & PTR_MASK) as Handle
-}
-
-/// The same slots `scan_http_roots` visits for a native-owned request, plus
-/// the response it produced.
-fn request_edges(req: &ClientRequestHandle, out: &mut Vec<u64>) {
-    out.extend(
-        [
-            req.socket_handle,
-            req.request_create_connection,
-            req.response_callback,
-            req.response_raw_wrapper,
-            req.end_callback,
-            req.tls.check_server_identity_callback,
-        ]
-        .map(address_word),
-    );
-    out.extend([req.abort_signal_bits, req.abort_listener_bits]);
-    out.extend(
-        req.pending_write_callbacks
-            .iter()
-            .map(|&cb| address_word(cb)),
-    );
-    for listener in req.listeners.values().flatten() {
-        out.push(address_word(listener.callback));
-        if listener.raw_wrapper != listener.callback {
-            out.push(address_word(listener.raw_wrapper));
-        }
-    }
-    if req.incoming_handle != 0 {
-        out.push(handle_word(req.incoming_handle));
-    }
-}
-
-/// The same slots `scan_http_roots` visits for a native-owned response, plus
-/// `res.req`.
-fn incoming_edges(msg: &IncomingMessageHandle, out: &mut Vec<u64>) {
-    out.push(address_word(msg.socket_handle));
-    out.extend(msg.listeners.values().flatten().map(|&cb| address_word(cb)));
-    out.extend(msg.pipes.iter().copied());
-    if msg.read.pending_error != 0 {
-        out.push(msg.read.pending_error);
-    }
-    for &(wrapper, original) in &msg.read.once_targets {
-        out.extend([address_word(wrapper), address_word(original)]);
-    }
-    if msg.request_handle != 0 {
-        out.push(handle_word(msg.request_handle));
-    }
 }
 
 /// The exchange of `request` is finished (its `'close'` fired): park the

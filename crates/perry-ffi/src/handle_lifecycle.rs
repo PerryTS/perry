@@ -45,11 +45,24 @@
 //! requests a trace without the time budget. The band then runs out only if
 //! the program itself names nearly all of it.
 //!
+//! **Parked records.** A payload of perry-ffi's registry parks *with its
+//! record*: [`crate::park_reclaimable_ffi`] moves the `NativePayloadRecord`
+//! out of the registry into the parked entry, so the registry and every type
+//! scanner walking it hold only payloads native code owns. Lookups on the
+//! parking mutator fall back to the entry; the payload box does not move. One
+//! root scanner visits the parked records through their owner
+//! ([`ParkedRecordOwner::visit`]): minors and relocation scans visit all of
+//! them, a full mark only the young ones and those borrowed mutably during the
+//! trace, and a rescan of the same trace (the final remark) only those borrowed
+//! mutably since or parked after the first scan reached them. An old record's
+//! edges are marked through a traced word naming its id.
+//!
 //! **Threads.** Parking is per mutator: each thread's trace decides only the
 //! ids that thread parked. A thread that exits hands its parked ids to the
 //! next mutator to begin a trace, which decides them against its own heap.
-use crate::handle::{Handle, HandleIdBuildHasher, REGISTRATIONS};
-use crate::NativeRegistrationIdentity;
+use crate::handle::{GcRootVisitor, Handle, HandleIdBuildHasher, REGISTRATIONS};
+use crate::{NativePayloadRecord, NativeRegistrationIdentity};
+use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -129,16 +142,41 @@ pub trait ParkedPayloadOwner: Sync {
     fn edges(&self, id: Handle, out: &mut Vec<u64>);
 }
 
-#[derive(Clone, Copy)]
+/// The owner of a parked perry-ffi payload record (a type family of
+/// [`crate::register_handle`] payloads whose owners are JS values once native
+/// code is done with them). perry-ffi holds the record and drops it when a
+/// trace proves the id unnamed; the owner only knows the payload's edges.
+pub trait ParkedRecordOwner: Sync {
+    /// Visit every GC edge `payload` holds for the current mutator, exactly as
+    /// the owner's root scanner visits a native-owned payload of the same type
+    /// (its property bag is visited by perry-ffi). A full mark reaches this
+    /// through the parked-record scanner while the record is young or written,
+    /// and otherwise through `observe` the first time a word naming the id is
+    /// traced (with a visitor that collects the edges as words). Runs with no
+    /// registry lock held; it may visit handle words of other payloads.
+    fn visit(&self, payload: &mut (dyn Any + Send + Sync), visitor: &mut GcRootVisitor<'_>);
+}
+
 enum Kind {
-    /// Payload still registered; dropped through its owner when proven
-    /// unreachable.
+    /// Payload still registered with its owner's own map; dropped through the
+    /// owner when proven unreachable.
     Reclaimable(&'static dyn ParkedPayloadOwner),
+    /// A perry-ffi payload record, moved out of the registry at park; perry-ffi
+    /// drops it when proven unreachable.
+    Record {
+        owner: &'static dyn ParkedRecordOwner,
+        record: Box<NativePayloadRecord>,
+    },
     /// Payload already removed; the id sits in `Retiring` until proven.
     Retired,
 }
 
-#[derive(Clone, Copy)]
+impl Kind {
+    fn reclaimable(&self) -> bool {
+        !matches!(self, Kind::Retired)
+    }
+}
+
 struct Parked {
     kind: Kind,
     identity: NativeRegistrationIdentity,
@@ -149,6 +187,9 @@ struct Parked {
     /// Epoch of the last trace during which native code borrowed the payload
     /// mutably (a possible edge store after `observe` took its edges).
     written: u64,
+    /// Serial of the last full trace whose root scan visited the record's
+    /// edges (`Epoch::serial`, never reused, unlike an aborted epoch).
+    visited: u64,
     /// A retirement with a grace deadline (`drop_handle_until`) is not
     /// released by a trace that began before it.
     not_before: Option<Instant>,
@@ -157,6 +198,9 @@ struct Parked {
 struct Epoch {
     /// Incremented when a trace begins; parked ids record it.
     current: u64,
+    /// Incremented when a trace begins and never decremented (an aborted
+    /// trace gives its epoch back, not its serial).
+    serial: u64,
     /// A trace armed by `phase(0)` is running.
     tracing: bool,
     /// When the armed trace began: the one clock its deadline checks read,
@@ -168,6 +212,8 @@ struct Epoch {
     /// the program holds. Young ids it only kept are not counted.
     live: usize,
     hooked: bool,
+    /// The parked-record scanner is registered for this mutator.
+    records_hooked: bool,
     registrations: u32,
     /// Registration count when the next trace was requested (or, when the
     /// collector began it unasked, when it began): the start of `span`.
@@ -208,11 +254,13 @@ thread_local! {
     static PARKED: RefCell<ParkedIds> = RefCell::new(ParkedIds::default());
     static EPOCH: RefCell<Epoch> = const { RefCell::new(Epoch {
         current: 0,
+        serial: 0,
         tracing: false,
         trace_began: None,
         trigger_at: MIN_TRIGGER,
         live: 0,
         hooked: false,
+        records_hooked: false,
         registrations: 0,
         span_from: None,
         span: 0,
@@ -225,26 +273,28 @@ thread_local! {
 }
 
 fn park(id: Handle, kind: Kind, identity: NativeRegistrationIdentity, not_before: Option<Instant>) {
+    let unstamped = |kind| Parked {
+        kind,
+        identity,
+        epoch: 0,
+        reached: 0,
+        written: 0,
+        visited: 0,
+        not_before,
+    };
     // Only a mutator's full traces see the values that can name the id. A
     // retirement elsewhere (a worker pool thread) has no heap to decide it.
     if !unsafe { perry_ffi_gc_thread_is_mutator() } {
         note_off_mutator_retirement(id);
-        orphan(
-            id,
-            Parked {
-                kind,
-                identity,
-                epoch: 0,
-                reached: 0,
-                written: 0,
-                not_before,
-            },
-        );
+        orphan(id, unstamped(kind));
         return;
     }
-    let Ok((hooked, epoch)) = EPOCH.try_with(|epoch| {
+    let record = matches!(kind, Kind::Record { .. });
+    let Ok((hooked, records_hooked, epoch)) = EPOCH.try_with(|epoch| {
         let mut epoch = epoch.borrow_mut();
         let hooked = std::mem::replace(&mut epoch.hooked, true);
+        let records_hooked = epoch.records_hooked;
+        epoch.records_hooked |= record;
         // First mutator activity after a requested trace: charge its whole
         // cost, sweep included, to the pacing budget.
         if let Some(started) = epoch.requested_started.take() {
@@ -252,20 +302,10 @@ fn park(id: Handle, kind: Kind, identity: NativeRegistrationIdentity, not_before
             epoch.last_cost = now - started;
             epoch.last_end = Some(now);
         }
-        (hooked, epoch.current)
+        (hooked, records_hooked, epoch.current)
     }) else {
         // Thread teardown: nothing can trace this thread any more.
-        orphan(
-            id,
-            Parked {
-                kind,
-                identity,
-                epoch: 0,
-                reached: 0,
-                written: 0,
-                not_before,
-            },
-        );
+        orphan(id, unstamped(kind));
         return;
     };
     if !hooked {
@@ -274,20 +314,30 @@ fn park(id: Handle, kind: Kind, identity: NativeRegistrationIdentity, not_before
             perry_ffi_gc_register_pool_handle_liveness(is_live);
         }
     }
-    let parked = Parked {
-        kind,
-        identity,
-        epoch,
-        reached: 0,
-        written: 0,
-        not_before,
-    };
+    // perry-ffi's own unit-test binary has no collector to register with; its
+    // tests drive the scanner through `full_scan_edges_for_tests`.
+    #[cfg(all(test, not(feature = "runtime-link")))]
+    let _ = records_hooked;
+    #[cfg(not(all(test, not(feature = "runtime-link"))))]
+    if record && !records_hooked {
+        crate::handle::gc_register_mutable_root_scanner_named(
+            "ffi:parked-payloads",
+            scan_parked_record_roots,
+        );
+    }
+    let mut parked = unstamped(kind);
+    parked.epoch = epoch;
+    let mut slot = Some(parked);
     let Ok(count) = PARKED.try_with(|map| {
         let mut map = map.borrow_mut();
-        map.0.insert(id, parked);
+        if let Some(parked) = slot.take() {
+            map.0.insert(id, parked);
+        }
         map.0.len()
     }) else {
-        orphan(id, parked);
+        if let Some(parked) = slot.take() {
+            orphan(id, parked);
+        }
         return;
     };
     let request = EPOCH
@@ -361,6 +411,25 @@ pub fn park_reclaimable(
     );
 }
 
+/// A perry-ffi payload record whose owners are JS values: perry-ffi holds it
+/// in the parked entry and drops it, recycling the id, once a full trace
+/// proves nothing names it (see [`crate::park_reclaimable_ffi`]).
+pub(crate) fn park_record(
+    identity: NativeRegistrationIdentity,
+    owner: &'static dyn ParkedRecordOwner,
+    record: NativePayloadRecord,
+) {
+    park(
+        identity.numeric_id(),
+        Kind::Record {
+            owner,
+            record: Box::new(record),
+        },
+        identity,
+        None,
+    );
+}
+
 /// A removed payload's id, still `Retiring` in the pool: reusable once a full
 /// trace proves no JS value still holds the number.
 pub fn park_retired(identity: NativeRegistrationIdentity) {
@@ -382,17 +451,199 @@ pub fn park_retired_until(identity: NativeRegistrationIdentity, deadline: Instan
 /// crypto digest used as a stream has listeners and queued events keyed by
 /// id), so it lives until explicitly dropped. Returns whether it was parked.
 pub fn retain_strongly(id: Handle) -> bool {
+    let Some(kind) = PARKED
+        .try_with(|map| {
+            let mut map = map.borrow_mut();
+            match map.0.get(&id) {
+                Some(parked) if parked.kind.reclaimable() => map.0.remove(&id).map(|p| p.kind),
+                _ => None,
+            }
+        })
+        .ok()
+        .flatten()
+    else {
+        return false;
+    };
+    // A record goes back to the registry its native owner reads.
+    if let Kind::Record { record, .. } = kind {
+        crate::handle::restore_parked_record(id, *record);
+    }
+    true
+}
+
+/// The boxed record of `id` while this mutator holds it parked. The box does
+/// not move until the entry is released or retired, so the pointer stays valid
+/// for as long as a registry borrow would; no `PARKED` borrow is held on
+/// return (visiting and observing re-enter it).
+pub(crate) fn parked_record(id: Handle) -> Option<*mut NativePayloadRecord> {
+    PARKED
+        .try_with(|map| match map.borrow_mut().0.get_mut(&id) {
+            Some(Parked {
+                kind: Kind::Record { record, .. },
+                ..
+            }) => Some(&mut **record as *mut NativePayloadRecord),
+            _ => None,
+        })
+        .ok()
+        .flatten()
+}
+
+/// Take the record of a parked `id` back from this mutator (its payload is
+/// being dropped or taken by native code; the caller retires the id).
+pub(crate) fn take_parked_record(id: Handle) -> Option<NativePayloadRecord> {
     PARKED
         .try_with(|map| {
             let mut map = map.borrow_mut();
             match map.0.get(&id) {
-                Some(parked) if matches!(parked.kind, Kind::Reclaimable(_)) => {
-                    map.0.remove(&id).is_some()
-                }
-                _ => false,
+                Some(Parked {
+                    kind: Kind::Record { .. },
+                    ..
+                }) => match map.0.remove(&id)?.kind {
+                    Kind::Record { record, .. } => Some(*record),
+                    _ => None,
+                },
+                _ => None,
             }
         })
-        .unwrap_or(false)
+        .ok()
+        .flatten()
+}
+
+/// Run `f` on every parked record of type `T` this mutator holds (agent
+/// retirement clears a dying heap's edges from finished payloads too). No
+/// `PARKED` borrow is held while `f` runs.
+pub fn iter_parked_payloads_of_mut<T, F>(mut f: F)
+where
+    T: 'static + Send + Sync,
+    F: FnMut(&mut T),
+{
+    for (_, record) in parked_records(|_| true) {
+        // SAFETY: see `parked_record`; nothing releases records while `f` runs.
+        if let Some(payload) = unsafe { &mut *record }.payload.downcast_mut::<T>() {
+            f(payload);
+        }
+    }
+}
+
+/// The owner and record of each parked record `select` accepts.
+fn parked_records(
+    mut select: impl FnMut(&mut Parked) -> bool,
+) -> Vec<(&'static dyn ParkedRecordOwner, *mut NativePayloadRecord)> {
+    PARKED
+        .try_with(|map| {
+            let mut map = map.borrow_mut();
+            let mut records = Vec::new();
+            for parked in map.0.values_mut() {
+                if !matches!(parked.kind, Kind::Record { .. }) || !select(parked) {
+                    continue;
+                }
+                if let Kind::Record { owner, record } = &mut parked.kind {
+                    records.push((*owner, &mut **record as *mut NativePayloadRecord));
+                }
+            }
+            records
+        })
+        .unwrap_or_default()
+}
+
+/// Clear the property bags whose allocations a retiring mutator frees, on
+/// this mutator's parked records and on orphaned ones.
+pub(crate) fn clear_parked_props_in_ranges(contains: &dyn Fn(usize) -> bool) {
+    for (_, record) in parked_records(|_| true) {
+        unsafe { &mut *record }.clear_props_if(contains);
+    }
+    if let Ok(mut orphans) = ORPHANS.lock() {
+        for (_, parked) in orphans.iter_mut() {
+            if let Kind::Record { record, .. } = &mut parked.kind {
+                record.clear_props_if(contains);
+            }
+        }
+    }
+}
+
+/// Whether a full trace's root scan of serial `serial` and epoch `current`
+/// visits a parked record. Young records (they may still be unpublished) and
+/// records borrowed mutably during this trace are roots; an old record's edges
+/// are marked only through a word naming its id. A rescan of the same trace
+/// (the final remark) skips a record the earlier scan visited unless it was
+/// borrowed mutably since: its edges cannot have changed.
+fn full_scan_visits(parked: &Parked, current: u64, serial: u64) -> bool {
+    let written = parked.written == current;
+    if parked.visited == serial && !written {
+        return false;
+    }
+    written || parked.epoch >= current.saturating_sub(1)
+}
+
+/// The mutable root scanner of this mutator's parked records: each record's
+/// property bag and its owner's edges. Minors and relocation scans visit all
+/// of them (they rewrite moved referents); a full mark only those
+/// [`full_scan_visits`] selects.
+fn scan_parked_record_roots(visitor: &mut GcRootVisitor<'_>) {
+    let full_mark = visitor.is_full_mark();
+    let (current, serial) = EPOCH
+        .try_with(|epoch| {
+            let epoch = epoch.borrow();
+            (epoch.current, epoch.serial)
+        })
+        .unwrap_or((0, 0));
+    let records = parked_records(|parked| {
+        if !full_mark {
+            return true;
+        }
+        let visits = full_scan_visits(parked, current, serial);
+        if visits {
+            parked.visited = serial;
+        }
+        visits
+    });
+    for (owner, record) in records {
+        // SAFETY: see `parked_record`; a scan releases nothing.
+        let record = unsafe { &mut *record };
+        if let Some(slot) = record.props_slot() {
+            visitor.visit_nanbox_u64_slot(slot);
+        }
+        owner.visit(record.as_mut(), visitor);
+    }
+}
+
+/// The words one full-mark scan of the parked records visits right now (a
+/// rescan within the same trace sees only what it would revisit) (tests).
+#[doc(hidden)]
+pub fn full_scan_edges_for_tests() -> Vec<u64> {
+    let mut edges = Vec::new();
+    scan_parked_record_roots(&mut GcRootVisitor::edge_collector(&mut edges));
+    edges.retain(|&bits| bits != 0);
+    edges
+}
+
+/// The edges `observe` marks when a word first names the parked record `id`
+/// (tests).
+#[doc(hidden)]
+pub fn parked_record_edges_for_tests(id: Handle) -> Vec<u64> {
+    let mut edges = Vec::new();
+    let owner = PARKED.with(|map| match map.borrow().0.get(&id).map(|p| &p.kind) {
+        Some(Kind::Record { owner, .. }) => Some(*owner),
+        _ => None,
+    });
+    if let (Some(owner), Some(record)) = (owner, parked_record(id)) {
+        // SAFETY: see `parked_record`.
+        record_edges(owner, unsafe { &mut *record }, &mut edges);
+    }
+    edges.retain(|&bits| bits != 0);
+    edges
+}
+
+/// A parked record's edges as words: its property bag and what its owner's
+/// visit reaches, collected rather than marked.
+fn record_edges(
+    owner: &'static dyn ParkedRecordOwner,
+    record: &mut NativePayloadRecord,
+    edges: &mut Vec<u64>,
+) {
+    edges.extend(record.props());
+    let mut collect = GcRootVisitor::edge_collector(edges);
+    owner.visit(record.as_mut(), &mut collect);
 }
 
 impl Epoch {
@@ -461,15 +712,14 @@ pub fn parked_handle_count() -> usize {
 /// the payload's edges is reached by the final root remark instead. An old
 /// parked payload's edges are marked only through a traced word naming its id.
 pub fn payload_edges_are_rooted(id: Handle) -> bool {
-    let Some(parked) = PARKED
-        .try_with(|parked| parked.borrow().0.get(&id).copied())
-        .ok()
-        .flatten()
-    else {
-        return true;
-    };
     let current = EPOCH.try_with(|epoch| epoch.borrow().current).unwrap_or(0);
-    parked.epoch >= current.saturating_sub(1) || parked.written == current
+    PARKED
+        .try_with(|parked| {
+            parked.borrow().0.get(&id).is_none_or(|parked| {
+                parked.epoch >= current.saturating_sub(1) || parked.written == current
+            })
+        })
+        .unwrap_or(true)
 }
 
 /// Native code is about to borrow the payload of `id` mutably. During an armed
@@ -490,7 +740,7 @@ pub fn note_mutable_access(id: Handle) {
     };
     let _ = PARKED.try_with(|map| {
         if let Some(parked) = map.borrow_mut().0.get_mut(&id) {
-            if matches!(parked.kind, Kind::Reclaimable(_)) {
+            if parked.kind.reclaimable() {
                 parked.written = current;
             }
         }
@@ -546,6 +796,7 @@ extern "C" fn phase(phase: u32) -> bool {
                 .try_with(|epoch| {
                     let mut epoch = epoch.borrow_mut();
                     epoch.current += 1;
+                    epoch.serial += 1;
                     epoch.trace_began = Some(Instant::now());
                     if std::mem::take(&mut epoch.requested_pending) {
                         epoch.requested_started = Some(Instant::now());
@@ -614,36 +865,41 @@ fn finish_full_trace() {
         }
         (epoch.current, epoch.trace_began.take())
     });
-    let mut dead = Vec::new();
     let mut live = 0usize;
-    PARKED.with(|map| {
+    let dead: Vec<Parked> = PARKED.with(|map| {
         let mut map = map.borrow_mut();
-        map.0.retain(|_, parked| {
-            let keep = trace_keeps(parked, current, began);
-            if !keep {
-                dead.push(*parked);
+        let mut dead_ids = Vec::new();
+        for (&id, parked) in map.0.iter() {
+            if !trace_keeps(parked, current, began) {
+                dead_ids.push(id);
             } else if parked.epoch < current.saturating_sub(1) && parked.reached == current {
                 // Decidable, and a word named it: the program holds it.
                 live += 1;
             }
-            keep
-        });
+        }
+        dead_ids
+            .into_iter()
+            .filter_map(|id| map.0.remove(&id))
+            .collect()
     });
     EPOCH.with(|epoch| {
         let mut epoch = epoch.borrow_mut();
         epoch.live = live;
         epoch.trigger_at = MIN_TRIGGER.max(live.saturating_mul(2));
     });
-    release(&dead);
+    release(dead);
 }
 
 /// Drop proven-dead payloads and hand their ids back to the shared pool.
 /// Allocates nothing on the GC heap; payload destructors run outside every
 /// registry lock.
-fn release(dead: &[Parked]) {
+fn release(dead: Vec<Parked>) {
     for parked in dead {
         match parked.kind {
             Kind::Reclaimable(owner) => owner.release(parked.identity),
+            Kind::Record { record, .. } => {
+                crate::handle::release_parked_record(parked.identity, *record)
+            }
             Kind::Retired => {
                 REGISTRATIONS.finish_retirement_reusable(parked.identity);
             }
@@ -656,17 +912,22 @@ fn release(dead: &[Parked]) {
 /// will release, so their weak entries are deleted in the same trace.
 extern "C" fn is_live(bits: u64) -> bool {
     let id = (bits & 0x0000_FFFF_FFFF_FFFF) as Handle;
-    let Some(parked) = PARKED
-        .try_with(|map| map.borrow().0.get(&id).copied())
+    let Some((current, began)) = EPOCH
+        .try_with(|epoch| {
+            let epoch = epoch.borrow();
+            epoch.tracing.then_some((epoch.current, epoch.trace_began))
+        })
         .ok()
         .flatten()
     else {
         return true;
     };
-    EPOCH
-        .try_with(|epoch| {
-            let epoch = epoch.borrow();
-            !epoch.tracing || trace_keeps(&parked, epoch.current, epoch.trace_began)
+    PARKED
+        .try_with(|map| {
+            map.borrow()
+                .0
+                .get(&id)
+                .is_none_or(|parked| trace_keeps(parked, current, began))
         })
         .unwrap_or(true)
 }
@@ -686,34 +947,52 @@ extern "C" fn observe(bits: u64, mark: Mark, ctx: *mut c_void) -> bool {
     } else {
         return false;
     };
-    let Some((parked, first)) = PARKED
+    let tracing = EPOCH
+        .try_with(|epoch| {
+            let epoch = epoch.borrow();
+            epoch.tracing.then_some(epoch.current)
+        })
+        .ok()
+        .flatten();
+    let Some(edges_of) = PARKED
         .try_with(|map| {
             let mut map = map.borrow_mut();
             let parked = map.0.get_mut(&id)?;
-            let first = EPOCH
-                .try_with(|epoch| {
-                    let epoch = epoch.borrow();
-                    epoch.tracing
-                        && std::mem::replace(&mut parked.reached, epoch.current) != epoch.current
-                })
-                .unwrap_or(false);
-            Some((*parked, first))
+            let first = tracing
+                .is_some_and(|current| std::mem::replace(&mut parked.reached, current) != current);
+            Some(first.then_some(match &mut parked.kind {
+                Kind::Reclaimable(owner) => EdgesOf::Owner(*owner),
+                Kind::Record { owner, record } => {
+                    EdgesOf::Record(*owner, &mut **record as *mut NativePayloadRecord)
+                }
+                Kind::Retired => EdgesOf::None,
+            }))
         })
         .ok()
         .flatten()
     else {
         return false;
     };
-    if first {
-        // Marked outside every borrow and registry lock: marking may offer
-        // more words (a paired payload's id) and re-enter `observe`.
-        if let Kind::Reclaimable(owner) = parked.kind {
-            let mut edges = Vec::new();
-            owner.edges(id, &mut edges);
-            for bits in edges.into_iter().filter(|&bits| bits != 0) {
-                mark(bits, ctx);
-            }
+    // Marked outside every borrow and registry lock: marking may offer more
+    // words (a paired payload's id) and re-enter `observe`.
+    let mut edges = Vec::new();
+    match edges_of {
+        None | Some(EdgesOf::None) => {}
+        Some(EdgesOf::Owner(owner)) => owner.edges(id, &mut edges),
+        Some(EdgesOf::Record(owner, record)) => {
+            // SAFETY: see `parked_record`; marking releases nothing.
+            record_edges(owner, unsafe { &mut *record }, &mut edges);
         }
     }
+    for bits in edges.into_iter().filter(|&bits| bits != 0) {
+        mark(bits, ctx);
+    }
     true
+}
+
+/// Where `observe` takes a newly reached parked id's edges from.
+enum EdgesOf {
+    Owner(&'static dyn ParkedPayloadOwner),
+    Record(&'static dyn ParkedRecordOwner, *mut NativePayloadRecord),
+    None,
 }

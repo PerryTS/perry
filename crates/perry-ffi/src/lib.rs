@@ -102,11 +102,11 @@ pub use handle::{
     drop_handle, drop_handle_until, free_handle_id, free_handle_id_until,
     gc_register_mutable_root_scanner, gc_register_mutable_root_scanner_named, get_handle,
     get_handle_mut, handle_exists, handle_registration, handle_registry_domain, index_handle_type,
-    iter_handle_entries_of_mut, iter_handle_ids_of, iter_handles_of, iter_handles_of_mut,
-    native_handle_props, park_reclaimable_ffi, register_handle, release_reclaimed_payload,
-    reserve_handle_id, reserve_handle_id_in_domain, set_native_handle_props, shared_handle_id_pool,
-    take_handle, with_handle, with_handle_mut, GcMutableRootScanner, GcRootVisitor, Handle,
-    HandleIdBuildHasher, HandleIdHasher, INVALID_HANDLE,
+    iter_handle_ids_of, iter_handles_of, iter_handles_of_mut, native_handle_props,
+    park_reclaimable_ffi, register_handle, reserve_handle_id, reserve_handle_id_in_domain,
+    set_native_handle_props, shared_handle_id_pool, take_handle, with_handle, with_handle_mut,
+    GcMutableRootScanner, GcRootVisitor, Handle, HandleIdBuildHasher, HandleIdHasher,
+    INVALID_HANDLE,
 };
 
 mod jsvalue;

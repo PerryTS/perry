@@ -298,7 +298,6 @@ const FFI_ROOT_SLOT_NANBOX_U64: u32 = 5;
 
 extern "C" {
     fn perry_ffi_gc_register_root_scanner(scanner: PerryFfiRootScanner);
-    fn perry_ffi_gc_root_visitor_is_full_mark(ctx: *mut c_void) -> bool;
     fn perry_ffi_gc_register_mutable_root_scanner_named(
         source_ptr: *const u8,
         source_len: usize,
@@ -346,6 +345,19 @@ unsafe extern "C" fn js_throw_error_with_code(
     std::process::abort()
 }
 
+#[cfg(not(all(test, not(feature = "runtime-link"))))]
+extern "C" {
+    fn perry_ffi_gc_root_visitor_is_full_mark(ctx: *mut c_void) -> bool;
+}
+
+// The unit-test binary drives scanners only through perry-ffi's own
+// edge-collecting visitor, which never asks the runtime.
+#[cfg(all(test, not(feature = "runtime-link")))]
+#[no_mangle]
+unsafe extern "C" fn perry_ffi_gc_root_visitor_is_full_mark(_ctx: *mut c_void) -> bool {
+    false
+}
+
 #[cfg(all(test, not(feature = "runtime-link")))]
 #[no_mangle]
 unsafe extern "C" fn js_register_ffi_handle_exists_probe(
@@ -359,7 +371,7 @@ unsafe extern "C" fn js_register_ffi_handle_exists_probe(
 /// so the runtime routes `server.close()` to the handle rather than swallowing
 /// it as `clearTimeout`. See `class_handles::ffi_handle_exists`.
 extern "C" fn ffi_handle_exists_probe(handle: Handle) -> bool {
-    HANDLES.contains_key(&handle)
+    handle_exists(handle)
 }
 
 /// Register [`ffi_handle_exists_probe`] with perry-runtime exactly once, the
@@ -390,19 +402,35 @@ pub type GcMutableRootScanner = for<'a> fn(&mut GcRootVisitor<'a>);
 pub struct GcRootVisitor<'a> {
     visit: PerryFfiMutableRootVisitor,
     ctx: *mut c_void,
+    /// Collects the visited slots' referents as JSValue words instead of
+    /// handing them to the runtime (a parked record's edges for `observe`).
+    collects_edges: bool,
     _marker: PhantomData<&'a mut ()>,
 }
 
 impl<'a> GcRootVisitor<'a> {
     /// Whether this visitor is performing a full reachability mark.
     pub fn is_full_mark(&self) -> bool {
-        unsafe { perry_ffi_gc_root_visitor_is_full_mark(self.ctx) }
+        self.collects_edges || unsafe { perry_ffi_gc_root_visitor_is_full_mark(self.ctx) }
     }
 
     fn new(visit: PerryFfiMutableRootVisitor, ctx: *mut c_void) -> Self {
         Self {
             visit,
             ctx,
+            collects_edges: false,
+            _marker: PhantomData,
+        }
+    }
+
+    /// A full-mark visitor that pushes each visited slot's referent onto
+    /// `edges` as a JSValue word (raw addresses become pointer words) and
+    /// rewrites nothing: the same scanner code then names a payload's edges.
+    pub(crate) fn edge_collector(edges: &'a mut Vec<u64>) -> Self {
+        Self {
+            visit: collect_edge_slot,
+            ctx: edges as *mut Vec<u64> as *mut c_void,
+            collects_edges: true,
             _marker: PhantomData,
         }
     }
@@ -473,6 +501,42 @@ impl<'a> GcRootVisitor<'a> {
             self.ctx,
         )
     }
+}
+
+extern "C" fn collect_edge_slot(kind: u32, slot: *mut c_void, ctx: *mut c_void) -> bool {
+    const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+    const PAYLOAD: u64 = 0x0000_FFFF_FFFF_FFFF;
+    let address_word = |address: u64| {
+        if address == 0 {
+            0
+        } else {
+            POINTER_TAG | (address & PAYLOAD)
+        }
+    };
+    // SAFETY: `slot` is the live slot of the kind the visitor method named.
+    let word = unsafe {
+        match kind {
+            FFI_ROOT_SLOT_I64 => {
+                let address = *(slot as *const i64);
+                if address > 0 {
+                    address_word(address as u64)
+                } else {
+                    0
+                }
+            }
+            FFI_ROOT_SLOT_USIZE | FFI_ROOT_SLOT_RAW_MUT_PTR => {
+                address_word(*(slot as *const usize) as u64)
+            }
+            FFI_ROOT_SLOT_NANBOX_F64 => (*(slot as *const f64)).to_bits(),
+            FFI_ROOT_SLOT_NANBOX_U64 => *(slot as *const u64),
+            _ => 0,
+        }
+    };
+    if word != 0 {
+        // SAFETY: `edge_collector` set `ctx` to its `&mut Vec<u64>`.
+        unsafe { &mut *(ctx as *mut Vec<u64>) }.push(word);
+    }
+    false
 }
 
 /// Register `value` under a fresh handle and return the handle.
@@ -583,9 +647,12 @@ pub fn with_handle<T: 'static + Send + Sync, R, F: FnOnce(&T) -> R>(
     handle: Handle,
     f: F,
 ) -> Option<R> {
-    HANDLES
-        .get(&handle)
-        .and_then(|entry| entry.value().downcast_ref::<T>().map(f))
+    if let Some(entry) = HANDLES.get(&handle) {
+        return entry.value().downcast_ref::<T>().map(f);
+    }
+    // SAFETY: see `handle_lifecycle::parked_record`.
+    let record = unsafe { &*crate::handle_lifecycle::parked_record(handle)? };
+    record.payload.downcast_ref::<T>().map(f)
 }
 
 /// Look up a handle and run `f` against a mutable borrow. Same
@@ -596,9 +663,12 @@ pub fn with_handle_mut<T: 'static + Send + Sync, R, F: FnOnce(&mut T) -> R>(
 ) -> Option<R> {
     // A mutable borrow may store an edge into a parked payload.
     crate::handle_lifecycle::note_mutable_access(handle);
-    HANDLES
-        .get_mut(&handle)
-        .and_then(|mut entry| entry.value_mut().downcast_mut::<T>().map(f))
+    if let Some(mut entry) = HANDLES.get_mut(&handle) {
+        return entry.value_mut().downcast_mut::<T>().map(f);
+    }
+    // SAFETY: see `handle_lifecycle::parked_record`.
+    let record = unsafe { &mut *crate::handle_lifecycle::parked_record(handle)? };
+    record.payload.downcast_mut::<T>().map(f)
 }
 
 /// Borrow the handle's value as `&'static T`. The reference is
@@ -611,19 +681,27 @@ pub fn get_handle<T: 'static + Send + Sync>(handle: Handle) -> Option<&'static T
     // reference points into that Box; it stays valid until the
     // entry is removed (which is the caller's responsibility to
     // sequence correctly).
-    HANDLES.get(&handle).and_then(|entry| {
+    if let Some(entry) = HANDLES.get(&handle) {
         let ptr = entry.value().downcast_ref::<T>()? as *const T;
-        Some(unsafe { &*ptr })
-    })
+        return Some(unsafe { &*ptr });
+    }
+    // A parked record's box stays put until its release, like a registry
+    // entry's until its removal.
+    let record = unsafe { &*crate::handle_lifecycle::parked_record(handle)? };
+    let ptr = record.payload.downcast_ref::<T>()? as *const T;
+    Some(unsafe { &*ptr })
 }
 
 /// Mutable counterpart to [`get_handle`].
 pub fn get_handle_mut<T: 'static + Send + Sync>(handle: Handle) -> Option<&'static mut T> {
     crate::handle_lifecycle::note_mutable_access(handle);
-    HANDLES.get_mut(&handle).and_then(|mut entry| {
+    if let Some(mut entry) = HANDLES.get_mut(&handle) {
         let ptr = entry.value_mut().downcast_mut::<T>()? as *mut T;
-        Some(unsafe { &mut *ptr })
-    })
+        return Some(unsafe { &mut *ptr });
+    }
+    let record = unsafe { &mut *crate::handle_lifecycle::parked_record(handle)? };
+    let ptr = record.payload.downcast_mut::<T>()? as *mut T;
+    Some(unsafe { &mut *ptr })
 }
 
 /// Remove the handle from the registry and return its value if
@@ -650,58 +728,66 @@ fn remove_payload(handle: Handle, deadline: Option<Instant>) -> Option<Box<dyn A
     let identity = REGISTRATIONS.begin_retirement(handle, NativeRegistrationKind::Payload)?;
     // Retiring blocks acquisition/reuse. Neither payload removal nor its later
     // destructor runs under the registration-state mutex.
-    let removed = HANDLES.remove(&handle).map(|(_, record)| record.payload);
-    // Still retiring, so the id cannot be reused before the index drops it.
-    if let Some(payload) = removed.as_deref() {
-        index_note_removed(payload, handle);
-    }
+    let removed = match HANDLES.remove(&handle) {
+        Some((_, record)) => {
+            // Still retiring, so the id cannot be reused before the index
+            // drops it.
+            index_note_removed(record.payload.as_ref(), handle);
+            Some(record.payload)
+        }
+        // A parked record: the retired id replaces its parked entry.
+        None => crate::handle_lifecycle::take_parked_record(handle).map(|record| record.payload),
+    };
     park(identity, deadline);
     removed
 }
 
 /// Park a registered payload whose owners are JS values once native code is
-/// finished with it: `owner` drops it (through [`release_reclaimed_payload`]),
-/// and its id is reissued, once a full trace proves no traced word names it.
-/// Until then it stays registered and readable. Returns false when `handle`
-/// is not a live registration.
+/// finished with it. Its record leaves the registry (so registry walks and
+/// type scanners no longer see it) for the parked entry, from which perry-ffi
+/// drops it and reissues the id once a full trace proves no traced word names
+/// it; `owner` names its edges meanwhile. Until then it stays readable through
+/// the lookups on this mutator. Returns false when `handle` is not a live
+/// registration.
 pub fn park_reclaimable_ffi(
     handle: Handle,
-    owner: &'static dyn crate::handle_lifecycle::ParkedPayloadOwner,
+    owner: &'static dyn crate::handle_lifecycle::ParkedRecordOwner,
 ) -> bool {
     let Some(identity) = REGISTRATIONS.identity(handle) else {
         return false;
     };
-    if !HANDLES.contains_key(&handle) {
+    let Some((_, record)) = HANDLES.remove(&handle) else {
         return false;
-    }
-    crate::handle_lifecycle::park_reclaimable(identity, owner);
+    };
+    index_note_removed(record.payload.as_ref(), handle);
+    crate::handle_lifecycle::park_record(identity, owner, record);
     true
 }
 
-/// The release half of [`park_reclaimable_ffi`], for a
-/// [`ParkedPayloadOwner::release`](crate::handle_lifecycle::ParkedPayloadOwner::release):
-/// remove the payload of `identity` and hand the id back at once (the trace
-/// already proved nothing names it; an outstanding lease still defers reuse).
-/// `None` when a concurrent `drop_handle` retired it first. The caller drops
-/// the payload outside every registry lock.
-pub fn release_reclaimed_payload(
+/// A parked record a trace proved unnamed: retire its registration and hand
+/// the id back at once (an outstanding lease still defers reuse), then drop
+/// the record outside every registry lock. A concurrent retirement (a
+/// `drop_handle` on another thread) already owns the id.
+pub(crate) fn release_parked_record(
     identity: crate::NativeRegistrationIdentity,
-) -> Option<Box<dyn Any + Send + Sync>> {
-    if !REGISTRATIONS.begin_retirement_of(identity) {
-        return None;
+    record: crate::NativePayloadRecord,
+) {
+    if REGISTRATIONS.begin_retirement_of(identity) {
+        assert!(REGISTRATIONS.finish_retirement_reusable(identity));
     }
-    let handle = identity.numeric_id();
-    let removed = HANDLES.remove(&handle).map(|(_, record)| record.payload);
-    if let Some(payload) = removed.as_deref() {
-        index_note_removed(payload, handle);
-    }
-    assert!(REGISTRATIONS.finish_retirement_reusable(identity));
-    removed
+    drop(record);
+}
+
+/// A parked record native code owns again (`retain_strongly`).
+pub(crate) fn restore_parked_record(handle: Handle, record: crate::NativePayloadRecord) {
+    let type_id = Any::type_id(record.payload.as_ref());
+    HANDLES.insert(handle, record);
+    index_note_registered(type_id, handle);
 }
 
 /// True if the handle currently maps to a registered object.
 pub fn handle_exists(handle: Handle) -> bool {
-    HANDLES.contains_key(&handle)
+    HANDLES.contains_key(&handle) || crate::handle_lifecycle::parked_record(handle).is_some()
 }
 
 /// Visit every registered handle whose stored type matches `T`,
@@ -765,32 +851,6 @@ where
     for mut entry in HANDLES.iter_mut() {
         if let Some(v) = entry.value_mut().downcast_mut::<T>() {
             f(v);
-        }
-    }
-}
-
-/// [`iter_handles_of_mut`] that also hands `f` the payload's id, for scanners
-/// whose rule depends on the id's parked state
-/// ([`crate::handle_lifecycle::payload_edges_are_rooted`]).
-pub fn iter_handle_entries_of_mut<T, F>(mut f: F)
-where
-    T: 'static + Send + Sync,
-    F: FnMut(Handle, &mut T),
-{
-    if let Some(ids) = indexed_ids_of::<T>() {
-        for id in ids {
-            if let Some(mut entry) = HANDLES.get_mut(&id) {
-                if let Some(v) = entry.value_mut().downcast_mut::<T>() {
-                    f(id, v);
-                }
-            }
-        }
-        return;
-    }
-    for mut entry in HANDLES.iter_mut() {
-        let id = *entry.key();
-        if let Some(v) = entry.value_mut().downcast_mut::<T>() {
-            f(id, v);
         }
     }
 }
@@ -1869,28 +1929,32 @@ mod reclaim_tests;
 /// Access the current mutator's bag on an existing native payload record.
 /// No caller may retain a reference into the registry across a GC operation.
 pub fn native_handle_props(handle: Handle) -> Option<u64> {
-    HANDLES.get(&handle).and_then(|entry| entry.props())
+    if let Some(entry) = HANDLES.get(&handle) {
+        return entry.props();
+    }
+    // SAFETY: see `handle_lifecycle::parked_record`.
+    unsafe { &*crate::handle_lifecycle::parked_record(handle)? }.props()
 }
 /// Replace the property bag on the current mutator's native owner.
 pub fn set_native_handle_props(handle: Handle, bits: u64) -> bool {
     crate::handle_lifecycle::note_mutable_access(handle);
-    let stored = HANDLES
-        .get_mut(&handle)
-        .is_some_and(|mut entry| entry.set_props(bits));
+    let stored = match HANDLES.get_mut(&handle) {
+        Some(mut entry) => entry.set_props(bits),
+        // The parked-record scanner visits a parked record's bag.
+        None => {
+            return crate::handle_lifecycle::parked_record(handle)
+                .is_some_and(|record| unsafe { &mut *record }.set_props(bits));
+        }
+    };
     if stored && bits != 0 {
         gc_register_mutable_root_scanner_named("ffi:native-payloads", scan_native_payload_roots);
     }
     stored
 }
 fn scan_native_payload_roots(visitor: &mut GcRootVisitor<'_>) {
-    // Full marks reach the bags of old parked payloads through the id's
-    // owner (`ParkedPayloadOwner::edges`); minors and relocation scans
-    // rewrite every bag.
-    let full_mark = visitor.is_full_mark();
+    // Native code owns every registered payload; parked records' bags are
+    // visited by the parked-record scanner (`handle_lifecycle`).
     for mut entry in HANDLES.iter_mut() {
-        if full_mark && !crate::handle_lifecycle::payload_edges_are_rooted(*entry.key()) {
-            continue;
-        }
         if let Some(slot) = entry.props_slot() {
             visitor.visit_nanbox_u64_slot(slot);
         }
@@ -1901,4 +1965,5 @@ pub fn clear_native_handle_props_in_ranges(contains: impl Fn(usize) -> bool) {
     for mut entry in HANDLES.iter_mut() {
         entry.clear_props_if(&contains);
     }
+    crate::handle_lifecycle::clear_parked_props_in_ranges(&contains);
 }

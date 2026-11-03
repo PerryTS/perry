@@ -148,6 +148,9 @@ mod tests {
 
     #[test]
     fn finished_request_handles_are_parked_for_the_gc() {
+        // Parked records live on the parking mutator: make this test thread one,
+        // as the JS thread that finalizes requests is.
+        perry_runtime::gc::gc_init();
         use super::super::in_flight::finalize_request_handles;
         use crate::server::response::ServerResponse;
         let request = perry_ffi::register_handle(123_u32);

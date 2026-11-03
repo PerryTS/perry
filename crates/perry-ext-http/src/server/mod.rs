@@ -50,10 +50,7 @@
 
 use std::sync::Once;
 
-use perry_ffi::{
-    gc_register_mutable_root_scanner_named, iter_handle_entries_of_mut, iter_handles_of_mut,
-    GcRootVisitor,
-};
+use perry_ffi::{gc_register_mutable_root_scanner_named, iter_handles_of_mut, GcRootVisitor};
 
 mod bun_server;
 mod cluster_bind;
@@ -129,18 +126,65 @@ pub(crate) fn ensure_gc_scanner_registered() {
 
 /// GC root scanner — walk every registered server / request /
 /// response handle and mark every closure pointer they've stashed.
-fn scan_http_server_roots(visitor: &mut GcRootVisitor<'_>) {
-    fn scan_listener_roots(
-        listeners: &mut std::collections::HashMap<String, Vec<i64>>,
-        visitor: &mut GcRootVisitor<'_>,
-    ) {
-        for callbacks in listeners.values_mut() {
-            for cb in callbacks.iter_mut() {
-                visitor.visit_i64_slot(cb);
-            }
+fn scan_listener_roots(
+    listeners: &mut std::collections::HashMap<String, Vec<i64>>,
+    visitor: &mut GcRootVisitor<'_>,
+) {
+    for callbacks in listeners.values_mut() {
+        for cb in callbacks.iter_mut() {
+            visitor.visit_i64_slot(cb);
         }
     }
+}
 
+/// A request's GC edges for the current mutator: the in-flight walk below and
+/// a parked request (`payloads::SERVER_PAYLOADS`) visit the same slots.
+pub(crate) fn scan_incoming_message_roots(
+    im: &mut IncomingMessage,
+    visitor: &mut GcRootVisitor<'_>,
+) {
+    scan_listener_roots(&mut im.listeners, visitor);
+    visitor.visit_nanbox_f64_slot(&mut im.signal_controller);
+    visitor.visit_nanbox_f64_slot(&mut im.signal);
+    if im.owner_agent == perry_ffi::agent_post::current_agent() {
+        visitor.visit_nanbox_f64_slot(&mut im.socket_value);
+    }
+}
+
+/// A response's GC edges for the current mutator, in flight or parked. A full
+/// mark also names `res.req` (pushed onto `named`: marking a handle word may
+/// read a payload of the registry the caller is walking).
+pub(crate) fn scan_server_response_roots(
+    sr: &mut ServerResponse,
+    visitor: &mut GcRootVisitor<'_>,
+    named: &mut Vec<u64>,
+) {
+    if visitor.is_full_mark() && sr.req_handle != 0 {
+        named.push(crate::client_payloads::handle_word(sr.req_handle));
+    }
+    if sr.owner_agent == perry_ffi::agent_post::current_agent() {
+        visitor.visit_nanbox_f64_slot(&mut sr.socket_value);
+        visitor.visit_nanbox_f64_slot(&mut sr.header_values);
+        if let Some((connection, _)) = &mut sr.turnloop {
+            connection.scan(visitor);
+        }
+    }
+    scan_listener_roots(&mut sr.listeners, visitor);
+    // #8163: `res.once(event, cb)` stores into a SECOND table that
+    // `take_event_listeners` merges into every emit. It was never scanned,
+    // so a `once('close')` closure that a moving minor relocated (or, with
+    // no other referent, freed) reached `emit_no_arg_to_listeners` as a
+    // pre-move address — Next's `pipeToNodeResponse` registers exactly
+    // that, and the production App Route fixture faulted on it under
+    // forced evacuation.
+    scan_listener_roots(&mut sr.once_listeners, visitor);
+    visitor.visit_nanbox_f64_slot(&mut sr.standalone_socket);
+    for cb in sr.pending_write_callbacks.iter_mut() {
+        visitor.visit_i64_slot(cb);
+    }
+}
+
+fn scan_http_server_roots(visitor: &mut GcRootVisitor<'_>) {
     fn scan_base_server_roots(server: &mut HttpServer, visitor: &mut GcRootVisitor<'_>) {
         if server.owner_agent == perry_ffi::agent_post::current_agent() {
             visitor.visit_nanbox_f64_slot(&mut server.transport_listener);
@@ -183,52 +227,16 @@ fn scan_http_server_roots(visitor: &mut GcRootVisitor<'_>) {
         visitor.visit_i64_slot(&mut s.handler);
         scan_base_server_roots(&mut s.base, visitor);
     });
-    // A full mark skips the edges of a finished exchange's old parked pair:
-    // the trace marks them through a word naming the id
-    // (`payloads::SERVER_PAYLOADS`), so a pair nothing names is collected.
+    // In-flight exchanges only: a finished pair's records are parked
+    // (`payloads::SERVER_PAYLOADS`) and visited by perry-ffi's parked-record
+    // scanner, or through a traced word naming the id.
     let full_mark = visitor.is_full_mark();
-    let skipped = |id| full_mark && !perry_ffi::handle_lifecycle::payload_edges_are_rooted(id);
-    iter_handle_entries_of_mut::<IncomingMessage, _>(|id, im| {
-        if skipped(id) {
-            return;
-        }
-        scan_listener_roots(&mut im.listeners, visitor);
-        visitor.visit_nanbox_f64_slot(&mut im.signal_controller);
-        visitor.visit_nanbox_f64_slot(&mut im.signal);
-        if im.owner_agent == perry_ffi::agent_post::current_agent() {
-            visitor.visit_nanbox_f64_slot(&mut im.socket_value);
-        }
-    });
+    iter_handles_of_mut::<IncomingMessage, _>(|im| scan_incoming_message_roots(im, visitor));
     // Transport and OutgoingMessage handles only. Standalone ServerResponse
     // objects are never registered here; GC traces their object-owned JS state.
     let mut named = Vec::new();
-    iter_handle_entries_of_mut::<ServerResponse, _>(|id, sr| {
-        if skipped(id) {
-            return;
-        }
-        if full_mark && sr.req_handle != 0 {
-            named.push(crate::client_payloads::handle_word(sr.req_handle));
-        }
-        if sr.owner_agent == perry_ffi::agent_post::current_agent() {
-            visitor.visit_nanbox_f64_slot(&mut sr.socket_value);
-            visitor.visit_nanbox_f64_slot(&mut sr.header_values);
-            if let Some((connection, _)) = &mut sr.turnloop {
-                connection.scan(visitor);
-            }
-        }
-        scan_listener_roots(&mut sr.listeners, visitor);
-        // #8163: `res.once(event, cb)` stores into a SECOND table that
-        // `take_event_listeners` merges into every emit. It was never scanned,
-        // so a `once('close')` closure that a moving minor relocated (or, with
-        // no other referent, freed) reached `emit_no_arg_to_listeners` as a
-        // pre-move address — Next's `pipeToNodeResponse` registers exactly
-        // that, and the production App Route fixture faulted on it under
-        // forced evacuation.
-        scan_listener_roots(&mut sr.once_listeners, visitor);
-        visitor.visit_nanbox_f64_slot(&mut sr.standalone_socket);
-        for cb in sr.pending_write_callbacks.iter_mut() {
-            visitor.visit_i64_slot(cb);
-        }
+    iter_handles_of_mut::<ServerResponse, _>(|sr| {
+        scan_server_response_roots(sr, visitor, &mut named)
     });
     if full_mark {
         // Visited after the walk: marking a handle word reads its payload
@@ -275,18 +283,23 @@ extern "C" fn retire_transport_edges(agent: u64) {
     iter_handles_of_mut::<Http2SecureServer, _>(|server| {
         clear_server(&mut server.base);
     });
-    iter_handles_of_mut::<IncomingMessage, _>(|request| {
+    // Finished exchanges this agent parked hold the same edges.
+    let clear_request = |request: &mut IncomingMessage| {
         if request.owner_agent == agent {
             request.socket_value = undefined;
         }
-    });
-    iter_handles_of_mut::<ServerResponse, _>(|response| {
+    };
+    iter_handles_of_mut::<IncomingMessage, _>(clear_request);
+    perry_ffi::handle_lifecycle::iter_parked_payloads_of_mut::<IncomingMessage, _>(clear_request);
+    let clear_response = |response: &mut ServerResponse| {
         if response.owner_agent == agent {
             response.turnloop = None;
             response.socket_value = undefined;
             response.header_values = undefined;
         }
-    });
+    };
+    iter_handles_of_mut::<ServerResponse, _>(clear_response);
+    perry_ffi::handle_lifecycle::iter_parked_payloads_of_mut::<ServerResponse, _>(clear_response);
     iter_handles_of_mut::<Http2SessionHandle, _>(|session| {
         if session.owner_agent == agent {
             session.socket_value = undefined;

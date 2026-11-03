@@ -7,72 +7,39 @@
 //! A handler or a later callback that kept `req` / `res` reads its url,
 //! headers and status like Node; a write after the connection went away hits
 //! the real, finished response. A full trace marks a parked payload's edges
-//! only through a traced word naming its id, and the trace that finds none
+//! only through a traced word naming its id (or while young, through
+//! perry-ffi's parked-record scanner), and the trace that finds none
 //! drops the payload and gives the id back. Until then the id cannot be
 //! reissued, so no late caller reaches a recycled pair.
-use perry_ffi::handle_lifecycle::ParkedPayloadOwner;
-use perry_ffi::Handle;
+use perry_ffi::handle_lifecycle::ParkedRecordOwner;
+use perry_ffi::{GcRootVisitor, Handle};
 
-use crate::client_payloads::{address_word, handle_word};
 use crate::server::request::IncomingMessage;
 use crate::server::response::ServerResponse;
 
-/// The ffi payload map as the owner of parked server request/response ids.
+/// The owner of parked server request/response records.
 pub(crate) struct ServerPayloads;
 
 pub(crate) static SERVER_PAYLOADS: ServerPayloads = ServerPayloads;
 
-impl ParkedPayloadOwner for ServerPayloads {
-    fn release(&self, identity: perry_ffi::NativeRegistrationIdentity) {
-        // A payload holds strings, vectors, closure addresses and a
-        // connection snapshot; dropping it runs no JS and allocates nothing
-        // on the GC heap.
-        drop(perry_ffi::release_reclaimed_payload(identity));
-    }
-
-    fn edges(&self, id: Handle, out: &mut Vec<u64>) {
-        out.extend(perry_ffi::native_handle_props(id));
-        let agent = perry_ffi::agent_post::current_agent();
-        let request = perry_ffi::with_handle::<IncomingMessage, _, _>(id, |im| {
-            incoming_edges(im, agent, out)
-        });
-        if request.is_none() {
-            perry_ffi::with_handle::<ServerResponse, _, _>(id, |sr| response_edges(sr, agent, out));
+impl ParkedRecordOwner for ServerPayloads {
+    // A payload holds strings, vectors, closure addresses and a connection
+    // snapshot; perry-ffi's drop of it runs no JS and allocates nothing on
+    // the GC heap.
+    fn visit(
+        &self,
+        payload: &mut (dyn std::any::Any + Send + Sync),
+        visitor: &mut GcRootVisitor<'_>,
+    ) {
+        if let Some(im) = payload.downcast_mut::<IncomingMessage>() {
+            crate::server::scan_incoming_message_roots(im, visitor);
+        } else if let Some(sr) = payload.downcast_mut::<ServerResponse>() {
+            let mut named = Vec::new();
+            crate::server::scan_server_response_roots(sr, visitor, &mut named);
+            for mut word in named {
+                visitor.visit_nanbox_u64_slot(&mut word);
+            }
         }
-    }
-}
-
-fn listener_words(listeners: &std::collections::HashMap<String, Vec<i64>>, out: &mut Vec<u64>) {
-    out.extend(listeners.values().flatten().map(|&cb| address_word(cb)));
-}
-
-/// The slots `scan_http_server_roots` visits for a request.
-fn incoming_edges(im: &IncomingMessage, agent: u64, out: &mut Vec<u64>) {
-    listener_words(&im.listeners, out);
-    out.extend([im.signal_controller.to_bits(), im.signal.to_bits()]);
-    if im.owner_agent == agent {
-        out.push(im.socket_value.to_bits());
-    }
-}
-
-/// The slots `scan_http_server_roots` visits for a response, plus `res.req`.
-fn response_edges(sr: &ServerResponse, agent: u64, out: &mut Vec<u64>) {
-    if sr.owner_agent == agent {
-        out.extend([sr.socket_value.to_bits(), sr.header_values.to_bits()]);
-        if let Some((connection, _)) = &sr.turnloop {
-            out.extend(connection.edge());
-        }
-    }
-    listener_words(&sr.listeners, out);
-    listener_words(&sr.once_listeners, out);
-    out.push(sr.standalone_socket.to_bits());
-    out.extend(
-        sr.pending_write_callbacks
-            .iter()
-            .map(|&cb| address_word(cb)),
-    );
-    if sr.req_handle != 0 {
-        out.push(handle_word(sr.req_handle));
     }
 }
 

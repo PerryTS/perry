@@ -152,6 +152,9 @@ fn http2_drain_waits_for_stream_outbox_not_just_socket_queue() {
 
 #[test]
 fn http2_compat_pump_keeps_unfinished_response_alive() {
+    // Parked records live on the parking mutator: make this test thread one,
+    // as the JS thread that finalizes requests is.
+    perry_runtime::gc::gc_init();
     let f = Fixture::new();
     let request = register_handle(String::from("request fixture"));
     let pending = server::HttpPendingRequest {

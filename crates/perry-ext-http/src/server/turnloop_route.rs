@@ -31,13 +31,6 @@ impl ResponseConnection {
             visitor.visit_nanbox_f64_slot(owner);
         }
     }
-    /// The GC edge [`Self::scan`] visits, as a JSValue word.
-    pub(crate) fn edge(&self) -> Option<u64> {
-        match self {
-            Self::Socket { owner, .. } => Some(owner.to_bits()),
-            Self::H2Session(_) => None,
-        }
-    }
     pub(crate) fn root(self) -> RootedConnection {
         match self {
             Self::Socket { owner, incarnation } => RootedConnection::Socket {
