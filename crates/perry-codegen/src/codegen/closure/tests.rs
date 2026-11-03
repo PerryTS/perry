@@ -27,6 +27,7 @@ fn one_capture_closure_ir() -> String {
         mutable_captures: vec![0],
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: true,
         is_async: false,
@@ -65,6 +66,7 @@ fn one_capture_closure_ir() -> String {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     let opts = crate::CompileOptions {
         emit_ir_only: true,
@@ -95,6 +97,7 @@ fn unboxed_capture_update_ir() -> String {
         mutable_captures: Vec::new(),
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: true,
         is_async: false,
@@ -126,6 +129,7 @@ fn unboxed_capture_update_ir() -> String {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     let opts = crate::CompileOptions {
         emit_ir_only: true,

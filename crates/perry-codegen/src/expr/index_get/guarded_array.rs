@@ -1088,6 +1088,7 @@ mod compact_read_tests {
             decorators: vec![],
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         });
         let ll = String::from_utf8(
             compile_module(

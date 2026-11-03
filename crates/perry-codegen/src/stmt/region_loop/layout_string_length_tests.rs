@@ -100,6 +100,7 @@ fn sum_lengths_ir_with(tree: Expr) -> String {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     String::from_utf8(
         crate::compile_module(

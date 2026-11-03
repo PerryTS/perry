@@ -479,6 +479,7 @@ fn phase2_v35_widget_set_hidden_in_closure_emits_state_binding() {
         mutable_captures: vec![],
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: false,
         is_async: false,

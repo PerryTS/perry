@@ -85,6 +85,7 @@ fn recursive_module(lhs: Expr, rhs: Expr) -> Module {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     };
     let mut module = Module::new("spec_self_recursion.ts");
     module.functions.push(f);
@@ -181,6 +182,7 @@ fn bigint_capable_guarded_recursive_module() -> Module {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     };
     let mut module = Module::new("spec_self_recursion_bigint.ts");
     module.functions.push(f);

@@ -72,6 +72,7 @@ fn probe_module(field_ty: Type) -> Module {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     };
     class.getters.push(("value".into(), getter.clone()));
     getter.id = 201;
@@ -131,6 +132,7 @@ fn probe_module(field_ty: Type) -> Module {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }];
     m.init_kind = ModuleInitKind::Eager;
     m

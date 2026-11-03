@@ -34,6 +34,7 @@ fn function_ir(body: Expr) -> String {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     compile(&m)
 }

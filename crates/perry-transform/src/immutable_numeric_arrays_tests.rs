@@ -18,6 +18,7 @@ fn function(body: Vec<Stmt>) -> Function {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 fn read(index: Expr) -> Expr {

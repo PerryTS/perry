@@ -32,6 +32,7 @@ fn closure(id: u32, params: Vec<Param>, body: Vec<Stmt>, captures: Vec<u32>) -> 
         mutable_captures: Vec::new(),
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: true,
         is_async: false,
@@ -67,6 +68,7 @@ fn module(params: Vec<Param>, body: Vec<Stmt>) -> Module {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     m
 }

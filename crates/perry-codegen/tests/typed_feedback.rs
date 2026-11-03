@@ -268,6 +268,7 @@ fn module_with_classes(
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         }],
         init_is_strict: false,
         init: Vec::new(),
@@ -937,6 +938,7 @@ fn full_outline_ic_auto_gate_counts_class_methods() {
                 decorators: Vec::new(),
                 was_plain_async: false,
                 was_unrolled: false,
+                construct_only: false,
             });
         }
         // A param-based array (not all-const) so it reaches the array-literal
@@ -1055,6 +1057,7 @@ fn typed_feedback_guards_direct_class_method_specialization() {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     let ir = ir_for(module_with_classes(
         "typed_feedback_class_method.ts",
@@ -1140,6 +1143,7 @@ fn synthetic_arguments_only_method_uses_shape_guarded_direct_call() {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     counter.methods.push(Function {
         id: 9,
@@ -1169,6 +1173,7 @@ fn synthetic_arguments_only_method_uses_shape_guarded_direct_call() {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     let ir = ir_for(module_with_classes(
         "synthetic_arguments_method_guard.ts",
@@ -1262,6 +1267,7 @@ fn typed_feedback_guards_direct_closure_call_specialization() {
                     mutable_captures: Vec::new(),
                     captures_this: false,
                     captures_new_target: false,
+                    construct_only: false,
                     enclosing_class: None,
                     is_arrow: false,
                     is_async: false,

@@ -26,13 +26,13 @@ pub use boxed_primitives::{
     js_boxed_bigint_new, js_boxed_boolean_new, js_boxed_number_new, js_boxed_string_new,
     js_boxed_symbol_new,
 };
+mod array_layout;
 mod collections;
 mod identity_equality;
 mod prototype_equality;
 mod strip_vt;
 mod typed_array_equality;
 mod util_format;
-mod array_layout;
 pub(crate) use util_format::install_json_format;
 mod value_repr;
 pub(crate) use value_repr::{int32_or_class_repr, is_array_hole};

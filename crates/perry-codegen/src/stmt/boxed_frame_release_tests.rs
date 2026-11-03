@@ -32,6 +32,7 @@ fn closure(func_id: u32, body: Vec<Stmt>, captures: Vec<u32>) -> Expr {
         captures,
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: true,
         is_async: false,
@@ -66,6 +67,7 @@ fn function(name: &str, params: Vec<Param>, body: Vec<Stmt>) -> Function {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 

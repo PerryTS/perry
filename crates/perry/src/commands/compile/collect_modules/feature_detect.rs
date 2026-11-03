@@ -1673,6 +1673,53 @@ class C {
         let literal = detect_for_source("console.log(\"literal %j\");");
         assert!(!literal.uses_json_format && !literal.uses_global_json);
     }
+    /// A sloppy function referenced only as a `new` callee gets a fresh
+    /// `this`, so passing that `this` on does not hand out the global object.
+    #[test]
+    fn construct_only_sloppy_this_is_not_the_global() {
+        for source in [
+            "function Edge(cfg) { this.a = 1; cfg.add(this); } const e = new Edge({ add(o) { console.log(o); } }); console.log(e.a);",
+            "function outer(cfg) { function Edge(c) { this.a = 1; c.add(this); } return new Edge(cfg); } console.log(outer({ add(o) { console.log(o); } }));",
+            // A parameter that shares the name is another binding.
+            "function Edge(cfg) { cfg.add(this); } function mk(Edge) { return Edge({ add() {} }); } new Edge({ add() {} }); mk(process.argv[2]);",
+            "function Edge(cfg) { this.a = 1; cfg.add(this); } function mk(c) { return new Edge(c); } console.log(mk({ add() {} }), new Edge({ add() {} }));",
+        ] {
+            let ctx = detect_for_source(source);
+            assert!(!ctx.uses_global_reflect && !ctx.uses_global_websocket, "{source}");
+        }
+    }
+    /// Every other way to reach the function keeps the old behaviour: its
+    /// `this` can be the global object.
+    #[test]
+    fn construct_only_sloppy_this_escapes_when_called_otherwise() {
+        for source in [
+            "function Edge(cfg) { cfg.add(this); } new Edge({ add() {} }); Edge({ add() {} });",
+            "function Edge(cfg) { cfg.add(this); } new Edge({ add() {} }); Edge.call(undefined, { add() {} });",
+            "function Edge(cfg) { cfg.add(this); } new Edge({ add() {} }); Edge.apply(undefined, [{ add() {} }]);",
+            "function Edge(cfg) { cfg.add(this); } new Edge({ add() {} }); const b = Edge.bind(undefined); b({ add() {} });",
+            "function Edge(cfg) { cfg.add(this); } new Edge({ add() {} }); module.exports = Edge;",
+            "function Edge(cfg) { cfg.add(this); } new Edge({ add() {} }); [{ add() {} }].forEach(Edge);",
+            "function Edge(cfg) { cfg.add(this); } new Edge({ add() {} }); const f = Edge; f({ add() {} });",
+            "function Edge(cfg) { cfg.add(this); } new Edge({ add() {} }); const g = new Edge({ add() {} }).constructor; g({ add() {} });",
+            "function Edge(cfg) { cfg.add(this); } new Edge({ add() {} }); console.log(eval('Edge')({ add() {} }));",
+            "function plain() { return this; } console.log(plain()[process.argv[2]]);",
+            "function Edge(cfg) { cfg.add(this); } function mk() { { function Edge(c) { c.add(this); } } return Edge({ add() {} }); } mk();",
+        ] {
+            let ctx = detect_for_source(source);
+            assert!(ctx.uses_global_reflect && ctx.uses_global_websocket, "{source}");
+        }
+        // The global object itself, by key or as an argument.
+        for source in [
+            "console.log(globalThis[process.argv[2]]);",
+            "function show(g) { console.log(g); } show(globalThis);",
+        ] {
+            let ctx = detect_for_source(source);
+            assert!(
+                ctx.uses_global_reflect && ctx.uses_global_websocket,
+                "{source}"
+            );
+        }
+    }
     #[test]
     fn escaped_globals_keep_json_namespace_available() {
         for source in [

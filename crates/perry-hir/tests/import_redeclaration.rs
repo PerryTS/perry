@@ -35,7 +35,10 @@ fn every_local_binding_form_conflicts_with_an_import() {
     assert_redeclared("import { b } from './m';\nlet [x, { b }] = [1, {}];", "b");
     assert_redeclared("import { c } from './m';\nif (true) { var c = 1; }", "c");
     assert_redeclared("import { d } from './m';\nexport function d() {}", "d");
-    assert_redeclared("import { e } from './m';\nimport { x as e } from './n';", "e");
+    assert_redeclared(
+        "import { e } from './m';\nimport { x as e } from './n';",
+        "e",
+    );
 }
 
 #[test]

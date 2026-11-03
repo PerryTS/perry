@@ -706,6 +706,7 @@ mod tests {
                 decorators: vec![],
                 was_plain_async: false,
                 was_unrolled: false,
+                construct_only: false,
             });
             // A loop indexed read registers the proof before any call. A
             // numeric intrinsic alone deliberately keeps per-access resolution.
@@ -839,6 +840,7 @@ mod tests {
             decorators: vec![],
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         });
         add_indexed_loop_read(&mut module.functions[0]);
         let ir = String::from_utf8(

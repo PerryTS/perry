@@ -935,6 +935,7 @@ fn dynamic_key_read_ir(name: &str, key_type: Type) -> String {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     String::from_utf8(
         compile_module(

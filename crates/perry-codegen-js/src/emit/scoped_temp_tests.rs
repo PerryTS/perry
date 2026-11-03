@@ -29,6 +29,7 @@ fn function(id: FuncId, name: &str, params: Vec<Param>, body: Vec<Stmt>) -> Func
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 
@@ -360,6 +361,7 @@ fn closure_scoped_temps_are_activation_local() {
             mutable_captures: vec![],
             captures_this: false,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow: true,
             is_async: false,

@@ -78,6 +78,7 @@ fn func(id: u32, params: Vec<Param>, body: Vec<Stmt>) -> Function {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 
@@ -338,6 +339,7 @@ fn an_exposure_in_a_closure_or_another_function_is_remote() {
         mutable_captures: vec![],
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: true,
         is_async: false,
@@ -428,14 +430,19 @@ fn a_returned_parameter_follows_its_arguments() {
             fresh(10),
             fresh(11),
             Stmt::Expr(get(10, call(1, vec![Expr::Integer(2)]))),
-            Stmt::Expr(get(
-                11,
-                call(2, vec![Expr::String("buffer".to_string())]),
-            )),
+            Stmt::Expr(get(11, call(2, vec![Expr::String("buffer".to_string())]))),
         ],
         vec![
-            func(1, vec![param(20)], vec![Stmt::Return(Some(Expr::LocalGet(20)))]),
-            func(2, vec![param(30)], vec![Stmt::Return(Some(Expr::LocalGet(30)))]),
+            func(
+                1,
+                vec![param(20)],
+                vec![Stmt::Return(Some(Expr::LocalGet(20)))],
+            ),
+            func(
+                2,
+                vec![param(30)],
+                vec![Stmt::Return(Some(Expr::LocalGet(30)))],
+            ),
         ],
     );
     let exposed = buffer_exposure(&m).exposed;

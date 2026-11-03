@@ -26,6 +26,7 @@ fn function(body: Vec<Stmt>, is_async: bool) -> Function {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 
@@ -349,6 +350,7 @@ fn hash_captured_by_a_closure_escapes() {
         mutable_captures: vec![],
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         is_strict: true,
         enclosing_class: None,
         is_arrow: true,
@@ -462,6 +464,7 @@ fn closure(func_id: u32, params: Vec<Param>, body: Vec<Stmt>, captures: Vec<u32>
         mutable_captures: vec![],
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         is_strict: false,
         enclosing_class: None,
         is_arrow: false,

@@ -80,6 +80,7 @@ fn anon_shape(id: u32, name: &str, ctor_id: u32, param_base: u32) -> Class {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         }),
         methods: Vec::new(),
         getters: Vec::new(),
@@ -133,6 +134,7 @@ fn method(func_id: u32, is_arrow: bool, is_strict: bool) -> Expr {
         mutable_captures: Vec::new(),
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow,
         is_async: false,
@@ -306,6 +308,7 @@ fn home_classes_name_only_unambiguous_dynamic_this_methods() {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
 
     let homes = crate::collectors::literal_method_home_classes(&hir);

@@ -707,6 +707,7 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
                 is_strict: true,
                 was_plain_async: false,
                 was_unrolled: false,
+                construct_only: false,
                 is_exported: false,
                 captures: ctor_body.2,
                 decorators: Vec::new(),

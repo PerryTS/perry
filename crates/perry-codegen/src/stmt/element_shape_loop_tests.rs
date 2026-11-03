@@ -196,6 +196,7 @@ fn assigning_ctor(fields: &[ClassField]) -> perry_hir::Function {
         is_strict: true,
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
         is_exported: false,
         captures: Vec::new(),
         decorators: Vec::new(),
@@ -1746,6 +1747,7 @@ fn element_binding_form_through_a_parameter_gets_the_clone() {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }];
     m.init_kind = ModuleInitKind::Eager;
     let ir = emit(&m);

@@ -71,6 +71,7 @@ fn compile(name: &str, params: Vec<Param>, body: Vec<Stmt>, kind: u8) -> String 
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     // A 65536-element owner is Native under the production placement policy.
     m.init.push(local(

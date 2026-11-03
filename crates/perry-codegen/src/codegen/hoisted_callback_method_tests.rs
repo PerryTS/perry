@@ -48,6 +48,7 @@ fn method(body: Vec<Stmt>) -> Function {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 
@@ -236,6 +237,7 @@ fn nested_closure_calls_are_not_assigned_the_outer_methods_ssa_target() {
         mutable_captures: Vec::new(),
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: true,
         is_async: false,

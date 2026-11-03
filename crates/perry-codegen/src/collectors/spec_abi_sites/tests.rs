@@ -47,6 +47,7 @@ fn func(id: u32, body: Vec<Stmt>) -> Function {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 
@@ -345,6 +346,7 @@ fn closure_reference_rejects_binding() {
         mutable_captures: vec![],
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: true,
         is_async: false,
@@ -416,6 +418,7 @@ fn sites_inside_closures_are_never_judged() {
         mutable_captures: vec![],
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: true,
         is_async: false,
@@ -530,6 +533,7 @@ fn local_is_reassigned_sees_closure_writes() {
         mutable_captures: vec![5],
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: true,
         is_async: false,

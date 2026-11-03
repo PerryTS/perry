@@ -385,6 +385,7 @@ fn collect_param_string_literal_union_from_function() {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
 
     let params = collect_dynamic_import_param_literals(&m);
@@ -453,6 +454,7 @@ fn collect_param_string_literal_union_from_type_alias() {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     m.type_aliases.push(crate::ir::TypeAlias {
         id: 1,
@@ -764,6 +766,7 @@ fn worker_new_visitor_descends_into_closure_bodies() {
         mutable_captures: vec![],
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: false,
         is_async: false,
@@ -809,6 +812,7 @@ fn dynamic_import_visitors_keep_closure_and_toplevel_order_in_lockstep() {
         mutable_captures: vec![],
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: false,
         is_async: false,
@@ -904,6 +908,7 @@ fn resolve_closure_local_const_specifier() {
         mutable_captures: vec![],
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: false,
         is_async: true,
@@ -949,6 +954,7 @@ fn collect_consts_invalidates_closure_mutation() {
         mutable_captures: vec![5],
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: false,
         is_async: false,
@@ -1071,6 +1077,7 @@ fn module_defining_fn(module: &str, name: &str) -> Module {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     m.exports.push(Export::Named {
         local: name.into(),
@@ -1404,6 +1411,7 @@ fn tla_skips_await_inside_closure() {
         mutable_captures: vec![],
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: false,
         is_async: true,

@@ -203,6 +203,7 @@ mod tests {
             decorators: vec![],
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         });
         String::from_utf8(
             compile_module(
@@ -239,7 +240,10 @@ mod tests {
             runtime_block.contains("call double @perry_array_read_cold_shared("),
             "{runtime_block}"
         );
-        assert!(!ir.contains("call double @js_array_get_index_or_string("), "{ir}");
+        assert!(
+            !ir.contains("call double @js_array_get_index_or_string("),
+            "{ir}"
+        );
     }
 
     #[test]

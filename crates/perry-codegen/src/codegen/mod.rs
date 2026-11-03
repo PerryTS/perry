@@ -247,9 +247,9 @@ mod ctor_arity;
 pub use ctor_arity::{
     context_free_ctor_abi, context_free_ctor_param_count, CtorAbi, UNRESOLVED_PARENT_FWD_ARITY,
 };
-mod checked_integer;
 #[cfg(test)]
 mod buffer_alias_metadata_tests;
+mod checked_integer;
 #[cfg(test)]
 mod declared_string_add_tests;
 #[cfg(test)]
@@ -993,6 +993,7 @@ fn lower_module(
                 is_strict: true,
                 was_plain_async: false,
                 was_unrolled: false,
+                construct_only: false,
                 is_exported: false,
                 captures: Vec::new(),
                 decorators: Vec::new(),
@@ -1013,6 +1014,7 @@ fn lower_module(
                 is_strict: true,
                 was_plain_async: false,
                 was_unrolled: false,
+                construct_only: false,
                 is_exported: false,
                 captures: Vec::new(),
                 decorators: Vec::new(),
@@ -1083,6 +1085,7 @@ fn lower_module(
                     is_strict: true,
                     was_plain_async: false,
                     was_unrolled: false,
+                    construct_only: false,
                     is_exported: false,
                     captures: Vec::new(),
                     decorators: Vec::new(),
@@ -1184,6 +1187,7 @@ fn lower_module(
                         is_strict: true,
                         was_plain_async: false,
                         was_unrolled: false,
+                        construct_only: false,
                         is_exported: false,
                         captures: Vec::new(),
                         decorators: Vec::new(),

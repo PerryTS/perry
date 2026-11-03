@@ -51,6 +51,7 @@ fn ir_body(body: Vec<Stmt>) -> String {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     String::from_utf8(
         compile_module(
@@ -907,6 +908,7 @@ fn ir_proven(proven: bool, expr: Expr) -> String {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     let elision = ElisionFacts {
         array_iterator_close_unwritten: proven,

@@ -89,6 +89,7 @@ fn class_p() -> Class {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         }),
         methods: Vec::new(),
         getters: Vec::new(),
@@ -126,6 +127,7 @@ fn class_q() -> Class {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }];
     q
 }
@@ -672,6 +674,7 @@ fn class_base() -> Class {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     b
 }
@@ -701,6 +704,7 @@ fn class_d_extends_base() -> Class {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     d
 }
@@ -937,6 +941,7 @@ fn non_numeric_writes_and_bindings_are_excluded() {
             mutable_captures: vec![6],
             captures_this: false,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow: true,
             is_async: false,

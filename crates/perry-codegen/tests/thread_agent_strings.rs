@@ -21,6 +21,7 @@ fn literal_ir(name: &str, method: Option<&str>, opts: CompileOptions, deferred: 
             mutable_captures: Vec::new(),
             captures_this: false,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow: true,
             is_async: false,

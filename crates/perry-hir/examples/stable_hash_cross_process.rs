@@ -86,6 +86,7 @@ fn build_canonical() -> Module {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
 
     m

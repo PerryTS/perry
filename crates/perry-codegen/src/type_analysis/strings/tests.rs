@@ -88,6 +88,7 @@ fn concat_probe_ir(property: &str) -> String {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         }],
         script_global_functions: Vec::new(),
         references_global_this: false,

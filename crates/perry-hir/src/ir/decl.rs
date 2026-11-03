@@ -561,6 +561,10 @@ pub struct Function {
     pub is_async: bool,
     pub is_generator: bool,
     pub is_strict: bool,
+    /// Every reference to this function is the callee of a `new` expression
+    /// (see `lower/pre_scan/construct_only.rs`): its sloppy `this` is always a
+    /// fresh object, never the global object. False when not proven.
+    pub construct_only: bool,
     pub is_exported: bool,
     /// Captured variables (for closures)
     pub captures: Vec<LocalId>,
