@@ -1322,6 +1322,10 @@ unsafe fn make_observer_object(id: usize) -> f64 {
         keys = crate::array::js_array_push(keys, JSValue::string_ptr(kp));
     }
     crate::object::js_object_set_keys(obj, keys);
+    let obj = crate::object::native_module::brand_native_namespace(
+        obj,
+        &crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL,
+    );
     link_perf_prototype(
         crate::value::js_nanbox_pointer(obj as i64),
         "PerformanceObserver",

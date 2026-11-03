@@ -412,6 +412,10 @@ unsafe fn build_v8_instance(module: &str, id: usize) -> f64 {
         keys = crate::array::js_array_push(keys, JSValue::string_ptr(kp));
     }
     crate::object::js_object_set_keys(obj, keys);
+    let obj = crate::object::native_module::brand_native_namespace(
+        obj,
+        &crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL,
+    );
     // The receiver's [[Prototype]] is its constructor's prototype: the methods
     // `serde_prototypes::attach` installs there are then visible on the
     // instance, and `Object.getPrototypeOf(s) === v8.Serializer.prototype`
@@ -760,6 +764,13 @@ pub extern "C" fn js_v8_gc_profiler_new() -> f64 {
     );
     keys.set_raw_mut_ptr(pushed);
     crate::object::js_object_set_keys(obj.get_raw_mut_ptr(), keys.get_raw_mut_ptr());
+    // SAFETY: `obj` is the live, rooted instance object born above.
+    obj.set_raw_mut_ptr(unsafe {
+        crate::object::native_module::brand_native_namespace(
+            obj.get_raw_mut_ptr(),
+            &crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL,
+        )
+    });
     crate::object::prototype_chain::object_set_static_prototype(
         obj.get_raw_mut_ptr::<ObjectHeader>() as usize,
         prototype.get_nanbox_f64().to_bits(),

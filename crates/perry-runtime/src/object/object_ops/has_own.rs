@@ -317,8 +317,8 @@ fn object_has_own_generic(obj_value: f64, key_value: f64) -> f64 {
                     key_str,
                 ))
                 .map(|(module, key)| {
-                    super::super::native_module::native_module_vtable()
-                        .is_some_and(|vt| (vt.has_enumerable_key)(module, key))
+                    super::super::native_module::object_native_vtable(obj)
+                        .is_some_and(|vt| (vt.has_enumerable_key)(vt, module, key))
                 })
                 .unwrap_or(false);
             return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
@@ -344,8 +344,8 @@ fn object_has_own_generic(obj_value: f64, key_value: f64) -> f64 {
             let present = read_native_module_name(obj)
                 .as_deref()
                 .is_some_and(|module_name| {
-                    super::super::native_module::native_module_vtable()
-                        .is_some_and(|vt| (vt.has_enumerable_key)(module_name, key_name))
+                    super::super::native_module::object_native_vtable(obj)
+                        .is_some_and(|vt| (vt.has_enumerable_key)(vt, module_name, key_name))
                 });
             return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
         }
@@ -759,7 +759,7 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
         if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
             if let Some(module_name) = read_native_module_name(obj) {
                 return f64::from_bits(
-                    if native_module_has_enumerable_key(&module_name, key_name) {
+                    if namespace_has_enumerable_key(obj, &module_name, key_name) {
                         TAG_TRUE
                     } else {
                         TAG_FALSE

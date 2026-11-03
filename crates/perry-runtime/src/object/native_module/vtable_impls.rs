@@ -109,7 +109,7 @@ pub(super) unsafe fn vt_get_own_field(
     // `process.getBuiltinModule(...)`) returned undefined for them while the
     // static codegen path resolved them via `js_native_module_property_by_name`.
     // Defer to that authoritative resolver so dynamic namespaces match static.
-    if native_module_has_enumerable_key(&module_name, property_name) {
+    if namespace_has_enumerable_key(obj, &module_name, property_name) {
         let resolved = js_native_module_property_by_name(
             module_name.as_ptr(),
             module_name.len(),
@@ -147,14 +147,15 @@ pub(crate) unsafe fn vt_own_keys_array(
     {
         return None;
     }
+    let vt = object_native_vtable(obj)?;
+    let keys = (vt.keys)(vt)?;
     let module_name = read_native_module_name(obj)?;
-    let keys = native_module_enumerable_keys(&module_name)?;
     let include_permission = matches!(
         module_name.as_str(),
         "process" | "process.namespace" | "process.default"
     ) && crate::process::process_permission_enabled();
     let out = crate::array::js_array_alloc(keys.len() as u32 + include_permission as u32);
-    for key_bytes in keys {
+    for key_bytes in keys.iter() {
         if crate::process::worker_restrictions::worker_process_member_hidden(
             &module_name,
             std::str::from_utf8(key_bytes).unwrap_or(""),

@@ -1227,7 +1227,7 @@ pub(crate) fn get_field_by_name_object_tail(
         // `None` (no module name / vtable uninstalled) falls through to
         // the generic scans below, matching the pre-relocation flow.
         if (*obj).class_id == NATIVE_MODULE_CLASS_ID && !key.is_null() {
-            if let Some(vt) = super::super::native_module::native_module_vtable() {
+            if let Some(vt) = super::super::native_module::object_native_vtable(obj) {
                 if let Some(v) = (vt.get_own_field)(obj, key) {
                     return v;
                 }

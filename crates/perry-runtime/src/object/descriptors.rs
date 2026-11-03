@@ -1226,7 +1226,7 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
         // `getOwnPropertyNames(fs).forEach(k => defineProperty(copy, k,
         // getOwnPropertyDescriptor(fs, k)))`; with only `__module__` listed,
         // the clone dropped every fs method (`readFileSync` → undefined).
-        // Mirror `Object.keys` (vt_own_keys_array → native_module_enumerable_keys).
+        // Mirror `Object.keys` (vt_own_keys_array → the shape's vtable keys).
         if obj_jv.is_pointer() {
             let obj_ptr = crate::value::js_nanbox_get_pointer(obj_value) as *const ObjectHeader;
             if !obj_ptr.is_null() {
@@ -1898,7 +1898,7 @@ pub(crate) unsafe fn nm_get_own_descriptor(
             false,
         ));
     }
-    if !native_module_has_enumerable_key(&module_name, key_name) {
+    if !super::native_module::namespace_has_enumerable_key(obj, &module_name, key_name) {
         return None;
     }
     if module_name == "fs" {

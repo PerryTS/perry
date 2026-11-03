@@ -77,7 +77,7 @@ pub(crate) use constructor_exports::{
     bound_native_callable_is_constructor_value, is_native_module_constructor_export,
 };
 pub(crate) use module_keys::{
-    native_module_enumerable_keys, native_module_has_enumerable_key,
+    native_module_has_enumerable_key, native_module_vtable_for,
     zlib_readonly_property_enumerability,
 };
 use name_tables::should_cache_native_module_namespace;
@@ -593,43 +593,125 @@ pub(crate) fn set_buffer_pool_size(value: f64) {
 /// reads, Object.keys, has/in checks). All of these bottom out in large
 /// static (module, method) tables that reference every module's runtime
 /// implementation; a direct call from a generic path pins all of it in
-/// every binary, `-dead_strip` notwithstanding. Namespace-class objects
-/// (NATIVE_MODULE_CLASS_ID) are only created by
-/// `js_create_native_module_namespace` and a handful of in-crate
-/// allocators (node_v8 serializer, perf_hooks observer), all of which
-/// install this vtable first — so a program that never creates one lets
-/// the linker drop the tables wholesale. Relaxed ordering is sufficient:
-/// the store happens-before any namespace object can reach a call site on
-/// the creating thread, and cross-thread publication of the object
-/// pointer itself already synchronizes.
+/// every binary, `-dead_strip` notwithstanding. The vtable is a FACT OF THE
+/// SHAPE of every namespace-class object (NATIVE_MODULE_CLASS_ID): the birth
+/// records its module's vtable as a brand on the shape record
+/// (`perry_abi::native_vtable_brand`), every transition carries it, and the
+/// generic paths read it off the receiver ([`object_native_vtable`]). Only a
+/// birth names a vtable, so a program that never creates a namespace lets the
+/// linker drop the tables wholesale.
 pub(crate) struct NativeModuleVtable {
     pub dispatch: unsafe fn(*const ObjectHeader, &str, *const f64, usize) -> f64,
     pub get_own_field:
         unsafe fn(*const ObjectHeader, *const crate::StringHeader) -> Option<JSValue>,
     pub own_keys_array: unsafe fn(*const ObjectHeader) -> Option<*mut crate::array::ArrayHeader>,
-    pub has_enumerable_key: fn(&str, &str) -> bool,
+    /// Is `key` an enumerable own export of the namespace `module` names?
+    pub has_enumerable_key: fn(&'static NativeModuleVtable, &str, &str) -> bool,
+    /// The module's enumerable export keys in Node's order, or `None` for a
+    /// module with no key table (its namespace enumerates its key list).
+    pub keys: fn(&'static NativeModuleVtable) -> Option<ModuleKeys>,
     /// The module's export keys in Node's order, as its item-level
     /// `realm_decl! { namespace ... }` declaration lists them; empty for a
     /// module still declared in the native birth block.
     pub module_keys: &'static [&'static [u8]],
 }
 
-/// The vtable every native namespace shares; an item-level namespace
-/// declaration adds its own `module_keys` to it.
+/// A module's enumerable export keys: its declared keys, then the keys a
+/// derived namespace appends (the deprecated `constants` module is
+/// `constants.default` plus `default`).
+#[derive(Clone, Copy)]
+pub(crate) struct ModuleKeys {
+    pub head: &'static [&'static [u8]],
+    pub tail: &'static [&'static [u8]],
+}
+
+impl ModuleKeys {
+    pub(crate) const fn of(head: &'static [&'static [u8]]) -> Self {
+        Self { head, tail: &[] }
+    }
+
+    pub(crate) fn iter(self) -> impl Iterator<Item = &'static [u8]> {
+        self.head.iter().chain(self.tail.iter()).copied()
+    }
+
+    pub(crate) fn len(self) -> usize {
+        self.head.len() + self.tail.len()
+    }
+
+    pub(crate) fn contains(self, key: &[u8]) -> bool {
+        self.head.contains(&key) || self.tail.contains(&key)
+    }
+}
+
+fn declared_module_keys(vt: &'static NativeModuleVtable) -> Option<ModuleKeys> {
+    Some(ModuleKeys::of(vt.module_keys))
+}
+
+fn no_module_keys(_: &'static NativeModuleVtable) -> Option<ModuleKeys> {
+    None
+}
+
+/// The vtable an item-level namespace declaration completes with its own
+/// `module_keys`.
 pub(crate) const NATIVE_MODULE_VTABLE_BASE: NativeModuleVtable = NativeModuleVtable {
     dispatch: dispatch_native_module_method,
     get_own_field: vt_get_own_field,
     own_keys_array: vt_own_keys_array,
     has_enumerable_key: native_module_has_enumerable_key,
+    keys: declared_module_keys,
     module_keys: &[],
 };
 
-static NATIVE_MODULE_VTABLE_IMPL: NativeModuleVtable = NativeModuleVtable {
+/// The vtable of a namespace whose module declares no key table (the
+/// modules of the native birth block, and the runtime's instance objects
+/// that share the namespace class).
+pub(crate) static NATIVE_MODULE_VTABLE_IMPL: NativeModuleVtable = NativeModuleVtable {
+    keys: no_module_keys,
     ..NATIVE_MODULE_VTABLE_BASE
 };
 
-static NATIVE_MODULE_VTABLE_PTR: AtomicPtr<NativeModuleVtable> =
-    AtomicPtr::new(std::ptr::null_mut());
+/// The vtable `obj`'s shape records, or `None` when `obj` is no namespace
+/// object (generic paths then fall through to their default behavior).
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader`.
+#[inline]
+pub(crate) unsafe fn object_native_vtable(
+    obj: *const ObjectHeader,
+) -> Option<&'static NativeModuleVtable> {
+    let shape = super::shapes::object_shape_descriptor(obj)?;
+    let address = perry_abi::native_vtable_brand::native_vtable_of(shape.brands())?;
+    // SAFETY: only `brand_native_namespace` and the image-row registration
+    // produce this band, each from a `&'static NativeModuleVtable`.
+    Some(&*(address as *const NativeModuleVtable))
+}
+
+/// Record `vt` on `obj`'s shape: one brand transition, carried by every
+/// later transition. Namespace births are cached per module, so this runs
+/// once per module per agent. The mint can collect: returns `obj` re-resolved.
+///
+/// # Safety
+/// `obj` is a live namespace-class `ObjectHeader` whose key list is set.
+pub(crate) unsafe fn brand_native_namespace(
+    obj: *mut ObjectHeader,
+    vt: &'static NativeModuleVtable,
+) -> *mut ObjectHeader {
+    super::arm_nm_namespace_ops(&NM_NAMESPACE_OPS_IMPL);
+    let brand = perry_abi::native_vtable_brand::native_vtable_brand(
+        vt as *const NativeModuleVtable as usize,
+    );
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_mut_ptr(obj);
+    obj.with_mut_ptr::<ObjectHeader, _>(|obj| {
+        super::shapes::transition_object_shape_add_brand(obj, brand);
+    });
+    let obj = obj.get_raw_mut_ptr::<ObjectHeader>();
+    debug_assert!(
+        object_native_vtable(obj).is_some_and(|have| std::ptr::eq(have, vt)),
+        "a namespace shape must carry exactly its module vtable"
+    );
+    obj
+}
 
 /// Generic-object-path behaviors for namespace objects, referenced ONLY from
 /// here (see `nm_namespace_hooks`): descriptors / dynamic stores / reflect
@@ -706,33 +788,29 @@ unsafe fn nm_own_keys_array_opt(
     vt_own_keys_array(obj)
 }
 
-/// Make the native-module vtable reachable. Must be called by every code
-/// path that creates a NATIVE_MODULE_CLASS_ID object — this is the only
-/// static reference to the dispatch/table machinery in the crate.
+/// Is `key` an enumerable own export of namespace `obj` (of `module_name`)?
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader`.
+pub(crate) unsafe fn namespace_has_enumerable_key(
+    obj: *const ObjectHeader,
+    module_name: &str,
+    key: &str,
+) -> bool {
+    object_native_vtable(obj).is_some_and(|vt| (vt.has_enumerable_key)(vt, module_name, key))
+}
+
+/// Arm the generic-path namespace ops (see `nm_namespace_hooks`). Called by
+/// the paths that mint native-module-backed values without a namespace
+/// object (bound callables, selected exports); a namespace birth arms them in
+/// [`brand_native_namespace`].
 pub(crate) fn install_native_module_vtable() {
     super::arm_nm_namespace_ops(&NM_NAMESPACE_OPS_IMPL);
-    NATIVE_MODULE_VTABLE_PTR.store(
-        &NATIVE_MODULE_VTABLE_IMPL as *const NativeModuleVtable as *mut NativeModuleVtable,
-        Ordering::Relaxed,
-    );
 }
 
-/// `None` until the first namespace object exists; generic paths treat
-/// that as "no native module can be involved" and fall through to their
-/// default behavior.
-#[inline]
-pub(crate) fn native_module_vtable() -> Option<&'static NativeModuleVtable> {
-    let p = NATIVE_MODULE_VTABLE_PTR.load(Ordering::Relaxed);
-    if p.is_null() {
-        None
-    } else {
-        Some(unsafe { &*(p as *const NativeModuleVtable) })
-    }
-}
-
-/// Route a NATIVE_MODULE_CLASS_ID method call through the vtable. A null
-/// vtable means no namespace object was ever created, so no such object
-/// can exist to dispatch on — unreachable in practice.
+/// Route a NATIVE_MODULE_CLASS_ID method call through the vtable its shape
+/// records. Every namespace-class birth brands the shape, so a receiver
+/// without one is unreachable in practice.
 #[inline]
 pub(crate) unsafe fn call_native_module_dispatch_hook(
     obj: *const ObjectHeader,
@@ -740,13 +818,10 @@ pub(crate) unsafe fn call_native_module_dispatch_hook(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
-    match native_module_vtable() {
+    match object_native_vtable(obj) {
         Some(vt) => (vt.dispatch)(obj, method_name, args_ptr, args_len),
         None => {
-            debug_assert!(
-                false,
-                "native-module method call before any namespace was created"
-            );
+            debug_assert!(false, "native-module method call on an unbranded receiver");
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
     }
@@ -765,9 +840,6 @@ pub extern "C" fn js_create_native_module_namespace(
     module_name_ptr: *const u8,
     module_name_len: usize,
 ) -> f64 {
-    // Install the vtable the moment the first namespace exists — the only
-    // static reference to the dispatch/table machinery in the crate.
-    install_native_module_vtable();
     // Invariant: every caller passes the bytes of a Rust `&str` -- codegen
     // emits the specifier through `strings.intern(&str)`/`add_string_constant`
     // with that str's `len()`, runtime callers pass literals -- so the bytes
@@ -808,6 +880,8 @@ pub extern "C" fn js_create_native_module_namespace(
     let key_str = crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
     crate::array::js_array_push(keys_array, JSValue::string_ptr(key_str));
     js_object_set_keys(obj, keys_array);
+    // The module's vtable is a fact of the namespace's shape.
+    let obj = unsafe { brand_native_namespace(obj, native_module_vtable_for(module_name)) };
 
     // Return as NaN-boxed pointer
     let value = crate::value::js_nanbox_pointer(obj as i64);
@@ -1543,7 +1617,7 @@ pub(crate) unsafe fn get_module_name_from_namespace(namespace_obj: f64) -> Strin
 /// raw `keys_array` walk both copy helpers use otherwise copies nothing, and
 /// every enumeration-based interop layer (turbopack `e.i`, Babel
 /// `interopRequireWildcard`, plain spread) produced an empty namespace. Here
-/// we enumerate the module's export names (`native_module_enumerable_keys`, the
+/// we enumerate the module's export names (its shape's vtable keys, the
 /// same list `Object.keys` returns) and resolve each to its live value through
 /// the authoritative `[[Get]]` path, handing `(key, value)` to `set`.
 ///
@@ -1564,10 +1638,13 @@ pub(crate) unsafe fn copy_native_module_exports(
     if (*src).class_id != NATIVE_MODULE_CLASS_ID {
         return false;
     }
-    let Some(module_name) = read_native_module_name(src) else {
+    let Some(vt) = object_native_vtable(src) else {
         return false;
     };
-    let Some(keys) = native_module_enumerable_keys(&module_name) else {
+    let Some(keys) = (vt.keys)(vt) else {
+        return false;
+    };
+    let Some(module_name) = read_native_module_name(src) else {
         return false;
     };
     let include_permission = matches!(
@@ -1577,7 +1654,6 @@ pub(crate) unsafe fn copy_native_module_exports(
 
     for key_bytes in keys
         .iter()
-        .copied()
         .chain(include_permission.then_some(b"permission" as &[u8]))
     {
         if crate::process::worker_restrictions::worker_process_member_hidden(
@@ -1622,6 +1698,9 @@ mod buffer_pool_size_tests;
 
 #[cfg(test)]
 mod namespace_accessor_tests;
+#[cfg(test)]
+#[path = "native_module/namespace_vtable_shape_tests.rs"]
+mod namespace_vtable_shape_tests;
 
 #[cfg(test)]
 mod builtin_parent_tests;

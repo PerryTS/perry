@@ -72,7 +72,7 @@ pub(super) unsafe fn native_module_enum(
     obj: *const ObjectHeader,
     what: MapSetEnum,
 ) -> Option<*mut ArrayHeader> {
-    let vt = super::super::native_module::native_module_vtable()?;
+    let vt = super::super::native_module::object_native_vtable(obj)?;
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_h = scope.root_raw_const_ptr(obj);
     let keys = obj_h.with_const_ptr(|obj| (vt.own_keys_array)(obj))?;
@@ -1402,7 +1402,7 @@ fn js_object_keys_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
             // Relocated to native_module.rs::vt_own_keys_array so the
             // module key tables are reachable only through the vtable
             // (linker-strippable when no namespace object exists).
-            if let Some(vt) = super::super::native_module::native_module_vtable() {
+            if let Some(vt) = super::super::native_module::object_native_vtable(obj) {
                 if let Some(out) = (vt.own_keys_array)(obj) {
                     return out;
                 }

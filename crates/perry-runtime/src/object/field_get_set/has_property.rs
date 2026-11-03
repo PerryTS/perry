@@ -1351,8 +1351,8 @@ unsafe fn native_module_namespace_has_property(
     let own = read_native_module_name(obj)
         .as_deref()
         .is_some_and(|module_name| {
-            super::super::native_module::native_module_vtable()
-                .is_some_and(|vt| (vt.has_enumerable_key)(module_name, key_name))
+            super::super::native_module::object_native_vtable(obj)
+                .is_some_and(|vt| (vt.has_enumerable_key)(vt, module_name, key_name))
         });
     if own {
         return true;

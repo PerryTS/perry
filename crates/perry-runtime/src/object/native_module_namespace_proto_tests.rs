@@ -193,10 +193,10 @@ fn every_declared_namespace_key_is_served() {
         "v8.startupSnapshot",
         "streams",
     ] {
-        let keys = native_module::native_module_enumerable_keys(module)
-            .unwrap_or_else(|| panic!("{module}: no declaration"));
+        let vt = native_module::native_module_vtable_for(module);
+        let keys = (vt.keys)(vt).unwrap_or_else(|| panic!("{module}: no declaration"));
         let ns = namespace(module);
-        for key in keys {
+        for key in keys.iter() {
             let key = std::str::from_utf8(key).unwrap();
             assert_ne!(
                 get(ns, key).to_bits(),

@@ -333,7 +333,7 @@ pub(crate) unsafe fn nm_reflect_has_enumerable(obj: *mut super::ObjectHeader, ke
         super::native_module::read_native_module_name(obj),
         key_to_rust_string(key),
     ) {
-        if super::native_module::native_module_has_enumerable_key(&module_name, &key_name) {
+        if super::native_module::namespace_has_enumerable_key(obj, &module_name, &key_name) {
             return true;
         }
     }

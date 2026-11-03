@@ -87,7 +87,9 @@ static HTTP2_SCAN_ROOTS: Hook<for<'a, 'b> fn(&'a mut crate::gc::RuntimeRootVisit
     Hook::empty();
 static HTTP2_SENSITIVE_HEADERS: Hook<fn() -> f64> = Hook::empty();
 static HTTP2_CONSTANT: Hook<fn(&str) -> Option<f64>> = Hook::empty();
-static HTTP2_KEYS: Hook<fn(&str) -> Option<&'static [&'static [u8]]>> = Hook::empty();
+static HTTP2_VTABLE: Hook<
+    fn(&str) -> Option<&'static crate::object::native_module::NativeModuleVtable>,
+> = Hook::empty();
 
 /// #6468: the `sensitiveHeaders` symbol slot's root, present once installed.
 pub(crate) fn http2_scan_roots(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
@@ -108,15 +110,19 @@ pub(crate) fn http2_constant(prop: &str) -> Option<f64> {
     HTTP2_CONSTANT.get().and_then(|f| f(prop))
 }
 
-/// The key list of the `http2` / `http2.constants` namespace.
-pub(crate) fn http2_keys(namespace: &str) -> Option<&'static [&'static [u8]]> {
-    HTTP2_KEYS.get().and_then(|f| f(namespace))
+/// The vtable of the `http2` / `http2.constants` namespace.
+pub(crate) fn http2_vtable(
+    namespace: &str,
+) -> Option<&'static crate::object::native_module::NativeModuleVtable> {
+    HTTP2_VTABLE.get().and_then(|f| f(namespace))
 }
 
-fn http2_keys_impl(namespace: &str) -> Option<&'static [&'static [u8]]> {
+fn http2_vtable_impl(
+    namespace: &str,
+) -> Option<&'static crate::object::native_module::NativeModuleVtable> {
     match namespace {
-        "http2" => Some(crate::node_http2_constants::NM_HTTP2.module_keys),
-        "http2.constants" => Some(crate::node_http2_constants::NM_HTTP2_CONSTANTS.module_keys),
+        "http2" => Some(&crate::node_http2_constants::NM_HTTP2),
+        "http2.constants" => Some(&crate::node_http2_constants::NM_HTTP2_CONSTANTS),
         _ => None,
     }
 }
@@ -126,5 +132,5 @@ pub(crate) fn install_http2_constants() {
     HTTP2_SCAN_ROOTS.set(crate::node_http2_constants::scan_roots_mut);
     HTTP2_SENSITIVE_HEADERS.set(crate::node_http2_constants::sensitive_headers_symbol);
     HTTP2_CONSTANT.set(crate::node_http2_constants::constant);
-    HTTP2_KEYS.set(http2_keys_impl);
+    HTTP2_VTABLE.set(http2_vtable_impl);
 }
