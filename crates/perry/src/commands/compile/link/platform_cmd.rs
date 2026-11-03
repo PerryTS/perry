@@ -7,6 +7,7 @@
 //! cross-compile flags, sysroots, and entry-symbol rewrites that each
 //! platform needs before any of the per-link-line code runs.
 
+use super::glibc_version::glibc_version_defsym;
 use super::*;
 use sha2::{Digest, Sha256};
 
@@ -107,19 +108,6 @@ fn compile_foundation_models_bridge(
         "PerryFoundationModels",
         "PerryFoundationModelsBridge",
     )
-}
-
-/// The link host's glibc as `major * 1000 + minor`.
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
-fn host_glibc_version_encoded() -> Option<u32> {
-    // SAFETY: glibc returns a pointer to a static NUL-terminated string.
-    let version = unsafe { std::ffi::CStr::from_ptr(libc::gnu_get_libc_version()) }
-        .to_str()
-        .ok()?;
-    let mut parts = version.split('.');
-    let major: u32 = parts.next()?.parse().ok()?;
-    let minor: u32 = parts.next()?.parse().ok()?;
-    Some(major * 1000 + minor)
 }
 
 /// Construct the platform-specific linker `Command` and prime it with the
@@ -809,7 +797,7 @@ pub fn select_linker_command(
         let cross_on_path = std::env::var_os("PATH")
             .map(|paths| std::env::split_paths(&paths).any(|d| d.join(&cross_gcc).is_file()))
             .unwrap_or(false);
-        if cross_on_path {
+        let mut c = if cross_on_path {
             Command::new(cross_gcc)
         } else {
             let mut c = Command::new("cc");
@@ -820,7 +808,11 @@ pub fn select_linker_command(
                 c.arg("-Wl,-dynamic-linker=/lib/ld-linux-aarch64.so.1");
             }
             c
-        }
+        };
+        // The program links against the cross sysroot's glibc.
+        let defsym = glibc_version_defsym(&c, false)?;
+        c.arg(defsym);
+        c
     } else if matches!(
         target,
         Some("linux-musl") | Some("linux-x86_64-musl") | Some("linux-aarch64-musl")
@@ -880,7 +872,6 @@ pub fn select_linker_command(
         // PERRY_IOS_SYSROOT/PERRY_WINDOWS_SYSROOT builder pattern).
         // Only the cross-compile block below mutates `c`; building on Linux
         // hands back a bare `cc`.
-        #[cfg_attr(target_os = "linux", allow(unused_mut))]
         let mut c = Command::new("cc");
         #[cfg(not(target_os = "linux"))]
         {
@@ -914,14 +905,11 @@ pub fn select_linker_command(
         // are resolved; any remaining unresolved symbol is a real bug
         // that should fail the link rather than produce a broken binary.
         //
-        // The program links against this host's glibc: record its version
-        // for process.report's header.glibcVersionCompiler.
-        #[cfg(all(target_os = "linux", target_env = "gnu"))]
-        if let Some(encoded) = host_glibc_version_encoded() {
-            c.arg(format!(
-                "-Wl,--defsym=perry_glibc_version_compiler={encoded}"
-            ));
-        }
+        // Record the glibc the program links against (this host's when
+        // linking natively, the sysroot's when cross-linking) for
+        // process.report's header.glibcVersionCompiler.
+        let defsym = glibc_version_defsym(&c, cfg!(target_os = "linux"))?;
+        c.arg(defsym);
         c
     } else if is_windows {
         // Windows target — two linker paths supported:
