@@ -128,6 +128,7 @@ _CODEGEN_SUITES = [
     "generated_inline_budget",
     "hoisted_var_callee_direct",
     "i64_spec_ternary_recursion",
+    "inherited_ctor_live_super_field_init",
     "ios_platform_api_lowering",
     "large_object_barriers",
     "loop_safepoint_purity",
