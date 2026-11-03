@@ -42,6 +42,10 @@ EOF
 mkdir -p "$WORK/scripts/gc_call_effects"
 printf '#!/bin/sh\nexit 0\n' > "$WORK/scripts/gc_call_effects/sidecars.sh"
 chmod +x "$WORK/scripts/gc_call_effects/sidecars.sh"
+# The full tier also builds the instrumented archive variant after the build
+# (scripts/build_instr_runtime.sh); the mock has no cargo graph to build.
+printf '#!/bin/sh\nexit 0\n' > "$WORK/scripts/build_instr_runtime.sh"
+chmod +x "$WORK/scripts/build_instr_runtime.sh"
 # The mock compiler: a slow compile that then produces a working binary.
 cat > "$WORK/perry" <<'EOF'
 #!/bin/sh
