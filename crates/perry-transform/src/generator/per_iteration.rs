@@ -1484,6 +1484,7 @@ mod tests {
             mutable_captures: vec![x],
             captures_this: false,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow: true,
             is_strict: false,

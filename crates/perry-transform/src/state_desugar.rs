@@ -661,6 +661,7 @@ fn try_rewrite_foreach(
         mutable_captures: Vec::new(),
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: false,
         is_strict: false,
@@ -859,6 +860,7 @@ fn try_rewrite_navstack(
         mutable_captures: Vec::new(),
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: false,
         is_strict: false,
@@ -1106,6 +1108,7 @@ mod tests {
                     mutable_captures: vec![],
                     captures_this: false,
                     captures_new_target: false,
+                    construct_only: false,
                     enclosing_class: None,
                     is_arrow: false,
                     is_strict: false,
@@ -1240,6 +1243,7 @@ mod tests {
             decorators: vec![],
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         });
 
         run(&mut module);

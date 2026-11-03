@@ -263,6 +263,7 @@ mod tests {
             mutable_captures: vec![],
             captures_this: false,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow,
             is_async: false,
@@ -448,6 +449,7 @@ mod tests {
                 decorators: vec![],
                 was_plain_async: false,
                 was_unrolled: false,
+                construct_only: false,
             };
             let mut local = 10;
             let mut func_id = 10;

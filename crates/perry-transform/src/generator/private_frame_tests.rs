@@ -20,6 +20,7 @@ fn fixture(ty: Type) -> Module {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     m.init = vec![
         Stmt::Let {
@@ -145,6 +146,7 @@ fn private_frame_capture_even_without_body_read_is_an_escape() {
         mutable_captures: vec![],
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: true,
         is_async: false,
@@ -237,6 +239,7 @@ fn private_frame_logging_requires_primitive_writes_not_a_number_annotation() {
                 mutable_captures: vec![],
                 captures_this: false,
                 captures_new_target: false,
+                construct_only: false,
                 enclosing_class: None,
                 is_arrow: true,
                 is_async: false,

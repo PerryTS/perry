@@ -2438,6 +2438,9 @@ pub enum Expr {
         is_generator: bool,
         /// Whether this closure body is strict mode code.
         is_strict: bool,
+        /// Every reference to this function is the callee of a `new`
+        /// expression, so its sloppy `this` is never the global object.
+        construct_only: bool,
     },
 
     // RegExp operations

@@ -189,7 +189,10 @@ mod tests {
             let mut module = original.clone();
             super::super::super::cjs_link::resolve_open_sites(&mut module, closed).unwrap();
             assert_eq!(
-                module.imports.iter().any(|i| i.source.strip_prefix("node:").unwrap_or(&i.source) == "module"),
+                module
+                    .imports
+                    .iter()
+                    .any(|i| i.source.strip_prefix("node:").unwrap_or(&i.source) == "module"),
                 !closed
             );
             let mut loader = false;

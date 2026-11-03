@@ -152,6 +152,7 @@ fn ir_for_fn_body(name: &str, body: Vec<Stmt>) -> String {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     String::from_utf8(compile_module(&m, entry_opts()).unwrap()).expect("LLVM IR should be UTF-8")
 }
@@ -229,6 +230,7 @@ fn release_boxes_lowers_through_closure_captures() {
         mutable_captures: vec![STATE, DONE, SENT],
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: true,
         is_strict: false,
@@ -272,6 +274,7 @@ fn escaped_user_closure_inside_step_keeps_its_box_capture_edge() {
                 mutable_captures: Vec::new(),
                 captures_this: false,
                 captures_new_target: false,
+                construct_only: false,
                 enclosing_class: None,
                 is_arrow: true,
                 is_strict: false,
@@ -285,6 +288,7 @@ fn escaped_user_closure_inside_step_keeps_its_box_capture_edge() {
         mutable_captures: vec![STATE, DONE, SENT],
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: false,
         is_strict: false,

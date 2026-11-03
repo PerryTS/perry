@@ -66,6 +66,7 @@ fn guarded_string_literal_parameter_length_is_numeric_only_in_the_guarded_body()
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     module.init.push(Stmt::Expr(Expr::Call {
         byte_end: 0,
@@ -142,6 +143,7 @@ fn public_guard_routes_to_proof_clone_and_conservative_fallback() {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     };
     let mut module = Module::new("ordinary_param_guard.ts");
     module.type_aliases.push(TypeAlias {
@@ -305,6 +307,7 @@ fn mixed_ta_clone_guards_numeric_array_shape_at_the_direct_call() {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     };
     let mut module = Module::new("number_array_guard.ts");
     module.functions.push(encipher);
@@ -407,6 +410,7 @@ fn numeric_by_construction_local_drops_specialized_clone_root() {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     };
     let mut module = Module::new("numeric_local_root.ts");
     module.functions.push(encipher);
@@ -537,6 +541,7 @@ fn guarded_typed_array_clone_keeps_prefix_update_indices_native() {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     };
     let mut module = Module::new("prefix_update_typed_array.ts");
     module.functions.push(read);
@@ -660,6 +665,7 @@ fn nonsuspending_async_function_needs_no_direct_call_site_for_its_guarded_clone(
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     };
     let mut module = Module::new("ordinary_param_guard_async.ts");
     module.type_aliases.push(TypeAlias {
@@ -700,6 +706,7 @@ fn nonsuspending_async_function_needs_no_direct_call_site_for_its_guarded_clone(
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     // The discriminating negative for the primitive-parameter choice above: the
     // SAME body shape with a reference-typed parameter gets no clone at all,
@@ -749,6 +756,7 @@ fn nonsuspending_async_function_needs_no_direct_call_site_for_its_guarded_clone(
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
 
     let mut opts = CompileOptions {
@@ -930,6 +938,7 @@ fn guarded_discriminant_branch_narrows_a_union_parameter_inside_the_clone() {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     };
     // Same union, same discriminant chain, but the "bin" arm recurses. The
     // call is what removes the clone.
@@ -974,6 +983,7 @@ fn guarded_discriminant_branch_narrows_a_union_parameter_inside_the_clone() {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     };
     let mut module = Module::new("recursive_guard_narrowing.ts");
     module.type_aliases.push(TypeAlias {
@@ -1175,6 +1185,7 @@ fn a_class_parameter_is_guarded_by_identity_and_declared_fields() {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     };
     let mut module = Module::new("class_param_guard.ts");
     module.classes.push(label);
@@ -1279,6 +1290,7 @@ fn specialized_typed_parameter_keeps_its_own_owner_root() {
             decorators: vec![],
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         });
         module.init = vec![
             Stmt::Let {

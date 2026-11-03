@@ -154,6 +154,7 @@ fn rejects_function_capture_metadata_even_without_localget() {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     run(&mut module);
     assert!(!projected(&module));

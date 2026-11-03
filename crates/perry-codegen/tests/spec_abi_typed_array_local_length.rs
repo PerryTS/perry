@@ -76,6 +76,7 @@ fn const_literal_length_local_routes_float64array_helper_to_raw_specialized_entr
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     module.init = vec![
         Stmt::Let {

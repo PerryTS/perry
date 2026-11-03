@@ -981,6 +981,7 @@ pub fn lower_module_full_with_platform_globals(
     // Class definitions evaluated at most once keep their captured
     // environment with the class (`synthesize_class_captures`).
     ctx.run_once_class_spans = super::run_once::run_once_class_spans(ast_module);
+    ctx.construct_only_fn_spans = super::pre_scan::construct_only_fn_spans(ast_module);
 
     // Enum IIFEs over a fresh object are born from one image.
     ctx.enum_image_sites = super::enum_image::enum_image_sites(ast_module).sites;

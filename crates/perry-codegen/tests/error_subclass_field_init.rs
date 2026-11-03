@@ -65,6 +65,7 @@ fn ctor(id: u32, body: Vec<Stmt>) -> Function {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 
@@ -128,6 +129,7 @@ fn module_with(classes: Vec<Class>, body: Vec<Stmt>) -> Module {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         }],
         init_is_strict: false,
         init: Vec::new(),

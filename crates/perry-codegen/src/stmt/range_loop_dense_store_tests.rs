@@ -158,6 +158,7 @@ fn module_ir_with_x(body: Vec<Stmt>, x_arg: Expr) -> String {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     let opts = CompileOptions {
         emit_ir_only: true,

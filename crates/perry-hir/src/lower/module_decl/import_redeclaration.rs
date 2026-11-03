@@ -62,7 +62,10 @@ pub(crate) fn check_import_redeclarations(ast_module: &ast::Module) -> anyhow::R
             _ => {}
         }
     }
-    match declared.iter().find(|name| imported.contains(name.as_str())) {
+    match declared
+        .iter()
+        .find(|name| imported.contains(name.as_str()))
+    {
         Some(name) => Err(already_declared(name)),
         None => Ok(()),
     }

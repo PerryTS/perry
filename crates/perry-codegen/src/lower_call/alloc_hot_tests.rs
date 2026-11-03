@@ -193,6 +193,7 @@ fn tiny_factory_class(prefix_stmts: usize) -> Class {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         }],
         getters: Vec::new(),
         setters: Vec::new(),
@@ -295,6 +296,7 @@ fn walk_module(recurse: bool) -> Module {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }];
     // Straight-line, ONE call site, no loop: the only thing that can admit
     // `walk` is the recursion itself.
@@ -346,6 +348,7 @@ fn indirect_closure_module(site_count: u32, call_in_loop: bool) -> Module {
                 mutable_captures: Vec::new(),
                 captures_this: false,
                 captures_new_target: false,
+                construct_only: false,
                 enclosing_class: None,
                 is_arrow: true,
                 is_async: false,
@@ -438,6 +441,7 @@ fn the_hot_cache_read_is_marked_gc_leaf_in_bodies_without_root_slots() {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }];
     module.init_kind = ModuleInitKind::Eager;
     let ir = ir_for_target(module, "arm64-apple-macosx15.0.0");

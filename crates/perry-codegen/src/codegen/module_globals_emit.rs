@@ -830,6 +830,7 @@ mod tests {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         });
         assert!(module_shadows_shared_array_buffer_intrinsic(
             &function_module,

@@ -28,6 +28,7 @@ fn closure(func_id: u32, params: Vec<Param>, body: Vec<Stmt>, captures: Vec<u32>
         mutable_captures: Vec::new(),
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: true,
         is_async: false,

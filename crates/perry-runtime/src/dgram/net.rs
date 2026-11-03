@@ -607,7 +607,10 @@ mod errno_code_tests {
             (libc::EAFNOSUPPORT, "EAFNOSUPPORT"),
             (libc::EHOSTUNREACH, "EHOSTUNREACH"),
         ] {
-            assert_eq!(io_error_code(&std::io::Error::from_raw_os_error(errno)), name);
+            assert_eq!(
+                io_error_code(&std::io::Error::from_raw_os_error(errno)),
+                name
+            );
         }
     }
 }

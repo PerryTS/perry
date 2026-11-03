@@ -34,6 +34,7 @@ fn reset(id: u32, default: f64) -> Function {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 
@@ -102,6 +103,7 @@ fn fixture() -> Module {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }];
     module.init_kind = ModuleInitKind::Eager;
     module

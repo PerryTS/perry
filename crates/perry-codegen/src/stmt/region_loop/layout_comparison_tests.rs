@@ -61,6 +61,7 @@ fn ir(body: Vec<Stmt>, in_loop: bool) -> String {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     let mut opts = crate::temp_root_coverage::entry_opts();
     opts.is_entry_module = false;
@@ -173,6 +174,7 @@ fn captured_mutable_receiver_keeps_semantic_field_reads() {
         mutable_captures: vec![1],
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: true,
         is_async: false,

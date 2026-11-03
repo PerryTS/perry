@@ -40,6 +40,7 @@ fn probe(body: Vec<Stmt>) -> Function {
         is_strict: true,
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
         is_exported: true,
         captures: Vec::new(),
         decorators: Vec::new(),

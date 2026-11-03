@@ -113,6 +113,7 @@ fn probe_module(name: &str, params: Vec<Param>, body: Vec<Stmt>) -> Module {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         }],
         script_global_functions: Vec::new(),
         references_global_this: false,

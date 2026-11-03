@@ -59,6 +59,7 @@ fn array_elements_and_reduce_callback_are_live_across_inline_births() {
                 mutable_captures: Vec::new(),
                 captures_this: false,
                 captures_new_target: false,
+                construct_only: false,
                 enclosing_class: None,
                 is_arrow: true,
                 is_async: false,

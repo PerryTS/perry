@@ -353,6 +353,7 @@ pub fn build_async_step_driver_direct(
         is_strict,
         is_async: false,
         is_generator: false,
+        construct_only: false,
     };
 
     // Outer wrapper:

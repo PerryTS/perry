@@ -41,6 +41,7 @@ fn probe_ir(params: Vec<Param>, body: Vec<Stmt>) -> String {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     let ir = String::from_utf8(
         compile_module(
@@ -156,6 +157,7 @@ fn capture_store_ir() -> String {
                 mutable_captures: vec![],
                 captures_this: false,
                 captures_new_target: false,
+                construct_only: false,
                 enclosing_class: None,
                 is_arrow: true,
                 is_async: false,
@@ -190,6 +192,7 @@ fn capture_store_ir() -> String {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     String::from_utf8(
         compile_module(

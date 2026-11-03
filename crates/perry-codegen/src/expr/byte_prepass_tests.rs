@@ -30,6 +30,7 @@ fn function(body: Vec<Stmt>, params: Vec<Param>) -> Function {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 

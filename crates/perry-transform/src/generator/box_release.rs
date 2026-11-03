@@ -36,6 +36,7 @@ mod tests {
             mutable_captures: Vec::new(),
             captures_this: false,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow: true,
             is_strict: false,
@@ -62,6 +63,7 @@ mod tests {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         };
         let mut m = Module::new("t");
         m.functions.push(f);

@@ -18,6 +18,7 @@ fn async_closure_with_await(func_id: perry_hir::types::FuncId) -> Expr {
         mutable_captures: Vec::new(),
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: true,
         is_async: true,
@@ -42,6 +43,7 @@ fn empty_fn(id: perry_hir::types::FuncId, body: Vec<Stmt>) -> Function {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 
@@ -172,6 +174,7 @@ fn async_closure_body(func_id: perry_hir::types::FuncId, stmts: Vec<Stmt>) -> Ex
         mutable_captures: Vec::new(),
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: true,
         is_async: true,
@@ -873,6 +876,7 @@ fn async_generator_closure_expressions_linearize_awaits() {
         mutable_captures: Vec::new(),
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: false,
         is_async: true,

@@ -84,6 +84,7 @@ fn ir_with_param_type(
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     for (id, f) in &facts.numeric_functions {
         let mut def = m.functions[0].clone();

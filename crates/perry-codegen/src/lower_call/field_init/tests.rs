@@ -52,6 +52,7 @@ fn func(params: Vec<Param>, body: Vec<Stmt>) -> Function {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 
@@ -702,6 +703,7 @@ fn captures_this_arrow_field() -> ClassField {
             mutable_captures: Vec::new(),
             captures_this: true,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: Some("ArrowRegistry".to_string()),
             is_arrow: true,
             is_async: false,

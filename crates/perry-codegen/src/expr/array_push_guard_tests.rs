@@ -215,6 +215,7 @@ fn push_module(elem: Type, value: Expr, classes: Vec<Class>) -> Module {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }];
     // Called once from module init so the function is not dead-stripped before
     // the census can see it.
@@ -546,6 +547,7 @@ fn field_push_module(field_writeback: Option<String>) -> Module {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     };
     let mut class = node_class();
     class.id = 405;

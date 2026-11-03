@@ -301,6 +301,7 @@ fn inline_for_each(func_id: u32, params: Vec<Param>, body: Vec<Stmt>) -> Stmt {
             mutable_captures: Vec::new(),
             captures_this: false,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow: true,
             is_async: false,
@@ -689,6 +690,7 @@ fn array_captured_by_a_closure_denies_the_push() {
             mutable_captures: Vec::new(),
             captures_this: false,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow: true,
             is_async: false,
@@ -1657,6 +1659,7 @@ fn the_module_barrier_still_denies_element_facts() {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     };
     let facts = facts_for(&classes, vec![barrier]);
     assert!(facts.has_shape_barrier_sites(), "fixture must be a barrier");
@@ -1695,6 +1698,7 @@ fn an_inadmissible_element_class_denies_the_array() {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         },
     )];
     let cs = [c];

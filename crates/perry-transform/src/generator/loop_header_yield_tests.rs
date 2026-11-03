@@ -32,6 +32,7 @@ fn generator(body: Vec<Stmt>, is_async: bool) -> Function {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 
@@ -177,6 +178,7 @@ fn body_contains_yield_ignores_header_yield_in_nested_closure() {
         mutable_captures: Vec::new(),
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: false,
         is_async: false,

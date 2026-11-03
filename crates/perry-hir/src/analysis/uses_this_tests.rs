@@ -177,6 +177,7 @@ fn nested_closures_propagate_only_captured_bindings() {
                 is_async: false,
                 is_generator: false,
                 is_strict: false,
+                construct_only: false,
             };
             let body = vec![Stmt::Labeled {
                 label: "outer".into(),

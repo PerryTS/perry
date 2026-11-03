@@ -152,6 +152,7 @@ mod tests {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
             is_strict: false,
         }
     }

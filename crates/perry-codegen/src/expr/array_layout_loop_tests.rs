@@ -134,6 +134,7 @@ fn probe_module(name: &str, elem: Type, body: Vec<Stmt>, update: Option<Expr>) -
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }];
     m.init_kind = ModuleInitKind::Eager;
     m

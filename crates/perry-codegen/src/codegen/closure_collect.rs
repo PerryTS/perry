@@ -101,6 +101,7 @@ pub(crate) fn select_versioned_loop_callbacks(
                 captures,
                 captures_this: false,
                 captures_new_target: false,
+                construct_only: false,
                 is_arrow: true,
                 is_async: false,
                 is_generator: false,

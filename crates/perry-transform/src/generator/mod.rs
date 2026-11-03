@@ -428,6 +428,7 @@ fn transform_generator_closures_in_stmts(
                             decorators: Vec::new(),
                             was_plain_async: false,
                             was_unrolled: false,
+                            construct_only: false,
                         };
                         transform_generator_function_with_extra_captures(
                             &mut synth,
@@ -503,6 +504,7 @@ pub fn transform_plain_async_closure_body(
         decorators: Vec::new(),
         was_plain_async: true,
         was_unrolled: false,
+        construct_only: false,
     };
     transform_generator_function_with_extra_captures(
         &mut synth,

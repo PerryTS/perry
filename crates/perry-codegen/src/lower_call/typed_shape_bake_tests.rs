@@ -171,6 +171,7 @@ fn two_field_ctor(f0: &str, f1: &str, f1_ty: Type) -> Function {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 
@@ -294,6 +295,7 @@ pub(super) fn loop_new_module(name: &str, f1_ty: Type, second: Expr) -> Module {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }];
     m.init_kind = ModuleInitKind::Eager;
     m

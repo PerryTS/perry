@@ -89,6 +89,7 @@ fn closure(params: Vec<Param>, body: Vec<Stmt>) -> Expr {
         mutable_captures: vec![],
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: false,
         is_async: false,

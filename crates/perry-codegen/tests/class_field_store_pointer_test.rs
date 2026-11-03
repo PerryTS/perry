@@ -154,6 +154,7 @@ fn param_prologue_ctor(field_name: &str, param_id: u32, param_ty: Type) -> Funct
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 
@@ -219,6 +220,7 @@ fn module_with_new(class: Class, args: Vec<Expr>) -> Module {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         }],
         init_is_strict: false,
         init: Vec::new(),

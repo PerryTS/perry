@@ -858,6 +858,7 @@ mod tests {
                     mutable_captures: vec![],
                     captures_this: false,
                     captures_new_target: false,
+                    construct_only: false,
                     enclosing_class: None,
                     is_arrow: true,
                     is_async: false,
@@ -873,6 +874,7 @@ mod tests {
             decorators: vec![],
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         });
         resolve_type_aliases_in_module(&mut module, &table);
         let f = &module.functions[0];

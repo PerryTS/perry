@@ -48,6 +48,7 @@ fn has_method() -> Function {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 
@@ -146,6 +147,7 @@ fn executor_class() -> Class {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         }],
         getters: Vec::new(),
         setters: Vec::new(),
@@ -310,6 +312,7 @@ fn compile_nested_map_get_ir() -> String {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         }],
         getters: Vec::new(),
         setters: Vec::new(),

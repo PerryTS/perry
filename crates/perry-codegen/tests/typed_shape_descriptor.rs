@@ -150,6 +150,7 @@ fn module_with_new(class: Class) -> Module {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         }],
         init_is_strict: false,
         init: Vec::new(),

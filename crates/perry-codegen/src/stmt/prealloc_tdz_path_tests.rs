@@ -19,6 +19,7 @@ fn emit(body: Vec<Stmt>) -> String {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     String::from_utf8(
         crate::compile_module(&module, super::prealloc_module_global_tests::ir_opts()).unwrap(),

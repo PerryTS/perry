@@ -46,12 +46,12 @@ pub(crate) const LLVM_CC_PRESERVE_NONE: u32 = 21;
 /// LLVM PreserveMost: shared births save live caller registers in one body.
 pub(crate) const LLVM_CC_PRESERVE_MOST: u32 = 14;
 
+pub(crate) use numbered::NumberedMetadata;
 use text::{
     add_enum_attr, apply_flags, attach_trailing_metadata, be, float_pred, inline_metadata,
     int_pred, rauw, rmatch_paren, set_alignment_if_any, set_invariant_load, split_top_level,
     take_quoted, unquote,
 };
-pub(crate) use numbered::NumberedMetadata;
 use types::{basic_type, constant, fn_type_of, indirect_fn_type, strip_label, ty_and_val};
 #[cfg(test)]
 pub(crate) mod tests;
@@ -758,7 +758,12 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
         if volatile {
             let _ = v.as_instruction_value().map(|i| i.set_volatile(true));
         }
-        attach_trailing_metadata(self.ctx, self.metadata, v.as_instruction_value(), &parts[2..])?;
+        attach_trailing_metadata(
+            self.ctx,
+            self.metadata,
+            v.as_instruction_value(),
+            &parts[2..],
+        )?;
         if atomic {
             let ord = match ordering {
                 Some("seq_cst") => {

@@ -46,6 +46,7 @@ fn dark_mode_ir(target: Option<&str>) -> String {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     let options = CompileOptions {
         emit_ir_only: true,

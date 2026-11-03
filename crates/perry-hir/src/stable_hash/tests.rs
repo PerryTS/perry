@@ -326,6 +326,7 @@ fn module_metadata_affects_hash() {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     assert_ne!(base_hash, hash_module(&m_fn));
 
@@ -409,6 +410,7 @@ pub(crate) fn canonical_module() -> Module {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     m
 }

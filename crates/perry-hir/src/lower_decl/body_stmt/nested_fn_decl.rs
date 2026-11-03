@@ -319,6 +319,9 @@ pub(super) fn lower_nested_fn_decl(
         mutable_captures,
         captures_this: false,
         captures_new_target: false,
+        construct_only: ctx
+            .construct_only_fn_spans
+            .contains(&(fn_decl.function.span.lo.0, fn_decl.function.span.hi.0)),
         enclosing_class: None,
         is_arrow: false,
         is_async: fn_decl.function.is_async,

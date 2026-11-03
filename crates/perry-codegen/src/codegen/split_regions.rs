@@ -1031,6 +1031,7 @@ fn try_extract(
             mutable_captures,
             captures_this: false,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow: true,
             is_async: false,
@@ -1053,6 +1054,7 @@ fn try_extract(
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         });
         Expr::FuncRef(func_id)
     };
