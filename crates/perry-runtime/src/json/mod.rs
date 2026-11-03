@@ -25,6 +25,7 @@ use std::cell::RefCell;
 mod construction_array;
 mod parse_api;
 mod parse_empty;
+mod parse_error;
 mod parse_inline_object;
 mod parse_reuse;
 mod parse_scalar;
