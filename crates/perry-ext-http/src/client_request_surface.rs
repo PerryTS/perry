@@ -39,7 +39,11 @@ pub(crate) fn create_client_once_wrapper(
     let wrapper = scope.root_addr(wrapper as i64);
     let wrapper_ptr = wrapper.get() as *mut RawClosureHeader;
     unsafe {
-        perry_ffi::set_closure_capture_f64(wrapper_ptr, 0, handle as f64);
+        perry_ffi::set_closure_capture_f64(
+            wrapper_ptr,
+            0,
+            crate::client_payloads::handle_capture(handle),
+        );
         perry_ffi::set_closure_capture_f64(wrapper_ptr, 1, event.get());
         perry_ffi::set_closure_capture_f64(
             wrapper_ptr,
@@ -78,7 +82,7 @@ extern "C" fn client_once_wrapper(
     rest: f64,
 ) -> f64 {
     unsafe {
-        let handle = perry_ffi::closure_capture_f64(closure, 0) as Handle;
+        let handle = crate::client_payloads::capture_handle_at(closure, 0);
         let event_value = perry_ffi::closure_capture_f64(closure, 1);
         let callback_value = perry_ffi::closure_capture_f64(closure, 2);
         let wrapper_value = perry_ffi::closure_capture_f64(closure, 3);
@@ -458,6 +462,7 @@ pub extern "C" fn js_http_client_request_destroy(handle: Handle, _error: f64) ->
     unsafe {
         finish_agent_request(handle, false);
     }
+    crate::client_payloads::park_client_exchange(handle);
     handle
 }
 

@@ -799,11 +799,21 @@ pub(crate) fn release_request(
 // GC scanner — call from lib.rs's scan_http_roots
 // ------------------------------------------------------------------
 
-pub(crate) fn scan_agent_roots(visitor: &mut GcRootVisitor<'_>) {
+/// `named` collects the handle words of the requests waiting in each queue;
+/// the caller names them after the registry walk (marking one can read its
+/// payload).
+pub(crate) fn scan_agent_roots(visitor: &mut GcRootVisitor<'_>, named: &mut Vec<u64>) {
     iter_handles_of_mut::<AgentHandle, _>(|agent| {
         if agent.owner_agent != perry_ffi::agent_post::current_agent() {
             return;
         }
+        named.extend(
+            agent
+                .queued_requests
+                .values()
+                .flatten()
+                .map(|&request| crate::client_payloads::handle_word(request)),
+        );
         for sockets in agent
             .active_socket_handles
             .values_mut()

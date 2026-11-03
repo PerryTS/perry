@@ -24,6 +24,7 @@ fn request(mode: Mode) -> Outbound {
         tls: None,
         proxy: None,
         extra: Vec::new(),
+        _request_lease: None,
     }
 }
 fn writes(effects: &[Effect]) -> Vec<u8> {
