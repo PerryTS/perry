@@ -1921,8 +1921,10 @@ jobs:
             scripts/build_instr_runtime.sh
             export PERRY_TEST_RUNTIME_PREBUILT=1
           else
-            cargo build --release -p perry-runtime -p perry-stdlib \
-              -p perry-runtime-static -p perry-stdlib-static
+            # Fixtures that compile `net`/`http`/`ws`/`zlib` link the prebuilt
+            # wrapper archives, which perry never builds at compile time, so
+            # build every archive in one graph with the runtime and stdlib.
+            cargo build-perry --release -p perry-runtime -p perry-stdlib
             scripts/gc_call_effects/sidecars.sh target/release
             # Fixtures that set a GC/diagnostic instrument knob while compiling
             # link the instrumented archives (runtime and stdlib only here).
@@ -3606,14 +3608,11 @@ jobs:
       # Two harness modes, chosen by the plan (see ci_plan.py GAP_SUITE):
       #   fast: PERRY_SKIP_BUILD=1 so every test links the prebuilt archives
       #         (~1.5 s/test) that gap-suite-build compiled ONCE and shared
-      #         below. Only ext-routed tests (http/net/ws/zlib/events) still
-      #         take the per-test auto-optimize path, because no single
-      #         prebuilt stdlib can serve them (#7629). PR + sweep tiers.
-      #   full: the harness's default -- every test compiles through
-      #         auto-optimize, which rebuilds a feature-stripped runtime per
-      #         distinct feature set (~200 s each; measured 96% of a shard's
-      #         wall time). It is the arm that sees auto-optimize-only bugs,
-      #         so it stays in the nightly/release tier at 24 shards, and never
+      #         below. PR + sweep tiers.
+      #   full: the harness's default -- each shard builds the same archive
+      #         set itself (`cargo build-perry` + the instrumented variant;
+      #         perry never builds an archive at compile time) and compiles
+      #         with auto-optimize on. Nightly/release tier, 24 shards, never
       #         downloads a shared build.
       # Both compare against the SAME committed Linux snapshot; a divergence
       # between them is a real auto-optimize-specific finding, not noise.
