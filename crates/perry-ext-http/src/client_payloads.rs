@@ -45,7 +45,7 @@ impl ParkedPayloadOwner for ClientPayloads {
 }
 
 /// A raw closure or object address as a JSValue word (`0` stays absent).
-fn address_word(address: i64) -> u64 {
+pub(crate) fn address_word(address: i64) -> u64 {
     if address > 0 {
         POINTER_TAG | (address as u64 & PTR_MASK)
     } else {

@@ -50,7 +50,10 @@
 
 use std::sync::Once;
 
-use perry_ffi::{gc_register_mutable_root_scanner_named, iter_handles_of_mut, GcRootVisitor};
+use perry_ffi::{
+    gc_register_mutable_root_scanner_named, iter_handle_entries_of_mut, iter_handles_of_mut,
+    GcRootVisitor,
+};
 
 mod bun_server;
 mod cluster_bind;
@@ -63,6 +66,7 @@ mod http2_stream_props;
 mod https_server;
 // #10428: runtime callback for http/https/http2 exports used as values.
 mod native_dispatch;
+pub(crate) mod payloads;
 mod request;
 mod response;
 mod response_end;
@@ -179,7 +183,15 @@ fn scan_http_server_roots(visitor: &mut GcRootVisitor<'_>) {
         visitor.visit_i64_slot(&mut s.handler);
         scan_base_server_roots(&mut s.base, visitor);
     });
-    iter_handles_of_mut::<IncomingMessage, _>(|im| {
+    // A full mark skips the edges of a finished exchange's old parked pair:
+    // the trace marks them through a word naming the id
+    // (`payloads::SERVER_PAYLOADS`), so a pair nothing names is collected.
+    let full_mark = visitor.is_full_mark();
+    let skipped = |id| full_mark && !perry_ffi::handle_lifecycle::payload_edges_are_rooted(id);
+    iter_handle_entries_of_mut::<IncomingMessage, _>(|id, im| {
+        if skipped(id) {
+            return;
+        }
         scan_listener_roots(&mut im.listeners, visitor);
         visitor.visit_nanbox_f64_slot(&mut im.signal_controller);
         visitor.visit_nanbox_f64_slot(&mut im.signal);
@@ -189,7 +201,14 @@ fn scan_http_server_roots(visitor: &mut GcRootVisitor<'_>) {
     });
     // Transport and OutgoingMessage handles only. Standalone ServerResponse
     // objects are never registered here; GC traces their object-owned JS state.
-    iter_handles_of_mut::<ServerResponse, _>(|sr| {
+    let mut named = Vec::new();
+    iter_handle_entries_of_mut::<ServerResponse, _>(|id, sr| {
+        if skipped(id) {
+            return;
+        }
+        if full_mark && sr.req_handle != 0 {
+            named.push(crate::client_payloads::handle_word(sr.req_handle));
+        }
         if sr.owner_agent == perry_ffi::agent_post::current_agent() {
             visitor.visit_nanbox_f64_slot(&mut sr.socket_value);
             visitor.visit_nanbox_f64_slot(&mut sr.header_values);
@@ -211,6 +230,14 @@ fn scan_http_server_roots(visitor: &mut GcRootVisitor<'_>) {
             visitor.visit_i64_slot(cb);
         }
     });
+    if full_mark {
+        // Visited after the walk: marking a handle word reads its payload
+        // from the same registry. Queued 'aborted' events name their requests.
+        named.extend(turnloop_serve::aborted_request_words());
+        for mut word in named {
+            visitor.visit_nanbox_u64_slot(&mut word);
+        }
+    }
     iter_handles_of_mut::<Http2SessionHandle, _>(|session| {
         if session.owner_agent == perry_ffi::agent_post::current_agent() {
             visitor.visit_nanbox_f64_slot(&mut session.socket_value);

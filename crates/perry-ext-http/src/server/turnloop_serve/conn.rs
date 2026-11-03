@@ -170,6 +170,19 @@ pub(crate) fn note_aborted_handle(handle: i64) {
         .push((perry_ffi::agent_post::current_agent(), handle));
 }
 
+/// The calling agent's queued `'aborted'` requests as handle words, so a full
+/// trace keeps each request until its event is delivered.
+pub(crate) fn aborted_request_words() -> Vec<u64> {
+    let agent = perry_ffi::agent_post::current_agent();
+    aborted()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .filter(|(owner, _)| *owner == agent)
+        .map(|&(_, handle)| crate::client_payloads::handle_word(handle))
+        .collect()
+}
+
 /// Take the `IncomingMessage` handles whose connection died mid-request.
 pub(crate) fn take_aborted() -> Vec<i64> {
     let mut queue = aborted().lock().unwrap_or_else(|e| e.into_inner());

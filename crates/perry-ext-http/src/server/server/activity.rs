@@ -147,16 +147,19 @@ mod tests {
     }
 
     #[test]
-    fn closed_request_handles_are_removed() {
-        use super::super::in_flight::finalize_request_handles_deferred;
+    fn finished_request_handles_are_parked_for_the_gc() {
+        use super::super::in_flight::finalize_request_handles;
         use crate::server::response::ServerResponse;
         let request = perry_ffi::register_handle(123_u32);
         let response = perry_ffi::register_handle(ServerResponse::new());
         assert!(perry_ffi::handle_exists(request));
         assert!(perry_ffi::handle_exists(response));
-        finalize_request_handles_deferred(request, response, None);
-        assert!(!perry_ffi::handle_exists(request));
-        assert!(!perry_ffi::handle_exists(response));
+        finalize_request_handles(request, response);
+        // Both stay readable until a full trace proves nothing names them;
+        // finalizing twice is harmless.
+        finalize_request_handles(request, response);
+        assert!(perry_ffi::handle_exists(request));
+        assert!(perry_ffi::handle_exists(response));
     }
 }
 
