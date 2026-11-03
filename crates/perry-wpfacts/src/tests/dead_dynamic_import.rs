@@ -1118,25 +1118,31 @@ fn forty_define_property_re_exports_keep_their_getters() {
     );
 }
 
-/// Activation-pass gap (CJS15b, for CWN under DEC 253): `esc` hands `pg`
-/// to `globalThis[computed]`, an unknown callee, so `pg` (and `PG`'s
-/// `Client` with it) escapes and the formatter is live. The pass finds it
-/// dead, with and without interpreted code: the call of a computed global
-/// inside a function body does not escape its argument. The same unknown
-/// value returned and called by the reader (`forty_..`'s `unknown` and
-/// `escaping` arms) does escape.
+/// `esc` hands `pg` to `globalThis[computed]`, an unknown callee: `pg`
+/// escapes, `PG`'s `Client` with it (the activation pass walks `esc` and
+/// `Client::drop`). The formatter's `import()` still stays dead: it runs
+/// only if `defaultFormat` runs, and nothing on that path (`host`, `opts`,
+/// `typescript`, `defaultFormat`, `generateTypescript`) reaches unknown
+/// code. An escape elsewhere does not make the default taken (EUC1b).
 #[test]
-#[ignore = "activation-pass gap: a call of globalThis[computed] inside a body does not escape its argument"]
-fn a_call_of_a_computed_global_escapes_its_argument() {
+fn an_argument_of_a_computed_global_escapes_and_the_default_stays_dead() {
     let tail = reexport_40_tail();
     let src = reexport_40("return vals.k7;").replace(
         "const vals: any = { k7: id };",
         "function esc(x: any) { (globalThis as any)[String(process.argv.length)](x); return x; }\nconst vals: any = { k7: esc };",
     );
+    // With interpreted code the chain stays opaque and the formatter is
+    // live (fail-closed); the escape is the same.
     for interp in [false, true] {
-        assert!(
+        assert_eq!(
             imports_formatter_with_make(&src, &tail, interp),
-            "interp={interp}: pg escapes through the computed global"
+            interp,
+            "interp={interp}: closed, the formatter's default is never taken"
+        );
+        let esc = last_act().escaped;
+        assert!(
+            esc.iter().any(|n| n == "class:mk.ts:Client"),
+            "interp={interp}: pg's Client escapes through the computed global: {esc:?}"
         );
     }
 }

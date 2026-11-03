@@ -478,6 +478,8 @@ pub(crate) struct ActStats {
     pub pts: u64,
     pub walks: usize,
     pub walked_keys: Vec<String>,
+    /// The names of the escaped tokens.
+    pub escaped: Vec<String>,
 }
 
 #[cfg(test)]
@@ -587,6 +589,7 @@ fn activation_pass<'a>(
                 .iter()
                 .map(|&a| g.m.atoms[a as usize].clone())
                 .collect(),
+            escaped: g.m.escaped.keys().map(|&t| g.m.tok_name(t)).collect(),
         })
     });
     if g.m.aborted {
