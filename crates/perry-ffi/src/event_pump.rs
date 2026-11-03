@@ -88,6 +88,9 @@ pub fn register_agent_event_pump(pump: extern "C" fn() -> i32, has_active: exter
 #[cfg(any(not(test), feature = "runtime-link"))]
 extern "C" fn drain_handle_quarantine_at_tick_begin() {
     crate::handle::drain_quarantined_handles();
+    // Payloads the last full trace proved unnamed, released between turns
+    // rather than inside the collection pause.
+    crate::handle_lifecycle::release_all_proven();
 }
 
 /// Wake the main thread so it picks up a pending event the calling

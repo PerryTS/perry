@@ -291,6 +291,18 @@ thread_local! {
         young_records: Vec::new(),
         young_walk: YoungRecordWalk { logged: 0, visited: 0, kept: 0, parked: 0 },
     }) };
+    /// Payloads a finished trace proved unnamed, released by this mutator
+    /// outside the collection pause (see [`release_proven`]).
+    static PROVEN_DEAD: RefCell<ProvenDead> = const { RefCell::new(ProvenDead(Vec::new())) };
+}
+
+/// Proven-dead parked entries awaiting release. A dying thread releases them.
+struct ProvenDead(Vec<Parked>);
+
+impl Drop for ProvenDead {
+    fn drop(&mut self) {
+        release(std::mem::take(&mut self.0));
+    }
 }
 
 fn park(id: Handle, kind: Kind, identity: NativeRegistrationIdentity, not_before: Option<Instant>) {
@@ -387,6 +399,7 @@ fn park(id: Handle, kind: Kind, identity: NativeRegistrationIdentity, not_before
     if request {
         request_full_trace();
     }
+    release_proven(RELEASE_BATCH);
 }
 
 static OFF_MUTATOR_RETIREMENTS: AtomicUsize = AtomicUsize::new(0);
@@ -838,6 +851,7 @@ impl Epoch {
 /// Called on every registration in the shared band: keeps traces coming while
 /// the band is running low, whoever is consuming it.
 pub fn note_registration() {
+    release_proven(RELEASE_BATCH);
     let reserve = EPOCH
         .try_with(|epoch| {
             let mut epoch = epoch.borrow_mut();
@@ -946,7 +960,19 @@ pub fn trace_trigger_for_tests() -> (usize, usize) {
 /// Drive the provider's trace phase directly (tests).
 #[doc(hidden)]
 pub fn trace_phase_for_tests(phase_id: u32) -> bool {
-    phase(phase_id)
+    let done = phase(phase_id);
+    // The test is the mutator: it releases the yield right after the finish.
+    if phase_id == 1 {
+        release_all_proven();
+    }
+    done
+}
+
+/// Finish the armed trace and leave its yield for the mutator to release
+/// (tests of the release outside the pause).
+#[doc(hidden)]
+pub fn trace_finish_unreleased_for_tests() -> bool {
+    phase(1)
 }
 
 /// Offer a traced word to the provider directly (tests).
@@ -959,6 +985,9 @@ pub fn observe_for_tests(bits: u64) -> bool {
 extern "C" fn phase(phase: u32) -> bool {
     match phase {
         0 => {
+            // Nothing ran since the last finish released its yield: do it now,
+            // before this trace stamps a new epoch.
+            release_all_proven();
             let orphans = ORPHANS
                 .lock()
                 .map(|mut orphans| std::mem::take(&mut *orphans))
@@ -1068,7 +1097,47 @@ fn finish_full_trace() {
         epoch.live = live;
         epoch.trigger_at = MIN_TRIGGER.max(live.saturating_mul(2));
     });
-    release(dead);
+    // The verdict is final, but dropping the payloads (allocator frees, id
+    // retirement) needs no stopped world: the mutator releases them after the
+    // pause, at the next tick begin and alongside its next parks and
+    // registrations, the way native code frees a payload it owns when its
+    // work finishes.
+    let _ = PROVEN_DEAD.try_with(|proven| proven.borrow_mut().0.extend(dead));
+}
+
+/// Proven-dead entries one park or registration releases. Each finished
+/// exchange parks and registers several ids, so the mutator releases faster
+/// than it parks and the backlog stays within one trace's yield.
+const RELEASE_BATCH: usize = 8;
+
+/// Release up to `max` of this mutator's proven-dead parked entries. Called
+/// outside the collection pause, with no registry lock or `PARKED` borrow
+/// held; a release may re-enter perry-ffi (one entry is taken at a time).
+pub(crate) fn release_proven(max: usize) {
+    for _ in 0..max {
+        let Some(parked) = PROVEN_DEAD
+            .try_with(|proven| proven.borrow_mut().0.pop())
+            .ok()
+            .flatten()
+        else {
+            return;
+        };
+        release(vec![parked]);
+    }
+}
+
+/// Release every proven-dead parked entry this thread holds (the tick-begin
+/// hook; a trace that begins with some left releases them first).
+pub fn release_all_proven() {
+    release_proven(usize::MAX);
+}
+
+/// Proven-dead parked entries not yet released on this thread (tests).
+#[doc(hidden)]
+pub fn proven_dead_pending_for_tests() -> usize {
+    PROVEN_DEAD
+        .try_with(|proven| proven.borrow().0.len())
+        .unwrap_or(0)
 }
 
 /// Drop proven-dead payloads and hand their ids back to the shared pool.

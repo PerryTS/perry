@@ -310,3 +310,32 @@ fn a_young_word_stored_without_a_note_is_caught_by_the_minor_walk() {
     assert!(caught.is_err(), "an unlogged young record is a red walk");
     collect_unobserved();
 }
+
+/// A finished trace's verdict is final, but its payloads are dropped and ids
+/// reissued by the mutator after the pause, not inside it.
+#[test]
+fn a_proven_dead_record_is_released_after_the_pause() {
+    use crate::handle_lifecycle::{
+        proven_dead_pending_for_tests, release_all_proven, trace_finish_unreleased_for_tests,
+    };
+    let _serial = recycle_serial();
+    collect_unobserved();
+    let (id, drops) = reclaimed_payload();
+    assert!(park_reclaimable_ffi(id, &RECLAIMED_OWNER));
+    trace_phase_for_tests(0);
+    trace_phase_for_tests(1);
+    trace_phase_for_tests(0);
+    trace_finish_unreleased_for_tests();
+    assert!(!handle_exists(id), "proven dead: no longer parked");
+    assert_eq!(
+        drops.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "not dropped inside the pause"
+    );
+    assert!(proven_dead_pending_for_tests() >= 1);
+    assert!(!reissuable(id));
+    release_all_proven();
+    assert_eq!(drops.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(proven_dead_pending_for_tests(), 0);
+    assert!(reissuable(id));
+}
