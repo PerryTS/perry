@@ -432,12 +432,13 @@ pub extern "C" fn js_http_client_request_destroy(handle: Handle, _error: f64) ->
     }
     // #4909 — Node teardown: destroying an in-flight request (sent, no
     // response yet) emits the coded ECONNRESET "socket hang up" on
-    // `'error'`, then `'close'`. A request that never went out (or whose
-    // response already completed) just gets the (once-only) `'close'`.
+    // `'error'`, then `'close'`. A request that never went out, or whose
+    // response already arrived (Node aborts the response instead), just gets
+    // the (once-only) `'close'`.
     let in_flight = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
         let was_completed = req.completed;
         req.completed = true;
-        req.ended && !was_completed
+        req.ended && !was_completed && req.incoming_handle == 0
     })
     .unwrap_or(false);
     if in_flight {
