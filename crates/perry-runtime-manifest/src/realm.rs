@@ -184,6 +184,10 @@ pub struct RealmDeclaration {
     pub captures: Vec<RealmValue>,
     #[serde(default)]
     pub header: Option<RealmHeaderFacts>,
+    /// The object's other names (references to this declaration, never
+    /// cells of their own).
+    #[serde(default)]
+    pub names: Vec<String>,
     #[serde(default)]
     pub native_namespace: Option<String>,
     #[serde(default)]

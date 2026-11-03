@@ -23,7 +23,6 @@
 "%Layout:REGEX_INDICES_GROUPS_NAMED%",
 "%MapIteratorPrototype%",
 "%MapIteratorPrototype%.next",
-"%NativeNamespace:console%",
 "%SetIteratorPrototype%",
 "%SetIteratorPrototype%.next",
 "%StringIteratorPrototype%",

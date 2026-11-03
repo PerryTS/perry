@@ -926,6 +926,7 @@ pub fn read(runtime_src: &Path) -> Result<Value, String> {
     for (source, path, package) in export_sources {
         exports.read(&source, &path, &package, &needed)?;
     }
+    second_names(&mut all, &mut native_receivers)?;
     native::resolve_receivers(&mut all, &native_receivers)?;
     derive::finish(&mut all)?;
     exports.link(&mut all)?;
@@ -951,6 +952,82 @@ pub fn read(runtime_src: &Path) -> Result<Value, String> {
         ),
         ("declarations".into(), Value::Array(all)),
     ])))
+}
+
+/// A second name of one object (`names = [...]`) is a reference to its one
+/// declaration: every use of it is spelled as the declaration's name, and a
+/// cell declared under a second name is an error.
+fn second_names(all: &mut [Value], receivers: &mut [(String, String)]) -> Result<(), String> {
+    let mut primary = BTreeMap::new();
+    for declaration in all.iter() {
+        let Some(names) = declaration.get("names").and_then(Value::array) else {
+            continue;
+        };
+        let name = declaration
+            .get("name")
+            .and_then(Value::string)
+            .ok_or("unnamed declaration")?;
+        for second in names {
+            let second = second.string().ok_or("names are strings")?;
+            if let Some(other) = primary.insert(second.to_owned(), name.to_owned()) {
+                return Err(format!("{second} is a name of both {other} and {name}"));
+            }
+        }
+    }
+    if primary.is_empty() {
+        return Ok(());
+    }
+    for declaration in all.iter() {
+        let name = declaration
+            .get("name")
+            .and_then(Value::string)
+            .unwrap_or_default();
+        if let Some(object) = primary.get(name) {
+            return Err(format!(
+                "{name} is declared as a cell and named by {object}"
+            ));
+        }
+    }
+    fn spell(value: &mut Value, primary: &BTreeMap<String, String>) {
+        match value {
+            Value::String(s) => {
+                if let Some(name) = primary.get(s.as_str()) {
+                    *s = name.clone();
+                }
+            }
+            Value::Array(values) => values.iter_mut().for_each(|v| spell(v, primary)),
+            Value::Object(fields) => {
+                if let Some(Value::Array(births)) = fields.get_mut("births") {
+                    // Births are a set: a second name joins its object's entry.
+                    if births
+                        .iter()
+                        .any(|b| b.string().is_some_and(|b| primary.contains_key(b)))
+                    {
+                        let mut set = BTreeSet::new();
+                        for birth in births.iter() {
+                            let birth = birth.string().unwrap_or_default();
+                            set.insert(primary.get(birth).map_or(birth, String::as_str).to_owned());
+                        }
+                        *births = set.into_iter().map(Value::String).collect();
+                    }
+                }
+                for (key, field) in fields.iter_mut() {
+                    if key != "name" && key != "names" && key != "births" {
+                        spell(field, primary);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    all.iter_mut()
+        .for_each(|declaration| spell(declaration, &primary));
+    for (_, receiver) in receivers.iter_mut() {
+        if let Some(name) = primary.get(receiver.as_str()) {
+            *receiver = name.clone();
+        }
+    }
+    Ok(())
 }
 
 /// Check every entry against the declaration actually present in source.
@@ -1038,6 +1115,42 @@ mod tests {
             Ok((body.into(), format!("source:{body}")))
         })
     }
+    #[test]
+    fn a_second_name_is_spelled_as_its_declaration_and_is_never_a_cell() {
+        let parse = |s: &str| json::parse(s).unwrap().array().unwrap().to_vec();
+        let mut all = parse(
+            r#"[{"name":"%NativeNamespace:x%","names":["node:x.default"]},
+                {"name":"node:x","births":["node:x.default","%NativeNamespace:x%"],
+                 "properties":[{"key":"default","value":{"kind":"reference","value":"node:x.default"}}]}]"#,
+        );
+        let mut receivers = vec![("node:x.f".to_owned(), "node:x.default".to_owned())];
+        second_names(&mut all, &mut receivers).unwrap();
+        assert_eq!(
+            all[0].get("names").unwrap().encode(),
+            r#"["node:x.default"]"#
+        );
+        assert_eq!(
+            all[1].get("births").unwrap().encode(),
+            r#"["%NativeNamespace:x%"]"#
+        );
+        let properties = all[1].get("properties").unwrap().encode();
+        assert!(
+            properties.contains(r#""value":"%NativeNamespace:x%""#),
+            "{properties}"
+        );
+        assert_eq!(receivers[0].1, "%NativeNamespace:x%");
+        let mut both = parse(r#"[{"name":"a","names":["n"]},{"name":"b","names":["n"]}]"#);
+        assert_eq!(
+            second_names(&mut both, &mut []).unwrap_err(),
+            "n is a name of both a and b"
+        );
+        let mut cell = parse(r#"[{"name":"a","names":["n"]},{"name":"n"}]"#);
+        assert_eq!(
+            second_names(&mut cell, &mut []).unwrap_err(),
+            "n is declared as a cell and named by a"
+        );
+    }
+
     #[test]
     fn bare_constructors_and_reference_captures_keep_one_instance_property() {
         let d = &inline("fn_info!(#[realm(Example,kind=constructor,provider=closure)] body,1;with_declared(1));").unwrap()[0];
@@ -1475,8 +1588,14 @@ mod tests {
         assert!(d.get("exotic_vtable").is_some());
         // The owner is declared, never inferred from the name.
         let unowned = inline(&source.replace("native_namespace = \"x\",", ""));
-        assert!(unowned.unwrap_err().contains("does not declare its native_namespace"));
-        assert!(inline(&source.replace("native_namespace = \"x\",", "native_namespace = \"x\", integrity = frozen,")).is_err());
+        assert!(unowned
+            .unwrap_err()
+            .contains("does not declare its native_namespace"));
+        assert!(inline(&source.replace(
+            "native_namespace = \"x\",",
+            "native_namespace = \"x\", integrity = frozen,"
+        ))
+        .is_err());
         let ordinary = source.replace("NATIVE_MODULE_CLASS_ID", "0");
         assert!(inline(&ordinary).is_err());
     }

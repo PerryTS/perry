@@ -355,6 +355,23 @@ fn sort_properties(properties: &mut [Value]) {
     });
 }
 
+/// `["a", "b"]`: the other names of one declared object.
+fn name_list(ts: &[Token<'_>]) -> Result<Vec<String>, String> {
+    let malformed = || "names is a list of string literals".to_string();
+    if ts.len() < 3 || ts[0].text != "[" || ts[ts.len() - 1].text != "]" {
+        return Err(malformed());
+    }
+    let mut names = Vec::new();
+    for (i, t) in ts[1..ts.len() - 1].iter().enumerate() {
+        match (i % 2, &t.string) {
+            (0, Some(name)) => names.push(name.clone()),
+            (1, None) if t.text == "," => {}
+            _ => return Err(malformed()),
+        }
+    }
+    Ok(names)
+}
+
 pub(super) fn birth(expression: &[Token<'_>], entry: &[Token<'_>]) -> Result<Value, String> {
     birth_at(expression, entry, "")
 }
@@ -446,6 +463,19 @@ pub(super) fn birth_at(
     }
     let clauses = info::split(entry, ",");
     let name = facts::path(clauses.first().ok_or("object birth needs a realm path")?)?;
+    // One object, one declaration: `names = ["…"]` lists the object's other
+    // names (references to this cell, never cells of their own). A `%…%`
+    // intrinsic has no path, so its members are spelled from its first name.
+    let names = clauses[1..]
+        .iter()
+        .find(|clause| clause.len() > 2 && clause[0].text == "names" && clause[1].text == "=")
+        .map(|clause| name_list(&clause[2..]))
+        .transpose()?
+        .unwrap_or_default();
+    let member_owner = match names.first() {
+        Some(first) if name.starts_with('%') => first.clone(),
+        _ => name.clone(),
+    };
     let mut kind = if native { "namespace" } else { "prototype" }.to_owned();
     let mut prototype = if null {
         String::new()
@@ -472,9 +502,9 @@ pub(super) fn birth_at(
             }
             "members" if clause[2].text == "{" && clause.last().unwrap().text == "}" => {
                 declared = Some(if native {
-                    members_with_defaults(&name, &clause[3..clause.len() - 1], 7, 7)?
+                    members_with_defaults(&member_owner, &clause[3..clause.len() - 1], 7, 7)?
                 } else {
-                    members(&name, &clause[3..clause.len() - 1])?
+                    members(&member_owner, &clause[3..clause.len() - 1])?
                 })
             }
             "members"
@@ -483,9 +513,10 @@ pub(super) fn birth_at(
                     && clause[3].text == "("
                     && clause[5].text == ")" =>
             {
-                declared = Some(pair_members(&name, source, clause[4].text)?);
+                declared = Some(pair_members(&member_owner, source, clause[4].text)?);
             }
             "never_move" if clause.len() == 3 && clause[2].text == "true" => never_move = true,
+            "names" if native => {}
             "native_namespace" if clause.len() == 3 && native => {
                 native_namespace = Some(
                     clause[2]
@@ -498,7 +529,7 @@ pub(super) fn birth_at(
                 if declared.is_some() {
                     return Err("members and members_source are one fact".into());
                 }
-                declared = Some(table_members(&name, source, clause[2].text)?);
+                declared = Some(table_members(&member_owner, source, clause[2].text)?);
             }
             "integrity" if clause.len() == 3 => {
                 integrity = super::derive::integrity(clause[2].text)?;
@@ -626,6 +657,12 @@ pub(super) fn birth_at(
     if prototype.is_empty() {
         map.remove("prototype");
     }
+    if !names.is_empty() {
+        map.insert(
+            "names".into(),
+            Value::Array(names.iter().map(string).collect()),
+        );
+    }
     // The owner: the module whose namespace this is, which
     // js_create_native_module_namespace stores in slot 0 and the vtable
     // serves. Every native birth declares it; nothing infers it.
@@ -636,7 +673,9 @@ pub(super) fn birth_at(
             string("crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL"),
         );
     } else if native {
-        return Err(format!("native namespace {name} does not declare its native_namespace"));
+        return Err(format!(
+            "native namespace {name} does not declare its native_namespace"
+        ));
     }
     if kind == "exotic" {
         map.insert(
@@ -835,6 +874,43 @@ mod tests {
             d.get("value").unwrap().get("value").and_then(Value::string),
             Some("process.env")
         );
+    }
+
+    #[test]
+    fn a_native_birth_lists_its_other_names_and_spells_members_from_the_first() {
+        let native = tokens("js_object_alloc(NATIVE_MODULE_CLASS_ID,1)").unwrap();
+        let d = birth(
+            &native,
+            &tokens(r#""%NativeNamespace:x%", names=["node:x.default"], native_namespace="x", members={f;}"#)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(d.get("names").unwrap().encode(), r#"["node:x.default"]"#);
+        assert!(d
+            .get("births")
+            .unwrap()
+            .encode()
+            .contains(r#""node:x.default.f""#));
+        // A named primary spells its members from its own name.
+        let d = birth(
+            &native,
+            &tokens(
+                r#""node:x.c", names=["node:x.default.c"], native_namespace="x.c", members={f;}"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(d
+            .get("births")
+            .unwrap()
+            .encode()
+            .contains(r#""node:x.c.f""#));
+        // Only a native birth carries second names.
+        assert!(birth(
+            &tokens("js_object_alloc(0,0)").unwrap(),
+            &tokens(r#"Plain, names=["Other"], members={}"#).unwrap(),
+        )
+        .is_err());
     }
 
     #[test]
