@@ -29,10 +29,6 @@ pub fn write(declarations: &[Value], out: &Path) -> Result<(), String> {
                 Some("any") => "",
                 Some("windows") => "#[cfg(windows)]",
                 Some("non_windows") => "#[cfg(not(windows))]",
-                Some("linux_gnu") => "#[cfg(all(target_os = \"linux\", target_env = \"gnu\"))]",
-                Some("non_linux_gnu") => {
-                    "#[cfg(not(all(target_os = \"linux\", target_env = \"gnu\")))]"
-                }
                 _ => return Err("invalid layout target facts".into()),
             };
             let scalar = [

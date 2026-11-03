@@ -105,8 +105,6 @@ fn target(ts: &[Token<'_>], mut at: usize) -> Result<&'static str, String> {
             result = match text(attr).as_str() {
                 "cfg ( windows )" => "windows",
                 "cfg ( not ( windows ) )" => "non_windows",
-                "cfg ( all ( target_os = \"linux\" , target_env = \"gnu\" ) )" => "linux_gnu",
-                "cfg ( not ( all ( target_os = \"linux\" , target_env = \"gnu\" ) ) )" => "non_linux_gnu",
                 other => return Err(format!("unsupported layout target predicate {other}")),
             };
         }
@@ -655,10 +653,7 @@ pub fn read(runtime_src: &Path) -> Result<Vec<Value>, String> {
             .map(|v| v.get("target").and_then(Value::string).unwrap())
             .collect::<Vec<_>>();
         targets.sort();
-        if targets != ["any"]
-            && targets != ["non_windows", "windows"]
-            && targets != ["linux_gnu", "non_linux_gnu"]
-        {
+        if targets != ["any"] && targets != ["non_windows", "windows"] {
             return Err(format!(
                 "overlapping or incomplete target variants for layout {name}"
             ));
