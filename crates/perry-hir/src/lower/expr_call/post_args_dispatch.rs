@@ -124,7 +124,6 @@ pub(super) fn try_array_static_alias_call(
     Err(args)
 }
 
-
 #[cfg(test)]
 mod tests {
     use crate::Module;

@@ -140,8 +140,8 @@ impl Model {
     }
 
     /// Record a write under `key` onto `t` that may reach
-    /// `%Function.prototype%`'s `bind`, `name` or `length`
-    /// ([`Model::fnproto_write`]). `key` `None`: an operation whose key the
+    /// `%Function.prototype%`'s bind metadata or borrowed call methods
+    /// ([`Model::fnproto_write`], [`Model::fnproto_borrow_write`]). `key` `None`: an operation whose key the
     /// model does not keep (a definition, a deletion).
     pub fn note_fnproto_write(&mut self, t: Tok, key: Option<Key>, what: &str) {
         if !(t == TOP || matches!(self.toks[t as usize], TokKind::ObjectProto)) {
