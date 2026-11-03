@@ -92,17 +92,37 @@ impl AtomTable {
         bytes: &[u8],
         hash: u64,
     ) -> Option<*const StringHeader> {
+        // The builtin global names are image atoms that are never seeded:
+        // their table is the global object's static layout.
+        match self.lookup_in_table(from, bytes, hash) {
+            Some(atom) => Some(atom),
+            None => crate::object::runtime_layouts::builtin_global_atom(bytes, hash),
+        }
+    }
+
+    /// The tabled atom for `bytes`, without the builtin-global answer. This is
+    /// the registration probe: a name being registered is not asked whether it
+    /// is a builtin global (that is a question of the lookup path, which still
+    /// asks it by name).
+    ///
+    /// # Safety
+    /// As [`Self::lookup`].
+    #[inline(always)]
+    unsafe fn lookup_in_table(
+        &self,
+        from: usize,
+        bytes: &[u8],
+        hash: u64,
+    ) -> Option<*const StringHeader> {
         if self.slots.is_empty() {
-            return crate::object::runtime_layouts::builtin_global_atom(bytes, hash);
+            return None;
         }
         let mask = self.slots.len() - 1;
         let mut i = Self::home(hash, mask);
         loop {
             let entry = &self.slots[i];
             if entry.string_ptr == 0 {
-                // The builtin global names are image atoms that are never
-                // seeded: their table is the global object's static layout.
-                return crate::object::runtime_layouts::builtin_global_atom(bytes, hash);
+                return None;
             }
             if entry.hash == hash {
                 let existing = entry.string_ptr as *const StringHeader;
@@ -945,7 +965,7 @@ pub unsafe extern "C" fn js_string_register_property_atom(key: *const StringHead
     let _ = ATOMS.try_with(|t| {
         let table = &mut *t.get();
         let bytes = std::slice::from_raw_parts(string_data(key), (*key).byte_len as usize);
-        if let Some(existing) = table.lookup(bytes, hash) {
+        if let Some(existing) = table.lookup_in_table(0, bytes, hash) {
             if existing == key {
                 return;
             }
