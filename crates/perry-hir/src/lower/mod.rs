@@ -163,4 +163,7 @@ mod tests;
 #[cfg(test)]
 mod iterator_step_tests;
 
+#[cfg(test)]
+mod wtf8_key_tests;
+
 pub(crate) mod dynamic_eval;
