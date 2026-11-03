@@ -194,6 +194,9 @@ pub(crate) struct Env {
     currently_loading_filename: Option<String>,
     instance_data: Option<InstanceDataRecord>,
     shutting_down: bool,
+    /// The next position in the environment cleanup queue, shared by cleanup
+    /// hooks, async cleanup hooks and thread-safe functions.
+    cleanup_order: u64,
     external_memory: i64,
     pending_exception_bits: Option<u64>,
     last_status: NapiStatus,
@@ -235,6 +238,7 @@ impl Env {
             currently_loading_filename: None,
             instance_data: None,
             shutting_down: false,
+            cleanup_order: 0,
             external_memory: 0,
             pending_exception_bits: None,
             last_status: NapiStatus::Ok,
@@ -267,6 +271,11 @@ impl Env {
         }
         self.refresh_error_info();
         status
+    }
+
+    fn next_cleanup_order(&mut self) -> u64 {
+        self.cleanup_order += 1;
+        self.cleanup_order
     }
 
     fn current_scope_depth(&self) -> u32 {

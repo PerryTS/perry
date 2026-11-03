@@ -1132,12 +1132,9 @@ fn instance_data_and_cleanup_hooks_run_once_in_shutdown_order() {
     );
     assert_eq!(instance_data as usize, 0x8523);
 
+    // Node runs one cleanup queue, newest first, whatever the hook kind.
     assert_eq!(
         unsafe { napi_add_env_cleanup_hook(env, Some(cleanup), 2usize as *mut c_void) },
-        NapiStatus::Ok
-    );
-    assert_eq!(
-        unsafe { napi_add_env_cleanup_hook(env, Some(cleanup), 3usize as *mut c_void) },
         NapiStatus::Ok
     );
     let mut async_handle = std::ptr::null_mut();
@@ -1152,9 +1149,13 @@ fn instance_data_and_cleanup_hooks_run_once_in_shutdown_order() {
         },
         NapiStatus::Ok
     );
+    assert_eq!(
+        unsafe { napi_add_env_cleanup_hook(env, Some(cleanup), 3usize as *mut c_void) },
+        NapiStatus::Ok
+    );
 
     shutdown_current_env();
-    assert_eq!(LIFECYCLE_SEQUENCE.load(Ordering::SeqCst), 1324);
+    assert_eq!(LIFECYCLE_SEQUENCE.load(Ordering::SeqCst), 3124);
     assert_eq!(
         ASYNC_CLEANUP_STATUS.load(Ordering::SeqCst),
         NapiStatus::Ok as usize
@@ -1163,7 +1164,32 @@ fn instance_data_and_cleanup_hooks_run_once_in_shutdown_order() {
     assert_eq!(INSTANCE_FINALIZER_HINT.load(Ordering::SeqCst), 0x1234);
 
     shutdown_current_env();
-    assert_eq!(LIFECYCLE_SEQUENCE.load(Ordering::SeqCst), 1324);
+    assert_eq!(LIFECYCLE_SEQUENCE.load(Ordering::SeqCst), 3124);
+}
+
+#[test]
+fn async_cleanup_hook_removal_handle_is_optional() {
+    LIFECYCLE_SEQUENCE.store(0, Ordering::SeqCst);
+    ASYNC_CLEANUP_STATUS.store(usize::MAX, Ordering::SeqCst);
+    let env = test_env();
+    // Node accepts a null `remove_handle`; the hook still receives its handle.
+    assert_eq!(
+        unsafe {
+            napi_add_async_cleanup_hook(
+                env,
+                Some(async_cleanup),
+                5usize as *mut c_void,
+                std::ptr::null_mut(),
+            )
+        },
+        NapiStatus::Ok
+    );
+    shutdown_current_env();
+    assert_eq!(LIFECYCLE_SEQUENCE.load(Ordering::SeqCst), 5);
+    assert_eq!(
+        ASYNC_CLEANUP_STATUS.load(Ordering::SeqCst),
+        NapiStatus::Ok as usize
+    );
 }
 
 #[test]
