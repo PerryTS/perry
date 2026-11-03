@@ -306,11 +306,13 @@ fn glibc_version_runtime() -> String {
         .into_owned()
 }
 
-/// The glibc the program was linked against, as `major.minor`: the compiler
-/// reads it from the link host and defines `perry_glibc_version_compiler` as
-/// the absolute symbol `major * 1000 + minor` at link time. A link that did
-/// not define it (a cross link, where the compiler cannot know the sysroot's
-/// glibc) reports the runtime's version, which is what the link resolved.
+/// The glibc the program was linked against, as `major.minor`. The compiler
+/// defines `perry_glibc_version_compiler` as the absolute symbol
+/// `major * 1000 + minor` in every glibc link it drives: the target
+/// sysroot's glibc when cross-linking, the link host's when linking
+/// natively (`link/glibc_version.rs`). Only a link Perry does not drive lacks
+/// it: the runtime crate's own test binaries, which cargo links natively, so
+/// the glibc they run on is the one they were linked against.
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 fn glibc_version_compiler() -> String {
     extern "C" {
