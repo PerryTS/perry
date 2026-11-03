@@ -40,6 +40,35 @@ rustflags = ["-C", "force-unwind-tables=yes", "-Z", "use-sync-unwind=yes"]
 # repeating the `[build]` flags in it: cargo uses the target list INSTEAD of
 # the build list, and a runtime without unwind tables strands every throw.
 
+# std without its `backtrace` feature, for every cargo build of this
+# workspace: release, dev, test, check/clippy, every target. std is compiled
+# from the toolchain's rust-src (rust-toolchain.toml lists the component)
+# with no optional feature. The prebuilt std is built with `backtrace`, which
+# makes its default panic hook (`std::panicking::default_hook` ->
+# `std::sys::backtrace::_print_fmt`) link std's DWARF symbolizer (gimli,
+# addr2line, miniz_oxide, object, rustc-demangle) into every program perry
+# links: ~170 KB of .text no perry program runs. Without it a panic prints its
+# message and location as before; RUST_BACKTRACE has no effect and
+# `Backtrace::capture()` returns raw frames without symbols. std's `unwind`
+# crate (the `_Unwind_*` the JS exception transport walks with) is not a
+# feature and stays. The CI gate scripts/check_std_symbolizer.sh fails on any
+# std symbolizer symbol in the runtime archives or a linked program.
+#
+# Host builds need no `--target`: this cargo builds std for the host when the
+# target is implicit, so artifacts stay in target/<profile>/.
+#
+# Tests build with the same panic strategy as everything else
+# (`panic-abort-tests`). Otherwise cargo builds a second, unwinding std for
+# the test graph next to the profile's panic=abort std (#7302), and
+# build-std's one panic_abort unit fails the abort std ("the crate
+# `panic_abort` does not have the panic strategy `abort`"). Under panic=abort
+# libtest runs each test in its own process, so `#[should_panic]` works;
+# `catch_unwind` catches nothing, as in every shipped build.
+[unstable]
+build-std = ["std", "panic_abort"]
+build-std-features = []
+panic-abort-tests = true
+
 # The bundled SQLite is built as node's is in this one respect: node compiles
 # it with SQLITE_DEFAULT_MEMSTATUS=0 (`PRAGMA compile_options` on node 26),
 # so every sqlite3_malloc skips the global memory-statistics mutex and

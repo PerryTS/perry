@@ -3763,6 +3763,8 @@ jobs:
           cargo test -p perry-gc-effects
           PERRY_GC_EFFECTS_SIDECAR=target/release/libperry_runtime.a.gc-effects \
             cargo test -p perry-gc-effects --test workspace_sidecar -- --ignored
+      - name: std without its symbolizer (runtime archives)
+        run: scripts/check_std_symbolizer.sh target/release/libperry_runtime.a target/release/libperry_stdlib.a
 
   # macOS aarch64 builds its own archives; Windows x86-64 cross-builds them
   # with cargo-xwin on Linux (the same toolchain lint's Windows type-check
@@ -3864,6 +3866,7 @@ jobs:
           scripts/gc_call_effects/sidecars.sh "$libdir"
           PERRY_GC_EFFECTS_SIDECAR="$libdir/$runtime.gc-effects" \
             cargo test -p perry-gc-effects --test workspace_sidecar -- --ignored
+          scripts/check_std_symbolizer.sh "$libdir/$runtime" "$libdir/${runtime/runtime/stdlib}"
 
   parity:
     # Sweep/full-tier only. Chained behind `check` so a sweep's fan-out does
@@ -5441,6 +5444,9 @@ jobs:
         run: |
           cargo build-perry --release
           scripts/gc_call_effects/sidecars.sh target/release
+
+      - name: std without its symbolizer (every archive)
+        run: scripts/check_std_symbolizer.sh target/release/libperry_*.a
 
       # What users ship is the dead-stripped LINKED program, not the archive:
       # compile a few small fixtures through the real pipeline, prove each

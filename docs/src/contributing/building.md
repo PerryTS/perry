@@ -5,7 +5,14 @@
 - Rust toolchain: install [rustup](https://rustup.rs/); the workspace pins
   `nightly-2026-10-04` in `rust-toolchain.toml` because its exception transport
   needs nightly unwind-table flags. Running Cargo from the checkout installs
-  or selects the pinned toolchain automatically.
+  or selects the pinned toolchain automatically, with its `rust-src` component:
+  every build of the workspace compiles the Rust standard library from source
+  without its `backtrace` feature (`.cargo/config.toml` `[unstable]`), which
+  keeps std's DWARF symbolizer (~170 KB of code) out of every program Perry
+  links. It adds about 20 s per target to a cold build. A Rust panic inside
+  the runtime still prints its message and location; `RUST_BACKTRACE` has no
+  effect. Tests build with `panic=abort` like everything else, so libtest runs
+  each test in its own process and `catch_unwind` catches nothing.
 - System C compiler (`cc` on macOS/Linux, MSVC on Windows)
 - **libclang** — the `libsqlite3-sys` build script runs `bindgen`. Missing it
   aborts the build with `Unable to find libclang`. Install `libclang-dev`
