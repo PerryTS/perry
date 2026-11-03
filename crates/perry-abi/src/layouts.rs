@@ -312,11 +312,17 @@ pub const fn intrinsic_function_layout_word(index: u32) -> u32 {
     }
 }
 
+/// Rows of [`NATIVE_LAYOUT_DESCRIPTORS`] that no runtime layout declares:
+/// kept so that no other runtime word moves (DESIGN §3.2 item 3).
+pub const NATIVE_LAYOUT_RESERVED: &[&str] = &["CJS_MODULE_RECORD"];
+
 /// Union of native descriptor names across target/cfg variants, sorted.
 /// Rows 0..9 are intrinsic functions; rows 9 and 10 are weak collections.
 pub const NATIVE_LAYOUT_DESCRIPTORS: &[&str] = &[
     "ARRAY_NAMED",
     "ARRAY_PROTOTYPE_NAMED",
+    // Reserved: no runtime birth and no declaration (DESIGN §3.2 item 3).
+    // The row stays so that no other runtime word moves.
     "CJS_MODULE_RECORD",
     "DUPLEX",
     "DUPLEX_PROTOTYPE",

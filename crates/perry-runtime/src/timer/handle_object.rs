@@ -529,10 +529,8 @@ pub(super) fn timer_object(id: i64, kind: CallbackTimerKind) -> i64 {
         "timer prototype must exist before layout birth"
     );
     let desc = match kind {
-        CallbackTimerKind::Immediate => {
-            std::ptr::addr_of!(crate::object::runtime_layouts::IMMEDIATE)
-        }
-        _ => std::ptr::addr_of!(crate::object::runtime_layouts::TIMEOUT),
+        CallbackTimerKind::Immediate => crate::object::runtime_layouts::IMMEDIATE::desc(),
+        _ => crate::object::runtime_layouts::TIMEOUT::desc(),
     };
     let scope = crate::gc::RuntimeHandleScope::new();
     let object = unsafe { crate::object::layout_desc::perry_alloc_layout(desc) };

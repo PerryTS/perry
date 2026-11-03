@@ -16,6 +16,11 @@ workspace = true
 crate-type = ["rlib"]
 
 [features]
+# DESIGN 3.2 item 10: test-only definitions of the runtime layouts, expanded
+# from their runtime_layout! declarations, for test crates that link the
+# runtime without a compiled program. Enable ONLY from [dev-dependencies];
+# the realm link-graph gate asserts a release program never carries them.
+test-layout-descriptors = []
 # Phase A acceptance census and fault hooks. Scalar counts only; compiled out
 # of shipped builds. Ext-net's dev dependency enables the binding witnesses.
 native-payload-test-census = []
@@ -124,7 +129,7 @@ gc-instruments = []
 contract-checks = []
 
 # Hot-path mutator diagnostics (`hot_diag`, #10572): `PERRY_REGEX_DIAG`,
-# `PERRY_IC_DIAG`, `PERRY_LAYOUT_DIAG`, `PERRY_ENUM_DIAG`,
+# `PERRY_LAYOUT_DIAG`, `PERRY_ENUM_DIAG`,
 # `PERRY_RECEIVER_REPR_DIAG`. Same contract as `gc-instruments`: in `default`,
 # compiled under the `perry_hot_diag` cfg only in debug-profile builds and the
 # instrumented prebuilt variant; perry links that variant when one of those

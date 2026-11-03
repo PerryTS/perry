@@ -935,8 +935,12 @@ fn deterministic_lookup_addresses(
 /// (verbatim leaves the list untouched).
 fn apply_result_order(addresses: &mut [ResolvedAddress]) {
     match DEFAULT_RESULT_ORDER.load(Ordering::Relaxed) {
-        RESULT_ORDER_IPV4_FIRST => addresses.sort_by_key(|a| u8::from(a.family != 4)),
-        RESULT_ORDER_IPV6_FIRST => addresses.sort_by_key(|a| u8::from(a.family != 6)),
+        RESULT_ORDER_IPV4_FIRST => {
+            crate::cold_sort::sort_by_u64_key(addresses, |a| u64::from(a.family != 4))
+        }
+        RESULT_ORDER_IPV6_FIRST => {
+            crate::cold_sort::sort_by_u64_key(addresses, |a| u64::from(a.family != 6))
+        }
         _ => {}
     }
 }

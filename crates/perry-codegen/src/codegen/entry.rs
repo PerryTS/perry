@@ -141,6 +141,8 @@ pub(super) fn compile_module_entry(
     // key-lengths array passed to `js_create_namespace`. Empty when
     // this module is not a dynamic-import target.
     namespace_key_globals: &[(String, usize)],
+    // R: the entry's `main` carries the runtime layouts it reaches.
+    realm_reach: Option<&perry_hir::realm_reach::RealmReach>,
 ) -> Result<()> {
     let strings_init_name = format!("__perry_init_strings_{}", module_prefix);
 
@@ -440,6 +442,15 @@ pub(super) fn compile_module_entry(
         // WRT step 1: the realm image's test fixture (a compile-time knob).
         let realm_fixture = crate::codegen::realm_image::test_fixture_requested()
             .then(|| crate::codegen::realm_image::emit_test_fixture(llmod));
+        // WRT3p-A1: the descriptor and key list of every runtime layout R
+        // reaches (DESIGN §3.2 item 9). The runtime retains none.
+        let runtime_layout_fixups = match realm_reach {
+            Some(reach) => {
+                crate::codegen::realm_image::layouts::emit_program_runtime_layouts(llmod, reach)
+                    .map_err(|error| anyhow::anyhow!("runtime layouts: {error}"))?
+            }
+            None => Vec::new(),
+        };
         let main = if is_dylib {
             llmod.define_function("perry_module_init", VOID, vec![])
         } else {
@@ -465,6 +476,9 @@ pub(super) fn compile_module_entry(
                     &[(PTR, path_ptr.as_str()), (I32, len_str.as_str())],
                 );
             }
+            // Apple pointer tags the emitted key lists cannot carry statically,
+            // stored before the first birth can read a list.
+            crate::codegen::realm_image::emit_tag_fixups(blk, &runtime_layout_fixups);
             blk.call_void("js_gc_init_with_layouts", &[(PTR, "@perry_layout_image")]);
             blk.call_void(
                 "perry_array_iteration_init",
@@ -807,7 +821,6 @@ pub(super) fn compile_module_entry(
             numeric_order_ready: Default::default(),
             program_has_worker: cross_module.program_has_worker,
             program_has_thread_agents: cross_module.program_has_thread_agents,
-            program_class_accessor_names: cross_module.program_class_accessor_names.clone(),
             func: main,
             module_slug: crate::expr::native_region_slug(strings.module_prefix()),
             source_function: "module_init".to_string(),

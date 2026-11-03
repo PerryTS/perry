@@ -88,7 +88,8 @@ pub fn write(declarations: &[Value], out: &Path) -> Result<(), String> {
         }
         count += 1;
     }
-    if count != perry_abi::NATIVE_LAYOUT_DESCRIPTORS.len() {
+    if count != perry_abi::NATIVE_LAYOUT_DESCRIPTORS.len() - perry_abi::NATIVE_LAYOUT_RESERVED.len()
+    {
         return Err(format!(
             "layout fact coverage {count} differs from native ABI"
         ));
@@ -101,6 +102,14 @@ unsafe fn check_source_layout(desc: *const super::PerryLayoutDesc, name: &str,
     let d = unsafe { &*desc };
     assert_eq!((d.family, d.variant, d.kind, d.integrity, d.rep, d.class_id, d.parent_class_id), scalar, "{name}");
     assert!(d.methods.is_null(), "{name}");
+    // The compiler writes `native_layout_word(name, proto code)` into each
+    // emitted descriptor (codegen `native_runtime_word`: object 0, serial 1,
+    // null 2); the runtime compares against `runtime_layout_word(name)`. One
+    // word rule, so the two cannot diverge.
+    let short = name.strip_prefix("perry_runtime_layout_").expect(name);
+    let proto_code = match prototype.0 { 0 => 0, 1 => 2, _ => 1 };
+    assert_eq!(d.layout_id, crate::codegen_abi::native_layout_word(short, proto_code), "{name}: compiler word rule");
+    assert_eq!(d.layout_id, super::runtime_layout_word(short), "{name}: runtime word table");
     assert_eq!((d.key_count as usize, d.slot_count as usize), (keys.len(), keys.len()), "{name}");
     match prototype.0 {
         0 => assert_eq!(d.proto as usize, 0, "{name}"),

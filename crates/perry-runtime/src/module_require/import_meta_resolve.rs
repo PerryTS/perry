@@ -72,7 +72,9 @@ fn export_target(exports: &Value, key: &str) -> Option<String> {
                     Some((prefix.len(), suffix.len(), value, matched))
                 })
                 .collect();
-            patterns.sort_by_key(|(prefix, suffix, _, _)| std::cmp::Reverse((*prefix, *suffix)));
+            crate::cold_sort::sort_by_key(&mut patterns, |(prefix, suffix, _, _)| {
+                std::cmp::Reverse((*prefix, *suffix))
+            });
             let (_, _, value, matched) = patterns.first()?;
             return conditional_target(value).map(|target| target.replace('*', matched));
         }

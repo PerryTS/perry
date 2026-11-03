@@ -490,12 +490,6 @@
       "why": "#9823 for-in diagnostics (`PERRY_ENUM_DIAG`), off unless armed. Two `Instant`s and a set of u64 counters (`for_in_calls`, `for_in_primitive`, `for_in_levels`, `for_in_key_arrays`, \u2026). No field stores an address."
     },
     {
-      "file": "crates/perry-runtime/src/hot_diag.rs",
-      "name": "IC_DIAG",
-      "verdict": "not_a_gc_pointer",
-      "why": "Inline-cache miss diagnostics (`PERRY_IC_DIAG`). `IcDiag` is two `Instant`s, three counters, and `sites: HashMap<usize, SiteStat>` whose KEY is a PIC cache-slot address \u2014 malloc'd arena storage from `field_get_set/ic_slot.rs`, never GC heap \u2014 and whose value is a `String` plus counters. Nothing here is a managed pointer."
-    },
-    {
       "file": "crates/perry-runtime/src/intl/segments_view.rs",
       "name": "DECLINE_EMPTY",
       "verdict": "not_a_gc_pointer",

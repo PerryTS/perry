@@ -1076,9 +1076,9 @@ pub fn run_with_parse_cache(
         // DCE layer 2: modules only unreachable `import()` sites load.
         let mut roots = vec![entry_canonical.clone()];
         roots.extend(
-            ctx.worker_url_entries
-                .iter()
-                .flat_map(|(l, c)| [l.clone(), c.clone()]),
+            super::program_facts::module_roots(&ctx)
+                .into_iter()
+                .map(PathBuf::from),
         );
         if let Some(ext_dir) = &args.bundle_extensions {
             for (entry_path, _) in super::resolve::discover_extension_entries(ext_dir)? {
@@ -3635,11 +3635,6 @@ pub fn run_with_parse_cache(
         candidates.dedup_by(|a, b| a.class_id == b.class_id && a.target == b.target);
     }
     let short_spread_method_candidates = std::sync::Arc::new(short_spread_method_candidates);
-    // #10498: the accessor names every compiled class declares decide which
-    // sites carry a class-accessor arm.
-    let program_class_accessor_names = std::sync::Arc::new(
-        perry_codegen::ClassAccessorNames::collect(ctx.native_modules.values()),
-    );
     // #8775: a generic library module can receive an exported adapter object
     // through a parameter without importing its defining module. Publish the
     // producer's exact immutable object/method facts to every codegen job so a
@@ -6242,9 +6237,6 @@ pub fn run_with_parse_cache(
             program_layouts: Default::default(),
             gc_effects: std::sync::Arc::clone(&gc_effects),
             short_spread_method_candidates: std::sync::Arc::clone(&short_spread_method_candidates),
-            program_class_accessor_names: Some(std::sync::Arc::clone(
-                &program_class_accessor_names,
-            )),
             object_literal_method_candidates: std::sync::Arc::clone(
                 &object_literal_method_candidates,
             ),
@@ -6531,6 +6523,31 @@ pub fn run_with_parse_cache(
         );
     }
     realm_reach.program_signals(&ctx.patched_builtins);
+    // Test-only input of the realm-diff gate (DESIGN §3.2, "The R-restricted
+    // realm-diff gate"; scripts/realm_diff_gate.py): R becomes exactly the
+    // file's names with top dropped, so the dumper, which reflects over
+    // globalThis, is built with a partial image; the close below applies the
+    // birth relation. A top program's own names are not kept (a top scan is
+    // already closed to the whole catalog). Inert when unset; the line it
+    // prints lets the gate assert the input took effect, and the gate checks
+    // that the closed R equals the file. The cache keys hash the path
+    // (compile_env), not the file, so the gate compiles with PERRY_NO_CACHE.
+    if let Some(path) = std::env::var_os("PERRY_REALM_REACH_NAMES") {
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| anyhow::anyhow!("PERRY_REALM_REACH_NAMES {path:?}: {e}"))?;
+        let names: Vec<String> = serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .and_then(|v| serde_json::from_value(v.get("names")?.clone()).ok())
+            .ok_or_else(|| {
+                anyhow::anyhow!("PERRY_REALM_REACH_NAMES {path:?}: expected {{\"names\": [...]}}")
+            })?;
+        eprintln!(
+            "[realm-reach-names] {} {}",
+            path.to_string_lossy(),
+            names.len()
+        );
+        realm_reach.restrict_to(names);
+    }
     realm_reach.close(perry_codegen::realm_manifest::REALM);
     if std::env::var("PERRY_REALM_REACH").is_ok_and(|v| v == "1") {
         let reasons: Vec<_> = realm_reach.top.iter().map(|r| r.reason()).collect();
@@ -6548,6 +6565,9 @@ pub fn run_with_parse_cache(
             })
         );
     }
+    // R drives the entry module's realm emission (WRT3p-A1: the runtime
+    // layouts' descriptors and key lists).
+    let realm_reach = std::sync::Arc::new(realm_reach);
     let reach_report = super::reach_report::start(&ctx, args.output_type != "executable")?;
     let source_need = super::source_need::start(need, &dropped_source, source_need_seconds)?;
     // fninfer (decision 140): per-function inferred signatures over the
@@ -6692,6 +6712,9 @@ pub fn run_with_parse_cache(
                 std::sync::Arc::make_mut(&mut opts.program_facts.elision).dynamic_code_reach =
                     ctx.patched_builtins.dynamic_code_reach.clone();
                 opts.program_layouts = std::sync::Arc::clone(&program_layouts);
+                if opts.is_entry_module {
+                    opts.program_facts.realm_reach = Some(std::sync::Arc::clone(&realm_reach));
+                }
                 Ok::<_, String>(opts)
             })
             .collect::<Vec<_>>()
@@ -6709,7 +6732,6 @@ pub fn run_with_parse_cache(
         constructor_contracts,
         static_shape_ids,
         short_spread_method_candidates,
-        program_class_accessor_names,
         object_literal_method_candidates,
     ));
     let mut owned_modules = std::mem::take(&mut ctx.native_modules);

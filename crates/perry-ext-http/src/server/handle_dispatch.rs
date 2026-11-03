@@ -1241,9 +1241,9 @@ fn constructor_object(name: &str) -> f64 {
     let _record_roots = perry_ffi::TransientRootScope::enter();
     let obj = _record_roots.root_addr(
         (unsafe {
-            perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
-                perry_ffi::runtime_layouts::RECORD_F13_0
-            ))
+            perry_ffi::runtime_layouts::alloc_runtime_record(
+                perry_ffi::runtime_layouts::RECORD_F13_0::desc(),
+            )
         }) as i64,
     );
     if (obj.get() as *mut perry_ffi::ObjectHeader).is_null() {

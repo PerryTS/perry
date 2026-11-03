@@ -328,30 +328,13 @@ pub(super) fn realm(expression: &str, entry: &[Token<'_>], source: &str) -> Resu
             ))
         }
     };
-    // Integrity makes each own property non-configurable, and freezing
-    // makes it non-writable; length is never enumerable or configurable.
-    let element_attrs = match integrity {
-        Integrity::Extensible | Integrity::NonExtensible => 7,
-        Integrity::Sealed => 3,
-        Integrity::Frozen => 2,
-    };
+    // Integrity lives in the header (the elements' attributes follow from
+    // it); length is never enumerable or configurable.
     let length_attrs = if integrity == Integrity::Frozen { 0 } else { 1 };
-    let mut properties = items
-        .iter()
-        .enumerate()
-        .map(|(i, item)| {
-            object([
-                ("key", string(i.to_string())),
-                ("symbol", Value::Bool(false)),
-                ("attributes", number(element_attrs)),
-                (
-                    "value",
-                    object([("kind", string("string")), ("value", string(item.clone()))]),
-                ),
-            ])
-        })
-        .collect::<Vec<_>>();
-    properties.push(object([
+    // The elements are storage, the one home the array emitter reads. The
+    // holder's key order lists its properties; the index keys come first by
+    // the array's own-keys rule and are not repeated here.
+    let properties = vec![object([
         ("key", string("length")),
         ("symbol", Value::Bool(false)),
         ("attributes", number(length_attrs)),
@@ -365,15 +348,23 @@ pub(super) fn realm(expression: &str, entry: &[Token<'_>], source: &str) -> Resu
                 ),
             ]),
         ),
-    ]));
-    properties.sort_by_key(|p| p.get("key").and_then(Value::string).unwrap().to_owned());
-    let mut keys = (0..items.len())
-        .map(|i| string(i.to_string()))
-        .collect::<Vec<_>>();
-    keys.push(string("length"));
+    ])];
     let mut map = base("namespace", elements);
     map.insert("properties".into(), Value::Array(properties));
-    map.insert("own_key_order".into(), Value::Array(keys));
+    map.insert("own_key_order".into(), Value::Array(vec![string("length")]));
+    if !items.is_empty() {
+        let elements = items
+            .iter()
+            .map(|item| object([("kind", string("string")), ("value", string(item.clone()))]))
+            .collect();
+        map.insert(
+            "storage".into(),
+            object([
+                ("kind", string("array")),
+                ("elements", Value::Array(elements)),
+            ]),
+        );
+    }
     Ok(Value::Object(map))
 }
 

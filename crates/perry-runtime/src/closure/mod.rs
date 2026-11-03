@@ -42,7 +42,7 @@ pub use alloc::{
 };
 pub(crate) use alloc::{
     closure_install_boxed_captures, closure_set_code_word, gc_capture_slot_range,
-    singleton_closure_if_cached,
+    returned_capture_bits, singleton_closure_if_cached,
 };
 pub use body_call::{call_value, plain_call_receiver, JsThis};
 pub use shape::closure_kind_probe;

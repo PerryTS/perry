@@ -108,7 +108,15 @@ pub struct ConstructorFacts {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RealmStorageFacts {
-    Set { entries: Vec<RealmValue> },
+    Set {
+        entries: Vec<RealmValue>,
+    },
+    /// The dense elements of a static array birth, in index order. Reflection
+    /// reads them as index properties; the array holder carries only
+    /// and its named properties, so the elements have one home.
+    Array {
+        elements: Vec<RealmValue>,
+    },
     RuntimeLayout(RuntimeLayoutFacts),
 }
 
@@ -116,6 +124,7 @@ impl RealmStorageFacts {
     pub fn values(&self) -> &[RealmValue] {
         match self {
             Self::Set { entries } => entries,
+            Self::Array { elements } => elements,
             Self::RuntimeLayout(_) => &[],
         }
     }

@@ -28,10 +28,18 @@ cp "$REPO_ROOT/npm/perry/package.json.tmpl" "$FIXTURE_REPO/npm/perry/package.jso
 cp "$REPO_ROOT/npm/perry/bin/perry.js" "$FIXTURE_REPO/npm/perry/bin/perry.js"
 cp "$REPO_ROOT/npm/perry-win32-x64/package.json.tmpl" \
   "$FIXTURE_REPO/npm/perry-win32-x64/package.json.tmpl"
+mkdir -p "$FIXTURE_REPO/npm/perry-ext"
+cp "$REPO_ROOT/npm/perry-ext/package.json.tmpl" "$FIXTURE_REPO/npm/perry-ext/package.json.tmpl"
 
 printf '[workspace.package]\nversion = "0.0.0-test"\n' > "$FIXTURE_REPO/Cargo.toml"
 printf 'fixture executable\n' > "$WIN_ARTIFACT/perry.exe"
 printf 'fixture LLVM runtime\n' > "$WIN_ARTIFACT/LLVM-C.dll"
+# Windows is also an ext triple (npm/packaged-triples.json), so staging it
+# stages @perryts/perry-ext-x86_64-pc-windows-msvc too: that needs a
+# perry_ext_*.lib archive and the release revision CI passes in as
+# PERRY_SOURCE_REVISION (needs.preflight.outputs.checkout-sha).
+printf 'fixture ext archive\n' > "$WIN_ARTIFACT/perry_ext_fixture.lib"
+export PERRY_SOURCE_REVISION="$(printf 'a%.0s' $(seq 40))"
 
 SKIP_MISSING=1 PERRY_NPM_NO_COMPRESS=1 \
   "$FIXTURE_REPO/scripts/stage-npm.sh" "$ARTIFACTS" > "$WORK/stage.out"
@@ -44,6 +52,12 @@ cmp "$WIN_ARTIFACT/LLVM-C.dll" \
 # The negative direction is load-bearing: a missing DLL must stop publishing,
 # not silently produce an npm package whose perry.exe dies with 0xC0000135.
 rm "$WIN_ARTIFACT/LLVM-C.dll"
+# Windows is also an ext triple (npm/packaged-triples.json), so staging it
+# stages @perryts/perry-ext-x86_64-pc-windows-msvc too: that needs a
+# perry_ext_*.lib archive and the release revision CI passes in as
+# PERRY_SOURCE_REVISION (needs.preflight.outputs.checkout-sha).
+printf 'fixture ext archive\n' > "$WIN_ARTIFACT/perry_ext_fixture.lib"
+export PERRY_SOURCE_REVISION="$(printf 'a%.0s' $(seq 40))"
 if SKIP_MISSING=1 PERRY_NPM_NO_COMPRESS=1 \
     "$FIXTURE_REPO/scripts/stage-npm.sh" "$ARTIFACTS" \
     > "$WORK/missing.out" 2> "$WORK/missing.err"; then

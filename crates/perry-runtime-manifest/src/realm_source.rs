@@ -1383,15 +1383,18 @@ mod tests {
         let source = r#"const T: &[&str] = &["a", "b"]; fn f() { crate::realm_decl! { birth crate::array::realm_string_array(T, false); realm { Example.list, elements_source = T, integrity = frozen } } }"#;
         let d = &inline(source).unwrap()[0];
         assert_eq!(header_word(d), "40967");
-        assert_eq!(
-            d.get("own_key_order").unwrap().encode(),
-            r#"["0","1","length"]"#
-        );
+        assert_eq!(d.get("own_key_order").unwrap().encode(), r#"["length"]"#);
+        // The holder carries only length; the elements are storage.
         let attrs = d.get("properties").unwrap().array().unwrap();
-        assert!(attrs
-            .iter()
-            .any(|p| p.get("key").unwrap().string() == Some("length")
-                && p.get("attributes") == Some(&Value::Number("0".into()))));
+        assert_eq!(attrs.len(), 1);
+        assert!(
+            attrs[0].get("key").unwrap().string() == Some("length")
+                && attrs[0].get("attributes") == Some(&Value::Number("0".into()))
+        );
+        assert_eq!(
+            d.get("storage").unwrap().encode(),
+            r#"{"elements":[{"kind":"string","value":"a"},{"kind":"string","value":"b"}],"kind":"array"}"#
+        );
         assert!(inline(&source.replace("elements_source = T", "elements_source = U")).is_err());
     }
 
@@ -1443,8 +1446,14 @@ mod tests {
         let source = r#"enum V { Code(f64), Name(&'static str) } const ROWS: &[(&str, V)] = &[("Z", V::Code(-1.0)), ("1", V::Name("one")), ("A", V::Code(2.0))]; fn f() { crate::realm_decl! { birth js_object_alloc_null_proto(0, 3); realm { Example.rows, kind = namespace, members_source = ROWS, integrity = frozen } } }"#;
         let d = &inline(source).unwrap()[0];
         assert_eq!(d.get("own_key_order").unwrap().encode(), r#"["1","Z","A"]"#);
-        // FROZEN|SEALED|NO_EXTEND|NULL_PROTO|HAS_DESCRIPTORS
-        assert_eq!(header_word(d), "2119");
+        // Frozen integrity and the non-default row attributes; the null
+        // [[Prototype]] is the shape's identity (#13666), not a header bit.
+        let frozen = perry_abi::OBJ_FLAG_FROZEN
+            | perry_abi::OBJ_FLAG_SEALED
+            | perry_abi::OBJ_FLAG_NO_EXTEND
+            | perry_abi::OBJ_FLAG_HAS_DESCRIPTORS;
+        assert_eq!(header_word(d), frozen.to_string());
+        assert!(d.get("prototype").is_none());
         assert!(d
             .get("properties")
             .unwrap()
@@ -1471,7 +1480,7 @@ mod tests {
 
     #[test]
     fn static_layout_births_take_their_kind_and_stay_unmarked() {
-        let source = r#"fn f() { crate::realm_decl! { birth crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(crate::object::runtime_layouts::EE_ASYNC_RESOURCE_PROTO)); realm { Example.prototype, extends = Base.prototype, members = { constructor; }; } } }"#;
+        let source = r#"fn f() { crate::realm_decl! { birth crate::object::layout_desc::perry_alloc_layout(crate::object::runtime_layouts::EE_ASYNC_RESOURCE_PROTO::desc()); realm { Example.prototype, extends = Base.prototype, members = { constructor; }; } } }"#;
         // PLAIN_ORDINARY|HAS_DESCRIPTORS; no NEVER_MOVE until a realm birth
         // names it as its [[Prototype]].
         assert_eq!(header_word(&inline(source).unwrap()[0]), "2560");

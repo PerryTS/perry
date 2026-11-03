@@ -1,7 +1,7 @@
 use super::*;
 
 unsafe fn image_keys() -> &'static [PerryLayoutKey] {
-    let descriptor = std::ptr::addr_of!(crate::object::runtime_layouts::ITERATOR_RESULT);
+    let descriptor = crate::object::runtime_layouts::ITERATOR_RESULT::desc();
     std::slice::from_raw_parts((*descriptor).keys, (*descriptor).key_count as usize)
 }
 

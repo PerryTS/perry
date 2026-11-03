@@ -1127,7 +1127,7 @@ pub extern "C" fn js_promise_with_resolvers_spec(this_ctor: f64) -> f64 {
     let mut values = [cap.promise, cap.resolve, cap.reject];
     let obj = unsafe {
         crate::object::runtime_layouts::perry_build_runtime_record(
-            std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_F473_0),
+            crate::object::runtime_layouts::RECORD_F473_0::desc(),
             values.as_mut_ptr(),
         )
     };

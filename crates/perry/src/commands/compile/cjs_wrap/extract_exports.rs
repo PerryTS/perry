@@ -458,6 +458,25 @@ pub fn extract_exports_from_source(source: &str) -> Vec<String> {
     names
 }
 
+/// The export keys this module STORES a value under (`exports.X = …`,
+/// `exports["X"] = …`, an object-literal entry, an esbuild `__export` body):
+/// the keys the born `exports` layout declares. A key whose every recognized
+/// write is an `Object.defineProperty` descriptor is an accessor or an
+/// attributed property, never a slot store: declared, it would only hold the
+/// hole until the define, which then moves the object to its overflow to keep
+/// definition order (`layout_desc::prepare_hole_define`). Undeclared, the
+/// define claims the key in the object's own list with its attributes, as a
+/// computed-key define (`_export`, webpack `.d`) does.
+pub fn extract_stored_exports_from_source(source: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    for_each_export_write(source, &mut |name, value| {
+        if value.is_some() && !names.iter().any(|n: &String| n == name) {
+            names.push(name.to_string());
+        }
+    });
+    names
+}
+
 /// True when this module provably puts its own top-level binding `name` on
 /// `exports` under the key `name`: at least one recognized export write of
 /// that key exists, and every one of them stores exactly the bare identifier

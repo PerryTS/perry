@@ -19,9 +19,9 @@ fn build_keypress_object(name: &str, ctrl: bool, shift: bool, meta: bool, seq: &
     use perry_runtime::object::js_object_set_field;
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let obj = unsafe {
-        perry_runtime::object::runtime_layouts::perry_alloc_runtime_record(std::ptr::addr_of!(
-            perry_runtime::object::runtime_layouts::RECORD_F483_0
-        ))
+        perry_runtime::object::runtime_layouts::perry_alloc_runtime_record(
+            perry_runtime::object::runtime_layouts::RECORD_F483_0::desc(),
+        )
     };
     let obj_handle = scope.root_raw_mut_ptr(obj);
     let name_str = js_string_from_bytes(name.as_ptr(), name.len() as u32);
