@@ -2,8 +2,9 @@
 // instance: implicit constructor, explicit super(o), explicit super(...a),
 // and the assert/strict export. No zlib import: the in-place init must work
 // in a program that links no native-module hook.
-const { AssertionError } = require("assert");
-const H = require("assert/strict").AssertionError;
+import { AssertionError } from "assert";
+import strictAssert from "assert/strict";
+const H = (strictAssert as any).AssertionError;
 
 class E extends AssertionError {}
 class F extends AssertionError {
@@ -20,7 +21,7 @@ class G extends AssertionError {
 }
 class I extends H {}
 
-const opts = { message: "m", actual: 1, expected: 2, operator: "strictEqual" };
+const opts = { message: "m", actual: 1, expected: 2, operator: "fail" };
 function show(name: string, x: any, Sub: any) {
   console.log(name, x instanceof Sub, x instanceof AssertionError, x instanceof Error,
     Object.getPrototypeOf(x) === Sub.prototype, x.message, x.code, x.name, String(x), x.tag);
