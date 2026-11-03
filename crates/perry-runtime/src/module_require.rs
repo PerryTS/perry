@@ -1013,7 +1013,37 @@ pub extern "C" fn js_module_create_require(filename_or_url: f64) -> f64 {
     validate_create_require_base(filename_or_url);
     let base = crate::module_require::file_url_text::module_base_to_path(filename_or_url)
         .unwrap_or_else(|| value_to_string(filename_or_url, "filename"));
-    make_require(string_value(&base), undefined())
+    make_require(string_value(&directory_base_as_file(base)), undefined())
+}
+
+/// Node resolves a `createRequire` base that ends in a separator
+/// (`createRequire(new URL(".", import.meta.url))`) as a directory: the
+/// require is the one of a file named `noop.js` inside it, so its base
+/// directory is that directory, not its parent.
+fn directory_base_as_file(base: String) -> String {
+    if base.ends_with('/') {
+        format!("{base}noop.js")
+    } else {
+        base
+    }
+}
+
+#[cfg(test)]
+mod directory_base_tests {
+    use super::directory_base_as_file;
+
+    #[test]
+    fn a_trailing_separator_names_a_directory() {
+        assert_eq!(
+            directory_base_as_file("/app/src/".into()),
+            "/app/src/noop.js"
+        );
+        assert_eq!(
+            directory_base_as_file("/app/src/main.js".into()),
+            "/app/src/main.js"
+        );
+        assert_eq!(directory_base_as_file("/app/src".into()), "/app/src");
+    }
 }
 
 /// Devirt codegen entry for `module.createRequire(...)` (#6644). The require
