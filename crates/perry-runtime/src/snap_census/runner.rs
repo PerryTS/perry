@@ -3000,19 +3000,23 @@ fn write_report(st: &mut State) {
         // string by its bytes (R2), a fresh `Symbol()` by its birth (it is an
         // arena cell, `symbol::alloc_symbol`, born by the init that made it;
         // no later code obtains it except through a censused read, so a D
-        // symbol held by an imaged init is visible as rule 2). A symbol the
-        // runtime leaked into malloc memory (`symbol::leak_symbol`: no birth;
-        // mimalloc randomizes its address per run even with ASLR off, and its
-        // id is drawn in creation order) is a registry (`Symbol.for`),
-        // well-known or runtime-layout symbol: any later code obtains the same
+        // symbol held by an imaged init is visible as rule 2). A persistent
+        // symbol (`symbol::leak_symbol`: no birth) is a cell of the process
+        // immortal symbol space, admitted by the space's own range and cell
+        // stride (`symbol::in_symbol_space`, design 2.10.19). Its cells are
+        // bump allocated in creation order, so its address (and its id) is a
+        // creation ordinal: an init in D that creates a persistent symbol
+        // first shifts every later one. It is a registry (`Symbol.for`),
+        // well-known, Intl or runtime symbol: any later code obtains the same
         // symbol by its name, whichever init created it, so it is named by
-        // its `Symbol.for` bit and its description bytes, not by its creator.
-        // Any other foreign key word hashes as its tag, like every foreign
-        // word of the digest. `PERRY_SNAP_KEYNAME=0`: raw words.
+        // its kind bits (`Symbol.for`, well-known) and its description
+        // bytes, not by its creator nor by its address. Any other foreign
+        // key word hashes as its tag, like every foreign word of the digest.
+        // `PERRY_SNAP_KEYNAME=0`: raw words.
         let kname = |names: &[(usize, usize, u64)], w: u64| -> u64 {
             let a = (w & 0xFFFF_FFFF_FFFF) as usize;
             let named = pname(names, w);
-            if !st.keyname || named != w || !in_malloc(a) || a < crate::gc::GC_HEADER_SIZE {
+            if !st.keyname || named != w || !crate::symbol::in_symbol_space(a) {
                 return named;
             }
             let g = unsafe { &*((a - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader) };
@@ -3034,7 +3038,9 @@ fn write_report(st: &mut State) {
             fnv(
                 fnv(
                     fnv(0x5359_4d42_0000_0000, w >> 48),
-                    (unsafe { (*sym).registered } & 1) as u64,
+                    (unsafe { (*sym).registered }
+                        & (perry_abi::SYMBOL_GLOBAL_REGISTRY | perry_abi::SYMBOL_WELL_KNOWN))
+                        as u64,
                 ),
                 dn,
             )
