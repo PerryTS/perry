@@ -1,0 +1,1 @@
+A file descriptor the program inherited across exec (an fd above 2 that is not close-on-exec) is no longer closed when a runtime thread winds down or its registry is dropped; as in node it is closed only by the program's own `fs.closeSync`/`fs.close` or by a socket built on it.
