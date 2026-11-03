@@ -9,7 +9,7 @@ For building and installing Perry as a user, see [README.md](README.md#installat
 All of these are welcome and none are ranked:
 
 - **Fix a bug.** Check the [issue tracker](https://github.com/PerryTS/perry/issues), especially [`good first issue`](https://github.com/PerryTS/perry/labels/good%20first%20issue) and [`help wanted`](https://github.com/PerryTS/perry/labels/help%20wanted).
-- **Close a TypeScript parity gap.** The [gap test suite](test-files/) tracks divergences from `node --experimental-strip-types`; run `./scripts/run_gap_tests.sh` for the current snapshot.
+- **Close a TypeScript parity gap.** The [gap test suite](test-files/) tracks divergences from `node --experimental-strip-types`; run `python3 scripts/parity.py run --suite test-files --filter test_gap_ --mode fast` against the current snapshot.
 - **Add a platform backend or widget.** See "Adding a native UI widget" in [docs/src/contributing/architecture.md](docs/src/contributing/architecture.md).
 - **Improve docs or examples.** Everything under [`docs/src/`](docs/src/) and [`docs/examples/`](docs/examples/) is fair game.
 - **Report an issue.** File one even if you don't have a fix — reproducers are themselves a contribution.
@@ -117,7 +117,7 @@ Behavioral changes (HIR, codegen, runtime) also need the conformance suite,
 which diffs compiled programs byte-for-byte against Node:
 
 ```bash
-./scripts/run_gap_tests.sh                          # ~560 tests; the PR gate runs this in 6 shards
+python3 scripts/parity.py run --suite test-files --filter test_gap_ --mode fast   # ~2,400 tests; the PR gate runs them in 12 shards
 ./scripts/run_doc_tests.sh                          # Compile + run every docs/examples/*.ts
 ```
 

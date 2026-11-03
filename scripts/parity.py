@@ -77,6 +77,14 @@ SERIAL_MODULES = (
 )
 SERIAL_IMPORT = re.compile(
     r"""(from|import|require\()\s*\(?["'](node:)?(%s)["']""" % "|".join(SERIAL_MODULES))
+
+
+def runs_serially(cid: str, text: str, mode: str) -> bool:
+    if cid.startswith("node-suite/"):
+        return subject_of(cid).split("/")[-1] in SERIAL_MODULES
+    # Fast mode builds an ext-routed case's runtime with auto-optimize; one at a
+    # time, so concurrent cases never rebuild the same feature set together.
+    return bool(SERIAL_IMPORT.search(text)) or (mode == "fast" and bool(EXT_ROUTED.search(text)))
 # node-suite modules whose no-auto links need prebuilt wrapper archives built in
 # the same cargo invocation as the stdlib archive.
 EXT_ARCHIVES = {
@@ -537,9 +545,8 @@ def cmd_run(args, root: Path) -> int:
             with tempfile.TemporaryDirectory(prefix="perry-parity-warm-") as td:
                 run([perry, str(path), "-o", str(Path(td) / f"o{EXE}")], TOOLCHAIN_TIMEOUT, root,
                     dict(os.environ), Path(td) / "log")
-    serial = [c for c in cases if subject_of(c[0]).split("/")[-1] in SERIAL_MODULES
-              or (not c[0].startswith("node-suite/") and SERIAL_IMPORT.search(
-                  c[1].read_text(encoding="utf-8", errors="replace")))]
+    serial = [c for c in cases if runs_serially(
+        c[0], c[1].read_text(encoding="utf-8", errors="replace"), args.mode)]
     parallel = [c for c in cases if c not in serial]
     results, done = {}, 0
 
