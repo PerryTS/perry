@@ -91,9 +91,14 @@ fn check(rows: &[(&str, String, bool)]) {
     assert!(bad.is_empty(), "{}", bad.join("\n"));
 }
 
-/// The rows main already decides right, and the d rows (hunk 1): a computed
-/// key and `Object.assign` onto the global object guard the call, so its
-/// generic arm reads the stored value. Both d rows are dead on main.
+/// The rows main already decides right, the d rows (hunk 1): a computed key
+/// and `Object.assign` onto the global object guard the call, so its generic
+/// arm reads the stored value (both d rows are dead on main), and the a5 rows
+/// (hunk 2): the strict existing-global store `Object = w` (lowered to
+/// `js_global_assign_existing_or_throw`) is a store into the global object
+/// the arm reads (dead before hunk 2: the extern was unmodeled). The a5 rows
+/// carry `export {}`: the module goal makes the module strict; a sloppy
+/// `Object = w` lowers to a property set that main already sees.
 #[test]
 fn global_namespace_store_reaches_the_namespace_call() {
     let date = "function createDate(D: any) { return class extends D { static now() { load(); return D.now(); } }; }";
@@ -119,6 +124,16 @@ fn global_namespace_store_reaches_the_namespace_call() {
             "b2 unknown, called through globalThis.Object",
             "(globalThis as any).Object = unknown.o;\n(globalThis as any).Object.keys(load as any);"
                 .into(),
+            true,
+        ),
+        (
+            "a5 strict bare `Object = w` of an object that calls",
+            format!("export {{}};\n{CALLS}\nObject = w;\nObject.keys(load as any);"),
+            true,
+        ),
+        (
+            "a5' strict bare `Object = unknown`",
+            "export {};\nObject = unknown.o;\nObject.keys(load as any);".into(),
             true,
         ),
         (
