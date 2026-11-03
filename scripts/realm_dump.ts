@@ -284,8 +284,9 @@ for (let cursor = 0; cursor < seen.length; cursor++) {
 // declaration, saying whether every access path (static import's default,
 // require, require(expr), sub-namespace property, the console global) yields
 // one object. Written after the walk so it cannot change the dump, and only
-// by the full dumper: a restricted one must not birth a module outside R.
-if (restrictedNames === null) {
+// by the full dumper: a restricted one must not birth a module outside R (its
+// `module` import is bound to undefined by the gate, which also skips this).
+if (restrictedNames === null && realm_native_20 !== undefined) {
     const load: any = realm_native_20.createRequire("/");
     const imported: any = {};
     for (let i = 0; i < nativeRoots.length; i++) imported[nativeRoots[i][0]] = nativeRoots[i][1];

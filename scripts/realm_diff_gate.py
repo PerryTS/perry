@@ -10,9 +10,10 @@ references in `realm-dumps/`, byte for byte:
   witness is compiled with `PERRY_REALM_REACH=1` and its R must equal the
   checked-in `<p>.names.json`. The dumper is then compiled with the test-only
   compiler-driver input `PERRY_REALM_REACH_NAMES=<p>.names.json`, which sets
-  its R to exactly those names, top dropped. The gate asserts the
+  its R to those names united with its own, top dropped. The gate asserts the
   input took effect (the driver printed `[realm-reach-names]` for this file,
-  and the dumper's R has no top reason and is exactly those names), so a dumper
+  and the dumper's R has no top reason and is the closure of exactly those
+  names united with the dumper's own pre-closure names), so a dumper
   built without it fails by construction. It walks only the roots in R (the
   names are handed to it as `realm-dump.names`), and its dump, restricted to
   the names, must equal `<p>.jsonl`, which is main's full walk restricted to
@@ -30,6 +31,12 @@ only through the regeneration command, run with main's compiler:
 
     PERRY_RUNTIME_DIR=<main>/target/release \\
       python3 scripts/realm_diff_gate.py --perry <main>/target/release/perry --regenerate
+
+The full dumper also writes one identity line per native namespace
+declaration (does every access path yield one object). The cells that still
+mint a fresh object per access on main are listed in MINTING; the gate
+asserts the dump's minting set equals that list, so a cell that stops minting
+or starts is red. The static realm image (WRT PR B) empties the list.
 
 `--self-test` feeds the plainly built dumper's compile log to the restricted
 check, which must refuse it.
@@ -78,8 +85,8 @@ def import_name(specifier):
     compiler's realm-reach scan (perry-hir realm_reach.rs native_module) adds
     the module's `node:<module>` namespace entry and its members. A native
     receiver cell (%NativeNamespace:...%) is a different root: the runtime
-    spells it (path/posix's is %NativeNamespace:path.posix%) and some modules
-    (node:fs) have none. The dumper keys its native roots by this name
+    spells it (path/posix's is %NativeNamespace:path.posix%, not its
+    specifier). The dumper keys its native roots by this name
     (`nativeRoots` in realm_dump.ts; the gate tests hold the two together)."""
     return "node:" + specifier.removeprefix("node:")
 
@@ -87,8 +94,33 @@ def import_name(specifier):
 NATIVE_IMPORT = re.compile(r'^import \* as (realm_native_\d+) from "([^"]+)";$', re.M)
 
 
+# A2-DESIGN §9 Q6: 11 namespaces and 6 sub-namespaces mint per access.
+MINTING = sorted(["console"] + ["%NativeNamespace:" + m + "%" for m in [
+    "buffer", "crypto", "domain", "readline", "string_decoder", "tls", "tty", "v8",
+    "worker_threads", "zlib"]] + ["node:buffer.constants", "node:crypto.constants",
+    "node:http2.constants", "node:perf_hooks.constants", "node:v8.promiseHooks",
+    "node:v8.startupSnapshot"])
+
+
 class GateError(Exception):
     pass
+
+
+def identities(stdout):
+    return [json.loads(line[len("@identity "):]) for line in stdout.splitlines()
+            if line.startswith("@identity ")]
+
+
+def check_identity(records):
+    """Each declaration is recorded once; the minting set equals MINTING."""
+    names = [r["name"] for r in records]
+    if not names or len(set(names)) != len(names):
+        raise GateError(f"identity records are missing or repeat a declaration: {names}")
+    minting = sorted(r["name"] for r in records if not r["one"])
+    if minting != MINTING:
+        raise GateError(f"minting set differs from MINTING: starts {sorted(set(minting) - set(MINTING))}, "
+                        f"stops {sorted(set(MINTING) - set(minting))}")
+    return minting
 
 
 def compile_ts(perry, source, binary, extra_env):
@@ -134,20 +166,26 @@ def reach_of(log):
 
 
 def check_restricted(log, names_file, names):
-    """The dumper was built with this names file, and R is exactly partial."""
+    """The dumper was built with this names file, and R is the closure of
+    exactly the file's names united with the dumper's own (pre-closure) names:
+    the seed the compiler closed is that union, nothing else, and R holds it."""
     took = [l.split() for l in log.splitlines() if l.startswith("[realm-reach-names] ")]
     if took != [["[realm-reach-names]", str(names_file), str(len(names))]]:
         raise GateError(f"the dumper was not built with PERRY_REALM_REACH_NAMES={names_file}")
     reach = reach_of(log)
     if reach["top"]:
         raise GateError(f"restricted dumper R is still top: {reach['top']}")
-    if set(reach["names"]) != set(names):
-        extra = sorted(set(reach["names"]) - set(names))[:10]
-        missing = sorted(set(names) - set(reach["names"]))[:10]
-        raise GateError(f"restricted dumper R is not the names file: extra {extra}, missing {missing}")
+    union = set(names) | set(reach["own"])
+    seed = set(reach["seed"] or ())
+    if seed != union:
+        raise GateError(f"restricted dumper R is not the names file united with its own names: "
+                        f"extra {sorted(seed - union)[:10]}, missing {sorted(union - seed)[:10]}")
+    if not union <= set(reach["names"]):
+        raise GateError(f"restricted dumper R lacks {sorted(union - set(reach['names']))[:10]}")
+    return reach
 
 
-def dump(binary, names=None, walk=False):
+def dump(binary, names=None, walk=False, records=None):
     """Run a dumper; `walk` hands it the names (realm-dump.names) so a
     restricted dumper walks only roots in R. Its output is restricted to
     `names` either way."""
@@ -165,6 +203,8 @@ def dump(binary, names=None, walk=False):
     if run.returncode != 0:
         raise GateError(f"{binary} exited {run.returncode}: {run.stderr[-500:]}")
     text = realm_dump.canonical(realm_dump.graph_from_text(run.stdout), names)
+    if records is not None:
+        records.extend(identities(run.stdout))
     return text.replace(str(work_dir()), WORK_TOKEN)
 
 
@@ -226,7 +266,9 @@ def main():
             binary = out / f"dump-{program}" / "realm-dump"
             log = compile_ts(args.perry, dumper_source(set(names)), binary,
                              {"PERRY_REALM_REACH_NAMES": str(names_file)})
-            check_restricted(log, names_file, names)
+            reach = check_restricted(log, names_file, names)
+            print(f"realm_diff_gate: {program}: R = {len(reach['names'])} names "
+                  f"(file {len(names)}, the dumper's own {len(reach['own'])})")
             ok &= compare(program, reference, dump(binary, set(names), walk=True), out)
         if "full" in wanted or args.self_test:
             binary = out / "dump-full" / "realm-dump"
@@ -237,7 +279,11 @@ def main():
                 (REFS / "full.jsonl").write_text(dump(binary))
                 print("realm_diff_gate: regenerated full")
             elif "full" in wanted:
-                ok &= compare("full", REFS / "full.jsonl", dump(binary), out)
+                records = []
+                ok &= compare("full", REFS / "full.jsonl", dump(binary, records=records), out)
+                minting = check_identity(records)
+                print(f"realm_diff_gate: identity: {len(records)} declarations, "
+                      f"{len(minting)} minting = MINTING")
             if args.self_test:
                 names_file = REFS / "hello.names.json"
                 names = json.loads(names_file.read_text())["names"]

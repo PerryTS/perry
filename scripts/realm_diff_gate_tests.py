@@ -17,12 +17,18 @@ NAMES_FILE = Path("/x/hello.names.json")
 NAMES = ["console", "globalThis"]
 
 
-def log(names_line=True, top=(), names=tuple(NAMES)):
+OWN = ["Map", "node:fs.existsSync"]
+
+
+def log(names_line=True, top=(), names=tuple(NAMES), own=tuple(OWN), seed=None):
+    """seed=None: the compiler closed the names united with its own names;
+    seed=False: it printed no seed (no input); otherwise that seed (+ own)."""
     lines = []
     if names_line:
         lines.append(f"[realm-reach-names] {NAMES_FILE} {len(NAMES)}")
     lines.append("[realm-reach-json] " + json.dumps(
-        {"names": list(names), "top": list(top), "full": 10}))
+        {"names": list(names) + list(own), "top": list(top), "full": 10, "own": list(own),
+         "seed": None if seed is False else list(names if seed is None else seed) + list(own)}))
     return "\n".join(lines) + "\n"
 
 
@@ -44,10 +50,19 @@ class RestrictedCheck(unittest.TestCase):
     def test_a_top_or_incomplete_r_fails(self):
         with self.assertRaisesRegex(gate.GateError, "still top"):
             gate.check_restricted(log(top=["with"]), NAMES_FILE, NAMES)
-        with self.assertRaisesRegex(gate.GateError, "not the names file"):
+        with self.assertRaisesRegex(gate.GateError, "not the names file united"):
             gate.check_restricted(log(names=("console",)), NAMES_FILE, NAMES)
-        with self.assertRaisesRegex(gate.GateError, "not the names file"):
+        with self.assertRaisesRegex(gate.GateError, "not the names file united"):
             gate.check_restricted(log(names=tuple(NAMES) + ("Object",)), NAMES_FILE, NAMES)
+        with self.assertRaisesRegex(gate.GateError, "not the names file united"):
+            gate.check_restricted(log(seed=False), NAMES_FILE, NAMES)
+
+    def test_the_dumpers_own_names_are_part_of_r(self):
+        reach = gate.check_restricted(log(), NAMES_FILE, NAMES)
+        self.assertEqual(sorted(reach["own"]), sorted(OWN))
+        # A seed without the dumper's own names is not the union.
+        with self.assertRaisesRegex(gate.GateError, "missing"):
+            gate.check_restricted(log(seed=["console"]), NAMES_FILE, NAMES)
 
     def test_one_reach_line_is_required(self):
         with self.assertRaisesRegex(gate.GateError, "one \\[realm-reach-json\\]"):
@@ -93,15 +108,28 @@ class ImportNames(unittest.TestCase):
         names = self.names("node-imports")
         self.assertEqual(kept_imports(names), ["node:events", "node:fs", "node:path/posix"])
         # The native receiver cells are spelled by the runtime, not by the
-        # specifier: keyed by them, node:fs and node:path/posix would be lost.
+        # specifier: keyed by them, node:path/posix would be lost (its cell is
+        # path.posix). fs's cell is its namespace item's (fs/namespace.rs,
+        # alias node:fs.default): the `default` member every namespace import
+        # observes (node: `ns.default === require("fs")`).
         self.assertIn("%NativeNamespace:events%", names)
-        self.assertNotIn("%NativeNamespace:fs%", names)
+        self.assertIn("%NativeNamespace:fs%", names)
         self.assertNotIn("%NativeNamespace:path/posix%", names)
         self.assertIn("%NativeNamespace:path.posix%", names)
+        # Exactly the receiver cells the three imports reach: Buffer (node:fs
+        # births Buffer), stream (fs.ReadStream extends stream.Readable),
+        # path.win32 (path/posix.win32); any other cell is an unreached root.
+        self.assertEqual(sorted(n for n in names if n.startswith("%NativeNamespace:")), [
+            "%NativeNamespace:buffer.Buffer%", "%NativeNamespace:events%",
+            "%NativeNamespace:fs%", "%NativeNamespace:path.posix%",
+            "%NativeNamespace:path.win32%", "%NativeNamespace:stream%"])
 
     def test_a_global_receiver_cell_does_not_keep_its_module_import(self):
         names = self.names("hello")
-        self.assertIn("%NativeNamespace:console%", names)
+        # console is one declaration (it mints per access, A2-DESIGN §9 Q6): its
+        # receiver cell is the global itself, not a %NativeNamespace:console% root.
+        self.assertIn("console", names)
+        self.assertNotIn("%NativeNamespace:console%", names)
         self.assertEqual(kept_imports(names), [])
 
 
@@ -145,6 +173,31 @@ class OneSource(unittest.TestCase):
         self.assertEqual(set(sources), {"reference", "check"})
         self.assertIn("is outside R", sources["reference"])
         self.assertEqual(sources["reference"], sources["check"])
+
+
+class IdentityCheck(unittest.TestCase):
+    def records(self, minting):
+        return [{"name": n, "one": n not in minting} for n in gate.MINTING + ["%NativeNamespace:fs%"]]
+
+    def test_the_minting_set_equals_the_list(self):
+        self.assertEqual(gate.check_identity(self.records(gate.MINTING)), gate.MINTING)
+
+    def test_a_cell_that_stops_or_starts_minting_fails(self):
+        with self.assertRaisesRegex(gate.GateError, "stops"):
+            gate.check_identity(self.records(gate.MINTING[1:]))
+        with self.assertRaisesRegex(gate.GateError, "starts"):
+            gate.check_identity(self.records(gate.MINTING + ["%NativeNamespace:fs%"]))
+
+    def test_a_second_record_or_none_fails(self):
+        with self.assertRaisesRegex(gate.GateError, "repeat"):
+            gate.check_identity(self.records(gate.MINTING) + [{"name": "%NativeNamespace:fs%", "one": True}])
+        with self.assertRaisesRegex(gate.GateError, "missing"):
+            gate.check_identity([])
+
+    def test_identity_lines_are_read_from_the_dump(self):
+        out = '@realm {}\n@identity {"name": "a", "one": true}\n'
+        self.assertEqual(gate.identities(out), [{"name": "a", "one": True}])
+
 
 if __name__ == "__main__":
     unittest.main()
