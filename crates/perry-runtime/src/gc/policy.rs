@@ -1818,7 +1818,6 @@ pub(crate) mod window_exit_probe {
 }
 
 impl Drop for GcSuppressScope {
-    #[inline]
     fn drop(&mut self) {
         if !self.was_suppressed {
             #[cfg(test)]
