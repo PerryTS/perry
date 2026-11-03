@@ -51,7 +51,7 @@ pub(crate) fn emit_class_capture_writeback(
     let cap_params: Vec<_> = ctor
         .params
         .iter()
-        .filter(|p| p.name.starts_with("__perry_cap_"))
+        .filter(|p| perry_hir::cap_fields::is_cap_field_name(&p.name))
         .collect();
     // The cap args occupy the last cap_params.len() slots of new_args.
     let cap_args_start = new_args.len().saturating_sub(cap_params.len());

@@ -15,7 +15,7 @@ fn constructor_stores_do_not_declare_fields() {
     assert_eq!(
         cell.fields
             .iter()
-            .filter(|f| f.origin == perry_hir::ClassFieldOrigin::Definition)
+            .filter(|f| f.origin.is_definition())
             .map(|f| f.name.as_str())
             .collect::<Vec<_>>(),
         ["declared"]

@@ -158,6 +158,7 @@ fn check_native(erase: bool) {
 
 #[test]
 fn native_async_context_without_resource_retains_its_captured_store() {
+    crate::feature_hooks::js_runtime_install_node_api_host();
     let _guard = crate::gc::tests::support::CopyingNurseryTestGuard::new(1);
     let _triggers =
         crate::gc::tests::support::GcTriggerThresholdTestGuard::suppress_automatic_triggers();

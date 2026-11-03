@@ -158,13 +158,13 @@ fn runtime_symbol_key(
 
 /// The descriptor initializer of `layout`, with its keys, index, prototype
 /// and key list emitted as private globals named from `base`. `owner` is the
-/// descriptor's own global when it is standalone (a runtime layout): its key
-/// list then leaves the link with it when no birth references it.
+/// global that holds the descriptor (its own global for a runtime layout, the
+/// span for lazy layouts): the key list lives and dies with it in the link.
 fn descriptor(
     module: &mut LlModule,
     base: &str,
     layout: &LayoutFacts,
-    owner: Option<&str>,
+    owner: &str,
 ) -> Result<(String, Vec<TagFixup>), String> {
     let key_count = layout.keys.len();
     let mut seen = vec![false; key_count];
@@ -227,7 +227,7 @@ fn descriptor(
                 slot: key.image.slot,
             })
             .collect::<Vec<_>>();
-        emit_image_key_list(module, &format!("{base}_list"), &image_keys, owner)
+        emit_image_key_list(module, &format!("{base}_list"), &image_keys, Some(owner))
     };
     let prototype = match &layout.prototype {
         Prototype::Object => "null".into(),
@@ -278,6 +278,9 @@ pub(crate) fn emit_layouts(
     let mut descriptors = Vec::new();
     let mut aliases = Vec::new();
     let mut fixups = Vec::new();
+    // The span is defined before the key lists it names: on ELF each list is
+    // tied to it (`ArrayCell::owner`).
+    let mark = module.global_mark();
     for (index, layout) in layouts.iter().enumerate() {
         let row = first
             .checked_add(u32::try_from(index).map_err(|_| "too many realm layouts")?)
@@ -289,8 +292,12 @@ pub(crate) fn emit_layouts(
             ));
         }
         let symbol = llvm_identifier(&layout.symbol);
-        let (initializer, tags) =
-            descriptor(module, &format!("perry_lazy_layout_{row}"), layout, None)?;
+        let (initializer, tags) = descriptor(
+            module,
+            &format!("perry_lazy_layout_{row}"),
+            layout,
+            "perry_lazy_layouts",
+        )?;
         fixups.extend(tags);
         descriptors.push(initializer);
         aliases.push(format!(
@@ -305,11 +312,14 @@ pub(crate) fn emit_layouts(
     } else {
         "perry_layouts"
     };
-    module.add_raw_global(format!(
-        "@perry_lazy_layouts = global [{} x {DESC_TY}] [{}], section \"{section}\", align 8",
-        layouts.len(),
-        descriptors.join(", "),
-    ));
+    module.insert_raw_global(
+        mark,
+        format!(
+            "@perry_lazy_layouts = global [{} x {DESC_TY}] [{}], section \"{section}\", align 8",
+            layouts.len(),
+            descriptors.join(", "),
+        ),
+    );
     for alias in aliases {
         module.add_raw_global(alias);
     }
@@ -336,7 +346,7 @@ pub(crate) fn emit_runtime_descriptors(
         // as its linked-to section, and the assembler of perry's textual `.s`
         // needs that section to exist when the list's section is opened.
         let mark = module.global_mark();
-        let (initializer, tags) = descriptor(module, &symbol, layout, Some(&symbol))?;
+        let (initializer, tags) = descriptor(module, &symbol, layout, &symbol)?;
         fixups.extend(tags);
         module.insert_raw_global(mark, format!("@{symbol} = global {initializer}, align 8"));
     }

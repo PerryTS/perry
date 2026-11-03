@@ -214,15 +214,10 @@ fn message_bytes_inner(value: f64, allow_list: bool) -> Option<Vec<u8>> {
     None
 }
 
-/// Map a `std::io::ErrorKind` from a socket syscall onto the Node error code.
+/// The Node error code of a socket syscall failure: libuv's name for the OS
+/// errno (the one table `util.getSystemErrorMap()` serves).
 pub(crate) fn io_error_code(err: &std::io::Error) -> &'static str {
-    match err.kind() {
-        std::io::ErrorKind::AddrInUse => "EADDRINUSE",
-        std::io::ErrorKind::AddrNotAvailable => "EADDRNOTAVAIL",
-        std::io::ErrorKind::PermissionDenied => "EACCES",
-        std::io::ErrorKind::ConnectionRefused => "ECONNREFUSED",
-        _ => "EINVAL",
-    }
+    crate::io_error::io_error_code(err)
 }
 
 /// Build (not throw) a Node-style socket error value with `code`/`syscall`.
@@ -597,4 +592,22 @@ pub(crate) fn ref_impl(socket: f64, refed: bool) -> f64 {
         }
     }
     socket
+}
+
+#[cfg(all(test, unix))]
+mod errno_code_tests {
+    use super::io_error_code;
+
+    #[test]
+    fn socket_errors_are_named_by_the_libuv_errno_table() {
+        for (errno, name) in [
+            (libc::EADDRINUSE, "EADDRINUSE"),
+            (libc::EMSGSIZE, "EMSGSIZE"),
+            (libc::ENETUNREACH, "ENETUNREACH"),
+            (libc::EAFNOSUPPORT, "EAFNOSUPPORT"),
+            (libc::EHOSTUNREACH, "EHOSTUNREACH"),
+        ] {
+            assert_eq!(io_error_code(&std::io::Error::from_raw_os_error(errno)), name);
+        }
+    }
 }

@@ -42,6 +42,7 @@ pub(crate) use context::perry_ui_factory_returns_handle;
 pub(crate) mod class_capture_scope;
 pub(crate) mod expr_assign;
 mod expr_call;
+pub(crate) use expr_call::intrinsics::as_builtin_proto_method_ref;
 pub(crate) mod expr_function;
 pub(crate) mod native_factory;
 pub(crate) use expr_function::capture_function_source;
@@ -147,6 +148,8 @@ pub(crate) use crate::lower_patterns::*;
 pub(crate) use crate::lower_types::*;
 
 #[cfg(test)]
+mod builtin_proto_alias_tests;
+#[cfg(test)]
 mod bun_sql_tests;
 #[cfg(test)]
 mod collection_view_tests;
@@ -163,5 +166,8 @@ mod tests;
 
 #[cfg(test)]
 mod iterator_step_tests;
+
+#[cfg(test)]
+mod wtf8_key_tests;
 
 pub(crate) mod dynamic_eval;

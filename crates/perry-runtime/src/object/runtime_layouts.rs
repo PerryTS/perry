@@ -226,13 +226,50 @@ macro_rules! runtime_layout {
             pub fn desc() -> *mut PerryLayoutDesc {
                 #[cfg(not(any(test, feature = "test-layout-descriptors")))]
                 {
-                    // SAFETY: an extern_weak static reads as the symbol's
-                    // address, or null when the program does not define it.
-                    let desc = unsafe { DEFINITION };
+                    let desc = definition();
                     if desc.is_null() {
                         crate::object::runtime_layouts::undefined_runtime_layout(stringify!($name));
                     }
                     desc
+                }
+                #[cfg(any(test, feature = "test-layout-descriptors"))]
+                {
+                    definition()
+                }
+            }
+            /// The layout symbol's address, or null when the program does
+            /// not define it.
+            #[cfg(not(target_os = "windows"))]
+            #[inline(always)]
+            fn definition() -> *mut PerryLayoutDesc {
+                #[cfg(not(any(test, feature = "test-layout-descriptors")))]
+                {
+                    // SAFETY: an extern_weak static reads as the symbol's
+                    // address, or null when the program does not define it.
+                    unsafe { DEFINITION }
+                }
+                #[cfg(any(test, feature = "test-layout-descriptors"))]
+                {
+                    std::ptr::addr_of_mut!(super::$name)
+                }
+            }
+            // COFF: LLVM lowers an undefined extern_weak reference, in each
+            // object that makes one, to a weak external whose default
+            // (`.weak.<symbol>.default.<a symbol of that object>`) is unique
+            // to the object, and MSVC link.exe rejects two weak externals of
+            // one symbol with different defaults (LNK1227). An inlined
+            // `desc()` made one per object that births the layout, here and
+            // in every crate that inlines it. So on Windows exactly one object
+            // reads the symbol: this reader, which every birth calls. Wrapper
+            // crates call it by its C name (perry-ffi `runtime_layouts`).
+            #[cfg(target_os = "windows")]
+            #[inline(never)]
+            #[export_name = concat!("perry_layout_reader_", stringify!($name))]
+            extern "C" fn definition() -> *mut PerryLayoutDesc {
+                #[cfg(not(any(test, feature = "test-layout-descriptors")))]
+                {
+                    // SAFETY: as above.
+                    unsafe { DEFINITION }
                 }
                 #[cfg(any(test, feature = "test-layout-descriptors"))]
                 {

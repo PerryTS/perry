@@ -14,7 +14,9 @@ use std::sync::Mutex;
 mod port_operations;
 pub use port_operations::install_core_methods as install_message_port_core_methods;
 pub use port_operations::js_register_worker_threads_message_port_dispatch;
-pub use port_operations::{message_port_id, message_port_object_with_id, MessagePortOperation};
+pub use port_operations::{
+    message_port_id, message_port_object_with_id, post_message_arguments, MessagePortOperation,
+};
 
 type MessageChannelFactory = extern "C" fn() -> f64;
 type BroadcastChannelFactory = extern "C" fn(f64) -> f64;
@@ -713,7 +715,10 @@ pub(crate) extern "C" fn js_message_channel_constructor_call_error(
     _closure: *const ClosureHeader,
     _this: crate::closure::JsThis,
 ) -> f64 {
-    throw_constructor_call_error()
+    crate::fs::validate::throw_type_error_with_code(
+        "Cannot call constructor without `new`",
+        "ERR_CONSTRUCT_CALL_REQUIRED",
+    )
 }
 
 #[no_mangle]
@@ -758,23 +763,30 @@ pub(crate) extern "C" fn js_broadcast_channel_constructor_call_error(
     _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
-    throw_constructor_call_error()
+    crate::node_submodules::diagnostics::throw_type_error_no_code(
+        b"Class constructor BroadcastChannel cannot be invoked without 'new'",
+    )
 }
 
 pub(crate) extern "C" fn js_message_port_constructor_call_error(
     _closure: *const ClosureHeader,
     _this: crate::closure::JsThis,
 ) -> f64 {
-    throw_constructor_call_error()
+    throw_message_port_constructor_error()
 }
 
 #[no_mangle]
 pub extern "C" fn js_message_port_constructor_error() -> f64 {
-    throw_constructor_call_error()
+    throw_message_port_constructor_error()
 }
 
-fn throw_constructor_call_error() -> f64 {
-    let msg = js_string_from_bytes(b"Constructor cannot be called".as_ptr(), 28);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+fn throw_message_port_constructor_error() -> ! {
+    crate::fs::validate::throw_type_error_with_code(
+        "Constructor cannot be called",
+        "ERR_CONSTRUCT_CALL_INVALID",
+    )
 }
+
+#[cfg(test)]
+#[path = "messaging/constructor_tests.rs"]
+mod constructor_tests;

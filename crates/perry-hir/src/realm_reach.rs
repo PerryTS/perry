@@ -77,6 +77,19 @@ impl RealmReach {
             return;
         }
         let by_name: BTreeMap<_, _> = entries.iter().map(|e| (e.name, e)).collect();
+        // Every program has the global cell, born on the layout its declaration
+        // names (object/global_this/fetch_globals.rs): that `%Layout:` birth is
+        // in every R. Its member births stay conditional (RealmPlan keeps only
+        // the reached members), so `%Global%` itself is not a root.
+        if let Some(global) = by_name.get("%Global%") {
+            self.names.extend(
+                global
+                    .births
+                    .iter()
+                    .filter(|birth| birth.starts_with("%Layout:"))
+                    .map(|birth| (*birth).to_string()),
+            );
+        }
         let mut pending: Vec<_> = self.names.iter().cloned().collect();
         while let Some(name) = pending.pop() {
             if let Some(entry) = by_name.get(name.as_str()) {

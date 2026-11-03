@@ -809,8 +809,15 @@ fn prepare_headers(c: &mut Conn, shape: &mut ResponseShape) -> bool {
     keep_alive
 }
 
-/// `res.end()` on a fully buffered response.
-pub(crate) fn send_response(conn_id: &RootedSocket, seq: u64, mut shape: ResponseShape) {
+/// `res.end()` on a fully buffered response. `notify` builds a callback that
+/// runs once the response bytes have been handed to the OS. Returns whether
+/// that callback was armed; when it was not, `notify` was never called.
+pub(crate) fn send_response_notified(
+    conn_id: &RootedSocket,
+    seq: u64,
+    mut shape: ResponseShape,
+    notify: Option<&mut dyn FnMut() -> f64>,
+) -> bool {
     let bytes = with_conn(conn_id, |c| {
         if !owns(c, seq) {
             return None;
@@ -891,10 +898,11 @@ pub(crate) fn send_response(conn_id: &RootedSocket, seq: u64, mut shape: Respons
         Some((out, framing))
     });
     let Some(Some((out, framing))) = bytes else {
-        return;
+        return false;
     };
-    write_raw(conn_id, &out);
+    let armed = write_raw_notified(conn_id, &out, notify);
     complete_response(conn_id, seq, framing);
+    armed
 }
 
 /// Write an interim (1xx) response on the connection answering `seq`.
@@ -985,7 +993,13 @@ pub(crate) fn send_body(conn_id: &RootedSocket, seq: u64, bytes: &[u8]) -> bool 
 }
 
 /// A streaming `res.end()`: close the body framing and finish the exchange.
-pub(crate) fn finish_body(conn_id: &RootedSocket, seq: u64, trailers: &[(String, String)]) {
+/// The callback contract is that of [`send_response_notified`].
+pub(crate) fn finish_body_notified(
+    conn_id: &RootedSocket,
+    seq: u64,
+    trailers: &[(String, String)],
+    notify: Option<&mut dyn FnMut() -> f64>,
+) -> bool {
     let framed = with_conn(conn_id, |c| {
         if !owns(c, seq) {
             return None;
@@ -1005,12 +1019,16 @@ pub(crate) fn finish_body(conn_id: &RootedSocket, seq: u64, trailers: &[(String,
         Some((out, active.framing))
     });
     let Some(Some((out, framing))) = framed else {
-        return;
+        return false;
     };
-    if !out.is_empty() {
-        write_raw(conn_id, &out);
-    }
+    // An empty tail has no write to attach the callback to.
+    let armed = if out.is_empty() {
+        false
+    } else {
+        write_raw_notified(conn_id, &out, notify)
+    };
     complete_response(conn_id, seq, framing);
+    armed
 }
 
 /// Retire the answered request and decide the connection's fate.
@@ -1073,6 +1091,32 @@ fn write_raw(conn_id: &RootedSocket, bytes: &[u8]) {
     {
         destroy_connection(conn_id)
     }
+}
+
+/// [`write_raw`] that registers the callback `notify` builds for these bytes.
+/// Returns false, without calling `notify`, when there is no live connection
+/// to write to or no `notify`.
+fn write_raw_notified(
+    conn_id: &RootedSocket,
+    bytes: &[u8],
+    notify: Option<&mut dyn FnMut() -> f64>,
+) -> bool {
+    let Some(notify) = notify else {
+        write_raw(conn_id, bytes);
+        return false;
+    };
+    if bytes.is_empty() || !conn_id.is_current() {
+        return false;
+    }
+    let callback = notify();
+    let user = net::write_callback(conn_id.value(), callback);
+    if conn_id
+        .write(bytes, user)
+        .is_some_and(|result| result.is_err())
+    {
+        destroy_connection(conn_id)
+    }
+    true
 }
 
 /// Answer a malformed request the way Node does: one 400, then close.
