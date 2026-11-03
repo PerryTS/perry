@@ -1214,11 +1214,11 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_property(
         "finished" => bool_value(js_node_http_res_finished(response_root.get()) != 0),
         // #4975: `outgoingMessage.destroyed` — false until `destroy()`.
         "destroyed" => bool_value(super::response::response_destroyed(response_root.get())),
-        "writableCorked" => 0.0,
-        "writableHighWaterMark" => 65_536.0,
-        "writableLength" => super::response::response_state(response_root.get())
-            .map(|sr| sr.buffered_body.len() as f64)
+        "writableCorked" => super::response::response_state(response_root.get())
+            .map(|sr| f64::from(sr.corked))
             .unwrap_or(0.0),
+        "writableHighWaterMark" => super::response::WRITABLE_HIGH_WATER_MARK as f64,
+        "writableLength" => super::response_cork::writable_length(response_root.get()) as f64,
         "writableObjectMode" => bool_value(false),
         "writableNeedDrain" => bool_value(false),
         "sendDate" => bool_value(js_node_http_res_send_date(response_root.get()) != 0),

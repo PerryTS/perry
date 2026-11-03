@@ -71,6 +71,10 @@ struct Active {
     encoder: Option<http1::Encoder>,
     framing: Framing,
     head_sent: bool,
+    /// node's unsent `_header`: the encoded head of a response whose first
+    /// `write()` corked the message. It goes out in front of the first body
+    /// bytes or the terminator (node f9175a212c).
+    pending_head: Vec<u8>,
     /// Keep the connection after this response, as decided at head time.
     keep_alive: bool,
     /// `100 Continue` was already sent at head time (see `decode`), so a
@@ -751,6 +755,7 @@ fn finish_request(
         encoder: None,
         framing: Framing::Sized(0),
         head_sent: false,
+        pending_head: Vec::new(),
         keep_alive: true,
         continue_sent: building.continue_sent,
     });
@@ -924,9 +929,16 @@ pub(crate) fn send_interim(conn_id: &RootedSocket, seq: u64, bytes: &[u8]) {
     }
 }
 
-/// `res.flushHeaders()` / the first `res.write(...)`: send the head now and
-/// stream the body afterwards.
-pub(crate) fn begin_stream(conn_id: &RootedSocket, seq: u64, mut shape: ResponseShape) -> bool {
+/// `res.flushHeaders()` / the first `res.write(...)`: encode the head and
+/// stream the body afterwards. `defer_head` keeps the head unsent until the
+/// first body bytes or the terminator (a corked first write); otherwise it is
+/// sent now.
+pub(crate) fn begin_stream(
+    conn_id: &RootedSocket,
+    seq: u64,
+    mut shape: ResponseShape,
+    defer_head: bool,
+) -> bool {
     let prepared = with_conn(conn_id, |c| {
         if !owns(c, seq) {
             return None;
@@ -948,18 +960,51 @@ pub(crate) fn begin_stream(conn_id: &RootedSocket, seq: u64, mut shape: Response
             Ok(head) => head,
             Err(_message) => return None,
         };
-        if let Some(active) = c.active.as_mut() {
-            active.head_sent = true;
-            active.framing = framing;
-            active.encoder = head.encoder;
+        let active = c.active.as_mut().expect("an active request");
+        active.head_sent = true;
+        active.framing = framing;
+        active.encoder = head.encoder;
+        if defer_head {
+            active.pending_head = head.bytes;
+            return Some(Vec::new());
         }
         Some(head.bytes)
     });
     let Some(Some(head_bytes)) = prepared else {
         return false;
     };
-    write_raw(conn_id, &head_bytes);
+    if !head_bytes.is_empty() {
+        write_raw(conn_id, &head_bytes);
+    }
     true
+}
+
+/// The length of the head `begin_stream` encoded but has not sent yet (node's
+/// `_header.length` while `_headerSent` is false).
+pub(crate) fn unsent_head_len(conn_id: &RootedSocket, seq: u64) -> usize {
+    with_conn(conn_id, |c| {
+        if owns(c, seq) {
+            c.active
+                .as_ref()
+                .map_or(0, |active| active.pending_head.len())
+        } else {
+            0
+        }
+    })
+    .unwrap_or(0)
+}
+
+/// Whether the response `seq` frames its body with `Transfer-Encoding:
+/// chunked` (node's `msg.chunkedEncoding`). False once the connection no
+/// longer owns the response.
+pub(crate) fn body_is_chunked(conn_id: &RootedSocket, seq: u64) -> bool {
+    with_conn(conn_id, |c| {
+        owns(c, seq)
+            && c.active
+                .as_ref()
+                .is_some_and(|active| matches!(active.framing, Framing::Chunked))
+    })
+    .unwrap_or(false)
 }
 
 /// A streaming `res.write(chunk)`.
@@ -969,12 +1014,14 @@ pub(crate) fn send_body(conn_id: &RootedSocket, seq: u64, bytes: &[u8]) -> bool 
             return None;
         }
         let active = c.active.as_mut().expect("an active request");
+        // An unsent head goes out in front of the first body bytes.
+        let mut out = std::mem::take(&mut active.pending_head);
         if matches!(active.framing, Framing::NoBody) {
             // A HEAD (or 204/304) response writes no body bytes, but the call
             // still succeeds — Node accepts the write and drops it.
-            return Some(Vec::new());
+            return Some(out);
         }
-        let mut out = Vec::with_capacity(bytes.len() + 16);
+        out.reserve(bytes.len() + 16);
         match active.encoder.as_mut() {
             Some(encoder) => {
                 let _ = encoder.body(bytes, &mut out);
@@ -1005,7 +1052,8 @@ pub(crate) fn finish_body_notified(
             return None;
         }
         let active = c.active.as_mut().expect("an active request");
-        let mut out = Vec::new();
+        // An unsent head goes out in front of the terminator.
+        let mut out = std::mem::take(&mut active.pending_head);
         if let Some(encoder) = active.encoder.as_mut() {
             let headers: Vec<http1::Header> = trailers
                 .iter()
