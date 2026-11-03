@@ -5748,13 +5748,23 @@ jobs:
           tool: cargo-llvm-cov
           # The vendored action has no generated binary download manifests.
           fallback: cargo-install
+      # std is built from source here as everywhere ([unstable] build-std in
+      # .cargo/config.toml, same features). -Cinstrument-coverage needs no
+      # std variant and no compiler-rt sources: rustc injects the toolchain's
+      # prebuilt profiler_builtins, a #![no_core] crate of compiler-rt's C
+      # profile runtime with no Rust dependency, so it links next to the
+      # source-built std. That holds because every profile here is
+      # panic=abort (with panic-abort-tests): under a panic=unwind profile the
+      # instrumented std build fails with E0152 (duplicate lang item in core).
+      # `--ignore-run-fail` already runs every test; cargo-llvm-cov 0.9 rejects
+      # it together with `--no-fail-fast`.
       - name: Run coverage
         run: |
           mapfile -t excluded < <(python3 scripts/workspace_architecture.py \
             --print-excluded-scope linux-test)
           exclude_args=()
           for package in "${excluded[@]}"; do exclude_args+=(--exclude "$package"); done
-          cargo llvm-cov --workspace --no-fail-fast --ignore-run-fail \
+          cargo llvm-cov --workspace --ignore-run-fail \
             "${exclude_args[@]}" \
             --html --output-dir target/llvm-cov-html
           cargo llvm-cov report \
