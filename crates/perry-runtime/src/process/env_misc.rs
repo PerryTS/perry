@@ -108,7 +108,10 @@ pub extern "C" fn js_process_exit(code: f64) {
     // returns `None` for exactly the nullish (no-argument) case.
     let published = validate_exit_code(code);
     let exit_code = run_process_exit_sequence(published);
-    js_process_run_finalization_exit();
+    // Node's `reallyExit` ends the process without `FreeEnvironment`: no
+    // Node-API cleanup hooks or finalizers run here. An addon finalizer may
+    // join a thread that only ends with the process.
+    super::finalization::run_process_finalization_exit_callbacks();
     crate::node_submodules::flush_trace_events_output();
     crate::gc::js_gc_release_current_thread_collection_side_allocations();
     terminate_without_atexit(exit_code)
