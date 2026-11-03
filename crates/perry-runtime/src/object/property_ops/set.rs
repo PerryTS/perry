@@ -397,7 +397,11 @@ pub(crate) fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescript
                 }) {
                     return None;
                 }
-                bag.map(|bag| bag as usize)
+                // As for a prototype above: a bag with an overflow keeps its
+                // keys and attributes in its entries (a delete, then a
+                // re-definition), which the complete lookup below reads.
+                bag.filter(|&bag| !crate::object::overflow::has_overflow(bag))
+                    .map(|bag| bag as usize)
             }
             _ => None,
         }
