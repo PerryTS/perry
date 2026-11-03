@@ -179,3 +179,26 @@ fn linked_parent_whose_binding_changed_is_hard() {
     let h = tmpl(&pf, "B").hard.clone().unwrap_or_default();
     assert!(h.starts_with("E11"), "{h}\n{}", pf.dump_text());
 }
+
+/// A class whose `extends` is evaluated per evaluation (`Expr::ClassExprFresh`)
+/// is constructed through its class object: the runtime reserves the declared
+/// width and adds a key when it is stored, so a constructor store is reserved
+/// (known slot, hole until stored), never owned from birth.
+#[test]
+fn per_evaluation_class_birth_keys_are_reserved_not_owned() {
+    let pf = facts(
+        r#"
+        function factory() {
+            class A { a: number; constructor() { this.a = 1; } }
+            class B extends A { b: number; constructor() { super(); this.b = 2; } }
+            return { A, B };
+        }
+        const { B } = factory(); factory();
+        console.log(new B().b);
+    "#,
+    );
+    let t = tmpl(&pf, "B");
+    let b = field(t, "b");
+    assert!(!b.definite, "{}", pf.dump_text());
+    assert!(b.reserved, "{}", pf.dump_text());
+}

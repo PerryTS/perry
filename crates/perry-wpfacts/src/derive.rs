@@ -723,9 +723,20 @@ fn template_facts(
     for (i, &a) in keys.iter().enumerate() {
         let birth = i < tpl.birth_keys.len();
         let is_accessor = accessor_keys.contains(&a);
-        let definite = birth && tpl.definite.contains(&a) && !is_accessor;
-        let declared = birth && tpl.declared.contains(&a) && !is_accessor;
-        let reserved = birth && tpl.reserved.contains(&a) && !definite && !is_accessor;
+        // A class evaluated more than once (`Expr::ClassExprFresh`) is
+        // constructed through its class object: the runtime allocates the
+        // declared width empty and appends each key when it is stored, so
+        // its birth keys are reserved, never owned at birth. A key the
+        // construction always adds keeps the template's order; a later key
+        // keeps its slot only while every earlier one is such a key.
+        let added = birth && tpl.definite.contains(&a) && !is_accessor;
+        let owned = birth && !tpl.per_evaluation && !is_accessor;
+        let definite = owned && tpl.definite.contains(&a);
+        let declared = owned && tpl.declared.contains(&a);
+        let reserved = birth
+            && (tpl.per_evaluation || tpl.reserved.contains(&a))
+            && !definite
+            && !is_accessor;
         if birth && !definite && !declared && !reserved {
             slot_ok = false;
             fixed_layout = false;
@@ -744,7 +755,7 @@ fn template_facts(
         // stays the hole for life. A defined key comes after every later
         // key that only construction writes; any other such key can be
         // added at any time, after any later key that is ever written.
-        let in_order = definite || ordered[i] || {
+        let in_order = added || ordered[i] || {
             let def = defined(a);
             !any_key_written
                 && written[i + 1..]
@@ -756,6 +767,9 @@ fn template_facts(
         }
         let slot = (birth && (definite || declared || reserved) && slot_ok && in_order)
             .then_some(i as u32);
+        if tpl.per_evaluation && birth && !added {
+            slot_ok = false;
+        }
         let w = m.writers.get(&(tm, a)).cloned().unwrap_or_default();
         let readonly = escape.is_none()
             && hard.is_none()
