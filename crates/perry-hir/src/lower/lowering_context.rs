@@ -907,11 +907,17 @@ pub struct LoweringContext {
     /// was silent — a plain `const a = { v: 42 }; a.v` read `undefined` merely
     /// because some never-called function elsewhere also named a proxy `a`.
     pub(crate) proxy_local_ids: HashSet<LocalId>,
-    /// #3144: local name -> builtin prototype method name, for bindings like
+    /// #3144: local binding -> builtin prototype method name, for bindings like
     /// `const m = [].map` / `const s = "".slice`. Lets the `.call`/`.apply`
     /// rewrite recognize `m.call(arr, ...)` (the receiver of `.call` is a plain
     /// identifier, not a member/literal) and synthesize `arr.map(...)`.
-    pub(crate) builtin_proto_method_locals: HashMap<String, String>,
+    ///
+    /// Keyed by the resolved `LocalId` (registered by the declarator lowering
+    /// in `track_decl_aliases`, and for module-level bindings at
+    /// pre-registration so earlier-lowered function bodies resolve it too).
+    /// The former name-keyed map was scope-blind and folded unrelated
+    /// same-named parameters' `.call(...)` into a builtin method call.
+    pub(crate) builtin_proto_method_local_ids: HashMap<LocalId, String>,
     /// #809: locals whose initializer is an object literal or
     /// `Object.create(...)` — i.e. provably a plain object, never a Date.
     /// Consulted by `static_receiver_class` so `obj.toJSON()` /

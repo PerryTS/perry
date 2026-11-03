@@ -133,6 +133,20 @@ pub(crate) fn track_decl_aliases(
     if let Some(method_name) = array_method_alias {
         ctx.array_static_method_aliases.insert(id, method_name);
     }
+    // #3144: `const m = [].map` / `var s = Object.prototype.toString` — bind
+    // the builtin-prototype method alias to THIS resolved binding so the
+    // `.call`/`.apply` fold applies to `m.call(...)` through this binding only.
+    if let Some(method) = decl
+        .init
+        .as_deref()
+        .and_then(|init_ast| builtin_proto_method_alias(ctx, init_ast))
+    {
+        ctx.builtin_proto_method_local_ids.insert(id, method);
+    } else {
+        // A re-declaration (`var` reuse) with another initializer must not keep
+        // a fold recorded for an earlier declarator of the same binding.
+        ctx.builtin_proto_method_local_ids.remove(&id);
+    }
     // #7775: bind "is a proxy" to THIS resolved binding rather than to the
     // name. Keyed off the lowered init, so it inherits `lower_new_expr`'s
     // `shadowed_by_user_binding` check for free — a user `class Proxy {}` never
@@ -307,4 +321,24 @@ pub(crate) fn track_decl_aliases(
             _ => {}
         }
     }
+}
+
+/// The builtin-prototype method a declarator initializer aliases
+/// (`[].map`, `"".slice`, `Array.prototype.filter`, ...), looking through
+/// parentheses and TypeScript-only wrappers.
+pub(crate) fn builtin_proto_method_alias(
+    ctx: &LoweringContext,
+    mut init: &ast::Expr,
+) -> Option<String> {
+    loop {
+        match init {
+            ast::Expr::TsAs(e) => init = &e.expr,
+            ast::Expr::TsTypeAssertion(e) => init = &e.expr,
+            ast::Expr::TsNonNull(e) => init = &e.expr,
+            ast::Expr::TsConstAssertion(e) => init = &e.expr,
+            ast::Expr::Paren(e) => init = &e.expr,
+            _ => break,
+        }
+    }
+    crate::lower::as_builtin_proto_method_ref(ctx, init)
 }

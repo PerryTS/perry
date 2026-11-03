@@ -439,7 +439,17 @@ pub(crate) fn try_builtin_prototype_method_apply_call(
             }
             method_ident.clone()
         }
-        ast::Expr::Ident(id) => match ctx.builtin_proto_method_locals.get(id.sym.as_ref()) {
+        // Keyed on the RESOLVED binding, never the spelling: minified bundles
+        // reuse one parameter name everywhere, so a `var e = Object.prototype
+        // .toString` in one function used to turn every other function's
+        // `e.call(this, a, b, c)` (e = some callback parameter) into
+        // `this.toString(a, b, c)` — a minified unist-util-visit-parents wrapper threw
+        // "Cannot read properties of undefined (reading 'toString')". A name
+        // that resolves to no local is a global, never one of these bindings.
+        ast::Expr::Ident(id) => match ctx
+            .lookup_local(id.sym.as_ref())
+            .and_then(|local| ctx.builtin_proto_method_local_ids.get(&local))
+        {
             Some(name) => {
                 // Build the method `.prop` IdentName by cloning the outer
                 // `.call`/`.apply` IdentName and overwriting its `sym`
@@ -698,6 +708,12 @@ pub(crate) fn as_builtin_proto_method_ref(
     // (see `is_primitive_wrapper_brand_method`). Untracked, the value read goes
     // through the reflective dispatch, which throws correctly.
     if is_primitive_wrapper_brand_method(&member.obj, method.sym.as_ref()) {
+        return None;
+    }
+    // #4101, alias form: `const f = Function.prototype.toString; f.call(x)` must
+    // stay reflective exactly like the direct `Function.prototype.toString
+    // .call(x)` (brand check + source reconstruction).
+    if method.sym.as_ref() == "toString" && is_function_prototype_member(&member.obj) {
         return None;
     }
     // Keep `const m = String.prototype.charAt; m.call(x)` reflective too — the
