@@ -97,6 +97,7 @@ pub use namespaces::crypto::NM_CRYPTO;
 pub use namespaces::domain::NM_DOMAIN;
 pub use namespaces::events::NM_EVENTS;
 pub use namespaces::net::NM_NET;
+pub use namespaces::process::NM_PROCESS;
 use vtable_impls::vt_get_own_field;
 pub(crate) use vtable_impls::vt_own_keys_array;
 pub(crate) use web_locks::{worker_threads_locks_value, WebLocksState};
