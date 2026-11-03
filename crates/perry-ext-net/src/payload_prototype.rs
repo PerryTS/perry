@@ -252,7 +252,8 @@ socket_getters!(
     local_address => "localAddress", local_port => "localPort", local_family => "localFamily",
     remote_address => "remoteAddress", remote_port => "remotePort", remote_family => "remoteFamily",
     readable_state => "_readableState", writable_state => "_writableState",
-    flowing => "readableFlowing"
+    flowing => "readableFlowing", closed => "closed", writable_object_mode => "writableObjectMode",
+    readable_object_mode => "readableObjectMode", readable_length => "readableLength"
 );
 method0!(is_paused, |owner| socket::get(owner, "isPaused"));
 unsafe extern "C" fn listening(_: *const RawClosureHeader, this: JsThis) -> f64 {
@@ -402,7 +403,9 @@ pub(crate) unsafe extern "C" fn install_socket(raw: *mut c_void) {
         "localPort" => local_port, "localFamily" => local_family, "remoteAddress" => remote_address,
         "remotePort" => remote_port, "remoteFamily" => remote_family,
         "_readableState" => readable_state, "_writableState" => writable_state,
-        "readableFlowing" => flowing
+        "readableFlowing" => flowing, "closed" => closed,
+        "writableObjectMode" => writable_object_mode, "readableObjectMode" => readable_object_mode,
+        "readableLength" => readable_length
     );
 }
 

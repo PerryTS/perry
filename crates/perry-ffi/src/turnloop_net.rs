@@ -1126,6 +1126,12 @@ extern "C" {
         socket: i64,
         err: *mut RawNetError,
     ) -> i32;
+    fn js_perry_net_link_adopt_descriptor(
+        core: *mut std::ffi::c_void,
+        link: usize,
+        fd: i32,
+        err: *mut RawNetError,
+    ) -> i32;
     fn js_perry_net_link_read_start(
         core: *mut std::ffi::c_void,
         link: usize,
@@ -1401,6 +1407,26 @@ pub fn link_adopt_stream(
             // Consumed on every outcome: dropping it closes it.
             drop(socket);
             let _ = (core, link);
+            Err(unavailable())
+        }
+    )
+}
+
+/// `new net.Socket({ fd })`: the socket takes ownership of the program's
+/// descriptor `fd` as its open stream; closing the socket closes it.
+pub fn link_adopt_descriptor(
+    core: &mut TransportCore,
+    link: OwnerLink,
+    fd: i32,
+) -> Result<(), NetError> {
+    runtime_call!(
+        {
+            link_call(|err| unsafe {
+                js_perry_net_link_adopt_descriptor(core.raw(), link.raw(), fd, err)
+            })
+        },
+        {
+            let _ = (core, link, fd);
             Err(unavailable())
         }
     )
