@@ -262,7 +262,7 @@ pub extern "C" fn js_value_length_property_key_f64(
 #[inline]
 fn lazy_array_length(value: f64) -> Option<f64> {
     let jsval = JSValue::from_bits(value.to_bits());
-    if !jsval.is_pointer() {
+    if !jsval.is_reference() {
         return None;
     }
     let raw = (value.to_bits() & POINTER_MASK) as usize;
