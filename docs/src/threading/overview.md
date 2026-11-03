@@ -281,3 +281,10 @@ and finalization are unchanged.
 throws `TypeError` with code `ERR_MISSING_ARGS`, but explicit `undefined` is a
 valid message. Rejected calls do not enqueue a message. Worker method calls use
 the ordinary method lookup, including own replacements and getters.
+
+### Messaging constructor errors
+
+`MessageChannel` requires `new` (`ERR_CONSTRUCT_CALL_REQUIRED`). `MessagePort`
+instances come from channels or transfers; calling or constructing one directly
+throws `ERR_CONSTRUCT_CALL_INVALID`. Calling `BroadcastChannel` without `new`
+throws the ordinary class-constructor `TypeError`, without a Node error code.
