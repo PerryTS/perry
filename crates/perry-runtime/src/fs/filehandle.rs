@@ -1516,7 +1516,7 @@ pub(crate) extern "C" fn filehandle_read_lines_impl(
             let start_for_len = start.unwrap_or(0);
             if end >= start_for_len {
                 let max_len = end.saturating_sub(start_for_len).saturating_add(1);
-                let _ = Read::by_ref(file).take(max_len).read_to_end(&mut bytes);
+                let _ = Read::by_ref(&mut **file).take(max_len).read_to_end(&mut bytes);
             }
         } else {
             let _ = file.read_to_end(&mut bytes);
