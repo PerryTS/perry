@@ -206,8 +206,12 @@ jobs:
               echo "::error::tag $TAG already exists — the version in Cargo.toml was already released. Land a version bump or use existing_tag to re-publish."
               exit 1
             fi
-            if [ -z "$(find changelog.d -maxdepth 1 -type f -name '[0-9]*.md' -print -quit)" ]; then
-              echo "::error::no fragments in changelog.d/ — the release notes are cut from them; nothing to release."
+            # A release's notes come from its own archive when the fold already
+            # landed on the release branch, and from the pending queue when it
+            # has not. Keying this on changelog.d/ alone refused every release
+            # that folded first, which is now the documented order.
+            if ! ./scripts/release_notes_source.sh "$TAG" >/dev/null; then
+              echo "::error::no release-note entries for $TAG — neither changelog/$TAG/ nor the pending queue in changelog.d/ has any; nothing to release."
               exit 1
             fi
           elif [ -n "$EXISTING_TAG" ]; then
@@ -2286,10 +2290,13 @@ jobs:
   # ---------------------------------------------------------------------------
   # Tag-last core (cut-release mode only): every build leg is green and
   # every exact npm tarball is public + registry-verified, so NOW create the
-  # tag + GitHub Release. Release notes are cut from changelog.d/
-  # fragments — same contract as scripts/cut_release_notes.sh, whose
-  # --notes-only mode this job calls. The fragment-removal commit stays a
-  # maintainer step afterwards (GITHUB_TOKEN can't push to protected main):
+  # tag + GitHub Release. Release notes are cut from changelog.d/ fragments —
+  # same contract as scripts/cut_release_notes.sh, whose --notes-only mode this
+  # job calls with --version $TAG: it reads the release's own archive
+  # changelog/vX.Y.Z/ when the fold already landed on the release branch, and
+  # the pending queue otherwise (warning that the fold is still owed). The fold
+  # itself is a release-branch step BEFORE the tag, so the archive is part of
+  # the reviewed commit:
   #   ./scripts/cut_release_notes.sh --fold vX.Y.Z
   # ---------------------------------------------------------------------------
   create-release:
@@ -2389,7 +2396,8 @@ jobs:
             reuse_tag=1
           fi
 
-          ./scripts/cut_release_notes.sh --notes-only > /tmp/release-notes-full.md
+          notes_dir=$(./scripts/release_notes_source.sh "$TAG")
+          ./scripts/cut_release_notes.sh --notes-only --version "$TAG" > /tmp/release-notes-full.md
           # GitHub rejects a release body over 125,000 characters with
           # `HTTP 422: body is too long`. v0.5.1519 carried 1505 changelog.d
           # fragments -- the first tag since v0.5.1220 on 2026-07-04 -- and
@@ -2397,7 +2405,9 @@ jobs:
           # created, which is the worst place for it to fail.
           LIMIT=120000
           if [ "$(wc -c < /tmp/release-notes-full.md)" -gt "$LIMIT" ]; then
-            frags=$(find changelog.d -name '*.md' ! -name 'README.md' ! -name 'HIGHLIGHTS.md' | wc -l | tr -d ' ')
+            # Count and link the set the notes actually came from, so the notice
+            # stays true after the fold empties changelog.d/.
+            frags=$(find "$notes_dir" -maxdepth 1 -type f -name '*.md' ! -name 'README.md' ! -name 'HIGHLIGHTS.md' | wc -l | tr -d ' ')
             # Cut on a line boundary so the body never ends mid-sentence.
             head -c "$LIMIT" /tmp/release-notes-full.md | sed '$d' > /tmp/release-notes.md
             {
@@ -2406,7 +2416,7 @@ jobs:
               echo
               echo "**These notes are truncated.** This release carries ${frags} changelog"
               echo "fragments and the full text exceeds GitHub's 125,000-character limit for a"
-              echo "release body. The complete set is in \`changelog.d/\` at [\`$TAG\`](https://github.com/$REPO/tree/$TAG/changelog.d)."
+              echo "release body. The complete set is in \`$notes_dir/\` at [\`$TAG\`](https://github.com/$REPO/tree/$TAG/$notes_dir)."
             } >> /tmp/release-notes.md
             echo "::notice::release notes truncated from $(wc -c < /tmp/release-notes-full.md) to $(wc -c < /tmp/release-notes.md) bytes (${frags} fragments)"
           else

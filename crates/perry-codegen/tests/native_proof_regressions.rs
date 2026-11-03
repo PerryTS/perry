@@ -72,7 +72,6 @@ fn empty_opts() -> CompileOptions {
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
         short_spread_method_candidates: std::sync::Arc::default(),
-        program_class_accessor_names: Default::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -1385,21 +1384,18 @@ fn guards_array_read_inline(ir: &str) -> bool {
         && ir.contains("call double @perry_array_read_cold_shared(")
 }
 
-#[path = "native_proof_support/read_memo_contract.rs"]
-mod read_memo_contract;
-
 /// #12986 selects validated shape/slot memos where getters are reachable.
 /// Both variants retain a complete [[Get]] miss; selected memo entrances must
 /// pass the same site storage to that miss.
+/// The layout probe with the complete `[[Get]]` behind it: the leaf
+/// (`perry_probe_get*`, which answers data and accessor slots from the shape)
+/// and a collecting exit, either the receiver's slow entry or the shared
+/// boxed-receiver refusal. A named read owns no shape/slot storage.
 fn is_layout_probe_read(body: &str) -> bool {
-    if body.contains("call double @perry_probe_get_memo(")
-        || body.contains("call double @perry_probe_get_value_memo(")
-    {
-        read_memo_contract::paired_memo_reads(body).is_some()
-    } else {
-        body.contains("call double @perry_probe_get")
-            && body.contains("call double @js_object_get_field_slow(")
-    }
+    body.contains("call double @perry_probe_get")
+        && (body.contains("call double @js_object_get_field_slow(")
+            || body.contains("call double @js_object_get_field_value("))
+        && !body.contains("_read_shape_slots")
 }
 
 /// Whether `ir` births a HEAP receiver object. A class instance is born by the

@@ -76,7 +76,7 @@ pub(super) use extract_exports::module_exports_is_opaque;
 use extract_exports::{
     export_key_is_own_binding, extract_exports_from_source, extract_named_exports_from_require,
     extract_object_literal_exports_from_require, extract_single_module_exports_assignment,
-    module_reexport_specs,
+    extract_stored_exports_from_source, module_reexport_specs,
 };
 // #8547: the stdlib-link decision needs the literal `require()` specifiers.
 pub(crate) use extract_requires::extract_require_specifiers;

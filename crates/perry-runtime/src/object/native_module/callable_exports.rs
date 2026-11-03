@@ -87,11 +87,12 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
     if module_name == "inspector/promises" && property_name != "Session" {
         return bound_native_callable_export_value("inspector", property_name);
     }
-    let export_module_name = if property_name == "Assert" && module_name == "assert/strict" {
-        "assert"
-    } else {
-        module_name
-    };
+    let export_module_name =
+        if matches!(property_name, "Assert" | "AssertionError") && module_name == "assert/strict" {
+            "assert"
+        } else {
+            module_name
+        };
     let callable_module_name = if export_module_name == "util.types" {
         "util/types"
     } else {
@@ -752,7 +753,104 @@ pub(crate) fn assert_cjs_export_value(module_name: &str) -> f64 {
         .as_pointer::<crate::closure::ClosureHeader>() as usize;
     crate::closure::closure_set_dynamic_prop(closure, "strict", strict);
     crate::closure::closure_set_dynamic_prop(closure, "default", callable.get_nanbox_f64());
+    // The constructors are the `assert` module's own, shared by `assert/strict`.
+    let constructors: [(&str, extern "C" fn(i32) -> f64); 2] = [
+        ("AssertionError", super::assert_assertion_error_export),
+        ("Assert", super::assert_assert_export),
+    ];
+    for (constructor, export) in constructors {
+        let value = export(0);
+        let closure = crate::value::JSValue::from_bits(callable.get_nanbox_f64().to_bits())
+            .as_pointer::<crate::closure::ClosureHeader>() as usize;
+        crate::closure::closure_set_dynamic_prop(closure, constructor, value);
+    }
     callable.get_nanbox_f64()
+}
+
+/// `assert.AssertionError.prototype`: `constructor`, and `Error.prototype` as
+/// its [[Prototype]] (node: `class AssertionError extends Error`). Every
+/// AssertionError, thrown by an assert helper or constructed, is born linked
+/// to this object, so `instanceof Error` / `instanceof AssertionError` are
+/// answered by the prototype chain.
+fn attach_assertion_error_prototype(constructor_value: f64) {
+    let constructor_js = JSValue::from_bits(constructor_value.to_bits());
+    if !constructor_js.is_pointer() {
+        return;
+    }
+    let closure = constructor_js.as_pointer::<crate::closure::ClosureHeader>() as usize;
+    if closure == 0 {
+        return;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let constructor = scope.root_nanbox_f64(constructor_value);
+    let error = {
+        let name = "Error";
+        scope.root_nanbox_f64(crate::object::js_get_global_this_builtin_value(
+            name.as_ptr(),
+            name.len(),
+        ))
+    };
+    let error_prototype = {
+        scope.root_nanbox_f64(unsafe {
+            crate::value::js_dynamic_object_get_property(
+                error.get_nanbox_f64(),
+                b"prototype".as_ptr().cast(),
+                9,
+            )
+        })
+    };
+    let proto = scope.root_raw_mut_ptr(crate::realm_decl! { birth js_object_alloc(0, 0); realm { "node:assert.AssertionError.prototype", members = { constructor; toString; }; } });
+    if proto.get_raw_mut_ptr::<ObjectHeader>().is_null() {
+        return;
+    }
+    if JSValue::from_bits(error_prototype.get_nanbox_f64().to_bits()).is_pointer() {
+        crate::object::prototype_chain::object_set_static_prototype(
+            proto.get_raw_mut_ptr::<ObjectHeader>() as usize,
+            error_prototype.get_nanbox_u64(),
+        );
+    }
+    let key = "constructor";
+    let constructor_key = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+    super::define_builtin_data_property(
+        proto.get_raw_mut_ptr::<ObjectHeader>(),
+        constructor_key,
+        constructor.get_nanbox_f64(),
+        key.to_string(),
+        super::PropertyAttrs::new(true, false, true),
+    );
+    // node: `AssertionError.prototype.toString()` is
+    // `${this.name} [${this.code}]: ${this.message}`.
+    let to_string = scope.root_nanbox_f64(async_hooks_static_method_value(
+        crate::fn_info!(#[realm("node:assert.AssertionError.prototype.toString")] export crate::object::assert::js_assert_assertion_error_to_string, 0),
+        "toString",
+        0,
+    ));
+    let key = "toString";
+    let to_string_key = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+    super::define_builtin_data_property(
+        proto.get_raw_mut_ptr::<ObjectHeader>(),
+        to_string_key,
+        to_string.get_nanbox_f64(),
+        key.to_string(),
+        super::PropertyAttrs::new(true, false, true),
+    );
+    let proto_value =
+        crate::value::js_nanbox_pointer(proto.get_raw_mut_ptr::<ObjectHeader>() as i64);
+    let closure = JSValue::from_bits(constructor.get_nanbox_f64().to_bits())
+        .as_pointer::<crate::closure::ClosureHeader>() as usize;
+    crate::closure::closure_set_dynamic_prop(closure, "prototype", proto_value);
+    super::set_builtin_property_attrs(
+        closure,
+        "prototype".to_string(),
+        super::PropertyAttrs::new(false, false, false),
+    );
+    // The constructor's own [[Prototype]] is `Error` (statics and
+    // `Object.getPrototypeOf(AssertionError) === Error`).
+    if JSValue::from_bits(error.get_nanbox_f64().to_bits()).is_pointer() {
+        let closure = JSValue::from_bits(constructor.get_nanbox_f64().to_bits())
+            .as_pointer::<crate::closure::ClosureHeader>() as usize;
+        crate::closure::closure_set_static_prototype(closure, error.get_nanbox_u64());
+    }
 }
 
 fn attach_assert_prototype(constructor_value: f64) {
@@ -1573,6 +1671,9 @@ pub(crate) unsafe fn nm_attach_assert(
 ) -> f64 {
     if property_name == "Assert" {
         attach_assert_prototype(value);
+    }
+    if property_name == "AssertionError" {
+        attach_assertion_error_prototype(value);
     }
     value
 }

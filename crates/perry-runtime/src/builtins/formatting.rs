@@ -1296,7 +1296,7 @@ unsafe fn format_object_as_json(
     }
 
     if inspect_sorted_enabled() {
-        string_parts.sort_by(|(left, _), (right, _)| left.cmp(right));
+        crate::cold_sort::sort_by(&mut string_parts, |(left, _), (right, _)| left.cmp(right));
     }
 
     let mut parts: Vec<String> = string_parts

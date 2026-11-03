@@ -302,8 +302,15 @@ pub(super) unsafe fn lookup_value(set: *const SetHeader, value: f64) -> Option<i
 pub(super) unsafe fn insert_value(set: *mut SetHeader, value: f64, raw: u32) {
     let index = mutable_index(set);
     if index.is_null() {
-        if (*set).size > SMALL_SET_SCAN_MAX {
-            rebuild_index(set);
+        // The threshold crossing: the index the Set's insertions build, by
+        // the one rule the compiler's image Sets are emitted with.
+        let elements = (*set).elements;
+        let born = SetIndex::from_insertions((0..(*set).used).filter_map(|i| {
+            let value = *elements.add(i as usize);
+            (value.to_bits() != SET_HOLE_VALUE_BITS).then(|| (value_hash(value), i))
+        }));
+        if let Some(index) = born {
+            install_owned_index(set, Box::new(index));
         }
     } else {
         let before = (*index).byte_len();
@@ -405,6 +412,11 @@ pub(crate) unsafe fn test_snapshot(set: *const SetHeader) -> (usize, usize, usiz
         index.as_ref().map_or(0, |i| i.byte_len()),
         TEST_HASH_CALLS.with(Cell::get),
     )
+}
+
+#[cfg(test)]
+pub(crate) unsafe fn test_has_index(set: *const SetHeader) -> bool {
+    !index_ptr(set).is_null()
 }
 
 #[cfg(test)]

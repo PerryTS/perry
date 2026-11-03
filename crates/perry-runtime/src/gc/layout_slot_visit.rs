@@ -496,39 +496,14 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<
                 return;
             }
             visit(pointer_slot(&mut (*lazy).blob_str as *mut _ as *mut usize));
-            visit(pointer_slot(
-                &mut (*lazy).materialized as *mut _ as *mut usize,
-            ));
-            visit(pointer_slot(
-                &mut (*lazy).materialized_elements as *mut _ as *mut usize,
-            ));
-            visit(pointer_slot(
-                &mut (*lazy).materialized_bitmap as *mut _ as *mut usize,
-            ));
-
+            // The element slots the materialized array keeps: TAG_HOLE until an
+            // element is materialized, which is a non-pointer to the visitor.
             let cached_length = (*lazy).cached_length as usize;
-            let cache = (*lazy).materialized_elements;
-            let bitmap = (*lazy).materialized_bitmap;
-            if cache.is_null() || bitmap.is_null() || cached_length == 0 {
-                return;
-            }
-            let bitmap_words = cached_length.div_ceil(64);
-            for w in 0..bitmap_words {
-                let word = *bitmap.add(w);
-                if word == 0 {
-                    continue;
-                }
-                let base_idx = w * 64;
-                for b in 0..64usize {
-                    if word & (1u64 << b) == 0 {
-                        continue;
-                    }
-                    let i = base_idx + b;
-                    if i >= cached_length {
-                        break;
-                    }
-                    visit(fixed_slot(cache.add(i) as *mut u64));
-                }
+            if cached_length != 0 {
+                visit(GcMutableSlotDescriptor::Range {
+                    range: HeapSlotRange::new(crate::json_tape::lazy_slot(lazy, 0), cached_length),
+                    layout_kind: None,
+                });
             }
         }
 
@@ -723,6 +698,37 @@ pub(super) unsafe fn visit_gc_rewrite_slots_inline<const DIAGNOSTICS: bool>(
     visit_gc_rewrite_slot_descriptors_with::<DIAGNOSTICS, true>(header, |descriptor| unsafe {
         descriptor.visit_slots_inline(&mut visit);
     });
+}
+
+/// [`visit_gc_rewrite_slots`] through the ONE shared, out-of-line copy of the
+/// rewrite-descriptor and layout decoder. The walker's slot action is a
+/// separate function either way (it was never inlined into the decoder), so
+/// the shared copy trades a direct call per descriptor for an indirect one;
+/// what it removes is the per-walker instantiation of the whole decoder.
+/// Enumerates exactly the same slots, in the same order.
+pub(super) unsafe fn visit_gc_rewrite_slots_shared<const DIAGNOSTICS: bool>(
+    header: *mut GcHeader,
+    mut visit: impl FnMut(GcMutableSlot),
+) {
+    visit_gc_rewrite_slot_descriptors_shared::<DIAGNOSTICS>(header, &mut |descriptor| unsafe {
+        descriptor.visit_slots_inline(&mut visit);
+    });
+}
+
+/// The shared decoder body behind [`visit_gc_rewrite_slots_shared`]: one copy
+/// per `DIAGNOSTICS`, never inlined into a walker.
+#[inline(never)]
+pub(super) unsafe fn visit_gc_rewrite_slot_descriptors_shared<const DIAGNOSTICS: bool>(
+    header: *mut GcHeader,
+    visit: &mut dyn FnMut(GcMutableSlotDescriptor),
+) {
+    #[cfg(test)]
+    if (*header).obj_type == crate::gc::GC_TYPE_NATIVE_HANDLE
+        && crate::native_payload::callback_sabotage("rewrite")
+    {
+        return;
+    }
+    visit_gc_rewrite_slot_descriptors_with::<DIAGNOSTICS, true>(header, visit);
 }
 
 /// Test-only sabotage for the inline mask walk

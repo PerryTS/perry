@@ -266,6 +266,12 @@ pub(crate) fn build_and_run_link(
             is_cross_ios || is_cross_visionos || is_cross_macos || is_cross_tvos,
             is_watchos || is_visionos,
         )?;
+        super::runtime_layouts::add_link_args(
+            &mut cmd,
+            !(is_linux || is_android || is_harmonyos),
+            is_cross_ios || is_cross_visionos || is_cross_macos || is_cross_tvos,
+            is_watchos || is_visionos,
+        );
         // PERRY_LINK_MAP=<path> — emit a linker map (which archive each symbol
         // resolves from) for diagnosing dup-symbol / shadowing bugs. Honor it on
         // every non-Windows linker, not just native macOS. GNU ld (ELF) spells

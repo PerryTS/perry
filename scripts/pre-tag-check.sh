@@ -144,6 +144,17 @@ if [[ -f scripts/gap_snapshot.py ]]; then
     run_check "gap snapshot self-test" python3 scripts/gap_snapshot.py --self-test
 fi
 
+# 8b. Changelog archive. Released fragments live in changelog/vX.Y.Z/ (never
+#     deleted), and the pending queue in changelog.d/ stays bounded. Both
+#     scripts carry a --self-test, so a gate that drifted fails here instead of
+#     passing silently.
+run_check "release notes folding self-test" \
+    ./scripts/cut_release_notes.sh --self-test
+run_check "changelog archive gate self-test" \
+    python3 scripts/check_changelog_archive.py --self-test
+run_check "changelog archive and pending queue" \
+    python3 scripts/check_changelog_archive.py
+
 # ---------------------------------------------------------------------------
 # Tier 2 — anything that compiles. Skipped under --quick.
 # ---------------------------------------------------------------------------

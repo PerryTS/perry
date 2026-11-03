@@ -660,7 +660,7 @@ fn load_static_symbol_index() -> Option<StaticSymbolIndex> {
     if raw_entries.is_empty() {
         return None;
     }
-    raw_entries.sort_unstable_by_key(|(address, _)| *address);
+    crate::cold_sort::sort_by_key(&mut raw_entries, |(address, _)| *address);
 
     // `dladdr` reports the loaded base. Mach-O and GNU-linked ELF images also
     // publish their preferred base as one of the marker symbols above. For an
@@ -693,7 +693,7 @@ fn load_static_symbol_index() -> Option<StaticSymbolIndex> {
             relocated_address(address, preferred_base, image_base).map(|address| (address, name))
         })
         .collect();
-    entries.sort_unstable_by_key(|(address, _)| *address);
+    crate::cold_sort::sort_by_key(&mut entries, |(address, _)| *address);
     entries.dedup_by(|right, left| right.0 == left.0);
     (!entries.is_empty()).then_some(StaticSymbolIndex {
         image_base,

@@ -109,17 +109,21 @@ fn expand(name: &str, styles: &str) -> Result<Vec<Value>, String> {
         declarations.push(object([
             ("name", string(path)),
             ("kind", string("namespace")),
+            // The pair's elements are array storage, their one home.
             (
                 "properties",
-                Value::Array(vec![
-                    property("0", 7, numeric(open as f64)),
-                    property("1", 7, numeric(close as f64)),
-                    property("length", 1, numeric(2.0)),
-                ]),
+                Value::Array(vec![property("length", 1, numeric(2.0))]),
             ),
+            ("own_key_order", Value::Array(vec![string("length")])),
             (
-                "own_key_order",
-                Value::Array(["0", "1", "length"].into_iter().map(string).collect()),
+                "storage",
+                object([
+                    ("kind", string("array")),
+                    (
+                        "elements",
+                        Value::Array(vec![numeric(open as f64), numeric(close as f64)]),
+                    ),
+                ]),
             ),
             ("own_symbol_order", Value::Array(Vec::new())),
             (
@@ -194,6 +198,30 @@ mod tests {
         assert_eq!(
             cells[2].get("own_key_order").unwrap().encode(),
             r#"["z","a"]"#
+        );
+        // A pair holds only length; its elements are array storage.
+        assert_eq!(
+            cells[0].get("own_key_order").unwrap().encode(),
+            r#"["length"]"#
+        );
+        assert_eq!(
+            cells[0]
+                .get("storage")
+                .unwrap()
+                .get("kind")
+                .and_then(Value::string),
+            Some("array")
+        );
+        assert_eq!(
+            cells[0]
+                .get("storage")
+                .unwrap()
+                .get("elements")
+                .unwrap()
+                .array()
+                .unwrap()
+                .len(),
+            2
         );
         assert!(expand("colors", &source.replace("name:\"a\"", "name:\"z\"")).is_err());
         assert!(birth("colors", "").is_err());

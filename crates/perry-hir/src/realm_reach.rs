@@ -59,6 +59,17 @@ impl RealmReach {
         }
     }
 
+    /// Test-only (the realm-diff gate's `PERRY_REALM_REACH_NAMES` input):
+    /// R becomes exactly `names`, with every top reason dropped, so a program
+    /// that reflects over `globalThis` (the realm dumper) can be built with a
+    /// partial image. A top program's own names are not kept: a scan closes a
+    /// top R to the whole catalog, so they are no longer distinguishable.
+    /// [`close`](Self::close) then applies the birth relation as usual.
+    pub fn restrict_to(&mut self, names: impl IntoIterator<Item = String>) {
+        self.top.clear();
+        self.names = names.into_iter().collect();
+    }
+
     pub fn close(&mut self, entries: &[RealmEntry]) {
         if self.is_full() {
             self.names

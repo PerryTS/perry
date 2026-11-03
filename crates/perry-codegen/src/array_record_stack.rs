@@ -360,7 +360,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, method: &str, args: &[Expr]) -> Result<
                 let protocol = ctx.block().icmp_eq(I64, &bits, crate::nanbox::TAG_TRUE_I64);
                 let close_idx = ctx.new_block("arec.close");
                 let join_idx = ctx.new_block("arec.closed");
-                let (close_label, join_label) = (ctx.block_label(close_idx), ctx.block_label(join_idx));
+                let (close_label, join_label) =
+                    (ctx.block_label(close_idx), ctx.block_label(join_idx));
                 let skip_pred = ctx.block().label.clone();
                 ctx.block().cond_br(&protocol, &close_label, &join_label);
                 ctx.current_block = close_idx;

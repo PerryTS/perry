@@ -5,7 +5,7 @@ use super::atoms::RealmAtoms;
 use super::objects::ObjectFacts;
 use super::properties::emit_values;
 use super::*;
-use perry_hir::realm_manifest::{RealmDeclaration, RealmProperty, RealmValue};
+use perry_hir::realm_manifest::{RealmDeclaration, RealmProperty, RealmStorageFacts, RealmValue};
 
 pub(crate) struct NamedArrayFacts<'a> {
     pub(crate) object: &'a ObjectFacts,
@@ -43,21 +43,19 @@ impl<'a> ArrayParts<'a> {
         // Integrity restrictions are represented by the receiver header, as
         // on heap arrays; do not materialize redundant element descriptors.
         let frozen = header.reserved & perry_abi::OBJ_FLAG_FROZEN != 0;
-        let sealed = header.reserved & perry_abi::OBJ_FLAG_SEALED != 0;
         if length.attributes != u8::from(!frozen) || length.get.is_some() || length.set.is_some() {
             return Err(format!(
                 "realm array {} needs length descriptor storage",
                 cell.name
             ));
         }
-        let default_attrs = if frozen {
-            2
-        } else if sealed {
-            3
-        } else {
-            7
+        // The elements have one home: the cell's array storage. An index
+        // key among the holder's properties is a second home and an error.
+        let elements = match &cell.storage {
+            Some(RealmStorageFacts::Array { elements }) => elements.iter().collect::<Vec<_>>(),
+            None => Vec::new(),
+            Some(_) => return Err(format!("realm array {} has non-array storage", cell.name)),
         };
-        let mut indexed = std::collections::BTreeMap::new();
         let mut named = Vec::new();
         for property in &cell.properties {
             if !property.symbol && property.key == "length" {
@@ -67,36 +65,22 @@ impl<'a> ArrayParts<'a> {
                 .then(|| property.key.parse::<u32>().ok())
                 .flatten()
                 .filter(|i| *i != u32::MAX && i.to_string() == property.key);
-            if let Some(index) = index {
-                let value = property
-                    .value
-                    .as_ref()
-                    .filter(|_| property.get.is_none() && property.set.is_none())
-                    .ok_or_else(|| {
-                        format!("realm array {} needs an indexed accessor holder", cell.name)
-                    })?;
-                if property.attributes != default_attrs || index >= n as u32 {
-                    return Err(format!(
-                        "realm array {} needs indexed descriptor storage",
-                        cell.name
-                    ));
-                }
-                if indexed.insert(index, value).is_some() {
-                    return Err("duplicate realm array index".into());
-                }
-            } else {
-                named.push(property.clone());
+            if index.is_some() {
+                return Err(format!(
+                    "realm array {} declares element {} as a property, not storage",
+                    cell.name, property.key
+                ));
             }
+            named.push(property.clone());
         }
         // Current source-owned static arrays are dense. A future sparse birth
         // must describe its holes explicitly, not silently emit undefined.
-        if indexed.len() != n as usize {
+        if elements.len() != n as usize {
             return Err(format!(
                 "realm array {} lacks dense element birth facts",
                 cell.name
             ));
         }
-        let elements = indexed.into_values().collect();
         Ok(Self {
             length: n as u32,
             elements,

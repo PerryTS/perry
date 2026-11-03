@@ -176,8 +176,17 @@ fn test_large_lazy_cluster_is_still_born_old_and_tenured() {
             0,
             "the header must be born tenured, as the large-object arm made it"
         );
+        // The allocation is the array itself: the fixed lazy fields (front
+        // reserve) plus one slot per element. It scales with the element
+        // count, never with the tape, which stays a side allocation.
+        let fixed = GC_HEADER_SIZE + std::mem::size_of::<crate::json_tape::LazyArrayHeader>();
+        let slots = (*lazy).cached_length as usize * 8;
         assert!(
-            ((*header).size as usize) < crate::gc::LARGE_OBJECT_THRESHOLD_BYTES,
+            ((*header).size as usize) <= fixed + slots + 8,
+            "the lazy allocation must be the fixed fields plus the element slots"
+        );
+        assert!(
+            ((*header).size as usize) < tape_bytes,
             "the header allocation must not scale with the tape"
         );
         assert_eq!(
