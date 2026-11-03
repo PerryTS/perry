@@ -252,3 +252,61 @@ fn a_settle_pass_without_a_pop_or_work_since_the_last_is_a_stall() {
     assert!(!settle_stall(None, (3, 10), true));
     assert!(!settle_stall(Some((3, 10)), (3, 10), false));
 }
+
+/// A node retired by its own give-up during its rule loop ends the loop.
+/// Subject 5 owns `h` with three load rules and no successor, so nothing is
+/// charged between the pop's budget check and the rules. A load through a
+/// token births that token's chain-value node (`cv_of`) in the loading
+/// subject: the first load of rule 0 births 5's next node. The budget puts
+/// 5's node budget (budget / 4) exactly at the nodes 5 holds when `h` pops,
+/// with the work far under: the pop passes, 5 gives up inside rule 0, and
+/// `h` holds the one TopSink from then on. The rules counted before the
+/// loop are gone; indexing them panics (opencode: solve.rs index out of
+/// bounds after `gave-up effect Atom.js:closure8`).
+#[test]
+fn a_node_retired_by_its_own_give_up_during_its_rule_loop_ends_the_loop() {
+    use crate::model::{Cons, Key};
+    const K: u64 = 8;
+    let mut m = copy_solver_model();
+    m.cur_subject = 5;
+    let h = m.node_l("h");
+    let dsts: Vec<_> = (0..3).map(|_| m.node_l("dst")).collect();
+    for (i, &d) in dsts.iter().enumerate() {
+        let key = Key::Named(m.atom(&format!("k{i}")));
+        m.cons(h, Cons::Load { key, dst: d });
+    }
+    // Room in the work budget: 5's node budget is a quarter of it.
+    for _ in 0..32 {
+        m.node_l("spare");
+    }
+    let toks: Vec<_> = (100..100 + K as u32)
+        .map(|i| m.tok(TokKind::ModNs(i)))
+        .collect();
+    m.add(h, &toks, 0);
+    m.subject_mark(5);
+    let (work0, nodes0) = m.charge(5).map(|c| (c.work, c.nodes)).expect("subject 5");
+    let budget = 4 * nodes0 as u64 + 3;
+    // The pop of `h` charges (K + 1) per rule; it stays under the budget.
+    let pop = (K + 1) * 3;
+    assert!(
+        work0 + pop < budget,
+        "work {work0} + pop {pop} budget {budget}"
+    );
+    m.budget = Budget(budget);
+    m.solve();
+    assert_eq!(m.gave_up.len(), 1, "{:?}", m.gave_up);
+    let (name, w, kind) = &m.gave_up[0];
+    assert_eq!((name.as_str(), *kind), ("fn#5", "nodes"), "{:?}", m.gave_up);
+    // Given up right after the pop's charge, before 5 did other work.
+    assert_eq!(*w, work0 + pop, "{:?}", m.gave_up);
+    assert!(m.charge(5).is_some_and(|c| c.gave_up));
+    let node = &m.nodes[h as usize];
+    assert!(node.retired);
+    assert_eq!(node.cons.len(), 1, "{:?}", node.cons);
+    assert!(
+        matches!(node.cons[0], Cons::TopSink { .. }),
+        "{:?}",
+        node.cons
+    );
+    assert!(node.pts.contains_tok(crate::model::TOP));
+}
