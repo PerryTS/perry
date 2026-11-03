@@ -50,6 +50,7 @@ pub(super) fn emit_module_artifacts(
         is_entry_module,
         non_entry_module_prefixes,
         output_type,
+        realm_reach,
         module_prefix,
         class_table,
         class_ids,
@@ -638,6 +639,7 @@ pub(super) fn emit_module_artifacts(
         cross_module,
         opts.output_type,
         &namespace_key_globals,
+        realm_reach,
     )
     .with_context(|| format!("lowering entry of module '{}'", hir.name))?;
     progress.checkpoint("namespace setup and module entry body");

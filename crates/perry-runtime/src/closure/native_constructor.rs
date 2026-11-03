@@ -10,43 +10,43 @@ use crate::object::{layout_desc::PerryLayoutDesc, runtime_layouts as layouts};
 fn definition(module: &str, name: &str) -> Option<(*const PerryLayoutDesc, u64)> {
     Some(match (module, name) {
         ("events", "EventEmitter") => (
-            &raw const layouts::NATIVE_CTOR_EVENT_EMITTER,
+            layouts::NATIVE_CTOR_EVENT_EMITTER::desc(),
             shape::INTRINSIC_SERIAL_NATIVE_CTOR_EVENT_EMITTER,
         ),
         ("stream", "Stream") => (
-            &raw const layouts::NATIVE_CTOR_STREAM,
+            layouts::NATIVE_CTOR_STREAM::desc(),
             shape::INTRINSIC_SERIAL_NATIVE_CTOR_STREAM,
         ),
         ("stream", "Readable") => (
-            &raw const layouts::NATIVE_CTOR_READABLE,
+            layouts::NATIVE_CTOR_READABLE::desc(),
             shape::INTRINSIC_SERIAL_NATIVE_CTOR_READABLE,
         ),
         ("stream", "Writable") => (
-            &raw const layouts::NATIVE_CTOR_WRITABLE,
+            layouts::NATIVE_CTOR_WRITABLE::desc(),
             shape::INTRINSIC_SERIAL_NATIVE_CTOR_WRITABLE,
         ),
         ("stream", "Duplex") => (
-            &raw const layouts::NATIVE_CTOR_DUPLEX,
+            layouts::NATIVE_CTOR_DUPLEX::desc(),
             shape::INTRINSIC_SERIAL_NATIVE_CTOR_DUPLEX,
         ),
         ("stream", "Transform") => (
-            &raw const layouts::NATIVE_CTOR_TRANSFORM,
+            layouts::NATIVE_CTOR_TRANSFORM::desc(),
             shape::INTRINSIC_SERIAL_NATIVE_CTOR_TRANSFORM,
         ),
         ("stream", "PassThrough") => (
-            &raw const layouts::NATIVE_CTOR_PASSTHROUGH,
+            layouts::NATIVE_CTOR_PASSTHROUGH::desc(),
             shape::INTRINSIC_SERIAL_NATIVE_CTOR_PASSTHROUGH,
         ),
         ("http", "OutgoingMessage") => (
-            &raw const layouts::NATIVE_CTOR_OUTGOING_MESSAGE,
+            layouts::NATIVE_CTOR_OUTGOING_MESSAGE::desc(),
             shape::INTRINSIC_SERIAL_NATIVE_CTOR_OUTGOING_MESSAGE,
         ),
         ("http", "ServerResponse") => (
-            &raw const layouts::NATIVE_CTOR_SERVER_RESPONSE,
+            layouts::NATIVE_CTOR_SERVER_RESPONSE::desc(),
             shape::INTRINSIC_SERIAL_NATIVE_CTOR_SERVER_RESPONSE,
         ),
         ("http", "IncomingMessage") => (
-            &raw const layouts::NATIVE_CTOR_INCOMING_MESSAGE,
+            layouts::NATIVE_CTOR_INCOMING_MESSAGE::desc(),
             shape::INTRINSIC_SERIAL_NATIVE_CTOR_INCOMING_MESSAGE,
         ),
         _ => return None,
@@ -103,13 +103,13 @@ pub(crate) fn seal_selected(module: &str, name: &str, value: f64) {
 /// The existing identity word names the bag itself, not a cached verdict.
 /// Its live layout word is the fact, including its irreversible shadow bit.
 #[inline(always)]
-unsafe fn ancestor(serial: u64, desc: *const PerryLayoutDesc) -> bool {
+unsafe fn ancestor(serial: u64, word: u32) -> bool {
     crate::object::shapes::identity_word_slot(serial).is_some_and(|slot| {
         let bits = *slot;
         bits & !crate::value::POINTER_MASK == crate::value::POINTER_TAG
             && (*((bits & crate::value::POINTER_MASK) as *const crate::object::ObjectHeader))
                 .parent_class_id
-                == (*desc).layout_id
+                == word
     })
 }
 
@@ -135,133 +135,133 @@ pub(crate) unsafe fn inherits_function(closure: *const super::ClosureHeader, nam
     // have no such identity and leave before loading constructor layouts.
     match (*meta).proto_serial {
         shape::INTRINSIC_SERIAL_NATIVE_CTOR_EVENT_EMITTER => {
-            word == (*(&raw const layouts::NATIVE_CTOR_EVENT_EMITTER)).layout_id
+            word == layouts::NATIVE_CTOR_EVENT_EMITTER::WORD
         }
         shape::INTRINSIC_SERIAL_NATIVE_CTOR_STREAM => {
-            word == (*(&raw const layouts::NATIVE_CTOR_STREAM)).layout_id
+            word == layouts::NATIVE_CTOR_STREAM::WORD
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_EVENT_EMITTER,
-                    &raw const layouts::NATIVE_CTOR_EVENT_EMITTER,
+                    layouts::NATIVE_CTOR_EVENT_EMITTER::WORD,
                 )
         }
         shape::INTRINSIC_SERIAL_NATIVE_CTOR_READABLE => {
-            word == (*(&raw const layouts::NATIVE_CTOR_READABLE)).layout_id
+            word == layouts::NATIVE_CTOR_READABLE::WORD
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_STREAM,
-                    &raw const layouts::NATIVE_CTOR_STREAM,
+                    layouts::NATIVE_CTOR_STREAM::WORD,
                 )
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_EVENT_EMITTER,
-                    &raw const layouts::NATIVE_CTOR_EVENT_EMITTER,
+                    layouts::NATIVE_CTOR_EVENT_EMITTER::WORD,
                 )
         }
         shape::INTRINSIC_SERIAL_NATIVE_CTOR_WRITABLE => {
-            word == (*(&raw const layouts::NATIVE_CTOR_WRITABLE)).layout_id
+            word == layouts::NATIVE_CTOR_WRITABLE::WORD
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_STREAM,
-                    &raw const layouts::NATIVE_CTOR_STREAM,
+                    layouts::NATIVE_CTOR_STREAM::WORD,
                 )
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_EVENT_EMITTER,
-                    &raw const layouts::NATIVE_CTOR_EVENT_EMITTER,
+                    layouts::NATIVE_CTOR_EVENT_EMITTER::WORD,
                 )
         }
         shape::INTRINSIC_SERIAL_NATIVE_CTOR_DUPLEX => {
-            word == (*(&raw const layouts::NATIVE_CTOR_DUPLEX)).layout_id
+            word == layouts::NATIVE_CTOR_DUPLEX::WORD
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_READABLE,
-                    &raw const layouts::NATIVE_CTOR_READABLE,
+                    layouts::NATIVE_CTOR_READABLE::WORD,
                 )
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_STREAM,
-                    &raw const layouts::NATIVE_CTOR_STREAM,
+                    layouts::NATIVE_CTOR_STREAM::WORD,
                 )
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_EVENT_EMITTER,
-                    &raw const layouts::NATIVE_CTOR_EVENT_EMITTER,
+                    layouts::NATIVE_CTOR_EVENT_EMITTER::WORD,
                 )
         }
         shape::INTRINSIC_SERIAL_NATIVE_CTOR_TRANSFORM => {
-            word == (*(&raw const layouts::NATIVE_CTOR_TRANSFORM)).layout_id
+            word == layouts::NATIVE_CTOR_TRANSFORM::WORD
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_DUPLEX,
-                    &raw const layouts::NATIVE_CTOR_DUPLEX,
+                    layouts::NATIVE_CTOR_DUPLEX::WORD,
                 )
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_READABLE,
-                    &raw const layouts::NATIVE_CTOR_READABLE,
+                    layouts::NATIVE_CTOR_READABLE::WORD,
                 )
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_STREAM,
-                    &raw const layouts::NATIVE_CTOR_STREAM,
+                    layouts::NATIVE_CTOR_STREAM::WORD,
                 )
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_EVENT_EMITTER,
-                    &raw const layouts::NATIVE_CTOR_EVENT_EMITTER,
+                    layouts::NATIVE_CTOR_EVENT_EMITTER::WORD,
                 )
         }
         shape::INTRINSIC_SERIAL_NATIVE_CTOR_PASSTHROUGH => {
-            word == (*(&raw const layouts::NATIVE_CTOR_PASSTHROUGH)).layout_id
+            word == layouts::NATIVE_CTOR_PASSTHROUGH::WORD
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_TRANSFORM,
-                    &raw const layouts::NATIVE_CTOR_TRANSFORM,
+                    layouts::NATIVE_CTOR_TRANSFORM::WORD,
                 )
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_DUPLEX,
-                    &raw const layouts::NATIVE_CTOR_DUPLEX,
+                    layouts::NATIVE_CTOR_DUPLEX::WORD,
                 )
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_READABLE,
-                    &raw const layouts::NATIVE_CTOR_READABLE,
+                    layouts::NATIVE_CTOR_READABLE::WORD,
                 )
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_STREAM,
-                    &raw const layouts::NATIVE_CTOR_STREAM,
+                    layouts::NATIVE_CTOR_STREAM::WORD,
                 )
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_EVENT_EMITTER,
-                    &raw const layouts::NATIVE_CTOR_EVENT_EMITTER,
+                    layouts::NATIVE_CTOR_EVENT_EMITTER::WORD,
                 )
         }
         shape::INTRINSIC_SERIAL_NATIVE_CTOR_OUTGOING_MESSAGE => {
-            word == (*(&raw const layouts::NATIVE_CTOR_OUTGOING_MESSAGE)).layout_id
+            word == layouts::NATIVE_CTOR_OUTGOING_MESSAGE::WORD
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_STREAM,
-                    &raw const layouts::NATIVE_CTOR_STREAM,
+                    layouts::NATIVE_CTOR_STREAM::WORD,
                 )
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_EVENT_EMITTER,
-                    &raw const layouts::NATIVE_CTOR_EVENT_EMITTER,
+                    layouts::NATIVE_CTOR_EVENT_EMITTER::WORD,
                 )
         }
         shape::INTRINSIC_SERIAL_NATIVE_CTOR_SERVER_RESPONSE => {
-            word == (*(&raw const layouts::NATIVE_CTOR_SERVER_RESPONSE)).layout_id
+            word == layouts::NATIVE_CTOR_SERVER_RESPONSE::WORD
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_OUTGOING_MESSAGE,
-                    &raw const layouts::NATIVE_CTOR_OUTGOING_MESSAGE,
+                    layouts::NATIVE_CTOR_OUTGOING_MESSAGE::WORD,
                 )
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_STREAM,
-                    &raw const layouts::NATIVE_CTOR_STREAM,
+                    layouts::NATIVE_CTOR_STREAM::WORD,
                 )
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_EVENT_EMITTER,
-                    &raw const layouts::NATIVE_CTOR_EVENT_EMITTER,
+                    layouts::NATIVE_CTOR_EVENT_EMITTER::WORD,
                 )
         }
         shape::INTRINSIC_SERIAL_NATIVE_CTOR_INCOMING_MESSAGE => {
-            word == (*(&raw const layouts::NATIVE_CTOR_INCOMING_MESSAGE)).layout_id
+            word == layouts::NATIVE_CTOR_INCOMING_MESSAGE::WORD
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_READABLE,
-                    &raw const layouts::NATIVE_CTOR_READABLE,
+                    layouts::NATIVE_CTOR_READABLE::WORD,
                 )
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_STREAM,
-                    &raw const layouts::NATIVE_CTOR_STREAM,
+                    layouts::NATIVE_CTOR_STREAM::WORD,
                 )
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_EVENT_EMITTER,
-                    &raw const layouts::NATIVE_CTOR_EVENT_EMITTER,
+                    layouts::NATIVE_CTOR_EVENT_EMITTER::WORD,
                 )
         }
         _ => false,

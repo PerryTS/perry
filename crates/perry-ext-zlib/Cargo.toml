@@ -38,5 +38,5 @@ libz-rs-sys = { version = "=0.6.8", default-features = false, features = ["std"]
 
 [dev-dependencies]
 # `default` + `stdlib`, as every other perry-ext-* crate (#6303, #6314).
-perry-runtime = { workspace = true, features = ["default", "stdlib"] }
+perry-runtime = { workspace = true, features = ["default", "stdlib", "test-layout-descriptors"] }
 perry-ffi = { workspace = true, features = ["runtime-link"] }

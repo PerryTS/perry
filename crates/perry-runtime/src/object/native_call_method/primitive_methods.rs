@@ -8,6 +8,7 @@ use super::*;
 /// # Safety
 /// `args_ptr` is valid for `args_len` reads (or null with `args_len == 0`).
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(crate) unsafe fn class_value_method_call(
     object: f64,

@@ -127,77 +127,6 @@ pub fn namespace_member_func_key(namespace: &str, member: &str) -> String {
     format!("\0perry_namespace_func\0{namespace}\0{member}")
 }
 
-/// Accessor names known to benefit from the emitted guarded arm. Computed
-/// literal choices extend the existing name sets without evaluating a key or
-/// widening every string read. Unresolved keys retain the runtime path; name
-/// admission never authenticates an answer (the shape/pair/lane guards do).
-#[derive(Debug, Clone, Default)]
-pub struct ClassAccessorNames {
-    getters: std::collections::HashSet<String>,
-    setters: std::collections::HashSet<String>,
-    /// Getter names an object literal or a literal-keyed
-    /// `Object.defineProperty` declares. They never widen [`Self::may_get`];
-    /// they only give a read of that name its shape/slot memo.
-    literal_getters: std::collections::HashSet<String>,
-}
-
-mod computed_names;
-
-impl ClassAccessorNames {
-    /// The accessor names declared by the classes of `modules` (instance and
-    /// static alike: a superset only costs an arm).
-    pub fn collect<'m>(modules: impl IntoIterator<Item = &'m perry_hir::Module>) -> Self {
-        computed_names::collect(modules)
-    }
-
-    /// The names given, for a caller that already knows them.
-    pub fn from_names<G, S>(getters: G, setters: S) -> Self
-    where
-        G: IntoIterator<Item = String>,
-        S: IntoIterator<Item = String>,
-    {
-        Self {
-            getters: getters.into_iter().collect(),
-            setters: setters.into_iter().collect(),
-            ..Self::default()
-        }
-    }
-
-    /// May a compiled class declare a getter named `name`?
-    pub fn may_get(&self, name: &str) -> bool {
-        self.getters.contains(name)
-    }
-
-    /// May any getter of the program be declared under `name` (a class, an
-    /// object literal or a literal-keyed `Object.defineProperty`)? Only such
-    /// a fixed-name read owns a shape/slot memo; every other read keeps the
-    /// stateless probe and complete read.
-    pub fn may_read_through_getter(&self, name: &str) -> bool {
-        self.getters.contains(name) || self.literal_getters.contains(name)
-    }
-
-    /// May a compiled class declare a setter named `name`?
-    pub fn may_set(&self, name: &str) -> bool {
-        self.setters.contains(name)
-    }
-
-    /// A stable rendering for the object-cache key.
-    pub fn cache_key(&self) -> String {
-        let mut getters: Vec<&str> = self.getters.iter().map(String::as_str).collect();
-        let mut setters: Vec<&str> = self.setters.iter().map(String::as_str).collect();
-        let mut literal: Vec<&str> = self.literal_getters.iter().map(String::as_str).collect();
-        getters.sort_unstable();
-        setters.sort_unstable();
-        literal.sort_unstable();
-        format!(
-            "get:{}|set:{}|lit:{}",
-            getters.join(","),
-            setters.join(","),
-            literal.join(",")
-        )
-    }
-}
-
 /// Options controlling code generation for a single module.
 #[derive(Debug, Clone, Default)]
 pub struct CompileOptions {
@@ -340,6 +269,14 @@ pub struct CompileOptions {
     /// Locals that are namespace imports (`import * as X from "./mod"`).
     /// Codegen uses this to know that `X.foo()` should be dispatched as
     /// a cross-module call rather than an object method call.
+    /// A module that namespace-imports ITSELF (`import * as Mod from
+    /// "./this-module.js"`). Its `@__perry_ns_<prefix>` populator must run
+    /// BEFORE the top-level body, because the body is itself a namespace
+    /// consumer: trails' activesupport does `import * as C from
+    /// "./calculations.js"` and then, at top level, `include(RubyTime, C)`,
+    /// which reads `Object.getOwnPropertyNames(C)`. Populating at the tail left
+    /// that read seeing the global's initial NaN-boxed `undefined`.
+    pub namespace_self_import: bool,
     pub namespace_imports: Vec<String>,
     /// Namespace local -> owning compiled module prefix, before following re-exports.
     pub namespace_source_prefixes: std::collections::HashMap<String, String>,
@@ -381,11 +318,6 @@ pub struct CompileOptions {
     /// reverse-flow metadata: the calling module need not import the producer.
     pub object_literal_method_candidates:
         std::sync::Arc<std::collections::HashMap<String, Vec<ObjectLiteralMethodCandidate>>>,
-    /// The whole program's class accessor names ([`ClassAccessorNames`]),
-    /// which decide where the class-accessor arms are emitted. `None` (a
-    /// standalone or test compile that did not collect them) emits the arms
-    /// at every site.
-    pub program_class_accessor_names: Option<std::sync::Arc<ClassAccessorNames>>,
     /// Imported enum member lists, keyed by the local name under which
     /// the enum is visible in this module.
     pub imported_enums: Vec<(String, Vec<(String, perry_hir::EnumValue)>)>,
@@ -986,6 +918,8 @@ pub(crate) struct CrossModuleCtx<'a> {
     /// The class and method tables inverted (`class_hierarchy`). Set once
     /// both tables are final, before any function body is lowered.
     pub class_hierarchy: super::class_hierarchy::ClassHierarchy,
+    /// See `CompileOptions::namespace_self_import`.
+    pub namespace_self_import: bool,
     pub namespace_imports: std::collections::HashSet<String>,
     pub namespace_source_prefixes: std::collections::HashMap<String, String>,
     /// #7189: `(namespace local, member)` pairs whose member is itself a MODULE
@@ -1010,8 +944,6 @@ pub(crate) struct CrossModuleCtx<'a> {
         std::sync::Arc<std::collections::HashMap<String, Vec<ShortSpreadMethodCandidate>>>,
     pub object_literal_method_candidates:
         std::sync::Arc<std::collections::HashMap<String, Vec<ObjectLiteralMethodCandidate>>>,
-    /// The whole program class accessor names, carried from the compile options.
-    pub program_class_accessor_names: Option<std::sync::Arc<ClassAccessorNames>>,
     /// FuncIds of locally-defined async functions in this module. Populated
     /// from `hir.functions.is_async`. Used by `is_promise_expr` to refine
     /// `let p = asyncFn();` to `Promise(_)` so subsequent `p.then(cb)`

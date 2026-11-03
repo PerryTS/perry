@@ -45,9 +45,9 @@ impl HttpProto {
 
     fn layout(self) -> *const crate::object::layout_desc::PerryLayoutDesc {
         match self {
-            HttpProto::OutgoingMessage => &raw const layouts::OUTGOING_MESSAGE_PROTOTYPE,
-            HttpProto::ServerResponse => &raw const layouts::SERVER_RESPONSE_PROTOTYPE,
-            HttpProto::IncomingMessage => &raw const layouts::INCOMING_MESSAGE_PROTOTYPE,
+            HttpProto::OutgoingMessage => layouts::OUTGOING_MESSAGE_PROTOTYPE::desc(),
+            HttpProto::ServerResponse => layouts::SERVER_RESPONSE_PROTOTYPE::desc(),
+            HttpProto::IncomingMessage => layouts::INCOMING_MESSAGE_PROTOTYPE::desc(),
         }
     }
 
@@ -484,6 +484,54 @@ pub extern "C" fn js_node_http_method_fallback(
     }
 }
 
+/// The method a native-handle response inherits under `name`: the function
+/// object `ServerResponse.prototype` (or, for a bare `OutgoingMessage`,
+/// `OutgoingMessage.prototype`) holds, own or from its parent prototype, so
+/// `res.writeHead === ServerResponse.prototype.writeHead` as in node.
+/// Calling it runs the native method on its `this`
+/// ([`js_node_http_method_fallback`] for a handle), never the receiver's own
+/// replacement. `undefined` when neither prototype defines `name` as a method.
+#[no_mangle]
+pub extern "C" fn js_node_http_response_prototype_method(
+    outgoing_only: i32,
+    name_ptr: *const u8,
+    name_len: usize,
+) -> f64 {
+    if name_ptr.is_null() || name_len == 0 {
+        return undefined();
+    }
+    // SAFETY: the caller passes a live name byte range.
+    let name = unsafe { std::slice::from_raw_parts(name_ptr, name_len) };
+    let chain: &[HttpProto] = if outgoing_only != 0 {
+        &[HttpProto::OutgoingMessage]
+    } else {
+        &[HttpProto::ServerResponse, HttpProto::OutgoingMessage]
+    };
+    for &kind in chain {
+        let proto = ensure_http_prototype(kind);
+        let holder = JSValue::from_bits(proto.to_bits());
+        if !holder.is_pointer() {
+            return undefined();
+        }
+        // SAFETY: a live sealed prototype; its method slots are data slots,
+        // so no getter runs.
+        let Some(value) =
+            (unsafe { crate::object::own_property_get_by_bytes(holder.as_pointer(), name, proto) })
+        else {
+            continue;
+        };
+        let bits = value.bits();
+        let is_method = JSValue::from_bits(bits).is_pointer()
+            && crate::closure::is_closure_ptr((bits & crate::value::POINTER_MASK) as usize);
+        return if is_method {
+            f64::from_bits(bits)
+        } else {
+            undefined()
+        };
+    }
+    undefined()
+}
+
 fn bool_value(b: bool) -> f64 {
     f64::from_bits(if b {
         crate::value::TAG_TRUE
@@ -732,7 +780,7 @@ unsafe fn message_init(this: f64, req: Option<f64>) {
     // stays on those keys.
     let plain_chain = crate::node_stream::instance_birth::on_layout_with_plain_chain(
         receiver,
-        &raw const layouts::SERVER_RESPONSE,
+        layouts::SERVER_RESPONSE::WORD,
     );
     let on_layout = || {
         plain_chain
@@ -740,8 +788,9 @@ unsafe fn message_init(this: f64, req: Option<f64>) {
                 this.get_nanbox_f64(),
             )
             .is_some_and(|obj| {
-                crate::node_stream::instance_birth::instance_layout(obj)
-                    == Some(&raw const layouts::SERVER_RESPONSE)
+                crate::node_stream::instance_birth::instance_layout(obj).is_some_and(
+                    |desc| unsafe { (*desc).layout_id } == layouts::SERVER_RESPONSE::WORD,
+                )
             })
     };
     let put = |slot: u32, name: &'static [u8], value: f64| {
@@ -906,7 +955,7 @@ pub unsafe extern "C" fn js_node_http_server_response_birth(proto: f64, req: f64
     let proto = scope.root_nanbox_f64(proto);
     let obj = match crate::node_stream::instance_birth::alloc_on_layout(
         proto.get_nanbox_f64(),
-        &raw const layouts::SERVER_RESPONSE,
+        layouts::SERVER_RESPONSE::desc(),
     ) {
         Some(obj) => boxed(obj),
         None => crate::object::js_object_create(proto.get_nanbox_f64()),
@@ -946,8 +995,9 @@ mod tests {
     }
 
     unsafe fn on_layout(obj: usize) -> bool {
-        crate::node_stream::instance_birth::instance_layout(obj as *const ObjectHeader)
-            == Some(&raw const crate::object::runtime_layouts::SERVER_RESPONSE)
+        crate::node_stream::instance_birth::instance_layout(obj as *const ObjectHeader).is_some_and(
+            |desc| (*desc).layout_id == crate::object::runtime_layouts::SERVER_RESPONSE::WORD,
+        )
     }
 
     #[test]

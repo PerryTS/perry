@@ -16,12 +16,16 @@ pub(super) use stack_maps::install_verify_walker;
 mod stack_roots;
 pub(crate) use stack_maps::census_rows::stack_map_index_census;
 mod temp_roots;
+mod walk_origin;
 pub(super) use stack_maps::ensure_built as ensure_stack_maps_built;
 pub(super) use stack_maps::initialize as initialize_stack_maps;
 pub(super) use stack_maps::native_maps_active as native_stack_maps_active;
 pub(super) use stack_maps::publish_rewrite_walk_stats as stack_maps_publish_rewrite_walk_stats;
 pub(super) use stack_maps::record_native_stack_walk_source;
 pub(super) use stack_maps::verify_native_slots_post_walk as stack_maps_native_slot_verify;
+#[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+pub(crate) use walk_origin::offering_entry_asm;
+pub(crate) use walk_origin::{EntryOrigin as EntryWalkOrigin, WalkOrigin};
 
 pub use rooted_values::RootedValues;
 pub(super) use runtime_handles::{

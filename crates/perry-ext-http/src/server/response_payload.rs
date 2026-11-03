@@ -354,11 +354,7 @@ pub(crate) fn write_head_fields(handle: i64, code: u16, reason: Option<String>) 
             let current = unsafe { perry_ffi::runtime_get(owner.get(), b"statusMessage") };
             match JsValue::from_bits(current.to_bits()).to_owned_string() {
                 Some(m) if !m.is_empty() => m,
-                _ => http::StatusCode::from_u16(code)
-                    .ok()
-                    .and_then(|s| s.canonical_reason())
-                    .unwrap_or("unknown")
-                    .to_string(),
+                _ => super::response::status_text(code).to_string(),
             }
         }
     };

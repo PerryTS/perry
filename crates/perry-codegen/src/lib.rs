@@ -22,9 +22,11 @@ pub mod ext_registry;
 pub mod facts_consumed;
 pub mod fallback_diag;
 pub(crate) mod fn_info;
+pub(crate) mod fn_record;
 pub mod function;
 pub mod function_order;
 pub(crate) mod gc_call_effects;
+pub mod verify_facts;
 pub use gc_call_effects::GcEffects;
 pub mod gc_map;
 #[cfg(feature = "llvm-inprocess")]
@@ -114,8 +116,8 @@ pub use codegen::{
     context_free_ctor_param_count, decode_static_seed, encode_static_seed, module_birth_shapes,
     namespace_member_class_key, namespace_member_func_key, namespace_member_var_key,
     resolve_target_triple, short_spread_method_capabilities, take_module_static_seeds,
-    target_os_of, user_function_symbol, AppMetadata, BirthProto, BirthShape, ClassAccessorNames,
-    CompileOptions, ConstFnBirth, ConstructorContracts, CtorAbi, DefinedClassShape, ElisionFacts,
+    target_os_of, user_function_symbol, AppMetadata, BirthProto, BirthShape, CompileOptions,
+    ConstFnBirth, ConstructorContracts, CtorAbi, DefinedClassShape, ElisionFacts,
     ExportedObjectLiteralCapability, FactsBody, FactsClass, FactsField, FactsIndexedOwner,
     FactsNumericExpr, FactsNumericFunction, FactsRecv, FpContractMode, ImportedClass,
     ImportedObjectLiteral, ImportedObjectLiteralMethod, ModuleBirth, NamespaceEntry,

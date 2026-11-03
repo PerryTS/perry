@@ -11,11 +11,6 @@ pub(crate) fn register_static_layouts() {
 /// caller already holds (`js_shape_run_static_seed`).
 #[inline(always)]
 pub(crate) fn register_static_layouts_in(program: &crate::codegen_abi::PerryProgramTableV1) {
-    #[cfg(target_family = "wasm")]
-    assert!(
-        image_layouts().next().is_some(),
-        "Wasm layout constructors did not run"
-    );
     // A lazy image span publishes at its rows' first touch, never here; a
     // program with one takes the walk around it, a program without walks
     // exactly as before.
@@ -34,6 +29,7 @@ pub(crate) fn register_static_layouts_in(program: &crate::codegen_abi::PerryProg
 /// The startup walk of an image with a lazy span. The span is one contiguous
 /// run of the section, so the walk goes around it and no row pays a test.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn register_around_lazy_span(program: &crate::codegen_abi::PerryProgramTableV1) {
     let (start, end) = layout_bounds();
@@ -49,18 +45,6 @@ unsafe fn register_around_lazy_span(program: &crate::codegen_abi::PerryProgramTa
         let after = (lazy_end - start) / size;
         for (index, desc) in records::<PerryLayoutDesc>((lazy_end, end)).enumerate() {
             if !register_static_row(after + index, desc) {
-                return;
-            }
-        }
-    }
-    #[cfg(target_family = "wasm")]
-    {
-        let section = (end.saturating_sub(start)) / size;
-        for (index, item) in inventory::iter::<crate::wasm_image::Layout>
-            .into_iter()
-            .enumerate()
-        {
-            if !register_static_row(section + index, item.0) {
                 return;
             }
         }
@@ -98,14 +82,15 @@ unsafe fn register_static_row(index: usize, desc: *mut PerryLayoutDesc) -> bool 
     }
 }
 
-/// Is `word` a layout of the runtime's own image (the ABI's native rows)?
-/// Generated code never names such a descriptor, so every object carrying
-/// one is born by a runtime funnel ([`layout_word_for_birth`]), which draws
-/// its id and installs its shape at the first birth.
+/// Is `word` a runtime layout's (`runtime_layout!`: the ABI's native rows,
+/// and in perry-runtime's tests the test band)? Generated code never names
+/// such a descriptor, so every object carrying one is born by a runtime
+/// funnel ([`layout_word_for_birth`]), which draws its id and installs its
+/// shape at the first birth.
 #[inline]
 pub(super) fn is_runtime_layout_word(word: u32) -> bool {
     word & crate::codegen_abi::LAYOUT_TAG != 0
-        && LayoutWord(word).row().0 < crate::codegen_abi::NATIVE_LAYOUT_ROWS
+        && LayoutWord(word).row().0 < super::super::runtime_layouts::RUNTIME_LAYOUT_ROWS
 }
 
 /// The registered word of `desc` for a birth in this agent. A runtime
@@ -125,8 +110,9 @@ pub(crate) unsafe fn layout_word_for_birth(desc: *const PerryLayoutDesc) -> Opti
 #[cold]
 #[inline(never)]
 unsafe fn install_runtime_layout(desc: *const PerryLayoutDesc) -> Option<()> {
-    let requested = layout_id_of_index(descriptor_index(desc)?)?;
-    let id = register_bound(desc, requested, &[], None, false);
+    // A runtime layout is its own emitted symbol with no position, so it
+    // requests no id: it draws one at its first install (§2.4a decision 1).
+    let id = register_bound(desc, 0, &[], None, false);
     (id != 0 && super::super::shapes::shape_record_for_word(LayoutWord(id)).is_some()).then_some(())
 }
 
@@ -320,13 +306,16 @@ pub(super) unsafe fn register_bound(
         }
     }
     // Case 2c: a class family's instances have the class's prototype, and
-    // its id is its descriptor record's.
+    // its id is its descriptor record's, unless the descriptor names the
+    // instances' prototype itself: `%Object.prototype%` (3, `exports`) or
+    // null (1, `require.cache`). The shape's identity is the one record of
+    // that link.
     let class_family = d.class_id != 0;
     let proto_id = match d.proto.addr() {
         3 => super::super::shapes::PROTO_ID_DEFAULT,
+        1 => super::super::shapes::PROTO_ID_NULL,
         _ if class_family => super::super::shapes::class_proto_id(d.class_id),
         0 => super::super::shapes::PROTO_ID_DEFAULT,
-        1 => super::super::shapes::PROTO_ID_NULL,
         2 if d.variant == crate::codegen_abi::LAYOUT_VARIANT_FUNCTION_CONSTRUCTOR => {
             match function_proto {
                 Some(id) if id != 0 => id,
@@ -452,12 +441,19 @@ pub(super) unsafe fn register_bound(
     }
     let proposed = if let Some(id) = existing {
         id
+    } else if is_runtime_layout_word(d.layout_id) {
+        super::super::shapes::allocate_declared_layout_id(proto_id).0
     } else if lazy {
         super::super::shapes::allocate_declared_layout_for_kind(proto_id, kind).0
     } else if function {
         super::super::shapes::allocate_declared_layout_id(proto_id).0
     } else if proto_id == super::super::shapes::PROTO_ID_DEFAULT
-        || class_family
+        // A class family keeps its section-ordered identity: a class
+        // identity is implied, which a plain id carries. A family linked to
+        // null (`require.cache`) names the null identity, which only a
+        // null-kind id carries: it takes an allocated one, beside the
+        // null-kind word the codegen gave its descriptor.
+        || (class_family && proto_id != super::super::shapes::PROTO_ID_NULL)
         || d.variant == crate::codegen_abi::LAYOUT_VARIANT_FUNCTION_CONSTRUCTOR
     {
         requested

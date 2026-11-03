@@ -132,9 +132,11 @@ pub(crate) fn has_pending_path_write(path: f64) -> bool {
 /// NaN-boxed `f64` copy held only in a Rust local names from-space the moment
 /// one runs — the same shape as the bare-pointer-across-allocation class the
 /// moving collector made live. The closure itself needs no handle here:
-/// `js_set_timeout_callback` roots it for exactly this reason (see
+/// `schedule_native_timeout` roots it for exactly this reason (see
 /// `schedule_callback_timer`'s own `RuntimeHandleScope`).
-fn park(path: f64, data: f64, options: f64, sink: f64, mode: f64) {
+/// `provider` is node's async_hooks type for the form: FSREQCALLBACK for a
+/// callback, FSREQPROMISE for a promise.
+fn park(path: f64, data: f64, options: f64, sink: f64, mode: f64, provider: &'static str) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let path_handle = scope.root_nanbox_f64(path);
     let data_handle = scope.root_nanbox_f64(data);
@@ -151,7 +153,7 @@ fn park(path: f64, data: f64, options: f64, sink: f64, mode: f64) {
     // A pending callback timer is a live event source, so a program that ends
     // by draining its loop still performs it; `process.exit()` never ticks the
     // timer queues, so an exit in the same tick drops it, as Node does.
-    let _ = crate::timer::js_set_timeout_callback(closure as i64, 0.0);
+    let _ = crate::timer::schedule_native_timeout(closure as i64, 0.0, provider);
     if is_write_mode(mode) {
         track_pending_path_write(path_handle.get_nanbox_f64());
     }
@@ -178,6 +180,7 @@ fn park_promise(path: f64, data: f64, options: f64, mode: f64) -> f64 {
         options_handle.get_nanbox_f64(),
         promise_handle.get_nanbox_f64(),
         mode,
+        "FSREQPROMISE",
     );
     promise_handle.get_nanbox_f64()
 }
@@ -217,6 +220,7 @@ pub(crate) fn defer_append_file_callback(
         options,
         callback_sink_value(callback),
         MODE_APPEND_CALLBACK,
+        "FSREQCALLBACK",
     );
 }
 
@@ -235,6 +239,7 @@ pub(crate) fn defer_write_file_callback(
         options,
         callback_sink_value(callback),
         MODE_WRITE_CALLBACK,
+        "FSREQCALLBACK",
     );
 }
 
@@ -247,6 +252,7 @@ pub(crate) fn defer_unlink_callback(path: f64, callback: *const ClosureHeader) {
         undefined(),
         callback_sink_value(callback),
         MODE_UNLINK_CALLBACK,
+        "FSREQCALLBACK",
     );
 }
 

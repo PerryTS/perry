@@ -64,6 +64,7 @@ pub(super) unsafe fn resolve(
 /// ordinary bind's five-slot allocation and installer, including their frame.
 /// Resolution excludes partial arguments, so slot 2 is always empty.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(super) unsafe fn allocate(
     resolved: Resolved,

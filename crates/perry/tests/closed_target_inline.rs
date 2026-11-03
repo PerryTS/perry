@@ -6,7 +6,7 @@
 //! the facts cannot close, in a program that rewrites the prototype, keeps
 //! its call boundary. Both programs are compared with Node for semantics.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::sync::Once;
 

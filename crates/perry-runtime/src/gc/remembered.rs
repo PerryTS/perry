@@ -115,6 +115,8 @@ pub(super) unsafe fn slot_is_external_to(parent_header: *mut GcHeader, slot: *mu
     slot_addr < start || slot_addr >= start + total_size
 }
 
+// Out of line: inlined, it changes its caller's code (see `repair_promoted_leaf_edges`).
+#[inline(never)]
 pub(super) unsafe fn remember_evacuated_old_copy_young_slots<const DIAGNOSTICS: bool>(
     sticky: &mut StickyRememberedSet,
     header: *mut GcHeader,
@@ -136,7 +138,7 @@ pub(super) unsafe fn remember_evacuated_old_copy_young_slots<const DIAGNOSTICS: 
     if crate::gc::gc_object_yields_no_child_slots(header) {
         return;
     }
-    visit_gc_rewrite_slots::<DIAGNOSTICS>(header, |slot| unsafe {
+    visit_gc_rewrite_slots_shared::<DIAGNOSTICS>(header, |slot| unsafe {
         if crate::weakref::is_weak_target_trace_slot(header, slot.slot)
             && (*header).obj_type != GC_TYPE_WEAK_STORAGE
         {
@@ -230,7 +232,7 @@ fn restore_surviving_dirty_coverage_impl<const DIAGNOSTICS: bool>(
         if DIAGNOSTICS {
             parents_visited += 1;
         }
-        visit_gc_rewrite_slots::<DIAGNOSTICS>(header, |slot| {
+        visit_gc_rewrite_slots_shared::<DIAGNOSTICS>(header, |slot| {
             if DIAGNOSTICS {
                 // Count all enumerated slots, including unproductive weak
                 // targets and primitive values. This measures traversal work.
@@ -367,6 +369,8 @@ pub(super) fn rebuild_evacuated_old_to_young_remembered_set<const DIAGNOSTICS: b
     sticky
 }
 
+// Out of line: inlined, it changes its caller's code (see `repair_promoted_leaf_edges`).
+#[inline(never)]
 unsafe fn remember_retained_old_to_young_slots<const DIAGNOSTICS: bool>(
     sticky: &mut StickyRememberedSet,
     header: *mut GcHeader,
@@ -382,7 +386,7 @@ unsafe fn remember_retained_old_to_young_slots<const DIAGNOSTICS: bool>(
     if !barrier_parent_needs_remembering(user_ptr as usize) {
         return;
     }
-    visit_gc_rewrite_slots::<DIAGNOSTICS>(header, |slot| unsafe {
+    visit_gc_rewrite_slots_shared::<DIAGNOSTICS>(header, |slot| unsafe {
         if crate::weakref::is_weak_target_trace_slot(header, slot.slot)
             && (*header).obj_type != GC_TYPE_WEAK_STORAGE
         {

@@ -44,8 +44,29 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
-          | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc >/dev/null
+        # Fetch the apt.llvm.org signing key with retries. A single transient
+        # network failure here (wget exit 4, ~1 s in, 2026-11-03 runs
+        # 41655442137, 41653535000, 41643020051) failed this step; the cargo
+        # steps guarded by `!cancelled()` then ran anyway with
+        # RUSTC_WRAPPER=sccache but no sccache installed (the install step is
+        # skipped after a failure), burying the real error. Download to a file
+        # first so a partial body is never installed, and fail loudly with a
+        # clear message if every attempt fails.
+        key_file="$(mktemp)"
+        key_ok=0
+        for attempt in 1 2 3; do
+          if curl -fsSL --connect-timeout 20 --max-time 60 \
+               -o "$key_file" https://apt.llvm.org/llvm-snapshot.gpg.key \
+             && [ -s "$key_file" ]; then key_ok=1; break; fi
+          echo "  apt.llvm.org key download attempt $attempt failed; retrying"
+          sleep $(( attempt * 5 ))
+        done
+        if [ "$key_ok" -ne 1 ]; then
+          echo "::error::could not download https://apt.llvm.org/llvm-snapshot.gpg.key after 3 attempts"
+          exit 1
+        fi
+        sudo install -m 0644 "$key_file" /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+        rm -f "$key_file"
         . /etc/os-release
         echo "deb http://apt.llvm.org/${VERSION_CODENAME}/ llvm-toolchain-${VERSION_CODENAME}-22 main" \
           | sudo tee /etc/apt/sources.list.d/llvm22.list >/dev/null

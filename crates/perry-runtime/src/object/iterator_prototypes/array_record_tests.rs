@@ -207,13 +207,17 @@ fn array_record_rejects_other_brands_and_custom_prototype() {
             crate::json_tape::alloc_lazy_array(tape, 0, 1, text)
         })
         .unwrap();
-        assert!((*lazy).materialized.is_null());
+        assert!(crate::json_tape::is_lazy_array(lazy));
+        // No array re-parenting recorded: the lazy array's iteration member is
+        // the intrinsic one, so the counted record admits it unforced.
+        crate::object::prototype_chain::test_swap_array_static_proto_recorded(false);
         assert_eq!(
             crate::array::js_array_record_needs_iterator(js_nanbox_pointer(lazy as i64)),
-            1
+            0,
+            "a lazy array takes the counted record; its read policy materializes"
         );
         assert!(
-            (*lazy).materialized.is_null(),
+            crate::json_tape::is_lazy_array(lazy),
             "eligibility must not materialize another representation"
         );
         let obj = js_nanbox_pointer(js_object_alloc(0, 0) as i64);
@@ -438,6 +442,103 @@ fn array_record_entry_repairs_only_its_private_source() {
         assert_eq!(crate::array::js_array_record_needs_iterator(record), 1);
         assert_eq!(crate::array::js_array_record_enter(42.0, &mut record, 1), 1);
         assert_eq!(record, 42.0);
+    }
+}
+
+unsafe fn stack_entry_source(value: f64, counted: u32) -> (i32, f64) {
+    let absent = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let mut record = crate::array::ArrayStackRecord {
+        payload: value,
+        next: absent,
+        index: 0.0,
+        state: 0.0,
+        protocol: 0.0,
+        value: absent,
+    };
+    let verdict = crate::array::js_array_record_stack_enter(&mut record, 1, counted);
+    (verdict, record.payload)
+}
+
+#[test]
+fn array_record_stack_entry_repairs_multiple_growth_hops() {
+    unsafe {
+        let _stable = crate::gc::GcSuppressScope::new();
+        let (alias, _, _) = fixture();
+        let first = crate::value::js_nanbox_get_pointer(alias) as *mut crate::array::ArrayHeader;
+        let middle = crate::array::js_array_grow(first, 100);
+        let live = crate::array::js_array_grow(middle, 200);
+        assert_ne!(first, middle);
+        assert_ne!(middle, live);
+        for stub in [first, middle] {
+            let header = crate::value::addr_class::try_read_gc_header(stub as usize).unwrap();
+            assert_ne!(header.gc_flags & crate::gc::GC_FLAG_ARENA, 0);
+            assert_ne!(header.gc_flags & crate::gc::GC_FLAG_FORWARDED, 0);
+        }
+        let (verdict, source) = stack_entry_source(alias, 0);
+        assert_eq!(verdict, 0);
+        assert_eq!(crate::value::js_nanbox_get_pointer(source), live as i64);
+        assert_eq!(crate::value::js_nanbox_get_pointer(alias), first as i64);
+        assert_eq!(crate::array::clean_arr_ptr(first), live);
+    }
+}
+
+#[test]
+fn array_record_stack_entry_preserves_sparse_elements() {
+    unsafe {
+        let _stable = crate::gc::GcSuppressScope::new();
+        fixture();
+        let initial = crate::array::js_array_alloc_with_length_exact(1);
+        crate::array::js_array_set_f64(initial, 0, 7.0);
+        let array = crate::array::js_array_set_f64_extend(initial, 5_000_000, 9.0);
+        let header = crate::value::addr_class::try_read_gc_header(array as usize).unwrap();
+        assert_ne!(header.gc_flags & crate::gc::GC_FLAG_ARENA, 0);
+        assert!(
+            (*array).length > (*array).capacity,
+            "must use the sparse resolver"
+        );
+        let value = js_nanbox_pointer(array as i64);
+        let (verdict, source) = stack_entry_source(value, 1);
+        assert_eq!(
+            verdict, 0,
+            "sparse elements cannot take the counted dense path"
+        );
+        assert_eq!(source.to_bits(), value.to_bits());
+        let source =
+            crate::value::js_nanbox_get_pointer(source) as *const crate::array::ArrayHeader;
+        assert_eq!(crate::array::js_array_length(source), 5_000_001);
+        assert_eq!(crate::array::js_array_get_f64(source, 0), 7.0);
+        assert_eq!(crate::array::js_array_get_f64(source, 5_000_000), 9.0);
+        assert_eq!(
+            crate::array::js_array_get_f64(source, 4_999_999).to_bits(),
+            crate::value::TAG_UNDEFINED
+        );
+    }
+}
+
+#[test]
+fn array_record_stack_entry_preserves_tracked_non_arena_arrays() {
+    unsafe {
+        let _stable = crate::gc::GcSuppressScope::new();
+        fixture();
+        // Use an actual tracked malloc allocation, not a fabricated header on
+        // an arena page. Initialize the complete payload before publishing it.
+        let bytes = crate::array::array_byte_size(1);
+        let raw = crate::gc::gc_malloc(bytes, crate::gc::GC_TYPE_ARRAY);
+        std::ptr::write_bytes(raw, 0, bytes);
+        let array = raw as *mut crate::array::ArrayHeader;
+        (*array).length = 1;
+        (*array).capacity = 1;
+        // GC_STORE_AUDIT(INIT): a fresh unpublished slot holds only a number.
+        *crate::array::array_elements_ptr(array) = 42.0f64.to_bits();
+        crate::gc::layout_init_pointer_free(raw);
+        let header = crate::value::addr_class::try_read_gc_header(array as usize).unwrap();
+        assert_eq!(header.gc_flags & crate::gc::GC_FLAG_ARENA, 0);
+        assert_eq!(crate::array::clean_arr_ptr(array), array);
+        let value = js_nanbox_pointer(array as i64);
+        let (verdict, source) = stack_entry_source(value, 0);
+        assert_eq!(verdict, 0);
+        assert_eq!(source.to_bits(), value.to_bits());
+        assert_eq!(crate::array::js_array_get_f64(array, 0), 42.0);
     }
 }
 

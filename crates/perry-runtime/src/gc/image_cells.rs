@@ -39,12 +39,12 @@ crate::perry_thread_local! {
 }
 
 /// Every image path visits a cell's slots through this one out-of-line,
-/// non-generic instance of the layout visitor. The paths are cold (bounded by
-/// the image) and sit inside hot collector functions; a generic visitor
-/// inlined at each of them grew `.text` by about 20 KB.
+/// non-generic entry into the shared rewrite-slot decoder. The paths are cold
+/// (bounded by the image) and sit inside hot collector functions; a generic
+/// visitor inlined at each of them grew `.text` by about 20 KB.
 #[inline(never)]
 unsafe fn visit_cell_slots(header: *mut GcHeader, visit: &mut dyn FnMut(GcMutableSlot)) {
-    visit_gc_rewrite_slots::<{ cfg!(test) }>(header, |slot| visit(slot));
+    visit_gc_rewrite_slots_shared::<{ cfg!(test) }>(header, visit);
 }
 
 /// Is `child_addr` a cell some collector owns, so that an image slot holding
@@ -65,6 +65,7 @@ pub(super) fn image_child_is_collectable(child_addr: usize) -> bool {
 /// address) published `child_addr`. Returns whether the cell is newly
 /// remembered.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(super) fn remember_image_parent(parent_addr: usize, child_addr: usize) -> bool {
     if !image_child_is_collectable(child_addr) {
@@ -329,6 +330,7 @@ pub(super) fn for_each_image_cell(mut visit: impl FnMut(*mut GcHeader)) {
 /// image cell holding a collectable child must be remembered, whatever the
 /// child's generation. A store that bypassed the barrier leaves its cell out.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(super) fn verify_image_cells_remembered(stats: &mut OldYoungEdgeVerifyStats) {
     for_each_image_cell(|header| unsafe {

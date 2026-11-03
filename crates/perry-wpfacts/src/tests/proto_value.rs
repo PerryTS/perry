@@ -206,6 +206,49 @@ fn a_number_key_calls_what_a_store_into_an_intrinsic_wrote() {
     assert!(call_escapes(s, "s[n](d)"));
 }
 
+/// `f` escapes from the callbacks an empty array's elements give, after
+/// the store `w` into ⊤ (tsc's `forEach(nodeFactoryPatchers, fn =>
+/// fn(factory))`, where no patcher is ever added).
+fn element_callee_escapes(w: &str) -> bool {
+    let pf = facts(&format!(
+        "declare const unknown: any;
+        class F {{ y = 2; make() {{ return 1; }} }}
+        const f = new F();
+        const t: any = unknown.reach(0);
+        const n = Math.random() > 0.5 ? 0 : 1;
+        const k = String(Math.random());
+        {w}
+        const fns: any[] = [];
+        function each(a: any[], cb: (x: any) => void) {{
+            for (let i = 0; i < a.length; i++) cb(a[i]);
+        }}
+        each(fns, (fn: any) => fn(f));
+        console.log(f.make());"
+    ));
+    tmpl(&pf, "F").escape.is_some()
+}
+
+#[test]
+fn a_number_key_reads_no_named_key_a_store_into_top_wrote() {
+    // `"elided"` is no ToPropertyKey of a number: `a[i]` of an array reads
+    // nothing it stored on Array.prototype. (Was: any key a store into ⊤
+    // wrote, so `fn` held ⊤ and `f` escaped: tsc's `factory` singleton,
+    // after checker's `msg.elidedInCompatabilityPyramid = originalValue`.)
+    let fun = "(x: any) => ((globalThis as any).sink = x)";
+    assert!(!element_callee_escapes(""));
+    assert!(!element_callee_escapes(&format!("t.elided = {fun};")));
+    // A number key a store into ⊤ may have written: an element store, a
+    // numeric name, a computed key.
+    for w in [
+        format!("t[n] = {fun};"),
+        format!("t[0] = {fun};"),
+        format!("t['1'] = {fun};"),
+        format!("t[k] = {fun};"),
+    ] {
+        assert!(element_callee_escapes(&w), "{w}");
+    }
+}
+
 const PROTO_OF_PARAM: &str = r#"
 export function protoOf(o: any) { return o.__proto__; }
 export function getProto(o: any) { return Object.getPrototypeOf(o); }

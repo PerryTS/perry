@@ -8,7 +8,9 @@
 # callgrind_annotate per function, join by function name.
 #
 # Writes <outdir>/<witness>.tsv (fn, ir_main, ir_head, delta; delta descending) and
-# <outdir>/summary.tsv (witness, total_main, total_head, delta, functions_with_plus_ir).
+# <outdir>/summary.tsv (witness, total_main, total_head, delta, functions_with_plus_ir, then the .text
+# and file bytes of each arm's unpadded link: text_main, text_head, text_delta, bin_main, bin_head,
+# bin_delta). The size columns are reported, not gated.
 # Exit 1 if a witness total is above main, or a function with +Ir is not listed in allow.txt
 # (one function name per line, '#' comments). A matched +/- pair from inlining is explained by
 # listing both names there.
@@ -21,13 +23,14 @@
 # Each perry binary sits next to its runtime libs (PERRY_RUNTIME_DIR = dirname of the resolved
 # binary). Workspace roots: IRDIFF_WS_MAIN / IRDIFF_WS_HEAD (defaults /root/A1S0/main-src and
 # /root/A1S0/src (arms need equal-length roots)). Witness roots: IRDIFF_SCORE (/root/hwp-move/score), IRDIFF_SAMPLES (/root/STU/samples),
-# IRDIFF_NSB (/root/NSB/jsc).
+# IRDIFF_NSB (/root/NSB/jsc), IRDIFF_LAD (/root/WSM/src: the lad-01/04/07 ladder programs).
 set -u
 full=0; pos=()
 for a in "$@"; do [ "$a" = --full ] && full=1 || pos+=("$a"); done
 MAIN=$(readlink -f "${pos[0]:?perry-main}"); HEAD=$(readlink -f "${pos[1]:?perry-head}"); OUT=${pos[2]:?outdir}
 ALLOW=${pos[3]:-/dev/null}
 SC=${IRDIFF_SCORE:-/root/hwp-move/score}; SAMPLES=${IRDIFF_SAMPLES:-/root/STU/samples}; NSB=${IRDIFF_NSB:-/root/NSB/jsc}
+LAD=${IRDIFF_LAD:-/root/WSM/src}
 WS_MAIN=${IRDIFF_WS_MAIN:-/root/A1S0/main-src}; WS_HEAD=${IRDIFF_WS_HEAD:-/root/A1S0/src}
 mkdir -p "$OUT/w" "$OUT/cg" "$OUT/tmp" "$OUT/pad"; OUT=$(readlink -f "$OUT")
 # Artifact controls (STARTUP_RULE_2026-10-28.md, addendum), applied to BOTH arms: the fixed-inputs preload
@@ -42,12 +45,15 @@ for f in "$FIXED" "$MAPS_SHIM" "$STR_PLAIN"; do [ -f "$f" ] || { echo "missing m
 PRELOAD="$FIXED:$MAPS_SHIM:$STR_PLAIN"
 # Link-pad control (on unless IRDIFF_LINKPAD=0): rows that follow addresses with equal call counts (mimalloc
 # page map, address-sorted ranges, libc alignment) move when one arm's sections are smaller. linkpad.py pads
-# each arm with unreferenced retained sections linked last (PERRY_EXTRA_LINK_ARGS) until every paddable
-# section ends at the same address in both arms, so later sections, segments and the heap start coincide;
-# the layout proof is $OUT/<witness>.layout.txt and the pads are $OUT/pads.tsv. Nothing executes a pad.
+# each arm with unreferenced retained sections placed by perry right after the compiled objects, before the
+# runtime archive (PERRY_LINK_PAD), until the runtime archive's bytes start at the same address in every
+# padded section, plus an end pad linked last (PERRY_EXTRA_LINK_ARGS) that equalizes section ends and the
+# heap start when the runtime itself differs in size. The layout proof (markers, section ends, segment
+# starts, image end, runtime symbols compared by address) is $OUT/<witness>.layout.txt and the pads are
+# $OUT/pads.tsv. Nothing executes a pad.
 # Self-test of the control (A/A): IRDIFF_HEAD_LINK_ARGS links extra inputs (e.g. a perturbing pad object)
 # into the head arm only; with the same perry on both arms the unpadded run shows the address rows, the
-# padded run must show 0.
+# padded run must show 0. IRDIFF_HEAD_LINK_PAD does the same for inputs placed before the runtime archive.
 LINKPAD=${IRDIFF_LINKPAD:-1}; LINKPAD_PY=$(dirname "$(readlink -f "$0")")/linkpad.py
 # minimal environment of both the compile and the run (same for both arms)
 ENVV=(PATH=/usr/lib/llvm-22/bin:/root/.cargo/bin:/usr/bin:/bin HOME="$HOME" LANG=C LC_ALL=C TZ=UTC LD_PRELOAD="$PRELOAD" PERRY_ALLOW_PERRY_FEATURES=1 TMPDIR="$OUT/tmp" NO_COLOR=1 PKG_BENCH_N=0 PKG_BENCH_WARM=0)
@@ -58,7 +64,10 @@ W=("hello|$SAMPLES|01-hello/main.ts|Perry"
    "commander|$SC/p/pk|commander/parse_argv.ts|"
    "fastify_inject|$SC/p/pk|fastify/inject.ts|"
    "awfy_richards|$SC/p/awfy|harness.js|Richards 1 0"
-   "binary_trees|$NSB|benches/23-binary-trees.ts|")
+   "binary_trees|$NSB|benches/23-binary-trees.ts|"
+   "lad_01_arith|$LAD|lad-01-arith.ts|"
+   "lad_04_classes|$LAD|lad-04-classes.ts|"
+   "lad_07_json|$LAD|lad-07-json.ts|")
 if [ $full = 1 ]; then
   W+=("tsc_tssrc|$SC/p/tssrc/work|tssrc.ts|3"
       "claude_code_newest|${IRDIFF_CLAUDE:-/root/secret-tests/claude-code-newest}|${IRDIFF_CLAUDE_SRC:-unbun-out/main.js}|--version"
@@ -66,20 +75,26 @@ if [ $full = 1 ]; then
       "nextjs_hello|${IRDIFF_NEXT:-/root/secret-tests/nextjs-hello}|${IRDIFF_NEXT_SRC:-main.ts}|")
 fi
 
-compile() { # arm perry ws name dir src [pad-object]  -> $OUT/w/$n.$arm
-  local arm=$1 perry=$2 ws=$3 n=$4 d=$5 s=$6 pad=${7:--} extra=() link=""
+compile() { # arm perry ws name dir src [mid-pad,end-pad]  -> $OUT/w/$n.$arm
+  local arm=$1 perry=$2 ws=$3 n=$4 d=$5 s=$6 pad=${7:--,-} extra=() link="" mid=${7%%,*} end=${7##*,}
+  [ -d "$OUT/tmp/cache.$arm" ] && mv "$OUT/tmp/cache.$arm" "$OUT/tmp/cache"
   [ "$arm" = head ] && link=${IRDIFF_HEAD_LINK_ARGS:-}
-  [ "$pad" != - ] && link="$link $pad"
+  [ "$end" != - ] && link="$link $end"
   [ -n "${link// }" ] && extra=(PERRY_EXTRA_LINK_ARGS="${link# }")
+  [ "$mid" = - ] && mid=""
+  [ "$arm" = head ] && mid="${IRDIFF_HEAD_LINK_PAD:-} $mid"  # a perturbation stands for compiled code: before the marker
+  mid=${mid# }; [ -n "${mid// }" ] && extra+=(PERRY_LINK_PAD="${mid% }")
   ( cd "$d" && env -i "${ENVV[@]}" "${extra[@]}" PERRY_RUNTIME_DIR=$(dirname "$perry") PERRY_WORKSPACE_ROOT=$ws PERRY_TARGET_CPU=x86-64-v3 PERRY_KEEP_SYMBOLS=1 \
       "$perry" compile --cache-dir "$OUT/tmp/cache" "$s" -o "$OUT/w/$n" > "$OUT/cg/$n.$arm.compile.log" 2>&1 )
-  local rc=$?; rm -rf "$OUT/tmp/cache"; [ $rc = 0 ] && mv "$OUT/w/$n" "$OUT/w/$n.$arm"; return $rc
+  # The cache path is part of generated symbol names, so both arms compile through the same path. The link-pad
+  # rounds relink the same objects: park the arm's object cache under its own name between compiles.
+  local rc=$?; if [ "$LINKPAD" = 1 ] && [ $rc = 0 ]; then mv "$OUT/tmp/cache" "$OUT/tmp/cache.$arm"; else rm -rf "$OUT/tmp/cache"; fi; [ $rc = 0 ] && mv "$OUT/w/$n" "$OUT/w/$n.$arm"; return $rc
 }
 # pads both arms of witness $n to the same layout (see LINKPAD); exit 1 if it does not converge
 linkpad() { # name dir src
   local n=$1 d=$2 s=$3 r res pm=- ph=- cm=- ch=-
   rm -f "$OUT/pad/$n.json"
-  for r in 1 2 3 4 5; do
+  for r in $(seq 1 30); do
     res=$(python3 "$LINKPAD_PY" plan "$OUT/w/$n.main" "$OUT/w/$n.head" "$OUT/pad/$n.json" "$OUT/pad") || return 1
     [ "$res" = CONVERGED ] && break
     pm=$(sed 's/.*main=\([^ ]*\).*/\1/' <<< "$res"); ph=$(sed 's/.*head=\([^ ]*\).*/\1/' <<< "$res")
@@ -87,7 +102,8 @@ linkpad() { # name dir src
     [ "$ph" != "$ch" ] && { compile head "$HEAD" "$WS_HEAD" "$n" "$d" "$s" "$ph" || return 1; ch=$ph; }
   done
   printf "%s\t%s\t%s\t%s\t%s\n" "$n" "$res" "$(basename "$cm")" "$(basename "$ch")" "$(tr -d ' \n' < "$OUT/pad/$n.json")" >> "$OUT/pads.tsv"
-  python3 "$LINKPAD_PY" check "$OUT/w/$n.main" "$OUT/w/$n.head" > "$OUT/$n.layout.txt"
+  rm -rf "$OUT/tmp/cache.main" "$OUT/tmp/cache.head"
+  python3 "$LINKPAD_PY" check "$OUT/w/$n.main" "$OUT/w/$n.head" "$(dirname "$MAIN")/libperry_runtime.a" > "$OUT/$n.layout.txt"
 }
 # per-function Ir of one callgrind run: fn<TAB>ir
 fn_ir() { # outfile
@@ -122,19 +138,24 @@ measure() { # arm name dir args  (runs $OUT/w/$n.$arm from the one path $OUT/w/$
   echo "${totals[0]}"
 }
 
-printf "witness\ttotal_main\ttotal_head\tdelta\tfns_plus\n" > "$OUT/summary.tsv"; fail=0
+# .text bytes and file bytes of a linked binary: "<text> <file>"
+sizes() { echo "$(readelf -SW "$1" | awk '$2==".text" { print strtonum("0x" $6) }') $(stat -c %s "$1")"; }
+printf "witness\ttotal_main\ttotal_head\tdelta\tfns_plus\ttext_main\ttext_head\ttext_delta\tbin_main\tbin_head\tbin_delta\n" > "$OUT/summary.tsv"; fail=0
 for spec in "${W[@]}"; do
   IFS='|' read -r n d s a <<< "$spec"
   if [ -n "${IRDIFF_ONLY:-}" ] && [[ " $IRDIFF_ONLY " != *" $n "* ]]; then continue; fi
-  if [ ! -f "$d/$s" ]; then echo "MISSING $n: no harness at $d/$s" | tee -a "$OUT/missing.txt"; printf "%s\tMISSING\tMISSING\t-\t-\n" "$n" >> "$OUT/summary.tsv"; continue; fi
-  compile main "$MAIN" "$WS_MAIN" "$n" "$d" "$s" || { echo "COMPILE-FAIL $n main"; fail=1; continue; }
-  compile head "$HEAD" "$WS_HEAD" "$n" "$d" "$s" || { echo "COMPILE-FAIL $n head"; fail=1; continue; }
+  if [ ! -f "$d/$s" ]; then echo "MISSING $n: no harness at $d/$s" | tee -a "$OUT/missing.txt"; printf "%s\tMISSING\tMISSING\t-\t-\t-\t-\t-\t-\t-\t-\n" "$n" >> "$OUT/summary.tsv"; continue; fi
+  zero=-,-; [ "$LINKPAD" = 1 ] && zero=$(python3 "$LINKPAD_PY" zero "$OUT/pad"),-
+  compile main "$MAIN" "$WS_MAIN" "$n" "$d" "$s" "$zero" || { echo "COMPILE-FAIL $n main"; fail=1; continue; }
+  compile head "$HEAD" "$WS_HEAD" "$n" "$d" "$s" "$zero" || { echo "COMPILE-FAIL $n head"; fail=1; continue; }
+  # sizes of the unpadded links, before linkpad adds any pad
+  read -r xm bm <<< "$(sizes "$OUT/w/$n.main")"; read -r xh bh <<< "$(sizes "$OUT/w/$n.head")"
   if [ "$LINKPAD" = 1 ]; then
-    linkpad "$n" "$d" "$s" || { echo "LINKPAD-FAIL $n: layouts differ (see $OUT/$n.layout.txt, $OUT/pads.tsv)"; fail=1; continue; }
+    linkpad "$n" "$d" "$s" || { rm -rf "$OUT/tmp/cache.main" "$OUT/tmp/cache.head"; echo "LINKPAD-FAIL $n: layouts differ (see $OUT/$n.layout.txt, $OUT/pads.tsv)"; fail=1; continue; }
   fi
   tm=$(measure main "$n" "$d" "$a") || { fail=1; continue; }
   th=$(measure head "$n" "$d" "$a") || { fail=1; continue; }
-  rm -f "$OUT/w/$n" "$OUT/w/$n.main" "$OUT/w/$n.head"
+  [ -n "${IRDIFF_KEEP:-}" ] || rm -f "$OUT/w/$n" "$OUT/w/$n.main" "$OUT/w/$n.head"  # IRDIFF_KEEP=1 keeps the linked arms
   awk -F'\t' 'NR==FNR { m[$1]=$2; next } { h[$1]=$2 } END { for (f in m) u[f]; for (f in h) u[f]; for (f in u) printf "%s\t%d\t%d\t%d\n", f, m[f]+0, h[f]+0, h[f]-m[f] }' \
     "$OUT/cg/$n.main.fn" "$OUT/cg/$n.head.fn" | awk -F'\t' '$4!=0' | sort -t$'\t' -k4,4nr > "$OUT/$n.tsv"
   grep -v '^#' "$ALLOW" 2>/dev/null | sed '/^$/d' | sort -u > "$OUT/tmp/allow.$n"
@@ -143,7 +164,7 @@ for spec in "${W[@]}"; do
   # a +row is checked unless it is allowed or unstable; FILENAME (not NR==FNR) so an empty list does not pass vacuously
   bad=$(awk -F'\t' 'FILENAME==ARGV[1] || FILENAME==ARGV[2] { ok[$0]; next } $4>0 && !($1 in ok)' "$OUT/tmp/allow.$n" "$OUT/tmp/unst.$n" "$OUT/$n.tsv" | wc -l)
   for a in main head; do awk -F'\t' -v w="$n" -v a="$a" '{ printf "unstable\t%s\t%s\t%s\tspread=%d\n", w, a, $1, $4 }' "$OUT/cg/$n.$a.unstable" >> "$OUT/unstable.tsv"; done
-  printf "%s\t%s\t%s\t%d\t%d\n" "$n" "$tm" "$th" $((th-tm)) "$plus" >> "$OUT/summary.tsv"
+  printf "%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n" "$n" "$tm" "$th" $((th-tm)) "$plus" "$xm" "$xh" $((xh-xm)) "$bm" "$bh" $((bh-bm)) >> "$OUT/summary.tsv"
   [ "$th" -gt "$tm" ] && { echo "TOTAL ABOVE MAIN: $n (+$((th-tm)))"; fail=1; }
   [ "$bad" -gt 0 ] && { echo "UNEXPLAINED +Ir in $n: $bad functions (see $OUT/$n.tsv)"; fail=1; }
 done

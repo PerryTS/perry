@@ -58,6 +58,9 @@ import * as realm_native_56 from "node:trace_events";
 // Reflection oracle for the compiled realm. The descriptor walk never invokes
 // accessors; the explicit pristine intrinsic seeds below use known builtins.
 // An ES module keeps the dumper's own declarations off the global object.
+// The names file is read through named imports: they call into fs without
+// running the namespace's init, which births every export of node:fs.
+import { existsSync, readFileSync } from "node:fs";
 export {};
 
 const symbolValues: any[] = [];
@@ -118,37 +121,57 @@ function descriptor(d: any, path: string): any {
 }
 // Root keys are sorted before traversal, so aliases/cycles have canonical paths.
 // The runner restricts the *result* to R; every arm executes this same program.
+// R-restricted mode (scripts/realm_diff_gate.py): the dumper is compiled with a
+// partial realm, so it must not touch a root outside R. A `realm-dump.names`
+// file (one name per line) in the working directory limits the global keys,
+// intrinsics and native modules it walks from to those names; everything else
+// is reached only through their descriptors and prototypes. Without the file
+// every root is walked. A namespace import is a root too: its module's init
+// runs at startup and births every export, so the gate compiles the restricted
+// dumper with the imports of modules outside R bound to undefined instead.
+const restrictedNames: string[] | null = existsSync("realm-dump.names")
+    ? readFileSync("realm-dump.names", "utf8").split("\n")
+    : null;
+function inR(name: string): boolean {
+    return restrictedNames === null || restrictedNames.indexOf(name) >= 0;
+}
 const root: any = globalThis;
 ref(root, "$global");
 // These realm objects are reached through syntax/operations, rather than an
 // own property of globalThis. The instances used to find them are not dumped.
+// Each is computed only when walked, so a restricted dumper never births one
+// outside R.
 const intrinsicRoots: any[] = [];
-function intrinsic(name: string, value: any): void {
-    intrinsicRoots.push({ name: name, value: ref(value, "$intrinsic[" + JSON.stringify(name) + "]") });
+function intrinsic(name: string, value: () => any): void {
+    if (!inR(name)) return;
+    intrinsicRoots.push({ name: name, value: ref(value(), "$intrinsic[" + JSON.stringify(name) + "]") });
 }
-const arrayIteratorPrototype = Object.getPrototypeOf([][Symbol.iterator]());
+const arrayIteratorPrototype = () => Object.getPrototypeOf([][Symbol.iterator]());
 intrinsic("%ArrayIteratorPrototype%", arrayIteratorPrototype);
-intrinsic("%IteratorPrototype%", Object.getPrototypeOf(arrayIteratorPrototype));
-intrinsic("%StringIteratorPrototype%", Object.getPrototypeOf("x"[Symbol.iterator]()));
-intrinsic("%MapIteratorPrototype%", Object.getPrototypeOf(new Map()[Symbol.iterator]()));
-intrinsic("%SetIteratorPrototype%", Object.getPrototypeOf(new Set()[Symbol.iterator]()));
-intrinsic("%TypedArray%", Object.getPrototypeOf(Uint8Array));
-intrinsic("%TypedArray%.prototype", Object.getPrototypeOf(Uint8Array.prototype));
-const generator = function* () { yield 1; };
-intrinsic("%GeneratorFunctionPrototype%", Object.getPrototypeOf(generator));
-intrinsic("%GeneratorPrototype%", Object.getPrototypeOf(generator.prototype));
-const asyncGenerator = async function* () { yield 1; };
-intrinsic("%AsyncGeneratorFunctionPrototype%", Object.getPrototypeOf(asyncGenerator));
-const asyncGeneratorPrototype = Object.getPrototypeOf(asyncGenerator.prototype);
+intrinsic("%IteratorPrototype%", () => Object.getPrototypeOf(arrayIteratorPrototype()));
+intrinsic("%StringIteratorPrototype%", () => Object.getPrototypeOf("x"[Symbol.iterator]()));
+intrinsic("%MapIteratorPrototype%", () => Object.getPrototypeOf(new Map()[Symbol.iterator]()));
+intrinsic("%SetIteratorPrototype%", () => Object.getPrototypeOf(new Set()[Symbol.iterator]()));
+intrinsic("%TypedArray%", () => Object.getPrototypeOf(Uint8Array));
+intrinsic("%TypedArray%.prototype", () => Object.getPrototypeOf(Uint8Array.prototype));
+const generator = () => function* () { yield 1; };
+intrinsic("%GeneratorFunctionPrototype%", () => Object.getPrototypeOf(generator()));
+intrinsic("%GeneratorPrototype%", () => Object.getPrototypeOf(generator().prototype));
+const asyncGenerator = () => async function* () { yield 1; };
+intrinsic("%AsyncGeneratorFunctionPrototype%", () => Object.getPrototypeOf(asyncGenerator()));
+const asyncGeneratorPrototype = () => Object.getPrototypeOf(asyncGenerator().prototype);
 intrinsic("%AsyncGeneratorPrototype%", asyncGeneratorPrototype);
-intrinsic("%AsyncIteratorPrototype%", Object.getPrototypeOf(asyncGeneratorPrototype));
-intrinsic("%AsyncFunctionPrototype%", Object.getPrototypeOf(async function () { return 1; }));
+intrinsic("%AsyncIteratorPrototype%", () => Object.getPrototypeOf(asyncGeneratorPrototype()));
+intrinsic("%AsyncFunctionPrototype%", () => Object.getPrototypeOf(async function () { return 1; }));
 // The runtime's Buffer species getter captures an intrinsic constructor which
 // need not be the later public native-callable Buffer export. Include that
 // identity rather than silently omitting an image-to-image capture edge.
-const bufferSpecies = Object.getOwnPropertyDescriptor(Buffer, Symbol.species);
-if (bufferSpecies && bufferSpecies.get) intrinsic("%BufferSpeciesConstructor%", bufferSpecies.get.call(Buffer));
-// Static native imports are realm roots too. Keep literal specifiers so each
+if (inR("%BufferSpeciesConstructor%")) {
+    const bufferSpecies = Object.getOwnPropertyDescriptor(Buffer, Symbol.species);
+    if (bufferSpecies && bufferSpecies.get) intrinsic("%BufferSpeciesConstructor%", () => bufferSpecies.get.call(Buffer));
+}
+// Static native imports are realm roots too, keyed by the name R records for
+// the import (import_name in realm_diff_gate.py). Keep literal specifiers so each
 // module's existing installer is linked by the qualified reference compiler.
 const nativeRoots: any[] = [
     ["node:assert", realm_native_0],
@@ -209,7 +232,7 @@ const nativeRoots: any[] = [
     ["node:test/reporters", realm_native_55],
     ["node:trace_events", realm_native_56],
 ];
-for (let i = 0; i < nativeRoots.length; i++) intrinsic(nativeRoots[i][0], nativeRoots[i][1]);
+for (let i = 0; i < nativeRoots.length; i++) intrinsic(nativeRoots[i][0], () => nativeRoots[i][1]);
 for (let cursor = 0; cursor < seen.length; cursor++) {
     const value = seen[cursor];
     const path = paths[cursor];
@@ -221,6 +244,7 @@ for (let cursor = 0; cursor < seen.length; cursor++) {
     const properties: any[] = [];
     for (let i = 0; i < names.length; i++) {
         const name = names[i];
+        if (cursor === 0 && !inR(name)) continue;
         const d = Object.getOwnPropertyDescriptor(value, name);
         if (d) {
             const result = descriptor(d, path + "[" + JSON.stringify(name) + "]");

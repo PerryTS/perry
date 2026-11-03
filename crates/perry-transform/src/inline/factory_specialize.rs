@@ -910,13 +910,13 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                 let cap_param_ids: HashSet<LocalId> = ctor
                     .params
                     .iter()
-                    .filter(|p| p.name.starts_with("__perry_cap_"))
+                    .filter(|p| perry_hir::cap_fields::is_cap_field_name(&p.name))
                     .map(|p| p.id)
                     .collect();
                 let cap_field_names: HashSet<String> = ctor
                     .params
                     .iter()
-                    .filter(|p| p.name.starts_with("__perry_cap_"))
+                    .filter(|p| perry_hir::cap_fields::is_cap_field_name(&p.name))
                     .map(|p| p.name.clone())
                     .collect();
                 // Drop the capture ctor params.

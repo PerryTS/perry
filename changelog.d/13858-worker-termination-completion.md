@@ -1,0 +1,1 @@
+Fix `Worker.terminate()` completion: concurrent calls now return distinct promises that all resolve with the worker's exit code, and calls after exit resolve to `undefined`. Keep every pending completion in the existing owner-scoped GC roots and settle it after the exit event.

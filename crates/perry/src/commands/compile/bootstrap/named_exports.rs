@@ -1,10 +1,11 @@
+use super::super::cjs_wrap::{is_commonjs, module_exports_is_opaque};
 use super::CompilationContext;
 use anyhow::{bail, Result};
 use perry_hir::walker::walk_expr_children;
 use perry_hir::{
     Class, Decorator, Export, Expr, Function, ImportSpecifier, Module, ModuleKind, Stmt,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -87,10 +88,9 @@ fn is_typescript_importer(path: &Path) -> bool {
 /// * only importers outside `node_modules`, and never CJS-wrapped
 ///   `require()`s: packages routinely `require` optional peers inside a
 ///   `try` (`debug` → `supports-color`), which must stay non-fatal;
-/// * only bindings the module CALLS directly (see [`called_import_names`]) —
-///   exactly the shape that used to die in the linker. A property read or a
-///   `new` on an unresolved binding still warns and continues as before (it
-///   links, and throws where it is reached), and a type-only use of an
+/// * only bindings the module CALLS or CONSTRUCTS directly (see
+///   [`called_or_constructed_import_names`]). A property read on an unresolved
+///   binding still warns and continues, and a type-only use of an
 ///   uninstalled `@types`-style import still compiles.
 fn enforce_resolved_bare_imports(ctx: &CompilationContext) -> Result<()> {
     let mut missing = Vec::new();
@@ -101,7 +101,7 @@ fn enforce_resolved_bare_imports(ctx: &CompilationContext) -> Result<()> {
         {
             continue;
         }
-        let mut called: Option<HashSet<String>> = None;
+        let mut referenced: Option<HashSet<String>> = None;
         for import in &module.imports {
             if import.resolved_path.is_some()
                 || import.is_native
@@ -121,8 +121,8 @@ fn enforce_resolved_bare_imports(ctx: &CompilationContext) -> Result<()> {
                     // Namespace imports already hard-error at collection (#629).
                     ImportSpecifier::Namespace { .. } => continue,
                 };
-                if called
-                    .get_or_insert_with(|| called_import_names(module))
+                if referenced
+                    .get_or_insert_with(|| called_or_constructed_import_names(module))
                     .contains(local)
                 {
                     missing.push((importer.clone(), import.source.clone(), local.clone()));
@@ -204,6 +204,68 @@ fn package_name(source: &str) -> &str {
 /// available, instead of inventing a perry_fn symbol that fails in the linker.
 pub(super) fn enforce(ctx: &mut CompilationContext) -> Result<()> {
     enforce_resolved_bare_imports(ctx)?;
+    for (importer, source, target, name, local) in static_named_edges(ctx) {
+        if availability(ctx, Path::new(&target), &name, &mut HashSet::new()) == Availability::Absent
+        {
+            // Ambient native-library declarations have no executable HIR export.
+            // The later import router binds manifest symbols (including ergonomic
+            // aliases), rejects ambiguous aliases, and prefers real TS wrappers.
+            // Let that router validate only names actually backed by this import's
+            // manifest; unrelated missing exports must still fail here.
+            let manifest_backed = ctx.native_libraries.iter().any(|library| {
+                library.module == source
+                    && library.functions.iter().any(|function| {
+                        function.name == name
+                            || super::super::resolve::ergonomic_export_alias(
+                                &library.module,
+                                &function.name,
+                            )
+                            .as_deref()
+                                == Some(name.as_str())
+                    })
+            });
+            if manifest_backed {
+                continue;
+            }
+            bail!(
+                "The requested module '{}' does not provide an export named '{}' \
+                 (imported as '{}' in {}). Resolved module: {}. \
+                 For CommonJS properties not exposed as named exports, use a default import and read the property from it.",
+                source, name, local, importer.display(), target
+            );
+        }
+    }
+    Ok(())
+}
+
+/// The program-wide names importers ask of a CommonJS module whose
+/// `module.exports` value its source does not spell out, and that the
+/// module does not otherwise export (see
+/// `CompilationContext::cjs_demanded_exports`). Grows the current set.
+pub(super) fn opaque_cjs_demand(
+    ctx: &mut CompilationContext,
+) -> BTreeMap<PathBuf, BTreeSet<String>> {
+    let mut demand = ctx.cjs_demanded_exports.clone();
+    let mut opaque: HashMap<PathBuf, bool> = HashMap::new();
+    for (_, _, target, name, _) in static_named_edges(ctx) {
+        let target = PathBuf::from(target);
+        if availability(ctx, &target, &name, &mut HashSet::new()) != Availability::Absent {
+            continue;
+        }
+        let is_opaque = *opaque.entry(target.clone()).or_insert_with(|| {
+            std::fs::read_to_string(&target)
+                .is_ok_and(|source| is_commonjs(&source) && module_exports_is_opaque(&source))
+        });
+        if is_opaque {
+            demand.entry(target).or_default().insert(name);
+        }
+    }
+    demand
+}
+
+/// Every value-bearing static named import between compiled modules, sorted:
+/// `(importer, specifier, resolved target, imported name, local name)`.
+fn static_named_edges(ctx: &CompilationContext) -> Vec<(PathBuf, String, String, String, String)> {
     let mut edges = Vec::new();
     let mut value_refs: HashMap<PathBuf, HashSet<String>> = HashMap::new();
     for (importer, module) in &ctx.native_modules {
@@ -242,38 +304,7 @@ pub(super) fn enforce(ctx: &mut CompilationContext) -> Result<()> {
         }
     }
     edges.sort();
-    for (importer, source, target, name, local) in edges {
-        if availability(ctx, Path::new(&target), &name, &mut HashSet::new()) == Availability::Absent
-        {
-            // Ambient native-library declarations have no executable HIR export.
-            // The later import router binds manifest symbols (including ergonomic
-            // aliases), rejects ambiguous aliases, and prefers real TS wrappers.
-            // Let that router validate only names actually backed by this import's
-            // manifest; unrelated missing exports must still fail here.
-            let manifest_backed = ctx.native_libraries.iter().any(|library| {
-                library.module == source
-                    && library.functions.iter().any(|function| {
-                        function.name == name
-                            || super::super::resolve::ergonomic_export_alias(
-                                &library.module,
-                                &function.name,
-                            )
-                            .as_deref()
-                                == Some(name.as_str())
-                    })
-            });
-            if manifest_backed {
-                continue;
-            }
-            bail!(
-                "The requested module '{}' does not provide an export named '{}' \
-                 (imported as '{}' in {}). Resolved module: {}. \
-                 For CommonJS properties not exposed as named exports, use a default import and read the property from it.",
-                source, name, local, importer.display(), target
-            );
-        }
-    }
-    Ok(())
+    edges
 }
 
 /// Names that `module`'s executable code reads as runtime bindings: imported
@@ -286,17 +317,25 @@ pub(super) fn value_reference_names(module: &Module) -> HashSet<String> {
     collect_refs(module).values
 }
 
-/// Imported bindings `module` CALLS directly (`nanoid()`, `uuidv4()`): the
-/// shape that codegen lowers to a call of an extern symbol named after the
-/// local binding, so an unresolved one fails in the linker (#11576).
-fn called_import_names(module: &Module) -> HashSet<String> {
-    collect_refs(module).called
+/// Imported bindings `module` CALLS (`nanoid()`, `uuidv4()`) or CONSTRUCTS
+/// (`new Simple()`) directly. A call lowers to an extern symbol named after the
+/// local binding, so an unresolved one fails in the linker (#11576). A `new`
+/// links instead: it builds a plain object whose every member reads `undefined`.
+/// A name the module also declares as a class is dropped, because `Expr::New`
+/// carries the name alone and a `new` on a local class shadowing the import
+/// reaches the same shape.
+fn called_or_constructed_import_names(module: &Module) -> HashSet<String> {
+    let mut names = collect_refs(module).called_or_constructed;
+    for class in &module.classes {
+        names.remove(&class.name);
+    }
+    names
 }
 
 #[derive(Default)]
 struct Refs {
     values: HashSet<String>,
-    called: HashSet<String>,
+    called_or_constructed: HashSet<String>,
 }
 
 impl Refs {
@@ -374,16 +413,18 @@ fn visit_function(function: &Function, out: &mut Refs) {
 fn visit_expr(expr: &Expr, out: &mut Refs) {
     if let Expr::Call { callee, .. } = expr {
         if let Expr::ExternFuncRef { name, .. } = callee.as_ref() {
-            out.called.insert(name.clone());
+            out.called_or_constructed.insert(name.clone());
         }
     }
     match expr {
         Expr::ExternFuncRef { name, .. } | Expr::ClassRef(name) => {
             out.insert(name.clone());
         }
-        Expr::New { class_name, .. }
-        | Expr::JsNew { class_name, .. }
-        | Expr::StaticFieldGet { class_name, .. }
+        Expr::New { class_name, .. } | Expr::JsNew { class_name, .. } => {
+            out.insert(class_name.clone());
+            out.called_or_constructed.insert(class_name.clone());
+        }
+        Expr::StaticFieldGet { class_name, .. }
         | Expr::StaticFieldSet { class_name, .. }
         | Expr::StaticMethodCall { class_name, .. } => {
             out.insert(class_name.clone());

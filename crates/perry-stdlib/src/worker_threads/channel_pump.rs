@@ -27,6 +27,7 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
         handler_cb: Option<u64>,
         global_handler: Option<u64>,
         msg: SerializedValue,
+        async_ids: Option<perry_runtime::async_hook_slots::AsyncResourceIds>,
     }
 
     loop {
@@ -74,6 +75,7 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
                         handler_cb,
                         global_handler,
                         msg,
+                        async_ids: state.async_ids,
                     }
                 })
             });
@@ -83,6 +85,11 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
         }
         match next {
             Some(dispatch) => {
+                // The listeners run inside the port's MESSAGEPORT resource.
+                let async_ids = dispatch.async_ids;
+                if let Some(ids) = async_ids {
+                    perry_runtime::async_hook_slots::enter_resource_scope(ids);
+                }
                 let scope = perry_runtime::gc::RuntimeHandleScope::new();
                 let target = scope.root_nanbox_f64(f64::from_bits(dispatch.target_bits));
                 let raw_cbs = dispatch
@@ -162,6 +169,9 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
                         global.get_nanbox_f64().to_bits(),
                         event.get_nanbox_f64(),
                     );
+                }
+                if let Some(ids) = async_ids {
+                    perry_runtime::async_hook_slots::leave_resource_scope(ids.async_id);
                 }
                 dispatched += 1;
             }
@@ -264,6 +274,9 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
         for state in ports.borrow_mut().values_mut() {
             if state.close_pending {
                 state.close_pending = false;
+                if let Some(ids) = state.async_ids.take() {
+                    perry_runtime::async_hook_slots::destroy(ids.async_id);
+                }
                 let raw_cbs = state.close_cbs.clone();
                 state.close_cbs.retain(|listener| !listener.once);
                 let event_cbs = state.close_event_cbs.clone();

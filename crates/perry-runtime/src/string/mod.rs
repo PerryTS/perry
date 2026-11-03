@@ -1166,6 +1166,7 @@ pub(crate) fn string_copy_range(
 
 /// Only block exhaustion needs the source handle and post-allocation reload.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn string_copy_range_collecting(
     s: *const StringHeader,

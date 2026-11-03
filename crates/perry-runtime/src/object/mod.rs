@@ -139,6 +139,7 @@ pub(crate) mod field_get_set;
 pub(crate) mod overflow;
 pub(crate) use field_get_set::scan_accessor_receiver_override_root_mut;
 mod field_set_by_name;
+pub(crate) mod function_own_put;
 mod gc_slots;
 pub(crate) use gc_slots::{
     gc_field_slot_range, gc_shape_keys_edge_slot, gc_shape_prototype_edge_slot,
@@ -236,12 +237,12 @@ pub(crate) use native_module_registry::js_nm_enable_install_all;
 pub(crate) use native_module_registry::nm_attach_lookup;
 pub(crate) use native_module_registry::nm_ctor_lookup;
 // Re-exported for submodule installers that delegate to a native module.
-#[cfg(test)]
-pub(crate) use native_module_registry::js_nm_install_fs;
 pub(crate) use native_module_registry::{
-    js_install_global_value_surfaces, js_nm_install_events, js_nm_install_module,
-    js_nm_install_perf, js_nm_install_readline, js_nm_install_tls, js_nm_install_util,
+    js_install_global_value_surfaces, js_nm_install_module, js_nm_install_perf, js_nm_install_tls,
+    js_nm_install_util,
 };
+#[cfg(test)]
+pub(crate) use native_module_registry::{js_nm_install_events, js_nm_install_fs};
 mod literal_constructor;
 mod native_module_stream;
 pub(crate) mod native_this_alias;
@@ -1813,6 +1814,25 @@ unsafe fn set_object_keys_with_live(
     live_inline_slot_count: u32,
 ) {
     set_object_keys_with_live_rep(obj, keys, live_inline_slot_count, field_rep::REP_ANY);
+}
+
+/// [`set_object_keys_with_live`] for an unstamped null-prototype newborn: its
+/// first shape names `PROTO_ID_NULL` (`shapes::publish_object_shape_from_rep_born`).
+#[cfg_attr(feature = "shape-mint-diag", track_caller)]
+pub(crate) unsafe fn set_object_keys_with_live_born_null(
+    obj: *mut ObjectHeader,
+    keys: ObjectKeys,
+    live_inline_slot_count: u32,
+) {
+    debug_assert!(shapes::object_shape_descriptor(obj).is_none());
+    shapes::publish_object_shape_from_rep_born(
+        obj,
+        None,
+        keys,
+        live_inline_slot_count,
+        field_rep::REP_ANY,
+        Some(shapes::PROTO_ID_NULL),
+    );
 }
 
 /// `set_object_keys_with_live` publishing the successor with field

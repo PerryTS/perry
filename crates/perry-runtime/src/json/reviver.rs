@@ -307,13 +307,11 @@ fn parse_json_source_tree(input: &[u8]) -> Option<JsonSourceNode> {
     JsonSourceParser::new(input).parse()
 }
 
-/// Force-materialize a lazy-tape array (`PERRY_JSON_TAPE`) into a real
-/// `ArrayHeader` tree and return a JSValue pointing at it. The reviver walk
-/// below reads `length`/`capacity`/element f64s directly off the pointer — a
-/// `LazyArrayHeader` has a different layout, so without this the walk reads
-/// garbage and SIGSEGVs. Unlike `redirect_lazy_to_materialized` (stringify),
-/// this forces materialization even when nothing has indexed the array yet.
-/// No-op for non-lazy values. Refs #1424.
+/// Force-materialize a lazy-tape array (`PERRY_JSON_TAPE`) before the
+/// reviver walk, which reads `length`/`capacity`/element f64s directly off
+/// the pointer: materialization fills every element slot and turns the
+/// value into the ordinary array in place, so the returned JSValue is the
+/// same object. No-op for non-lazy values. Refs #1424.
 unsafe fn force_materialize_if_lazy(value: JSValue) -> JSValue {
     let bits = value.bits();
     if (bits >> 48) != 0x7FFD {

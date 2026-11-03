@@ -1,0 +1,1 @@
+wpfacts: a function whose result is a closure over its own frame (a memoize or once wrapper, a factory returning methods) now runs once per call site, so each call site's closure and captured state is proven separately.

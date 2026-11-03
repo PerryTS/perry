@@ -20,6 +20,7 @@
 use std::sync::Once;
 
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
 const PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 
 extern "C" {
@@ -161,6 +162,16 @@ fn is_incoming_message_property(name: &str) -> bool {
             | "socket"
             | "connection"
             | "req"
+            | "read"
+            | "pause"
+            | "resume"
+            | "destroy"
+            | "removeListener"
+            | "off"
+            | "readable"
+            | "readableEnded"
+            | "closed"
+            | "destroyed"
     )
 }
 
@@ -182,11 +193,21 @@ unsafe fn claim(out: *mut f64, value: f64) -> i32 {
 }
 
 /// Mirrors perry-stdlib's `dispatch_client_incoming_method` plus the
-/// `pause`/`resume` arm (Node's `Readable.pause()/resume()` return `this`).
+/// Readable surface (`read`, `pause`, `resume`, `destroy`, `removeListener`).
 unsafe fn incoming_message_method(handle: i64, name: &str, args: &[f64]) -> Option<f64> {
     if !matches!(
         name,
-        "setEncoding" | "on" | "once" | "addListener" | "pipe" | "pause" | "resume"
+        "setEncoding"
+            | "on"
+            | "once"
+            | "addListener"
+            | "pipe"
+            | "pause"
+            | "resume"
+            | "read"
+            | "destroy"
+            | "removeListener"
+            | "off"
     ) || crate::client_surface::js_http_is_incoming_message(handle) == 0
     {
         return None;
@@ -197,7 +218,31 @@ unsafe fn incoming_message_method(handle: i64, name: &str, args: &[f64]) -> Opti
     // has no header behind its bits (#11519). The natives copy it out.
     let arg_ptr = |n: usize| perry_ffi::string_arg_ptr(args[n]);
     Some(match name {
-        "pause" | "resume" => self_ref,
+        "pause" => crate::client_incoming_read::pause(handle),
+        "resume" => crate::client_incoming_read::resume(handle),
+        "read" => crate::client_incoming_read::read(
+            handle,
+            args.first()
+                .copied()
+                .filter(|size| size.is_finite() && *size >= 0.0)
+                .map(|size| size as usize),
+        ),
+        "destroy" => crate::client_incoming_read::destroy(
+            handle,
+            args.first()
+                .copied()
+                .filter(|error| !matches!(error.to_bits(), TAG_UNDEFINED | TAG_NULL)),
+        ),
+        "removeListener" | "off" if args.len() >= 2 => {
+            let event = perry_ffi::JsValue::from_bits(args[0].to_bits())
+                .to_owned_string()
+                .unwrap_or_default();
+            crate::client_incoming_read::remove_listener(
+                handle,
+                &event,
+                (args[1].to_bits() & PTR_MASK) as i64,
+            )
+        }
         "setEncoding" if !args.is_empty() => {
             crate::client_surface::js_http_incoming_message_set_encoding(handle, arg_ptr(0));
             self_ref
@@ -285,9 +330,12 @@ unsafe extern "C" fn http_client_property_dispatch_ext(
     }
     use crate::client_surface as im;
     let v = match name {
-        "setEncoding" => {
+        "setEncoding" | "read" | "pause" | "resume" | "destroy" | "removeListener" | "off" => {
             // Same bound-method value perry-stdlib's arm produces.
             js_class_method_bind(handle as f64, name.as_ptr(), name.len())
+        }
+        "readable" | "readableEnded" | "closed" | "destroyed" => {
+            crate::client_incoming_read::state_property(handle, name)
         }
         "statusCode" => im::js_http_status_code(handle),
         "statusMessage" => {

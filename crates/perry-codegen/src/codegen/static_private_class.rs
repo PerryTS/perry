@@ -37,35 +37,7 @@ use std::collections::HashMap;
 /// whose private elements carry `class_id` (`private_instance_value_name` of
 /// the class template's evaluation).
 pub(crate) fn private_storage_key(class_id: u32, name: &str) -> String {
-    format!("#<perry:private-value:{class_id}:{name}>")
-}
-
-/// The chain of `class`, root first, when every link is a local ordinary
-/// class.
-fn local_chain<'c>(
-    class: &'c Class,
-    classes: &HashMap<String, &'c Class>,
-) -> Option<Vec<&'c Class>> {
-    let mut chain = vec![class];
-    let mut current = class;
-    while let Some(parent) = current.extends_name.as_deref() {
-        let parent = classes.get(parent).copied()?;
-        if chain.len() > 32 || chain.iter().any(|c| std::ptr::eq(*c, parent)) {
-            return None;
-        }
-        chain.push(parent);
-        current = parent;
-    }
-    if chain.iter().any(|c| {
-        c.is_imported_stub()
-            || c.native_extends.is_some()
-            || c.extends_expr.is_some()
-            || c.heritage_lexically_shadowed
-    }) {
-        return None;
-    }
-    chain.reverse();
-    Some(chain)
+    perry_hir::private_names::private_value_key(class_id, name)
 }
 
 fn is_number_literal(e: &Expr) -> bool {
@@ -92,23 +64,8 @@ pub(crate) fn private_final(
     if !birth.constfn.is_empty() || !birth.private.is_empty() || birth.typed.is_some() {
         return None;
     }
-    let chain = local_chain(class, classes)?;
-    if !chain.iter().any(|c| c.has_private_instance_elements()) {
-        return None;
-    }
-    // A computed key is claimed at construction in source order, and a
-    // nested or widened class is allocated outside the birth layout.
-    if chain.iter().any(|c| {
-        c.fields.iter().any(|f| f.key_expr.is_some()) || c.is_nested || c.alloc_width_hint != 0
-    }) {
-        return None;
-    }
-    if crate::lower_call::new_alloc::constructor_added_key_count_in(class, &|name| {
-        classes.get(name).copied()
-    }) > 0
-    {
-        return None;
-    }
+    let chain =
+        perry_hir::private_names::claimed_private_chain(class, &|name| classes.get(name).copied())?;
     let mut private = Vec::new();
     let mut brands = Vec::new();
     let mut rep = birth.rep;

@@ -26,7 +26,7 @@ extern "C" fn webcrypto_digest_settle(
         perry_runtime::closure::js_closure_set_capture_ptr(cl, 0, promise_bits as i64);
         perry_runtime::closure::js_closure_set_capture_ptr(cl, 1, value_bits as i64);
         perry_runtime::closure::closure_set_capture_word(cl, 2, remaining - 1);
-        perry_runtime::timer::js_set_immediate_callback(cl as i64);
+        perry_runtime::timer::schedule_native_immediate(cl as i64, &[], "Immediate");
         return f64::from_bits(JSValue::undefined().bits());
     }
     let promise = perry_runtime::value::js_nanbox_get_pointer(f64::from_bits(promise_bits))

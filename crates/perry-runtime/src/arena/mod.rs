@@ -13,6 +13,7 @@ mod block;
 pub(crate) use block::discard_dead_payload_pages;
 mod construction;
 mod from_space;
+#[cfg(test)]
 pub(crate) fn young_in_use_bytes() -> usize {
     from_space::copying_from_space_in_use_bytes() + young_large::young_large_in_use_bytes()
 }
@@ -133,8 +134,9 @@ pub use allocators::{
 };
 pub(crate) use allocators::{
     arena_alloc_gc_collecting_holder, arena_alloc_gc_large_young_no_collect,
-    arena_alloc_gc_no_collect, arena_alloc_gc_object_word, arena_alloc_gc_old_born_tenured,
-    arena_alloc_gc_old_excluding_pages, arena_alloc_gc_promoted, arena_alloc_gc_survivor,
+    arena_alloc_gc_no_collect, arena_alloc_gc_object_word_offering,
+    arena_alloc_gc_old_born_tenured, arena_alloc_gc_old_excluding_pages, arena_alloc_gc_promoted,
+    arena_alloc_gc_survivor,
 };
 
 // walk.rs

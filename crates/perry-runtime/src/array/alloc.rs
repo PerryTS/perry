@@ -175,13 +175,13 @@ pub(crate) fn js_array_alloc_named_props_reserved(
         let (named, array) = array.across_mut::<ArrayHeader, _>(|| {
             crate::object::layout_desc::perry_alloc_layout(match set {
                 crate::array::NamedPropertyKeys::ExecResult => {
-                    std::ptr::addr_of!(crate::object::runtime_layouts::REGEX_EXEC_NAMED)
+                    crate::object::runtime_layouts::REGEX_EXEC_NAMED::desc()
                 }
                 crate::array::NamedPropertyKeys::ExecResultIndices => {
-                    std::ptr::addr_of!(crate::object::runtime_layouts::REGEX_EXEC_INDICES_NAMED)
+                    crate::object::runtime_layouts::REGEX_EXEC_INDICES_NAMED::desc()
                 }
                 crate::array::NamedPropertyKeys::IndicesGroups => {
-                    std::ptr::addr_of!(crate::object::runtime_layouts::REGEX_INDICES_GROUPS_NAMED)
+                    crate::object::runtime_layouts::REGEX_INDICES_GROUPS_NAMED::desc()
                 }
             })
         });

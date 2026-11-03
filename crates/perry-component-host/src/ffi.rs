@@ -431,8 +431,9 @@ pub unsafe extern "C" fn perry_component_host_dispose(
                     drop(unsafe { (&mut *bridge.pending.get()).take() });
                     if let Some(driver) = &bridge.driver {
                         let before = bridge.async_replies.failure_serial();
-                        driver.dispose();
+                        let result = driver.dispose();
                         disposed = true;
+                        result?;
                         ensure!(
                             before == bridge.async_replies.failure_serial(),
                             "component driver disposal callback failed"
@@ -565,7 +566,9 @@ pub unsafe extern "C" fn perry_component_host_drop(handle: *mut c_void) {
         bridge.cleanup_context.store(0, Ordering::Release);
         drop((&mut *bridge.pending.get()).take());
         if let Some(driver) = &bridge.driver {
-            driver.dispose();
+            // Teardown: a disposal error has no caller to report to, and
+            // `abandon` releases the engine memory regardless.
+            let _ = driver.dispose();
         }
         (&mut *bridge.host.get()).abandon();
         drop(bridge);

@@ -324,11 +324,11 @@ pub(super) fn emit_fused_admission(
 }
 
 fn reserve_alias_scope(ctx: &mut FnCtx<'_>, data_slot: &str) -> u32 {
-    let scope_idx = ctx.buffer_alias_base + ctx.buffer_data_slots.len() as u32;
-    // Loop-local views are removed before the generic clone is lowered, but
-    // module metadata is emitted from the final map length. Retain a synthetic
-    // unreachable key so scope ids stay unique and every metadata reference is
-    // declared. Real HIR LocalIds cannot collide because we probe all maps.
+    let scope_idx = ctx.buffer_alias_scopes.allocate();
+    // Loop-local views are removed before the generic clone is lowered. The
+    // scope id itself comes from the module counter (never reused); retain a
+    // synthetic unreachable key so the data slot stays registered. Real HIR
+    // LocalIds cannot collide because we probe all maps.
     let mut reservation = u32::MAX;
     while ctx.locals.contains_key(&reservation)
         || ctx.module_globals.contains_key(&reservation)

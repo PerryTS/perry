@@ -1,6 +1,5 @@
 {
   "per_file": {
-    "crates/perry-ext-better-sqlite3/src/lib.rs": 11,
     "crates/perry-ext-cheerio/src/lib.rs": 7,
     "crates/perry-ext-http/src/agent.rs": 2,
     "crates/perry-ext-http/src/client_request_surface.rs": 2,
@@ -42,5 +41,5 @@
     "crates/perry-stdlib/src/worker_threads/worker_surface.rs": 6
   },
   "schema_version": 3,
-  "total": 261
+  "total": 250
 }

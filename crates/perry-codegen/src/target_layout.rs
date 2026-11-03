@@ -746,6 +746,35 @@ mod dense_layout_tests {
 
 #[cfg(all(test, feature = "llvm-inprocess"))]
 #[test]
+fn emitted_key_type_has_exact_llvm_target_layout() {
+    use inkwell::{context::Context, targets::TargetData};
+    for (layout, size, off) in [
+        (
+            "e-p:64:64-i64:64",
+            perry_abi::LAYOUT_KEY_SIZE_LP64,
+            perry_abi::LAYOUT_KEY_OFF_OFFSET_LP64,
+        ),
+        (
+            "e-p:32:32-i64:64",
+            perry_abi::LAYOUT_KEY_SIZE_ILP32,
+            perry_abi::LAYOUT_KEY_OFF_OFFSET_ILP32,
+        ),
+    ] {
+        let context = Context::create();
+        let ir = format!(
+            "%Key = type {}\n@key = global %Key zeroinitializer\n",
+            crate::layout_desc::KEY_TY
+        );
+        let module = crate::inprocess::parse_ir_text(&context, &ir, "key_offsets").unwrap();
+        let ty = module.get_struct_type("Key").unwrap();
+        let data = TargetData::create(layout);
+        assert_eq!(data.get_abi_size(&ty), size as u64);
+        assert_eq!(data.offset_of_element(&ty, 4), Some(off as u64));
+    }
+}
+
+#[cfg(all(test, feature = "llvm-inprocess"))]
+#[test]
 fn emitted_descriptor_type_has_exact_llvm_target_layout() {
     use inkwell::{context::Context, targets::TargetData};
     for (layout, size, identity) in [("e-p:64:64-i64:64", 128, 72), ("e-p:32:32-i64:64", 112, 56)] {

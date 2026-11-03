@@ -105,6 +105,13 @@ impl PayloadPrototype {
         crate::object::install_proto_method(self.proto, name, info, arity);
     }
 
+    /// Install a builtin method with `.length` 0 that is enumerable, as node
+    /// installs the `node:sqlite` prototype methods.
+    pub fn method_enumerable(&mut self, name: &str, info: *const crate::closure::JsFunctionInfo) {
+        let value = crate::object::install_proto_method(self.proto, name, info, 0);
+        self.data(name, value, true, true, true);
+    }
+
     /// Install a non-enumerable, configurable builtin getter.
     pub fn getter(&mut self, name: &str, info: *const crate::closure::JsFunctionInfo) {
         let closure = crate::closure::js_closure_alloc(info, 0);
@@ -326,12 +333,31 @@ fn family_prototype(family: &NativePayloadFamily) -> *mut ObjectHeader {
     // export carries `prototype` before any instance exists); adopt the one
     // it published instead of building a second.
     let constructor = match family.constructor_export {
-        Some((module, export)) => crate::object::bound_native_callable_export_value(module, export),
+        Some((module, export)) => {
+            crate::object::native_module::constructor_shapes::native_constructor_value(
+                module, export,
+            )
+        }
         None => anonymous_constructor(family.name, family.constructor_length),
     };
     let existing = PAYLOAD_PROTOTYPES.with(|slots| slots[index].load(Ordering::Acquire));
     if existing != 0 {
         return existing as *mut ObjectHeader;
+    }
+    // A constructor whose shape already carries its prototype (linked into
+    // node's chain when the export was created) keeps it: that object is the
+    // family prototype, and replacing it would orphan the chain and every
+    // reference already taken to `C.prototype`.
+    if family.constructor_export.is_some()
+        && crate::value::JSValue::from_bits(constructor.to_bits()).is_pointer()
+    {
+        let own = crate::closure::closure_get_dynamic_prop(
+            crate::value::js_nanbox_get_pointer(constructor) as usize,
+            "prototype",
+        );
+        if let Some(proto) = any_object(own) {
+            return adopt_prototype(family, proto);
+        }
     }
     let proto = crate::object::js_object_alloc(0, 0);
     if proto.is_null() {
@@ -665,6 +691,7 @@ pub(crate) unsafe fn born_instance(
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn mint_birth_record(
     class_id: u32,
@@ -1498,6 +1525,7 @@ pub unsafe fn call_from_link(link: OwnerLink, callee: f64, args: &[f64]) -> Resu
 /// The owner's first callback: create its pending slot (see
 /// [`ensure_pending_slot`]), then call.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn first_call_from_link(link: OwnerLink, callee: f64, args: &[f64]) -> Result<f64, ()> {
     let cell = link.0 as *mut NativeHandleHeader;

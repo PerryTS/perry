@@ -183,6 +183,7 @@ pub(crate) unsafe fn cell_dfa_regrow<'a>(
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn regrow_cell<'a>(cell: *mut ProgramCell, words: usize) -> Option<&'a mut [u32]> {
     unsafe {

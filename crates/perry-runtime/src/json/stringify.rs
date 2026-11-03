@@ -1079,7 +1079,7 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
     // indices or move the array. Raw slot reads (including template probing)
     // cannot preserve those effects. Keep this walk outside the dense path.
     if crate::array::array_iteration_is_exotic_resolved(arr)
-        || crate::object::prototype_chain::object_static_prototype(arr as usize).is_some()
+        || crate::object::prototype_chain::object_static_prototype_is_linked(arr as usize)
     {
         stringify_exotic_array(arr, len, buf, depth);
         STRINGIFY_STACK.with(|s| s.borrow_mut().pop());

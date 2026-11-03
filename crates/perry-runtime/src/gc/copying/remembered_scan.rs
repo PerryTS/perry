@@ -133,6 +133,7 @@ pub(in crate::gc) fn scan_remembered_dirty_slots_copying<const DIAGNOSTICS: bool
 /// retire, and moving it invalidates a raw address nothing will rewrite. Abort
 /// loudly at the faulting site instead of corrupting the heap silently.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(in crate::gc) unsafe fn pinned_young_move_under_skipped_preflight(header: *mut GcHeader) -> ! {
     // #7990: the report is built in `gc/pin.rs` from the header's own flags,

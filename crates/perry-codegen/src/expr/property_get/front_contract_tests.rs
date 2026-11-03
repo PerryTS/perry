@@ -1,4 +1,4 @@
-//! The generic read's shape probe (`perry_probe_get_memo`) takes the agent's shape
+//! The generic read's shape probe (`perry_probe_get`) takes the agent's shape
 //! directory, whose lookup is target-specific (extra blocks on Apple aarch64,
 //! a TEB-derived chain on Windows). Follow the CFG and the call operand
 //! rather than assuming a single block or ELF.
@@ -28,7 +28,7 @@ fn verify_front_flow(blocks: &Blocks) -> Result<usize, String> {
         .enumerate()
         .filter(|(_, (_, body))| {
             body.iter()
-                .any(|line| line.contains("call double @perry_probe_get_memo("))
+                .any(|line| line.contains("call double @perry_probe_get("))
         })
         .collect();
     let [(index, (call_label, call_body))] = calls.as_slice() else {
@@ -99,7 +99,7 @@ fn verify_front_flow(blocks: &Blocks) -> Result<usize, String> {
     let (cond, served, declined) = tower_cond_br(call_body);
     let call = call_body
         .iter()
-        .find(|line| line.contains("call double @perry_probe_get_memo("))
+        .find(|line| line.contains("call double @perry_probe_get("))
         .unwrap();
     let answer = call.split_once(" = ").unwrap().0;
     let bits = call_body
@@ -140,39 +140,49 @@ fn verify_front_flow(blocks: &Blocks) -> Result<usize, String> {
     Ok(*index)
 }
 
-/// The four-argument leaf and collecting exit share the site's integer storage.
-pub(super) fn verify_front_site_memo(blocks: &Blocks) -> Result<String, String> {
+/// The four-argument leaf takes the key's atom hash as its last operand and
+/// no pointer but the directory; the collecting exit is the memo-free
+/// `js_object_get_field_value` (boxed receiver, key, feedback id). No named
+/// read site owns shape/slot storage. Returns the hash operand.
+pub(super) fn verify_front_site_hash(blocks: &Blocks) -> Result<String, String> {
     let index = verify_front_flow(blocks)?;
     let call = blocks[index]
         .1
         .iter()
-        .find(|line| line.contains("call double @perry_probe_get_memo("))
+        .find(|line| line.contains("call double @perry_probe_get("))
         .unwrap();
-    if !call.contains("_read_shape_slots") || call.matches(", ptr ").count() != 1 {
-        return Err("the four-argument front must receive one memo and no hash".into());
-    }
-    let slow: Vec<_> = blocks
-        .iter()
-        .flat_map(|(_, body)| body)
-        .filter(|line| line.contains("@js_object_get_field_value_site("))
-        .collect();
-    if slow.len() != 1 {
-        return Err(format!("one collecting memo exit required: {slow:?}"));
-    }
-    let memo = slow[0]
-        .rsplit_once(", ptr ")
-        .and_then(|(_, tail)| tail.split_once(')'))
-        .map(|(memo, _)| memo)
-        .ok_or("the collecting exit must receive its site storage")?;
-    if !memo.starts_with("@perry_ic_") || !memo.ends_with("_read_shape_slots") {
+    if call.matches("ptr ").count() != 1 || call.matches(", i64 ").count() != 3 {
         return Err(format!(
-            "the memo must be this site's shape/slot storage: {memo}"
+            "the four-argument front takes the directory, receiver, key and hash: {call}"
         ));
     }
-    if !call.contains(&format!(", ptr {memo})")) {
-        return Err("the front and collecting exit must share their memo".into());
+    let hash = call
+        .rsplit_once(", i64 ")
+        .and_then(|(_, tail)| tail.split_once(')'))
+        .map(|(hash, _)| hash)
+        .ok_or("the front's last operand")?;
+    if hash.parse::<i64>().is_err() {
+        return Err(format!(
+            "the front's last operand must be the key's hash: {hash}"
+        ));
     }
-    Ok(memo.to_string())
+    let all = || blocks.iter().flat_map(|(_, body)| body);
+    if all().any(|line| line.contains("_read_shape_slots")) {
+        return Err("a named read site must own no shape/slot storage".into());
+    }
+    let slow: Vec<_> = all()
+        .filter(|line| line.contains("@js_object_get_field_value("))
+        .collect();
+    if slow.len() != 1 {
+        return Err(format!("one collecting exit required: {slow:?}"));
+    }
+    if slow[0].contains("ptr ") || slow[0].matches(", i64 ").count() != 2 {
+        return Err(format!(
+            "the collecting exit takes receiver, key and feedback id only: {}",
+            slow[0]
+        ));
+    }
+    Ok(hash.to_string())
 }
 
 pub(super) fn front_call_block(blocks: &Blocks) -> (&str, &[String]) {
@@ -199,7 +209,7 @@ pub(super) fn verify_front_directory(blocks: &Blocks) -> Result<(), String> {
     let call = blocks[index]
         .1
         .iter()
-        .find(|line| line.contains("call double @perry_probe_get_memo("))
+        .find(|line| line.contains("call double @perry_probe_get("))
         .unwrap();
     let dir = call
         .split_once("(ptr ")
@@ -352,19 +362,44 @@ fn front_contract_rejects_lookup_bypasses_wrong_slots_and_wrong_declines() {
         let blocks = tower_blocks(&ir);
         let index = verify_front_flow(&blocks).unwrap();
         verify_front_directory(&blocks).unwrap();
-        let memo = verify_front_site_memo(&blocks).unwrap();
-        let mut wrong_memo = blocks.clone();
-        for (_, body) in &mut wrong_memo {
+        let hash = verify_front_site_hash(&blocks).unwrap();
+        assert_eq!(
+            hash,
+            (crate::layout_desc::atom_hash("foo") as i64).to_string()
+        );
+        // Negative controls: a per-site memo pointer on either call fails.
+        let mut memo_front = blocks.clone();
+        for line in &mut memo_front[index].1 {
+            if line.contains("call double @perry_probe_get(") {
+                *line = line.replace(
+                    &format!(", i64 {hash})"),
+                    ", ptr @perry_ic_0_read_shape_slots)",
+                );
+            }
+        }
+        assert_ne!(
+            memo_front, blocks,
+            "{target}: front memo sabotage must alter IR"
+        );
+        assert!(
+            verify_front_site_hash(&memo_front).is_err(),
+            "{target}: memo-taking front"
+        );
+        let mut memo_slow = blocks.clone();
+        for (_, body) in &mut memo_slow {
             for line in body {
-                if line.contains("@js_object_get_field_value_site(") {
-                    *line = line.replace(&format!(", ptr {memo})"), ", ptr null)");
+                if line.contains("@js_object_get_field_value(") {
+                    *line = line.replacen(")", ", ptr @perry_ic_0_read_shape_slots)", 1);
                 }
             }
         }
-        assert_ne!(wrong_memo, blocks, "{target}: memo sabotage must alter IR");
+        assert_ne!(
+            memo_slow, blocks,
+            "{target}: slow memo sabotage must alter IR"
+        );
         assert!(
-            verify_front_site_memo(&wrong_memo).is_err(),
-            "{target}: disconnected slow memo"
+            verify_front_site_hash(&memo_slow).is_err(),
+            "{target}: memo-taking collecting exit"
         );
         let mut wrong = blocks.clone();
         let cond = tower_cond_br(&wrong[index].1).0;
@@ -391,7 +426,7 @@ fn front_contract_rejects_lookup_bypasses_wrong_slots_and_wrong_declines() {
         let call = wrong[index]
             .1
             .iter_mut()
-            .find(|l| l.contains("call double @perry_probe_get_memo("))
+            .find(|l| l.contains("call double @perry_probe_get("))
             .unwrap();
         let operand = call
             .split_once("(ptr ")

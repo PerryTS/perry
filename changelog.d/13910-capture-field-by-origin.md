@@ -1,0 +1,1 @@
+A user property spelled like a compiler capture field (`__perry_cap_user`, `__perry_cap_7`) is an ordinary property: only the compiler\x27s own `__perry_cap_<id>m<12 hex>` fields are capture storage, so such keys now survive in class instances, enumeration and JSON.

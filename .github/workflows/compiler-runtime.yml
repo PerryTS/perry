@@ -1044,7 +1044,7 @@ jobs:
           args+=(--suite "${SUITE:-}")
           python3 scripts/actions_plan.py "${args[@]}"
   node-compat-matrix__node-compat-matrix:
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 120
     steps:
       - name: Checkout repository (inline git)
@@ -1966,7 +1966,7 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - macos-14
+          - macos-15
           - ubuntu-24.04
     runs-on: ${{ matrix.os }}
     steps:
@@ -2052,7 +2052,7 @@ jobs:
       pull-requests: read
   container-tests__integration-macos-apple:
     name: container-tests / layer c — integration (macos / apple/container)
-    runs-on: macos-14
+    runs-on: macos-15
     if: ${{ needs.route-integration.result == 'success' && fromJSON(needs.route-integration.outputs.plan)['container-tests'] && ((github.event_name != 'pull_request' || github.base_ref == 'main') && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))) }}
     steps:
       - name: Checkout repository (inline git)
@@ -2380,7 +2380,7 @@ jobs:
           print(f'{len(ids)} suite jobs completed or were intentionally skipped')
           PY
   simctl-tests__simctl:
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 60
     steps:
       - name: Checkout repository (inline git)
@@ -2761,7 +2761,7 @@ jobs:
           args+=(--suite "${SUITE:-}")
           python3 scripts/actions_plan.py "${args[@]}"
   benchmark__performance:
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 100
     outputs:
       status: ${{ steps.compare.outputs.status }}
@@ -2902,7 +2902,7 @@ jobs:
           print()
           print(f"- Baseline commit: `{base.get('commit','?')}`")
           print(f"- Current commit:  `{cur.get('commit','?')}`")
-          print(f"- Runner: macos-14 / median of 5 runs")
+          print(f"- Runner: macos-15 / median of 5 runs")
           for runtime, metadata in cur.get("runtimes", {}).items():
               availability = metadata.get("version") if metadata.get("available") else "unavailable"
               command = " ".join(metadata.get("command", []))
@@ -3001,7 +3001,7 @@ jobs:
       contents: write
     name: benchmark / performance
   benchmark__binary-size:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - name: Checkout repository (inline git)
         shell: bash
@@ -3124,7 +3124,7 @@ jobs:
       contents: write
     name: benchmark / binary-size
   benchmark__compile-time:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - name: Checkout repository (inline git)
         shell: bash
@@ -3203,7 +3203,7 @@ jobs:
     name: benchmark / compile-time
   benchmark__update-baseline:
     if: ${{ needs.route-performance.result == 'success' && fromJSON(needs.route-performance.outputs.plan)['benchmark'] && (github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AUTO_UPDATE_BASELINE == 'true') }}
-    runs-on: macos-14
+    runs-on: macos-15
     needs:
       - route-performance
       - benchmark__performance
@@ -3515,7 +3515,7 @@ jobs:
     name: tls-budget / self-test-checkers
   tls-budget__tls-budget:
     if: ${{ needs.route-performance.result == 'success' && fromJSON(needs.route-performance.outputs.plan)['tls-budget'] && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')) }}
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 90
     permissions:
       contents: read

@@ -23,6 +23,7 @@ pub(crate) use abrupt::{
 };
 pub(crate) use async_step::build_async_step_driver_direct;
 pub(crate) use call_this::generator_body_uses_call_this;
+pub(crate) use private_brand::restore_in_class_closures;
 pub(crate) use resume::{wrap_async_gen_step_body, wrap_generator_resume_body};
 pub(crate) use yield_await::await_async_generator_yield_operands;
 

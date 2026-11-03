@@ -401,13 +401,8 @@ pub extern "C" fn js_array_length(arr: *const ArrayHeader) -> u32 {
             if (*gc_header).obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
                 let lazy = raw_ptr as *const crate::json_tape::LazyArrayHeader;
                 if (*lazy).magic == crate::json_tape::LAZY_ARRAY_MAGIC {
-                    // If we've already materialized (e.g. an indexed
-                    // access forced it), read the authoritative length
-                    // from the materialized tree.
-                    if !(*lazy).materialized.is_null() {
-                        let array = crate::json_hooks::resolve_materialized_array(lazy.cast_mut());
-                        return if array.is_null() { 0 } else { (*array).length };
-                    }
+                    // Still lazy: a materialized lazy array is an ordinary
+                    // Array at the same address and never reaches here.
                     return (*lazy).cached_length;
                 }
             }

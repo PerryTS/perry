@@ -648,8 +648,8 @@ fn record_expr_use(e: &Expr, depth: u32, scan: &mut ModuleScan) {
         // `new Int32Array(src)` consumes `src` by COPY (non-view: the arg is
         // not an ArrayBuffer when the binding proof later demands it), so the
         // ctor-arg position cannot change `src`'s length afterwards. Length
-        // reads are also safe.
-        Expr::TypedArrayNew { arg: Some(arg), .. } => {
+        // reads are also safe. `new Uint8Array(src)` copies the same way.
+        Expr::TypedArrayNew { arg: Some(arg), .. } | Expr::Uint8ArrayNew(Some(arg)) => {
             if let Expr::LocalGet(id) = arg.as_ref() {
                 if depth > 0 {
                     scan.closure_refs.insert(*id);
@@ -1265,8 +1265,8 @@ pub fn collect_spec_abi_facts(hir: &Module) -> SpecAbiModuleFacts {
     }
 
     // Proven typed-array bindings: single TOP-LEVEL `let`/`const` bound to a
-    // provably-non-view `TypedArrayNew` of a numeric kind, never reassigned,
-    // never referenced by a closure.
+    // provably-non-view `TypedArrayNew` of a numeric kind (or `Uint8ArrayNew`),
+    // never reassigned, never referenced by a closure.
     let mut ta_bindings: HashMap<u32, SpecTaBinding> = HashMap::new();
     // The callee hoists the data pointer and length through the header once,
     // so only a sealed binding may be passed: observing `.buffer` rebinds the
@@ -1274,33 +1274,61 @@ pub fn collect_spec_abi_facts(hir: &Module) -> SpecAbiModuleFacts {
     let exposed = super::sealed_buffers::buffer_exposure(hir).exposed;
     let mut collect_ta = |stmts: &[Stmt]| {
         for s in stmts {
-            if let Stmt::Let {
+            let Stmt::Let {
                 id,
-                init: Some(Expr::TypedArrayNew { kind, arg }),
+                init: Some(init),
                 ..
             } = s
-            {
-                if !spec_ta_kind_is_numeric(*kind)
-                    || exposed.contains(id)
-                    || scan.let_counts.get(id).copied() != Some(1)
-                    || scan.writes.contains(id)
-                    || scan.closure_refs.contains(id)
-                    || scan.boxed_prealloc.contains(id)
-                {
-                    continue;
-                }
-                if let Some(const_len) =
+            else {
+                continue;
+            };
+            let proven = match init {
+                Expr::TypedArrayNew { kind, arg } if spec_ta_kind_is_numeric(*kind) => {
                     judge_ctor_arg(arg.as_deref(), &array_literal_locals, &length_locals)
-                {
-                    ta_bindings.insert(
-                        *id,
-                        SpecTaBinding {
-                            kind: *kind,
-                            const_len,
-                        },
-                    );
+                        .map(|const_len| (*kind, const_len))
                 }
+                // `new Uint8Array(x)` lowers to `Uint8ArrayNew`, not
+                // `TypedArrayNew`, but births the same non-view byte store:
+                // `js_uint8array_alloc` and `typed_array_alloc(UINT8, n)` both
+                // brand it `GC_TYPE_BUFFER_UINT8ARRAY` (`store_alloc`, never a
+                // view). The judge keeps `new Uint8Array(buffer)` boxed: only a
+                // proven length or plain-array source is a copy.
+                Expr::Uint8ArrayNew(arg) => {
+                    judge_ctor_arg(arg.as_deref(), &array_literal_locals, &length_locals)
+                        .map(|const_len| (perry_hir::TYPED_ARRAY_KIND_UINT8, const_len))
+                }
+                // `Buffer.alloc(size)` births a fresh owning byte cell (a
+                // `BufferHeader`: u32 length at +0, inline bytes behind the
+                // header, non-movable) for every size, or throws: it is never a
+                // view, so its byte layout is a `Uint8Array`'s. The length is
+                // constant only for a literal size (directly or through an
+                // immutable local bound once to one). A fill or encoding
+                // argument is left to the boxed path.
+                Expr::BufferAlloc {
+                    size,
+                    fill: None,
+                    encoding: None,
+                } => Some((
+                    perry_hir::TYPED_ARRAY_KIND_UINT8,
+                    typed_array_length_literal(size).or_else(|| match size.as_ref() {
+                        Expr::LocalGet(n) => length_locals.get(n).copied().flatten(),
+                        _ => None,
+                    }),
+                )),
+                _ => None,
+            };
+            let Some((kind, const_len)) = proven else {
+                continue;
+            };
+            if exposed.contains(id)
+                || scan.let_counts.get(id).copied() != Some(1)
+                || scan.writes.contains(id)
+                || scan.closure_refs.contains(id)
+                || scan.boxed_prealloc.contains(id)
+            {
+                continue;
             }
+            ta_bindings.insert(id.to_owned(), SpecTaBinding { kind, const_len });
         }
     };
     collect_ta(&hir.init);

@@ -167,6 +167,9 @@ enum Commands {
     /// Manage Perry's on-disk cache (default `node_modules/.cache/perry`)
     Cache(commands::cache::CacheArgs),
 
+    /// Install, list or remove cross-target libraries (`perry target add android`)
+    Target(commands::target::TargetArgs),
+
     /// Sign-side tooling for `@perry/updater` (closes #229).
     ///
     /// `perry updater keygen` — generate Ed25519 keypair.
@@ -545,6 +548,7 @@ fn main_inner() -> Result<()> {
         Commands::Appstore(args) => commands::appstore::run(args),
         Commands::Types(args) => commands::types::run(args, cli.format, use_color),
         Commands::Cache(args) => commands::cache::run(args, cli.format),
+        Commands::Target(args) => commands::target::run(args),
         #[cfg(feature = "updater-cli")]
         Commands::Updater(args) => commands::updater::run(args),
         #[cfg(feature = "native-cli")]

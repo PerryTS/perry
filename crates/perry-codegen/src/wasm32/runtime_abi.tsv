@@ -1913,7 +1913,6 @@ js_i32_box_get	i32s	ptr
 js_i32_box_release	void	ptr
 js_i32_box_scope_release	void	ptr
 js_i32_box_set	void	ptr,i32s
-js_ic_diag_note_hit	void	i64,i32s
 js_immediate_has_pending	i32s	
 js_import_meta_resolve	f64	f64,f64,f64
 js_import_meta_resolve_value	f64	f64
@@ -2531,6 +2530,7 @@ js_node_http_res_write_head	i64	i64,f64,i64,i64
 js_node_http_res_write_processing	void	i64
 js_node_http_res_write_with_cb	i32s	i64,f64,i64
 js_node_http_response_layout_receiver	i32s	f64
+js_node_http_response_prototype_method	f64	i32s,ptr,usize
 js_node_http_response_state_get	f64	f64
 js_node_http_response_state_set	void	f64,f64
 js_node_http_server_address_json	ptr	i64
@@ -3145,6 +3145,7 @@ js_perry_payload_prototype	f64	ptr,ptr,usize
 js_perry_payload_receiver_link	usize	f64,ptr,ptr
 js_perry_payload_reopen	i32s	f64,ptr,ptr,usize
 js_perry_read_embedded	ptr	f64
+js_perry_schedule_native_timeout	i64	i64,f64
 js_perry_smtp_add_recipient	void	i64,ptr,usize
 js_perry_smtp_available	i32s	
 js_perry_smtp_begin	i64	
@@ -3612,6 +3613,7 @@ js_register_text_id_handler	void	ptr
 js_register_tls_handle_kind_probe	void	ptr
 js_register_widget_hidden_handler	void	ptr
 js_register_worker_threads_environment_data	void	ptr,ptr
+js_register_worker_threads_message_port_dispatch	void	ptr
 js_register_worker_threads_messaging_constructors	void	ptr,ptr
 js_register_worker_threads_namespace_getters	void	ptr,ptr,ptr,ptr,ptr,ptr
 js_register_worker_threads_worker_constructor	void	ptr
@@ -3883,6 +3885,7 @@ js_sqlite_stmt_columns	ptr	i64
 js_sqlite_stmt_get	f64	i64,ptr
 js_sqlite_stmt_raw	i64	i64
 js_sqlite_stmt_run	ptr	i64,ptr
+js_sqlite_stmt_safe_integers	i64	i64,f64
 js_sqlite_transaction	ptr	i64,i64
 js_stack_overflow	void	
 js_state_get	f64	f64
@@ -5342,5 +5345,6 @@ perry_updater_refresh_due	i64
 perry_watchos_classes_registered	void	
 perry_wpfacts_check_call	ptr	f64,i64,i64
 perry_wpfacts_check_call_miss	i32s	ptr,i64
-perry_wpfacts_check_field	i32s	f64,f64,i64,i64,i64,i32s,i32s,i32s,i64
+perry_wpfacts_check_field	i32s	f64,f64,i64,i64,i64,i32s,i32s,i32s,i32s,i64
+perry_wpfacts_check_miss	i32s	f64,i64
 setInterval	i64	i64,f64

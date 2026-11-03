@@ -1,0 +1,1 @@
+Whole-program facts no longer claim a parameter whose every value is a closed object can read an absent key as undefined, and a declared class field assigned on only one constructor path keeps its initial undefined; proven sites rise on a private chess witness (main.ts 573 to 576, tests 739 to 742 per unit) and are unchanged on tssrc.

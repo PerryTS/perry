@@ -1,0 +1,1 @@
+Per-unit wpfacts treat an own definite data key (constructor store, field initializer, literal key) as shadowing the prototype chain on read, so a store through an unknown value under a computed key no longer defeats reads of keys an object always holds itself. delete, defineProperty and escape of the object still revoke the key.

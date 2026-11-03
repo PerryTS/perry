@@ -76,6 +76,8 @@ as a string from one that is merely declared as a string. Bare local truthiness
 always uses `js_is_truthy`, because numeric and boolean annotations can hold
 any NaN-boxed value.
 
+[Program facts](program-facts.md) provide a separate cross-module analysis. Local initializer evidence is not the sole source of specialization proofs.
+
 ## Static inventory and CI gate
 
 `scripts/local_binding_type_audit.py` scans production HIR/codegen sources for

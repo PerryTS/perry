@@ -248,8 +248,7 @@ pub(super) fn new_promise_capability(c: f64) -> Capability {
 }
 
 pub(super) fn is_default_promise_constructor(c: f64) -> bool {
-    let promise_ctor =
-        crate::object::js_get_global_this_builtin_value(b"Promise".as_ptr(), b"Promise".len());
+    let promise_ctor = crate::object::builtin_constructor_value("Promise");
     !is_undef(promise_ctor) && promise_ctor.to_bits() == c.to_bits()
 }
 
@@ -992,7 +991,7 @@ pub fn run_combinator(kind: CombinatorKind, c: f64, iterable: f64) -> f64 {
 /// The intrinsic `Promise` constructor value — `this` for the codegen
 /// direct-call path (`Promise.all([...])`).
 pub(super) fn default_promise_ctor() -> f64 {
-    crate::object::js_get_global_this_builtin_value(b"Promise".as_ptr(), b"Promise".len())
+    crate::object::builtin_constructor_value("Promise")
 }
 
 // NOTE: `this_ctor` is passed through verbatim — `undefined`/`null`/primitive
@@ -1127,7 +1126,7 @@ pub extern "C" fn js_promise_with_resolvers_spec(this_ctor: f64) -> f64 {
     let mut values = [cap.promise, cap.resolve, cap.reject];
     let obj = unsafe {
         crate::object::runtime_layouts::perry_build_runtime_record(
-            std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_F473_0),
+            crate::object::runtime_layouts::RECORD_F473_0::desc(),
             values.as_mut_ptr(),
         )
     };

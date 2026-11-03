@@ -148,8 +148,10 @@ js_sharp_webp	NR_HANDLE_ID	crates/perry-ext-sharp/src/lib.rs	Handle
 js_sqlite_open	NR_HANDLE_ID	crates/perry-ext-better-sqlite3/src/lib.rs	Handle
 js_sqlite_prepare	NR_HANDLE_ID	crates/perry-ext-better-sqlite3/src/lib.rs	Handle
 js_sqlite_stmt_all	NR_GCPTR	crates/perry-ext-better-sqlite3/src/lib.rs	*mut ArrayHeader
+js_sqlite_stmt_columns	NR_GCPTR	crates/perry-ext-better-sqlite3/src/lib.rs	*mut ArrayHeader
 js_sqlite_stmt_raw	NR_HANDLE_ID	crates/perry-ext-better-sqlite3/src/lib.rs	Handle
 js_sqlite_stmt_run	NR_GCPTR	crates/perry-ext-better-sqlite3/src/lib.rs	*mut ObjectHeader
+js_sqlite_stmt_safe_integers	NR_HANDLE_ID	crates/perry-ext-better-sqlite3/src/lib.rs	Handle
 js_tls_create_server	NR_HANDLE_ID	crates/perry-stdlib/src/tls.rs	i64
 js_tls_server_close	NR_HANDLE_ID	crates/perry-stdlib/src/tls.rs	i64
 js_tls_server_listen	NR_HANDLE_ID	crates/perry-stdlib/src/tls.rs	i64

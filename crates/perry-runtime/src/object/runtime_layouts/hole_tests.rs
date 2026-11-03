@@ -100,7 +100,7 @@ runtime_layout!(
     link_section = "perry_layouts"
 )]
 static mut CLASS_HOLEY: PerryLayoutDesc = PerryLayoutDesc {
-    image_keys: crate::object::image_keys::image_key_list!(HOLEY::KEYS),
+    image_keys: std::ptr::null_mut(),
     shape_id: 0,
     gc_plan: 0,
     family: 0x41574203,
@@ -139,7 +139,7 @@ runtime_layout!(
     link_section = "perry_literal_layouts"
 )]
 static mut LITERAL_FAMILY: PerryLayoutDesc = PerryLayoutDesc {
-    image_keys: crate::object::image_keys::image_key_list!(LITERAL_OPTIONAL::KEYS),
+    image_keys: std::ptr::null_mut(),
     shape_id: 0,
     gc_plan: 0,
     family: 0x7f000016,
@@ -299,10 +299,7 @@ unsafe fn born(
 #[test]
 fn layout_holes_are_absent_for_every_reader() {
     crate::gc::initialize_runtime_fixture();
-    for desc in [
-        std::ptr::addr_of!(HOLEY),
-        std::ptr::addr_of!(HOLEY_PERMUTED),
-    ] {
+    for desc in [HOLEY::desc(), HOLEY_PERMUTED::desc()] {
         soft_ne!(
             unsafe { layout_id(desc) },
             0,
@@ -440,7 +437,7 @@ unsafe fn assert_absent_own(object: *mut ObjectHeader, key: &StaticAtom) {
 #[test]
 fn layout_hole_reads_answer_per_object() {
     crate::gc::initialize_runtime_fixture();
-    let desc = std::ptr::addr_of!(HOLEY);
+    let desc = HOLEY::desc();
     let scope = crate::gc::RuntimeHandleScope::new();
     let full = unsafe { born(desc, &scope) };
     let holey = unsafe { born(desc, &scope) };
@@ -491,9 +488,8 @@ fn layout_hole_reads_answer_per_object() {
 fn solid_layout_has_no_hole_bit() {
     crate::gc::initialize_runtime_fixture();
     let scope = crate::gc::RuntimeHandleScope::new();
-    let object = scope.root_raw_mut_ptr(unsafe {
-        crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(SOLID))
-    });
+    let object = scope
+        .root_raw_mut_ptr(unsafe { crate::object::layout_desc::perry_alloc_layout(SOLID::desc()) });
     unsafe {
         object.with_mut_ptr(|obj| {
             for (i, key) in [&H_A, &H_B, &H_C, &H_D].iter().enumerate() {
@@ -535,11 +531,67 @@ fn deleting_absent_class_family_keys_preserves_birth_word() {
     }
 }
 
+/// R1: a loop region over a class family is primed (the family's layout
+/// keeps `SUMMARY_HOLES` for life), and its word carries the presence bit:
+/// the shape cannot say which keys the object has, its slots do. The guard
+/// proves presence once; inside F no JS runs, and a present key becomes absent
+/// only through a delete, which must change the object's word.
+#[test]
+fn a_class_family_primes_a_loop_region_word_with_the_presence_test() {
+    use crate::object::shapes::{
+        js_region_loop_prime, object_shape_stamp, REGION_GUARD_WORD_EMPTY,
+        REGION_LOOP_WORD_PRESENCE_TEST, REGION_LOOP_WORD_VALUE_TEST,
+    };
+    let _global = crate::gc::global_side_table_test_lock();
+    let _gc = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let obj = crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(CLASS_HOLEY));
+        js_object_set_field_by_name(obj, H_B.string, 7.0);
+        let bits = |a: &StaticAtom| crate::js_nanbox_string(a.string as i64).to_bits();
+        let site = core::sync::atomic::AtomicU64::new(REGION_GUARD_WORD_EMPTY);
+        // The body reads `b` as a Number and stores `a`, still a hole.
+        let word = js_region_loop_prime(
+            &site,
+            object_shape_stamp(obj).0,
+            2,
+            bits(&H_B),
+            bits(&H_A),
+            0,
+            0,
+            0,
+            0,
+            0b10,
+            0,
+            0b01,
+        );
+        assert_ne!(word, REGION_GUARD_WORD_EMPTY, "a class family is served");
+        assert_eq!(word as u32, object_shape_stamp(obj).0);
+        assert_ne!(word & REGION_LOOP_WORD_PRESENCE_TEST, 0);
+        assert_ne!(word & REGION_LOOP_WORD_VALUE_TEST, 0);
+        // The object decides presence: `b`'s slot holds its value, `a`'s the
+        // hole, which the guard's presence test refuses.
+        let slot = |i: u32| ((word >> (32 + 6 * i)) & 63) as usize;
+        let fields = (obj as *const u8).add(core::mem::size_of::<ObjectHeader>()) as *const u64;
+        assert_eq!(*fields.add(slot(0)), 7.0f64.to_bits());
+        assert_eq!(*fields.add(slot(1)), crate::value::TAG_HOLE);
+        let primed = object_shape_stamp(obj);
+        assert_eq!(
+            crate::object::delete_rest::js_object_delete_field(obj, H_B.string),
+            1
+        );
+        assert_ne!(
+            object_shape_stamp(obj),
+            primed,
+            "a delete of a present key must change the word the guard compares"
+        );
+    }
+}
+
 #[test]
 fn ordinary_hole_delete_keeps_the_existing_order_representation() {
     let _global = crate::gc::global_side_table_test_lock();
     unsafe {
-        let obj = crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(HOLEY));
+        let obj = crate::object::layout_desc::perry_alloc_layout(HOLEY::desc());
         assert!(!crate::object::layout_desc::is_family_layout_word(
             (*obj).parent_class_id
         ));
@@ -560,10 +612,7 @@ fn absent_layout_methods_throw_or_resolve_an_inherited_method() {
         this.as_f64()
     }
     crate::gc::initialize_runtime_fixture();
-    for descriptor in [
-        std::ptr::addr_of!(HOLEY),
-        std::ptr::addr_of!(HOLEY_PERMUTED),
-    ] {
+    for descriptor in [HOLEY::desc(), HOLEY_PERMUTED::desc()] {
         let scope = crate::gc::RuntimeHandleScope::new();
         let object = unsafe { born(descriptor, &scope) };
         let receiver =
@@ -656,7 +705,7 @@ fn classless_optional_family_keeps_shape_and_routes_unknown_keys_to_overflow() {
     crate::gc::initialize_runtime_fixture();
     let scope = crate::gc::RuntimeHandleScope::new();
     let ordinary = scope.root_raw_mut_ptr(unsafe {
-        crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(LITERAL_OPTIONAL))
+        crate::object::layout_desc::perry_alloc_layout(LITERAL_OPTIONAL::desc())
     });
     ordinary.with_const_ptr(|obj: *const ObjectHeader| unsafe {
         assert!(crate::object::layout_desc::family_desc_of(obj).is_none());
@@ -792,9 +841,8 @@ fn classless_optional_family_keeps_shape_and_routes_unknown_keys_to_overflow() {
         );
         assert_eq!(js_object_get_field_by_name_f64(obj, H_A.string), 17.0);
     });
-    let mixed = scope.root_raw_mut_ptr(unsafe {
-        crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(HOLEY))
-    });
+    let mixed = scope
+        .root_raw_mut_ptr(unsafe { crate::object::layout_desc::perry_alloc_layout(HOLEY::desc()) });
     mixed.with_const_ptr(|obj: *const ObjectHeader| unsafe {
         assert!(
             crate::object::layout_desc::family_desc_of(obj).is_none(),
@@ -828,7 +876,7 @@ mod first_birth {
         link_section = "perry_literal_layouts"
     )]
     static mut LITERAL: PerryLayoutDesc = PerryLayoutDesc {
-        image_keys: crate::object::image_keys::image_key_list!(KEYS),
+        image_keys: std::ptr::null_mut(),
         shape_id: 0,
         gc_plan: 0,
         family: 0x7f000015,
@@ -1038,4 +1086,49 @@ fn absent_overflow_definition_uses_final_data_entry() {
             );
         });
     }
+}
+
+static LITERAL_FAMILY_DECLARATION: crate::object::class_registry::declarations::ClassDeclaration =
+    crate::object::class_registry::declarations::ClassDeclaration {
+        instance_layout: std::ptr::addr_of!(LITERAL_FAMILY),
+        ..crate::object::class_registry::declarations::ClassDeclaration::native(&[])
+    };
+
+/// A literal family's objects carry class id 0: the proven class is told by the
+/// family descriptor word its declaration owns (the runtime fact check's F4).
+#[test]
+fn a_literal_family_object_is_its_proven_class_by_the_layout_word() {
+    const CLASS: u32 = 60_301;
+    crate::gc::initialize_runtime_fixture();
+    let _lock = crate::gc::global_side_table_test_lock();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    unsafe {
+        crate::object::class_registry::declarations::js_register_class_declaration(
+            CLASS,
+            &LITERAL_FAMILY_DECLARATION,
+        )
+    };
+    let literal = scope.root_raw_mut_ptr(unsafe {
+        crate::object::layout_desc::perry_alloc_literal_layout(std::ptr::addr_of!(LITERAL_FAMILY))
+    });
+    let ordinary = scope.root_raw_mut_ptr(unsafe {
+        crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(LITERAL_OPTIONAL))
+    });
+    let (class_id, word) = literal.with_const_ptr(|obj: *const ObjectHeader| unsafe {
+        ((*obj).class_id, (*obj).parent_class_id)
+    });
+    assert_eq!(class_id, 0, "a literal family names class 0");
+    assert!(crate::object::layout_desc::word_is_class_family_layout(
+        word, CLASS
+    ));
+    assert!(
+        !crate::object::layout_desc::word_is_class_family_layout(word, CLASS + 1),
+        "a class without that declaration"
+    );
+    let other =
+        ordinary.with_const_ptr(|obj: *const ObjectHeader| unsafe { (*obj).parent_class_id });
+    assert!(
+        !crate::object::layout_desc::word_is_class_family_layout(other, CLASS),
+        "an ordinary classless layout is not the class's family"
+    );
 }

@@ -337,10 +337,8 @@ mod registry_key_tests {
                     "fixture {number} is not heap-plausible: the test would prove nothing"
                 );
                 assert!(
-                    crate::value::addr_class::try_read_tracked_gc_header(
-                        number.to_bits() as usize
-                    )
-                    .is_none(),
+                    crate::value::addr_class::try_read_tracked_gc_header(number.to_bits() as usize)
+                        .is_none(),
                     "fixture {number} must name an unowned address"
                 );
                 let text = crate::builtins::js_string_coerce(number);

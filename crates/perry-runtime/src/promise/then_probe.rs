@@ -51,7 +51,7 @@
 //! * no own `then` key (a direct dense scan of the keys array — this is the
 //!   common REAL thenable, `{ then(res, rej) {…} }`, and it must always be
 //!   found);
-//! * `OBJ_FLAG_NULL_PROTO` ⇒ the own keys ARE the whole chain, answer proven;
+//! * a null [[Prototype]] (the shape's identity) ⇒ the own keys ARE the whole chain, answer proven;
 //! * otherwise no per-instance `setPrototypeOf` / `__proto__` override
 //!   (`object_static_prototype`) ⇒ the chain is exactly
 //!   `obj → Object.prototype → null`.
@@ -297,7 +297,7 @@ fn compute_object_prototype_then(proto_addr: usize) -> Option<bool> {
     }
     // Likewise if `Object.prototype` itself was given a prototype: the chain
     // above it is not modelled here, and an accessor could live on it.
-    if crate::object::prototype_chain::object_static_prototype(proto_addr).is_some() {
+    if crate::object::prototype_chain::object_static_prototype_is_linked(proto_addr) {
         return Some(false);
     }
     let proto_value = crate::value::js_nanbox_pointer(proto_addr as i64);
@@ -530,7 +530,7 @@ unsafe fn prove_no_then(value: f64) -> Outcome {
         OwnScan::NoThen => {}
     }
     // A null-prototype object's own keys are its whole `[[Get]]` chain.
-    if flags & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
+    if crate::object::shapes::object_prototype_is_null(obj) {
         return Outcome::Proved;
     }
     // A per-instance `setPrototypeOf` / `__proto__` override puts an arbitrary

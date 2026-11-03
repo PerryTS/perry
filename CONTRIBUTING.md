@@ -135,7 +135,8 @@ test `node_fail`, and it is dropped from the run instead of going red. CI sat
 on Node 22 while the suite grew Node 24/26 features and hid 14 tests that way.
 
 Any PR touching `crates/` also needs a `changelog.d/<PR-number>-<slug>.md`
-fragment; see [changelog.d/README.md](changelog.d/README.md).
+fragment; see [changelog.d/README.md](changelog.d/README.md). Released fragments
+move to `changelog/vX.Y.Z/` at release time — they are archived, never deleted.
 
 **Never cancel the CI run of the PR you are about to merge.** Cancelling other
 runs to free capacity is fine and expected on a 20-slot org. Cancelling the run

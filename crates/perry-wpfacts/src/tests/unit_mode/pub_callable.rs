@@ -162,7 +162,7 @@ fn pub_described_results_normalize_escaped_boxes_beside_top() {
         for unknown in [false, true] {
             for box_first in [false, true] {
                 let ast = perry_parser::parse_typescript(
-                    r#"function F() { return "a,b".split(","); }"#,
+                    r#"function F() { return "a,b".match(","); }"#,
                     "owner.ts",
                 )
                 .unwrap();
@@ -178,7 +178,7 @@ fn pub_described_results_normalize_escaped_boxes_beside_top() {
                         .unwrap() as u32;
                 let boxed = (0..g.m.toks.len() as u32)
                     .find(|&t| g.m.is_box(t))
-                    .expect("split box");
+                    .expect("match box");
                 let n = g.m.node(|| "mixed result".into());
                 if box_first {
                     g.m.add_tok(n, boxed);

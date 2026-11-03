@@ -874,7 +874,8 @@ pub(crate) use process_streams::test_set_stdin_data_listener;
 pub use process_streams::{
     disable_process_stdin_keypress_events, enable_process_stdin_keypress_events,
     ensure_process_stdin_reader, is_process_stdin_handle, js_process_stderr, js_process_stdin,
-    js_process_stdout, mark_process_stdin_destroyed, pump_process_stdin,
+    js_process_stdout, mark_process_stdin_destroyed, note_process_stdin_listener,
+    note_process_stdin_paused, note_process_stdin_resumed, pump_process_stdin,
     reset_process_stdin_liveness_for_tests, scan_process_stream_singleton_roots_mut,
     set_process_stdin_raw_state, stdin_chunk_jsvalue, stdin_chunk_jsvalue_opt,
     stdin_encoding_flush_jsvalue, stdin_has_encoding, stdin_is_detached,
@@ -1238,7 +1239,7 @@ pub extern "C" fn js_os_cpus() -> *mut ArrayHeader {
         let mut values = [times.user, times.nice, times.sys, times.idle, times.irq];
         unsafe {
             crate::object::runtime_layouts::perry_build_runtime_record(
-                std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_F412_0),
+                crate::object::runtime_layouts::RECORD_F412_0::desc(),
                 values.as_mut_ptr(),
             )
         }

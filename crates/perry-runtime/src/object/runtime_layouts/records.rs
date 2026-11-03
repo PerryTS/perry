@@ -283,7 +283,7 @@ mod records_0 {
     runtime_layout!(RECORD_F13_0, 3837185475, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [RECORD_ATOM_12], realm = ["node:http", "node:https"]);
     runtime_layout!(RECORD_F17_0, 3646424415, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [RECORD_ATOM_13, RECORD_ATOM_14, RECORD_ATOM_12, RECORD_ATOM_15, RECORD_ATOM_16, RECORD_ATOM_4, RECORD_ATOM_8], realm = ["node:http", "node:https"]);
     runtime_layout!(RECORD_F20_0, 3774555503, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [RECORD_ATOM_4, RECORD_ATOM_8, RECORD_ATOM_17, RECORD_ATOM_18], realm = ["node:net"]);
-    runtime_layout!(RECORD_F21_0, 496937115, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [RECORD_ATOM_13, RECORD_ATOM_14, RECORD_ATOM_12, RECORD_ATOM_15, RECORD_ATOM_16], realm = ["node:net"]);
+    runtime_layout!(RECORD_F21_0, 496937115, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [RECORD_ATOM_13, RECORD_ATOM_14, RECORD_ATOM_12, RECORD_ATOM_15, RECORD_ATOM_16], realm = ["node:net", "node:tls", "node:http", "node:https", "node:http2.createServer", "node:http2.createSecureServer"]);
     runtime_layout!(RECORD_F28_0, 2356982127, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [RECORD_ATOM_19, RECORD_ATOM_20], realm = ["node:nodemailer"]);
     runtime_layout!(RECORD_F29_0, 1341208471, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [RECORD_ATOM_9, RECORD_ATOM_21], realm = ["node:@parcel/watcher", "node:@parcel/watcher-darwin-arm64", "node:@parcel/watcher-darwin-x64", "node:@parcel/watcher-linux-arm64-glibc", "node:@parcel/watcher-linux-arm64-musl", "node:@parcel/watcher-linux-x64-glibc", "node:@parcel/watcher-linux-x64-musl", "node:@parcel/watcher-win32-arm64", "node:@parcel/watcher-win32-x64"]);
     runtime_layout!(RECORD_F30_0, 4175759692, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [RECORD_ATOM_22, RECORD_ATOM_23, RECORD_ATOM_24, RECORD_ATOM_25, RECORD_ATOM_26], realm = ["node:sharp"]);
@@ -301,7 +301,7 @@ mod records_1 {
     runtime_layout!(RECORD_F413_0, 2389792640, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [RECORD_ATOM_54, RECORD_ATOM_55, RECORD_ATOM_56], realm = ["node:os"]);
     runtime_layout!(RECORD_F414_0, 2296314286, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [RECORD_ATOM_57, RECORD_ATOM_58, RECORD_ATOM_59, RECORD_ATOM_60, RECORD_ATOM_61], realm = ["node:os"]);
     runtime_layout!(RECORD_F418_0, 814018159, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [RECORD_ATOM_62, RECORD_ATOM_63, RECORD_ATOM_64, RECORD_ATOM_65, RECORD_ATOM_12], realm = ["node:path", "node:path/posix", "node:path/win32"]);
-    runtime_layout!(RECORD_F426_0, 1617101137, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [RECORD_ATOM_52, RECORD_ATOM_66, RECORD_ATOM_67], realm = ["node:perf_hooks"]);
+    runtime_layout!(RECORD_F426_0, 1617101137, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [RECORD_ATOM_52, RECORD_ATOM_66, RECORD_ATOM_67], realm = ["node:perf_hooks", "node:worker_threads.Worker"]);
     runtime_layout!(RECORD_F427_0, 3587014428, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [RECORD_ATOM_68, RECORD_ATOM_69, RECORD_ATOM_70], realm = ["node:perf_hooks"]);
     runtime_layout!(RECORD_F429_0, 547262760, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [RECORD_ATOM_12, RECORD_ATOM_71, RECORD_ATOM_72, RECORD_ATOM_73, RECORD_ATOM_74, RECORD_ATOM_75, RECORD_ATOM_76, RECORD_ATOM_77, RECORD_ATOM_78, RECORD_ATOM_79, RECORD_ATOM_80], realm = ["node:perf_hooks"]);
 }
@@ -326,7 +326,7 @@ pub use records_2::*;
 mod records_3 {
     use super::*;
     use super::record_atoms::*;
-    runtime_layout!(RECORD_Q436_0, 1355075821, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [RECORD_ATOM_49, RECORD_ATOM_139], realm = ["process"]);
+    runtime_layout!(RECORD_Q436_0, 1355075821, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [RECORD_ATOM_49, RECORD_ATOM_139], realm = ["process", "node:worker_threads.Worker"]);
     runtime_layout!(RECORD_Q439_0, 204330772, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [RECORD_ATOM_140, RECORD_ATOM_141, RECORD_ATOM_142, RECORD_ATOM_143, RECORD_ATOM_144], realm = ["process"]);
     runtime_layout!(RECORD_Q440_0, 257971323, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [RECORD_ATOM_145, RECORD_ATOM_146, RECORD_ATOM_147], realm = ["process"]);
     runtime_layout!(RECORD_Q441_0, 2648632556, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [RECORD_ATOM_148, RECORD_ATOM_149], realm = ["process"]);

@@ -236,7 +236,12 @@ pub const LAYOUT_DESC_ID_OFFSET_ILP32: usize = 56;
 pub const LAYOUT_DESC_SIZE_LP64: usize = 80;
 pub const LAYOUT_DESC_SIZE_ILP32: usize = 64;
 /// `PerryLayoutKey.off`: the key's absolute slot offset from the object (u16).
-pub const LAYOUT_KEY_OFF_OFFSET: usize = 14;
+/// It follows `atom` (a pointer), `slot` (u32), `attrs` and `_pad` (u8 each).
+pub const LAYOUT_KEY_OFF_OFFSET_LP64: usize = 14;
+pub const LAYOUT_KEY_OFF_OFFSET_ILP32: usize = 10;
+/// `PerryLayoutKey` is 16 bytes on LP64 (12 on ILP32).
+pub const LAYOUT_KEY_SIZE_LP64: usize = 16;
+pub const LAYOUT_KEY_SIZE_ILP32: usize = 12;
 /// Offsets of the A1 precomputes (`gc_header_word`) appended after `image_keys`
 /// (`i64` aligned to 8 on every target).
 pub const LAYOUT_DESC_GC_HEADER_WORD_OFFSET_LP64: usize = 88;
@@ -307,11 +312,17 @@ pub const fn intrinsic_function_layout_word(index: u32) -> u32 {
     }
 }
 
+/// Rows of [`NATIVE_LAYOUT_DESCRIPTORS`] that no runtime layout declares:
+/// kept so that no other runtime word moves (DESIGN §3.2 item 3).
+pub const NATIVE_LAYOUT_RESERVED: &[&str] = &["CJS_MODULE_RECORD"];
+
 /// Union of native descriptor names across target/cfg variants, sorted.
 /// Rows 0..9 are intrinsic functions; rows 9 and 10 are weak collections.
 pub const NATIVE_LAYOUT_DESCRIPTORS: &[&str] = &[
     "ARRAY_NAMED",
     "ARRAY_PROTOTYPE_NAMED",
+    // Reserved: no runtime birth and no declaration (DESIGN §3.2 item 3).
+    // The row stays so that no other runtime word moves.
     "CJS_MODULE_RECORD",
     "DUPLEX",
     "DUPLEX_PROTOTYPE",
@@ -319,6 +330,7 @@ pub const NATIVE_LAYOUT_DESCRIPTORS: &[&str] = &[
     "EVENT_EMITTER",
     "EVENT_EMITTER_PROTOTYPE",
     "FUNCTION_PROTOTYPE",
+    "GLOBAL_OBJECT",
     "IMMEDIATE",
     "INCOMING_MESSAGE_PROTOTYPE",
     "ITERATOR_RESULT",
@@ -559,7 +571,7 @@ mod tests {
     #[test]
     fn catalog_is_sorted_and_image_is_bounded() {
         assert!(NATIVE_LAYOUT_DESCRIPTORS.windows(2).all(|w| w[0] < w[1]));
-        assert_eq!(NATIVE_LAYOUT_ROWS, 125);
+        assert_eq!(NATIVE_LAYOUT_ROWS, 126);
         assert!(unsafe { PerryLayoutImageV1::RUNTIME.valid() });
         for (i, name) in NATIVE_LAYOUT_DESCRIPTORS.iter().enumerate() {
             assert_eq!(native_layout_row(name).0, 11 + i as u32);

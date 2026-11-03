@@ -22,6 +22,7 @@ use front_contract::{front_call_block, verify_front_directory};
 
 fn ir_opts(debug_locations: bool, module_source: Option<&str>) -> CompileOptions {
     CompileOptions {
+        namespace_self_import: false,
         static_shape_ids: Vec::new(),
         program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),
@@ -53,7 +54,6 @@ fn ir_opts(debug_locations: bool, module_source: Option<&str>) -> CompileOptions
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
         short_spread_method_candidates: std::sync::Arc::default(),
-        program_class_accessor_names: Default::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -176,7 +176,7 @@ fn imported_variable_read_preserves_class_tags_and_calls_the_live_getter_once() 
     // would lose the 0x7FFE tag and the class would dispatch as an object.
     assert!(
         ir.lines().any(|line| {
-            line.contains("call double @js_object_get_field_value_site(")
+            line.contains("call double @js_object_get_field_value(")
                 && bits.iter().any(|b| line.contains(&format!("(i64 {b},")))
         }),
         "class dispatch must receive the getter's unmasked value bits:\n{ir}"
@@ -230,10 +230,10 @@ fn no_call_location_without_debug_symbols() {
 }
 
 /// The generic property read's hit is ONE leaf call of the receiver layout's
-/// probe (`perry_probe_get_memo`) over the agent's shape directory, the key,
-/// the receiver's handle and the site's five integer shape/slot pairs. There
-/// is no inline ShapeId compare, no way token and no epoch; the receiver's
-/// own shape is the authority.
+/// probe (`perry_probe_get`) over the agent's shape directory, the receiver's
+/// handle, the key and the key's atom hash. The site owns no storage: there is
+/// no inline ShapeId compare, no shape/slot memo, no way token and no epoch;
+/// the receiver's own shape is the authority (an accessor included).
 #[test]
 fn generic_property_get_hit_path_is_shape_id_only() {
     let ir = emit(false, None);
@@ -241,7 +241,7 @@ fn generic_property_get_hit_path_is_shape_id_only() {
     let (_, ok) = tower_block(&blocks, "pget.recv_ok");
     let probes: Vec<&String> = ok
         .iter()
-        .filter(|l| l.contains("call double @perry_probe_get_memo("))
+        .filter(|l| l.contains("call double @perry_probe_get("))
         .collect();
     assert_eq!(probes.len(), 1, "the hit is one probe call: {ok:?}");
     assert!(
@@ -250,12 +250,14 @@ fn generic_property_get_hit_path_is_shape_id_only() {
         "the hit block makes no other call and compares no site-cached \
          ShapeId: {ok:?}"
     );
+    assert_eq!(
+        front_contract::verify_front_site_hash(&blocks).unwrap(),
+        (crate::layout_desc::atom_hash("foo") as i64).to_string(),
+        "the probe must receive the key's atom hash"
+    );
     assert!(
-        ir.contains(&format!(
-            "{} = private global [5 x i64] zeroinitializer, align 8",
-            front_contract::verify_front_site_memo(&blocks).unwrap()
-        )),
-        "the read must own exactly five zero-initialized shape/slot pairs:\n{ir}"
+        !ir.contains("_read_shape_slots") && !ir.contains("[5 x i64] zeroinitializer"),
+        "a named read owns no shape/slot storage:\n{ir}"
     );
     assert!(
         !ir.contains("4611686018427387904"),
@@ -470,13 +472,13 @@ fn generic_property_get_tries_ways_before_calling_the_miss_handler() {
     assert!(
         probe_block
             .iter()
-            .any(|l| l.contains("call double @perry_probe_get_memo(")),
+            .any(|l| l.contains("call double @perry_probe_get(")),
         "{probe_block:?}"
     );
     assert!(
         !probe_block
             .iter()
-            .any(|l| l.contains("@js_object_get_field_value_site(")),
+            .any(|l| l.contains("@js_object_get_field_value(")),
         "the slow call must not sit inside the probe block: {probe_block:?}"
     );
     let (_, served, declined) = tower_cond_br(probe_block);
@@ -513,7 +515,7 @@ fn generic_refusal_keeps_boxed_receiver_and_reloads_key_on_the_join() {
     assert_eq!(slow.iter().filter(|l| l.contains(" call ")).count(), 1);
     let call = slow
         .iter()
-        .find(|l| l.contains("@js_object_get_field_value_site("))
+        .find(|l| l.contains("@js_object_get_field_value("))
         .unwrap();
     let bits = call
         .split_once("(i64 ")
@@ -541,10 +543,8 @@ fn generic_refusal_keeps_boxed_receiver_and_reloads_key_on_the_join() {
         !all.iter().any(|l| l.contains("@PERRY_IC_EPOCH")),
         "the removed keys-pointer epoch global must not appear"
     );
-    assert!(
-        front_contract::verify_front_site_memo(&blocks).is_ok(),
-        "the refusal must pass the leaf's own shape/slot storage"
-    );
+    front_contract::verify_front_site_hash(&blocks)
+        .unwrap_or_else(|e| panic!("the refusal passes no site storage: {e}"));
 }
 
 /// A SPILL-located key is served by the runtime probe, not by site code: the
@@ -559,7 +559,7 @@ fn a_spill_entry_is_served_by_the_leaf_front_before_the_slow_call() {
     let (probe_label, probe_block) = front_call_block(&blocks);
     let call = probe_block
         .iter()
-        .find(|l| l.contains("@perry_probe_get_memo("))
+        .find(|l| l.contains("@perry_probe_get("))
         .unwrap_or_else(|| panic!("the probe call: {probe_block:?}"));
     let answer = call.split_once(" = ").map(|(r, _)| r).unwrap();
     let (_, merge) = tower_block(&blocks, "pget.recv_merge");
@@ -818,13 +818,13 @@ fn the_generic_tower_is_one_leaf_call_one_exit_and_a_bounded_number_of_blocks() 
     sorted.sort();
     assert_eq!(
         sorted,
-        vec!["js_object_get_field_value_site", "perry_probe_get_memo"],
+        vec!["js_object_get_field_value", "perry_probe_get"],
         "the read must expand the probe and exactly one collecting exit:\n{func}"
     );
     // The probe is nounwind and GC-leaf: a plain call, never an invoke.
     let probes: Vec<&str> = func
         .lines()
-        .filter(|l| l.contains("@perry_probe_get_memo("))
+        .filter(|l| l.contains("@perry_probe_get("))
         .collect();
     assert_eq!(probes.len(), 1, "one probe call per read:\n{func}");
     assert!(
@@ -885,7 +885,7 @@ fn the_generic_shared_read_receives_boxed_receiver_key_and_feedback() {
         .iter()
         .flat_map(|(l, body)| {
             body.iter()
-                .filter(|t| t.contains("@js_object_get_field_value_site("))
+                .filter(|t| t.contains("@js_object_get_field_value("))
                 .map(move |t| (l.as_str(), t))
         })
         .collect();
@@ -936,9 +936,6 @@ fn guarded_length_reads_admit_byte_views_and_use_a_pooled_cold_key() {
         "byte views take the semantic helper:\n{ir}"
     );
 }
-
-#[path = "computed_admission_tests.rs"]
-mod computed_admission;
 
 #[path = "refusal_join_tests.rs"]
 mod refusal_join;

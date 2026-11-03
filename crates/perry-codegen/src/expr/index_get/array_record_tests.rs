@@ -624,16 +624,28 @@ fn stack_record_ir(fused: bool) -> String {
 #[test]
 fn array_stack_record_fuses_only_the_generated_next_value() {
     let ll = stack_record_ir(true);
+    // The protocol arm keeps the fused step: length and Get share one cold
+    // boundary. #13645: the array arm is its own counted loop (it may carry
+    // the counted-loop tiers' guards, exactly as `a[i]` does); its Get still
+    // completes through the record's cold dispatcher.
     assert!(ll.contains("record.next.cold") && ll.contains("i32 6"));
+    let guards: Vec<_> = ll
+        .split("\nrecord.next.guard.")
+        .skip(1)
+        .map(|block| block.split("\n\n").next().unwrap())
+        .collect();
+    assert!(!guards.is_empty(), "exercise the fused helper: {ll}");
+    for guard in guards {
+        assert!(
+            guard.contains(", 64") && guard.contains("@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED"),
+            "fused hole canonicalization needs both prototype proofs: {guard}"
+        );
+    }
     assert!(
-        !ll.lines()
-            .any(|l| l.contains("call") && l.contains("@js_region_loop_prime(")),
-        "the traversal keeps one user body without a learned body guard"
+        ll.contains("record.indexed.") && ll.contains("record.protocol."),
+        "{ll}"
     );
-    assert!(
-        !ll.contains("record.read.cold"),
-        "length and Get share a cold boundary"
-    );
+    assert!(ll.contains("record.read.cold"), "the array arm's Get: {ll}");
     assert!(
         !ll.contains("call double @perry_length_cold_"),
         "one live bounds check"
@@ -651,8 +663,8 @@ fn array_stack_record_fuses_only_the_generated_next_value() {
         .count();
     assert_eq!(
         calls,
-        consumers * 2,
-        "next and finish share the record ABI; entry already captured the method"
+        consumers * 3,
+        "next, the array arm's Get and finish share the record ABI; entry already captured the method"
     );
     crate::testing::verify_ir(&ll, "fused_array_stack_record").unwrap();
 }
@@ -722,6 +734,62 @@ fn array_stack_record_uses_one_range_and_one_cold_dispatch() {
         "a safepoint cannot cache a record field across a collection"
     );
     crate::testing::verify_ir(&ll, "array_stack_record").unwrap();
+}
+
+#[test]
+fn array_stack_record_reads_use_live_own_prefix_and_raw_hole_fallback() {
+    let ll = stack_record_ir(false);
+    let mut hits = 0;
+    let mut raw_hole_tests = 0;
+    for block in ll.split("\nrecord.read.").skip(1) {
+        let block = block.split("\n\n").next().unwrap();
+        if block.starts_with("prefix.hit.") {
+            hits += 1;
+            assert!(
+                block.contains("load double"),
+                "own slot must load directly: {block}"
+            );
+            assert!(
+                !block.contains("icmp") && !block.contains("select"),
+                "P already proves bounds, absence of descriptors and holes: {block}"
+            );
+        }
+        if block.starts_with("hole.") {
+            assert!(
+                block.contains(", 64"),
+                "absence needs the receiver's custom-prototype bit: {block}"
+            );
+            assert!(
+                block.contains("@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED"),
+                "absence needs the global protector: {block}"
+            );
+        }
+        if block.starts_with("load.") {
+            raw_hole_tests += 1;
+            assert!(
+                block.contains(crate::nanbox::TAG_HOLE_I64),
+                "test the raw hole: {block}"
+            );
+            assert!(
+                !block.contains("select"),
+                "never canonicalize a hole before its cold edge: {block}"
+            );
+            assert!(
+                block.contains("record.read.hole."),
+                "a hole must check prototype absence: {block}"
+            );
+        }
+        assert!(
+            block.starts_with("hole.")
+                || !block.contains("@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED"),
+            "only holes depend on prototype invalidation: {block}"
+        );
+    }
+    assert!(
+        hits > 0 && raw_hole_tests == hits,
+        "exercise prefix and residual read: {ll}"
+    );
+    crate::testing::verify_ir(&ll, "array_record_own_prefix").unwrap();
 }
 
 #[test]
@@ -807,5 +875,119 @@ fn array_stack_entry_owns_acquisition_without_a_second_dispatch() {
             |l| l.contains("call double @js_array_record_stack_dispatch(") && l.ends_with("i32 0)")
         ),
         "GetIterator must not run a second time"
+    );
+}
+
+// #13645: with no `return` on the array iterator chain proven, the array
+// arm of IteratorClose is emitted as nothing; unproven, the runtime calls
+// stay. Each assertion is paired with the unproven control.
+fn ir_proven(proven: bool, expr: Expr) -> String {
+    use crate::codegen::{ElisionFacts, ProgramFactsView};
+    let mut m = Module::new("array_record_unsigned");
+    m.functions.push(Function {
+        id: 1,
+        name: "read".into(),
+        type_params: vec![],
+        params: vec![Param {
+            id: 1,
+            name: "array".into(),
+            ty: Type::Array(Box::new(Type::Any)),
+            default: None,
+            decorators: vec![],
+            is_rest: false,
+            arguments_object: None,
+        }],
+        return_type: Type::Any,
+        body: vec![Stmt::Return(Some(expr))],
+        is_async: false,
+        is_generator: false,
+        is_strict: true,
+        is_exported: true,
+        captures: vec![],
+        decorators: vec![],
+        was_plain_async: false,
+        was_unrolled: false,
+    });
+    let elision = ElisionFacts {
+        array_iterator_close_unwritten: proven,
+        ..Default::default()
+    };
+    String::from_utf8(
+        compile_module(
+            &m,
+            CompileOptions {
+                emit_ir_only: true,
+                program_facts: ProgramFactsView {
+                    elision: std::sync::Arc::new(elision),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+        .unwrap(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn proven_array_iterator_close_emits_no_close_call() {
+    let close = || {
+        runtime(
+            "arrayRecordClose",
+            vec![
+                Expr::LocalGet(1),
+                Expr::Number(0.0),
+                Expr::Bool(false),
+                Expr::Undefined,
+                Expr::Bool(false),
+            ],
+        )
+    };
+    let absent = || runtime("arrayRecordCloseAbsent", vec![]);
+    for expr in [close, absent] {
+        let unproven = ir_proven(false, expr());
+        let proven = ir_proven(true, expr());
+        assert!(
+            unproven.contains("call double @js_array_record_close(")
+                || unproven.contains("call i32 @js_array_record_close_absent("),
+            "control keeps the runtime call: {unproven}"
+        );
+        assert!(
+            !proven.contains("call double @js_array_record_close(")
+                && !proven.contains("call i32 @js_array_record_close_absent("),
+            "{proven}"
+        );
+    }
+}
+
+#[test]
+fn proven_array_iterator_close_calls_the_runtime_only_for_the_protocol_arm() {
+    let finish = || {
+        runtime(
+            "arrayRecordFinish",
+            vec![
+                Expr::Bool(false),
+                Expr::LocalGet(1),
+                Expr::Number(0.0),
+                Expr::Undefined,
+                Expr::Bool(true),
+                Expr::Undefined,
+                Expr::Bool(false),
+            ],
+        )
+    };
+    let unproven = ir_proven(false, finish());
+    let proven = ir_proven(true, finish());
+    assert!(!unproven.contains("arec.close"), "{unproven}");
+    assert!(
+        proven.contains("arec.close") && proven.contains("arec.closed"),
+        "{proven}"
+    );
+    assert_eq!(
+        proven
+            .matches("call double @js_array_record_finish(")
+            .count(),
+        1,
+        "{proven}"
     );
 }

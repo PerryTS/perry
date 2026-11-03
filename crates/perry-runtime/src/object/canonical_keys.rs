@@ -149,7 +149,6 @@ pub(crate) unsafe fn adopt_image_key(
 mod records;
 pub(crate) use records::{CanonicalKeys, LiveObject, SharedLayout};
 
-
 /// No trie node: an owned (dictionary) list, or a list whose holder never
 /// learned one. Shared with `ObjectKeys` and the shape record's packed field.
 pub(crate) const NO_NODE: u32 = u32::MAX;
@@ -701,6 +700,7 @@ impl CanonicalTable {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn canonical_node_ids_exhausted() -> ! {
     eprintln!(
@@ -1069,6 +1069,7 @@ unsafe fn probe(
 ///
 /// # Safety
 /// The caller suppresses collection while the existing canonical strings are read.
+#[inline(always)]
 pub(crate) unsafe fn probe_born_layout(
     _proof: &SharedLayout,
     entries: &[(&str, f64)],

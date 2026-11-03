@@ -1,19 +1,6 @@
 # Garbage collector: current architecture and operations
 
-> **Current as of 2026-08-12.** This is the source of truth for the collector
-> that ships. The [generational plan][generational-plan] and
-> [statepoint experiment][statepoint-experiment] are chronological
-> evidence; their opening decisions describe the date they were written, not
-> today's defaults.
->
-> This page deliberately names **no issue numbers**. A sentence of the form
-> "that phase is still unsliced (see the tracker)" becomes false the moment the
-> tracker closes, and nothing in the tree notices — which is exactly how three
-> paragraphs here went stale inside one landing train. State what the code does;
-> the tracker's state is not in this repository. Every number below is bound to
-> the constant it came from by
-> a `gc-fact` marker and re-derived by
-> `scripts/check_gc_doc_claims.py`, which `lint` runs.
+> **Reviewed against the code on 2026-11-01.** Historical plans record earlier designs. Source paths, `gc-fact` constants and `gc-symbol` checks below bind the operational description to the implementation.
 
 Perry uses a per-thread, tracing generational collector. JavaScript values are
 NaN-boxed, allocations carry an 8-byte `GcHeader`, and each runtime thread owns
@@ -163,7 +150,7 @@ no fragmentation workload in the corpus exercises it — turning it back on is
 gated on a stress corpus existing, not on the contract. Nursery evacuation and
 normal old-generation sweep are unaffected either way.
 
-## Aging, promotion, and where an object is born
+## Aging, promotion, and where an object is born {#aging-promotion-and-where-an-object-is-born}
 
 The copying minor's tenuring threshold is **adaptive, not fixed**: it is the
 largest number of survivals `S` whose projected survivor occupancy still fits
@@ -211,16 +198,26 @@ off outright rather than silently stop exercising their own subject.
 <!-- gc-symbol: in_place_promotion_leaves_the_object_at_its_address_in_old_gen in crates/perry-runtime/src/gc/tests/promote_in_place.rs -->
 <!-- gc-symbol: promote_in_place_knob_parses_both_states in crates/perry-runtime/src/gc/tests/promote_in_place.rs -->
 
-**Born-old thresholds are type-dependent.** A pointer-free allocation above
-16 KiB
+**Size selects storage, not necessarily age.** The large-object cutoffs are 16 KiB for pointer-free cells and 128 KiB for pointer-bearing cells. Eligible leaves and containers enter dedicated non-moving young storage: a minor traces their children, reclaims dead cells, or promotes survivors at the same address. Types with external backing, move hooks, or other address-stability contracts retain their specialized allocation policy.
 <!-- gc-fact: LARGE_OBJECT_THRESHOLD_BYTES = 16 * 1024 in crates/perry-runtime/src/gc/types.rs -->
-is born in old-gen; a pointer-bearing one stays nursery-resident until 128 KiB
-<!-- gc-fact: LARGE_POINTER_BEARING_OBJECT_THRESHOLD_BYTES = 128 * 1024 in crates/perry-runtime/src/gc/types.rs -->.
-The split matters when reading a survival ratio: a flat threshold sends the
-intermediate backing stores of a growing array straight to old-gen, so the
-garbage they abandon never appears in the young generation at all.
+<!-- gc-fact: LARGE_POINTER_BEARING_OBJECT_THRESHOLD_BYTES = 128 * 1024 in crates/perry-runtime/src/gc/types.rs -->
+<!-- gc-symbol: young_large_storage_admits in crates/perry-runtime/src/gc/types.rs -->
 
-## Roots, by target
+Admission is derived from GC type descriptors in `crates/perry-runtime/src/gc/types.rs`; allocation and collection live in `crates/perry-runtime/src/arena/allocators.rs` and `crates/perry-runtime/src/arena/young_large.rs`. Scoped JSON birth rules can keep eligible storage in the ordinary nursery beyond the normal cutoff.
+
+The inline nursery cursor carries a permission bound at `InlineArenaState.size`.
+It is zero while allocate-black is active; the physical block extent remains in
+`ArenaBlock.size`. Every birth-color transition and cursor refill updates this
+same bound. A successful positive-size bump therefore proves idle birth color
+for a complete unpublished layout, while the refused path retains ordinary
+coloring and mark seeding. Native roots still use LLVM statepoints.
+
+For compiler-owned descriptors uniquely named in the whole-image layout plan,
+fixed births initialize the header with the immutable template word from that
+same plan. Opaque or ambiguous descriptors keep their checked runtime load;
+no runtime shape lookup or validity structure is introduced.
+
+## Roots, by target {#roots-by-target}
 
 One root-set analysis feeds two lowerings:
 
@@ -285,7 +282,7 @@ explicit diagnostic/sensitivity arm. A full scan pins ambiguous roots and
 therefore makes the copying minor ineligible; it is useful evidence, not a
 second normal rooting backend.
 
-## Barriers and weak references
+## Barriers and weak references {#barriers-and-weak-references}
 
 Every old-to-young pointer publication must hit the remembered-set barrier.
 Codegen emits barriers for generated heap stores and runtime helpers perform
@@ -318,8 +315,7 @@ Platform hosts call `js_gc_memory_pressure(level)`:
 - if collection is unsafe, the request is made sticky and drains at the next
   precise safepoint/allocation check.
 
-Released 1 MiB blocks first enter a **per-thread LIFO reuse pool under a
-process-wide byte cap**. The reuse order is thread-local; the budget is not — a
+Released regular arena blocks first enter a **per-thread LIFO reuse pool under a process-wide byte cap**. The reuse order is thread-local; the budget is not — a
 single global reservation is what bounds N live agents to one allowance instead
 of N of them. The cap is derived by `gc_block_pool_cap_with_budget` in
 `crates/perry-runtime/src/gc/heap_budget.rs`: 64 MiB
@@ -464,7 +460,7 @@ python3 scripts/check_gc_doc_claims.py
 python3 scripts/gc_runtime_root_holders.py --self-test
 python3 scripts/gc_runtime_root_holders.py
 python3 scripts/gc_root_dominance_check.py --self-test
-cargo test -p perry-runtime --lib
+RUST_TEST_THREADS=1 cargo test -p perry-runtime --lib
 ```
 
 The dedicated performance/rooting workflows have broader compiler and host
@@ -484,15 +480,3 @@ relevance filters.
 
 [generational-plan]: https://github.com/PerryTS/perry/blob/main/docs/generational-gc-plan.md
 [statepoint-experiment]: https://github.com/PerryTS/perry/blob/main/docs/statepoint-gc-experiment.md
-
-The inline nursery cursor carries a permission bound at `InlineArenaState.size`.
-It is zero while allocate-black is active; the physical block extent remains in
-`ArenaBlock.size`. Every birth-color transition and cursor refill updates this
-same bound. A successful positive-size bump therefore proves idle birth color
-for a complete unpublished layout, while the refused path retains ordinary
-coloring and mark seeding. Native roots still use LLVM statepoints.
-
-For compiler-owned descriptors uniquely named in the whole-image layout plan,
-fixed births initialize the header with the immutable template word from that
-same plan. Opaque or ambiguous descriptors keep their checked runtime load;
-no runtime shape lookup or validity structure is introduced.

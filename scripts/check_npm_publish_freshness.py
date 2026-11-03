@@ -177,6 +177,11 @@ def load_packages(manifest: Path = MANIFEST) -> list[Package]:
     return packages
 
 
+# A template whose name holds __TRIPLE__ is published once per triple in this
+# list (npm/packaged-triples.json), under the key named after its directory.
+TRIPLE_LISTS = {"perry-target": "targets", "perry-ext": "ext"}
+
+
 def npm_package_names(npm_dir: Path = NPM_DIR) -> set[str]:
     """Package names as declared by the publish templates under npm/."""
     names = set()
@@ -187,7 +192,18 @@ def npm_package_names(npm_dir: Path = NPM_DIR) -> set[str]:
                 f"{tmpl} declares no literal `name` -- the freshness gate cannot "
                 "tell which package it publishes, so it would stop covering it"
             )
-        names.add(m.group(1))
+        name = m.group(1)
+        if "__TRIPLE__" not in name:
+            names.add(name)
+            continue
+        key = TRIPLE_LISTS.get(tmpl.parent.name)
+        if key is None:
+            raise SystemExit(
+                f"{tmpl} is a per-triple template but no triple list is named for "
+                f"{tmpl.parent.name} -- the freshness gate cannot expand it"
+            )
+        triples = json.loads((npm_dir / "packaged-triples.json").read_text())[key]
+        names.update(name.replace("__TRIPLE__", t) for t in triples)
     return names
 
 

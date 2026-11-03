@@ -362,9 +362,8 @@ pub(crate) fn collect_module_finish(
         perry_codegen::scope_env::group_scope_boxes(&mut hir_module);
     }
 
-    // Set optional-feature gates (regex/temporal/url/crypto/events/etc.) so
-    // auto-optimize links only the runtime subsystems this module can reach.
-    feature_detect::detect_optional_feature_usage(ctx, &hir_module);
+    // Optional features are selected after the graph-wide CommonJS proof
+    // discards unreachable loader arms (run_pipeline).
 
     let collected_after_insert = ctx.native_modules.len() + ctx.js_modules.len() + 1;
     progress.record(ProgressSnapshot {

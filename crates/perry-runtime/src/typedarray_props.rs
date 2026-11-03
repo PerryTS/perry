@@ -985,12 +985,10 @@ pub(crate) unsafe fn typed_array_prototype_chain_has(owner: usize, name: &str) -
         return true;
     }
     if let Some(kind) = typed_array_owner_kind_id(owner) {
-        let ctor_name = crate::typedarray_hook_slots::name_for_kind(kind);
-        let ctor =
-            crate::object::js_get_global_this_builtin_value(ctor_name.as_ptr(), ctor_name.len());
-        let raw = crate::value::js_nanbox_get_pointer(ctor) as usize;
-        if raw >= 0x10000 {
-            let proto = crate::closure::closure_get_dynamic_prop(raw, "prototype");
+        let proto = crate::object::builtin_prototype_value(
+            crate::typedarray_hook_slots::name_for_kind(kind),
+        );
+        {
             let proto_raw = crate::value::js_nanbox_get_pointer(proto) as usize;
             if proto_raw >= 0x10000 {
                 if crate::object::own_key_present(

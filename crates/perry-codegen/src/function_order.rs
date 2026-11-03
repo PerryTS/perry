@@ -54,6 +54,17 @@ pub const SORTED_SECTION_PREFIX: &str = ".text.sorted.";
 /// rank order at the front of that output section.
 pub const JS_SORTED_SECTION_PREFIX: &str = "perry_js_text.sorted.";
 
+/// Prefix of a JS body's own input section (`split_js_text`): the link
+/// drops each one nothing references and gathers the rest into the JS text
+/// output section ([`JS_TEXT_LINK_RULE`]).
+pub const JS_FN_SECTION_PREFIX: &str = "perry_js_text.fn.";
+
+/// The ELF link rule that gathers the JS text input sections into the
+/// `perry_js_text` output section: a C-identifier name, so the linker defines
+/// `__start_`/`__stop_perry_js_text` around every JS frame.
+pub const JS_TEXT_LINK_RULE: &str =
+    "SECTIONS {\n perry_js_text : ALIGN(16) {\n  *(perry_js_text perry_js_text.fn.*)\n }\n} INSERT AFTER .text;\n";
+
 /// A parsed order list: function name -> rank (0 runs first).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionOrder {
@@ -139,7 +150,7 @@ impl FunctionOrder {
         // section name, so the linker defines `__start_`/`__stop_perry_js_text`
         // around both: every JS frame is in that range.
         out.push_str(
-            "SECTIONS {\n perry_js_text : ALIGN(16) {\n  __perry_hot_js_text_start = .;\n  *(SORT(perry_js_text.sorted.*))\n  __perry_hot_js_text_end = .;\n  __perry_hot_js_text_limit = __perry_hot_js_text_end;\n  *(perry_js_text)\n }\n} INSERT AFTER .text;\n",
+            "SECTIONS {\n perry_js_text : ALIGN(16) {\n  __perry_hot_js_text_start = .;\n  *(SORT(perry_js_text.sorted.*))\n  __perry_hot_js_text_end = .;\n  __perry_hot_js_text_limit = __perry_hot_js_text_end;\n  *(perry_js_text perry_js_text.fn.*)\n }\n} INSERT AFTER .text;\n",
         );
         Ok(out)
     }
@@ -275,12 +286,25 @@ mod tests {
     #[test]
     fn elf_order_keeps_the_js_hot_run_inside_the_js_text_section() {
         let order = FunctionOrder::parse("perry_fn_a\njs_string_concat\n");
-        assert_eq!(order.js_section_for("perry_fn_a").as_deref(), Some("perry_js_text.sorted.00000000"));
-        assert_eq!(order.section_for("js_string_concat").as_deref(), Some(".text.sorted.00000001"));
+        assert_eq!(
+            order.js_section_for("perry_fn_a").as_deref(),
+            Some("perry_js_text.sorted.00000000")
+        );
+        assert_eq!(
+            order.section_for("js_string_concat").as_deref(),
+            Some(".text.sorted.00000001")
+        );
         let script = order.elf_linker_script().unwrap();
-        let js = script.split("perry_js_text : ALIGN(16)").nth(1).expect("JS text output section");
-        let first = js.find("*(SORT(perry_js_text.sorted.*))").expect("ranked first");
-        let rest = js.find("*(perry_js_text)").expect("then the rest");
+        let js = script
+            .split("perry_js_text : ALIGN(16)")
+            .nth(1)
+            .expect("JS text output section");
+        let first = js
+            .find("*(SORT(perry_js_text.sorted.*))")
+            .expect("ranked first");
+        let rest = js
+            .find("*(perry_js_text perry_js_text.fn.*)")
+            .expect("then the rest");
         assert!(first < rest);
         assert!(js.contains("__perry_hot_js_text_start"));
         assert!(js.contains("__perry_hot_js_text_limit = __perry_hot_js_text_end"));

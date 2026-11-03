@@ -153,68 +153,76 @@ fn is_es_module_target(target: &Path) -> bool {
     }
 }
 
-/// Is `name` a JS global-builtin VALUE (a constructor/namespace reachable as a
-/// bare identifier at runtime)? Used only to decide whether a CJS named export
-/// whose KEY equals such a name (`module.exports = { Error: Error }`) needs the
-/// mangled-rebinding emission so a module-scope `export const <name>` doesn't
-/// shadow the global for free references in the IIFE body. Deliberately limited
-/// to runtime VALUES (not TS-only utility types): an over-broad set would only
-/// route an unrelated export through the (correct) mangled re-export.
-fn is_global_value_builtin_name(name: &str) -> bool {
-    matches!(
-        name,
-        "Error"
-            | "TypeError"
-            | "RangeError"
-            | "SyntaxError"
-            | "ReferenceError"
-            | "EvalError"
-            | "URIError"
-            | "AggregateError"
-            | "SuppressedError"
-            | "Object"
-            | "Function"
-            | "Array"
-            | "Boolean"
-            | "Number"
-            | "String"
-            | "Symbol"
-            | "BigInt"
-            | "Math"
-            | "JSON"
-            | "Date"
-            | "RegExp"
-            | "Promise"
-            | "Proxy"
-            | "Reflect"
-            | "Map"
-            | "Set"
-            | "WeakMap"
-            | "WeakSet"
-            | "WeakRef"
-            | "ArrayBuffer"
-            | "SharedArrayBuffer"
-            | "DataView"
-            | "Buffer"
-            | "Uint8Array"
-            | "Uint8ClampedArray"
-            | "Int8Array"
-            | "Int16Array"
-            | "Uint16Array"
-            | "Int32Array"
-            | "Uint32Array"
-            | "Float32Array"
-            | "Float64Array"
-            | "BigInt64Array"
-            | "BigUint64Array"
-            // `exports.globalThis = capturedGlobalThis` (a rolldown-bundled
-            // primordials capture) — an
-            // `export const globalThis = _cjs.globalThis;` binding shadows
-            // the real global for EVERY `globalThis.<prop>` read in the
-            // body, which all evaluate before the IIFE returns, so the
-            // module read `undefined.atob` at init.
-            | "globalThis"
-    )
+/// Is `name` declared at the module body's top level (brace depth 0) as a
+/// `function`, `class`, `var`, `let` or `const` binding? Comments and strings
+/// are masked first; nested declarations (inside any function, block or
+/// object literal) do not count.
+fn identifier_declared_at_top_level(source: &str, name: &str) -> bool {
+    let masked = super::detect::strip_comments_and_strings(source);
+    let bytes = masked.as_bytes();
+    let is_ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'$';
+    let mut depth: i64 = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'{' => depth += 1,
+            b'}' => depth -= 1,
+            _ if depth == 0
+                && masked.is_char_boundary(i)
+                && (i == 0 || !is_ident(bytes[i - 1])) =>
+            {
+                for keyword in ["function", "class", "var", "let", "const"] {
+                    let rest = &masked[i..];
+                    let Some(after) = rest.strip_prefix(keyword) else {
+                        continue;
+                    };
+                    let after = after.trim_start_matches(|c: char| c.is_whitespace() || c == '*');
+                    if let Some(tail) = after.strip_prefix(name) {
+                        if !tail.bytes().next().is_some_and(is_ident) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Is `name` a global binding the runtime defines (`globalThis.<name>`:
+/// `Error`, `Buffer`, `Response`, `fetch`, `undefined`, ...)? The answer comes
+/// from the runtime's own realm declarations (`perry_codegen::realm_manifest`),
+/// generated from its source, so every global is covered with no hand-kept list.
+/// A CJS named export of such a name must never become a module-scope
+/// `export const <name>`: it would shadow the global for every free reference
+/// in the IIFE body, which all run before the IIFE returns (zod's
+/// `exports.undefined`, rolldown factories' `exports.Buffer`, undici's
+/// `exports.Response`).
+pub(super) fn is_runtime_global_name(name: &str) -> bool {
+    static GLOBALS: std::sync::OnceLock<HashSet<&'static str>> = std::sync::OnceLock::new();
+    GLOBALS
+        .get_or_init(|| {
+            perry_codegen::realm_manifest::REALM
+                .iter()
+                .map(|entry| entry.name)
+                .filter(|name| is_global_binding_name(name))
+                .chain(["globalThis", "undefined", "NaN", "Infinity"])
+                .collect()
+        })
+        .contains(name)
+}
+
+/// A realm entry naming a global binding (`Response`), not a member
+/// (`Response.prototype.json`), an intrinsic (`%IteratorPrototype%`) or a module
+/// export (`node:fs.readFile`).
+pub(super) fn is_global_binding_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'$')
+        && !name.as_bytes()[0].is_ascii_digit()
 }
 
 /// Wrap CJS source as ESM. `source_path` is the absolute path of the file
@@ -270,6 +278,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
         is_entry_module,
         compile_packages,
         None,
+        None,
         &mut Vec::new(),
         None,
     )
@@ -284,6 +293,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
     is_entry_module: bool,
     compile_packages: Option<&HashSet<String>>,
     native_addon_paths: Option<&std::collections::BTreeMap<PathBuf, String>>,
+    demanded_exports: Option<&std::collections::BTreeSet<String>>,
     messages: &mut Vec<String>,
     computed_require_warnings: Option<&mut Vec<String>>,
 ) -> (String, Option<usize>) {
@@ -1168,12 +1178,22 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
     // re-export it under the original name (`const __cjsexp_Error = _cjs.Error;
     // export { __cjsexp_Error as Error };`). The value still surfaces for named
     // imports, but no `Error` binding shadows the global in the body.
+    // Only a TOP-LEVEL declaration of the name (`function Error() {}` at module
+    // scope) makes it a genuine module binding with no global to shadow. A
+    // nested declaration (a bundled factory's `const Buffer =
+    // require_safe_buffer().Buffer`) does not cover the free global references
+    // elsewhere in the body (another factory's `typeof Buffer`), which an
+    // `export const Buffer` would capture in its dead zone.
     let builtin_value_global_collision = |n: &str| -> bool {
-        is_global_value_builtin_name(n) && !identifier_is_declared_binding(source, n)
+        is_runtime_global_name(n) && !identifier_declared_at_top_level(source, n)
     };
     let export_snapshot = |n: &str| {
-        if flat_default_class.is_some() || builtin_value_global_collision(n) {
-            // Flat emission keeps the original bindings at module scope.
+        if flat_default_class.is_some()
+            || builtin_value_global_collision(n)
+            || hoisted_class_names.iter().any(|class| class == n)
+        {
+            // Flat emission keeps the original bindings at module scope, and
+            // a hoisted class is a module-scope binding of the same name.
             // Alias all snapshots, including destructuring and multi-declarator
             // bindings the lexical scanner misses. Read the CJS property, which
             // can differ from the same-named original binding.
@@ -1181,16 +1201,6 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
         } else {
             format!("export const {n} = _cjs.{n};")
         }
-    };
-
-    let direct_class_exports = if hoisted_class_names.is_empty() {
-        String::new()
-    } else {
-        hoisted_class_names
-            .iter()
-            .map(|n| format!("export {{ {} }};", n))
-            .collect::<Vec<_>>()
-            .join("\n")
     };
 
     // Issue #665 follow-up: detect `(?:module\.)?exports\.X = require('Y')`
@@ -1253,9 +1263,41 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
         .map(|(n, _)| n.clone())
         .collect();
 
+    // A hoisted class surfaces as a direct binding (`export { X }`, keeping
+    // class identity for the consumer) only under an export key the module
+    // actually writes, and only when every write of that key stores the class
+    // binding itself (`exports.X = X`) and the binding is never reassigned.
+    // A namespace holds exactly the module's exports: a hoisted class the
+    // module keeps private is no export, and a key holding another value
+    // (`exports.X = wrap(X)`) is read from `module.exports` like any other.
+    let direct_class_names: Vec<&String> = hoisted_class_names
+        .iter()
+        .filter(|n| named_exports.contains(n) && !named_reexport_names.contains(n))
+        .filter(|n| export_key_is_own_binding(source, n) && !identifier_is_reassigned(source, n))
+        .collect();
+    let direct_class_exports = direct_class_names
+        .iter()
+        .map(|n| format!("export {{ {n} }};"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    // Names importers ask of a module whose `module.exports` value the source
+    // does not spell out (`CompilationContext::cjs_demanded_exports`): each
+    // is a snapshot of that property once the body has run, as for the
+    // names read from the source.
+    for name in demanded_exports.into_iter().flatten() {
+        if !is_js_reserved_word(name)
+            && is_identifier_name(name)
+            && !named_exports.contains(name)
+            && !hoisted_class_names.contains(name)
+            && !named_reexport_names.contains(name)
+        {
+            named_exports.push(name.clone());
+        }
+    }
+
     let named_export_decls = named_exports
         .iter()
-        .filter(|n| !hoisted_class_names.contains(n))
+        .filter(|n| !direct_class_names.contains(n))
         .filter(|n| !named_reexport_names.contains(n))
         .map(|n| export_snapshot(n))
         .collect::<Vec<_>>()
@@ -1431,10 +1473,13 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
     // module itself assigns (`exports.X = ...`), each absent until assigned,
     // so every such read and the export snapshots are slots of its layout.
     // It is the contract of this object only: a module that replaces
-    // `module.exports` publishes whatever it assigned instead.
+    // `module.exports` publishes whatever it assigned instead. A name only
+    // `Object.defineProperty` writes is no slot of it
+    // (`extract_stored_exports_from_source`).
     let exports_init = {
+        let stored = extract_stored_exports_from_source(source);
         let mut keys: Vec<&str> = Vec::new();
-        for name in &plain_exports {
+        for name in plain_exports.iter().filter(|name| stored.contains(name)) {
             let ok = !name.is_empty()
                 && name.len() <= 64
                 && name != "__proto__"
@@ -1750,14 +1795,6 @@ function __perry_require_static_{i}() {{
         // still carries any sibling classes we DID hoist; `{flat_class}` itself
         // was refused a hoist (it closes over an IIFE-local), so it stays in
         // `{body_for_iife}` and lands at module scope here unchanged.
-        // An explicit CJS property with the class's name already has its
-        // snapshot/re-export below. Do not export that name a second time.
-        let flat_class_named_export =
-            if named_exports.contains(flat_class) || named_reexport_names.contains(flat_class) {
-                String::new()
-            } else {
-                format!("export {{ {flat_class} }};")
-            };
         format!(
             r#"{imports}
 {cjs_link_decls}
@@ -1770,7 +1807,6 @@ function __perry_require_static_{i}() {{
 const _cjs = __cjs_module.exports;
 {path_register}
 export default {flat_class};
-{flat_class_named_export}
 {direct_class_exports}
 {direct_named_reexports}
 {named_export_decls}
@@ -1966,3 +2002,16 @@ mod cache_invalidation_tests;
 #[cfg(test)]
 #[path = "native_addon_tests.rs"]
 mod native_addon_tests;
+
+#[cfg(test)]
+#[path = "opaque_exports_tests.rs"]
+mod opaque_exports_tests;
+
+/// An ASCII JavaScript identifier, usable as `export const <name>`.
+fn is_identifier_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_' || c == '$')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+}

@@ -7,6 +7,7 @@ use anyhow::Result;
 use swc_common::Spanned;
 use swc_ecma_ast as ast;
 mod default_export_binding;
+pub(super) mod import_redeclaration;
 mod namespace;
 pub(super) mod native_default_import;
 pub(super) mod native_profile_import;
@@ -722,7 +723,13 @@ pub(crate) fn lower_module_decl(
                                     let module_name = match (class_name, module_name.as_deref()) {
                                         _ if matches!(
                                             sqlite_export,
-                                            Some("DatabaseSync" | "StatementSync" | "Session")
+                                            Some(
+                                                "Database"
+                                                    | "DatabaseSync"
+                                                    | "Statement"
+                                                    | "StatementSync"
+                                                    | "Session"
+                                            )
                                         ) =>
                                         {
                                             None
