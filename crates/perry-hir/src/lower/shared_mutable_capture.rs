@@ -1362,7 +1362,7 @@ fn is_redundant_cell_propagation(items: &[Expr], index_uses: &HashSet<LocalId>) 
     };
     index_uses.contains(&written)
         && matches!(object.as_ref(), Expr::This)
-        && property.starts_with("__perry_cap_")
+        && crate::cap_fields::is_cap_field_name(property)
         && matches!(value.as_ref(), Expr::LocalGet(id) if *id == written)
 }
 
@@ -1576,7 +1576,7 @@ fn rewrite_expr(expr: &mut Expr, shared: &HashSet<LocalId>, index_uses: &HashSet
         // handle on the instance field so methods snapshot the shared array.
         Expr::PropertySet {
             object, property, ..
-        } if matches!(object.as_ref(), Expr::This) && property.starts_with("__perry_cap_") => {
+        } if matches!(object.as_ref(), Expr::This) && crate::cap_fields::is_cap_field_name(property) => {
             return;
         }
         // Constructor PUBLISH `ClassEnvSet { value: LocalGet(param) }`: the

@@ -457,7 +457,7 @@ pub fn synthesize_class_captures(
     if let Some(pname) = extends_name {
         if let Some(parent_fields) = ctx.lookup_class_field_names(pname) {
             for f in parent_fields {
-                if f.starts_with("__perry_cap_") {
+                if crate::cap_fields::is_cap_field_name(f) {
                     inherited_cap_field_names.insert(f.clone());
                 }
             }
@@ -479,7 +479,7 @@ pub fn synthesize_class_captures(
             continue;
         }
         fields.push(ClassField {
-            origin: crate::ClassFieldOrigin::Definition,
+            origin: crate::ClassFieldOrigin::Capture,
             name: crate::cap_fields::cap_field_name(cap_salt, cid),
             key_expr: None,
             ty: Type::Any,

@@ -76,7 +76,7 @@ impl JsEmitter {
             for field in class
                 .fields
                 .iter()
-                .filter(|f| f.origin == perry_hir::ClassFieldOrigin::Definition)
+                .filter(|f| f.origin.is_definition())
             {
                 if let Some(init) = &field.init {
                     // Only emit if constructor body doesn't set this field
@@ -106,7 +106,7 @@ impl JsEmitter {
             for field in class
                 .fields
                 .iter()
-                .filter(|f| f.origin == perry_hir::ClassFieldOrigin::Definition)
+                .filter(|f| f.origin.is_definition())
             {
                 self.write_indent();
                 let _ = write!(self.output, "this.{} = ", field.name);

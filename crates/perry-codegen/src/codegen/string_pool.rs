@@ -990,7 +990,7 @@ pub(super) fn emit_string_pool(
             .map(|c| {
                 c.params
                     .iter()
-                    .filter(|p| p.name.starts_with("__perry_cap_"))
+                    .filter(|p| perry_hir::cap_fields::is_cap_field_name(&p.name))
                     .count() as u32
             })
             .unwrap_or(0);
@@ -1345,7 +1345,7 @@ pub(super) fn emit_string_pool(
                     ctor.params
                         .iter()
                         .take_while(|p| {
-                            !p.is_rest && p.default.is_none() && !p.name.starts_with("__perry_cap_")
+                            !p.is_rest && p.default.is_none() && !perry_hir::cap_fields::is_cap_field_name(&p.name)
                         })
                         .count() as u32
                 })

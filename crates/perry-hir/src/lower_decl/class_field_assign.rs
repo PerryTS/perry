@@ -156,10 +156,10 @@ pub(crate) fn settle_reservations(
         }
     }
     fields.retain(|field| {
-        field.origin == ClassFieldOrigin::Definition || order.contains(&field.name)
+        field.origin.is_definition() || order.contains(&field.name)
     });
     fields.sort_by_key(|field| match field.origin {
-        ClassFieldOrigin::Definition => 0,
+        ClassFieldOrigin::Definition | ClassFieldOrigin::Capture => 0,
         ClassFieldOrigin::Declared => usize::MAX,
         ClassFieldOrigin::ConstructorStore => order
             .iter()

@@ -494,9 +494,25 @@ pub enum ClassFieldOrigin {
     /// limited by the late-key budget. Only [`Class::is_declared_keys_record`]
     /// classes carry it.
     Declared,
+    /// A compiler capture field, synthesized by `synthesize_class_captures`.
+    /// It is defined at birth like [`ClassFieldOrigin::Definition`] (see
+    /// [`ClassFieldOrigin::is_definition`]); this origin is the one place that
+    /// says "compiler capture field": no reader looks at the name.
+    Capture,
 }
 
 impl ClassFieldOrigin {
+    /// The field defines its property at birth (a source definition or a
+    /// compiler capture field).
+    pub fn is_definition(self) -> bool {
+        matches!(self, ClassFieldOrigin::Definition | ClassFieldOrigin::Capture)
+    }
+
+    /// The field is a compiler capture field.
+    pub fn is_capture(self) -> bool {
+        matches!(self, ClassFieldOrigin::Capture)
+    }
+
     /// The field defines no property at birth (a reservation the
     /// constructor or a later store fills).
     pub fn is_reservation(self) -> bool {

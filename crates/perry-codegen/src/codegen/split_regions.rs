@@ -1591,9 +1591,7 @@ fn split_body(
     // which are stored outside this body. Preserve their shared cells using
     // lowering's reserved capture names, just like captures found in-body.
     captured.extend(params.iter().filter_map(|p| {
-        p.name
-            .starts_with(perry_hir::cap_fields::CAP_FIELD_PREFIX)
-            .then_some(p.id)
+        perry_hir::cap_fields::is_cap_field_name(&p.name).then_some(p.id)
     }));
     let boxed: HashSet<u32> = captured
         .iter()
