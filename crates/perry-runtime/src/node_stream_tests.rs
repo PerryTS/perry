@@ -1275,7 +1275,7 @@ fn stream_json_stringify_uses_node_state_shape() {
     ));
     assert_eq!(
         readable_json,
-        r#"{"_events":{},"_readableState":{"highWaterMark":65536,"buffer":[],"bufferIndex":0,"length":0,"pipes":[],"awaitDrainWriters":null}}"#
+        r#"{"_events":{},"_readableState":{"highWaterMark":65536,"buffer":[],"bufferIndex":0,"length":0,"fastChunk":null,"pipeOnData":null,"pipePause":null,"pipes":[],"awaitDrainWriters":null}}"#
     );
 
     let writable = js_node_stream_writable_new(f64::from_bits(TAG_UNDEFINED));
