@@ -235,6 +235,12 @@ pub unsafe extern "C-unwind" fn js_class_value_super_construct_site(
         args_ptr,
         args_len,
     ));
+    // One rule with a capability fallback: js_fetch_or_value_super first asks
+    // the native side for the export's in-place init (the receiver stays
+    // `this`; the result is the receiver or undefined), and the relink below
+    // then returns early (result == receiver). Only an export WITHOUT an
+    // in-place form yields a fresh object born on the export's prototype, and
+    // that object is relinked to newTarget.prototype.
     link_native_super_result(result.get_nanbox_f64(), receiver.get_nanbox_f64());
     link_native_super_object(
         parent.get_nanbox_f64(),
@@ -492,6 +498,50 @@ mod tests {
                 result.to_bits(),
                 crate::value::TAG_UNDEFINED,
                 "receiver replaced"
+            );
+        }
+    }
+
+    /// Capability fallback of the one `super()` rule: the in-place init runs
+    /// first (the test above); an export WITHOUT an in-place form answers
+    /// undefined, the generic construct returns a FRESH object born on the
+    /// export prototype, and `link_native_super_object` relinks it to
+    /// newTarget.prototype once. An in-place init that handled the
+    /// construction leaves `result == receiver`, where the relink returns early.
+    #[test]
+    fn super_into_export_without_in_place_form_relinks_the_fresh_object() {
+        unsafe {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let parent = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
+                "zlib", "Gzip",
+            ));
+            let parent_proto = scope.root_nanbox_f64(
+                crate::object::js_function_prototype_value_for_read(parent.get_nanbox_f64()),
+            );
+            assert!(
+                JSValue::from_bits(parent_proto.get_nanbox_u64()).is_pointer(),
+                "export has a prototype object"
+            );
+            let target_proto = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
+            let target_proto_value = target_proto
+                .with_mut_ptr::<ObjectHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64));
+            let receiver = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
+            let receiver_value = receiver
+                .with_mut_ptr::<ObjectHeader, _>(|r| crate::value::js_nanbox_pointer(r as i64));
+            crate::object::js_object_set_prototype_of(receiver_value, target_proto_value);
+            let fresh = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
+            let fresh_value = fresh
+                .with_mut_ptr::<ObjectHeader, _>(|f| crate::value::js_nanbox_pointer(f as i64));
+            crate::object::js_object_set_prototype_of(fresh_value, parent_proto.get_nanbox_f64());
+            link_native_super_object(parent.get_nanbox_f64(), fresh_value, receiver_value);
+            let fresh_value = fresh
+                .with_mut_ptr::<ObjectHeader, _>(|f| crate::value::js_nanbox_pointer(f as i64));
+            let target_proto_value = target_proto
+                .with_mut_ptr::<ObjectHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64));
+            assert_eq!(
+                crate::object::js_object_get_prototype_of(fresh_value).to_bits(),
+                target_proto_value.to_bits(),
+                "fresh object not relinked to newTarget.prototype"
             );
         }
     }
