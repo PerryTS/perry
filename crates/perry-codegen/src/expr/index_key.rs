@@ -228,10 +228,18 @@ mod tests {
             ir.contains("call i32 @perry_array_index_normalize_i32"),
             "{ir}"
         );
+        // The runtime-key arm hands the original key to the shared cold read
+        // (#119da3bb1); the retired helper may still be declared, so assert
+        // the call inside that block, not the symbol's presence.
+        let runtime_block = ir
+            .split_once("\naidx.runtime_key.")
+            .map(|(_, rest)| rest.split("\n\n").next().unwrap_or(rest))
+            .unwrap_or_else(|| panic!("no runtime-key block: {ir}"));
         assert!(
-            ir.contains("aidx.runtime_key") && ir.contains("js_array_get_index_or_string"),
-            "{ir}"
+            runtime_block.contains("call double @perry_array_read_cold_shared("),
+            "{runtime_block}"
         );
+        assert!(!ir.contains("call double @js_array_get_index_or_string("), "{ir}");
     }
 
     #[test]

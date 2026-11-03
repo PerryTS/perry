@@ -1207,37 +1207,29 @@ pub(super) fn is_macos_triple(triple: &str) -> bool {
     target_os_of(triple) == Some("macos")
 }
 
-pub(super) fn emit_buffer_alias_metadata(llmod: &mut LlModule, count: u32) {
-    if count == 0 {
+/// Define every buffer alias scope the module's functions committed: one
+/// shared domain, then per scope `S` its node, its single-scope list `S+1`
+/// and its noalias list `S+2` (every other scope). All ids come from the
+/// module's one metadata id counter (`LlModule::buffer_alias_scope_allocator`),
+/// so no count of scopes can make two definitions share an id.
+pub(crate) fn emit_buffer_alias_metadata(llmod: &mut LlModule) {
+    let scopes = llmod.buffer_alias_scopes().to_vec();
+    if scopes.is_empty() {
         return;
     }
-    // Shared domain.
-    llmod.add_metadata_line("!100 = distinct !{!100}".to_string());
-    // Per-buffer scope nodes.
-    for i in 0..count {
-        let sid = 101 + i;
-        llmod.add_metadata_line(format!("!{} = distinct !{{!{}, !100}}", sid, sid));
-    }
-    // Single-element alias-scope lists (one per buffer).
-    for i in 0..count {
-        let list_id = 201 + i;
-        let scope_id = 101 + i;
-        llmod.add_metadata_line(format!("!{} = !{{!{}}}", list_id, scope_id));
-    }
-    // Noalias lists: for buffer i, every *other* buffer's scope.
-    for i in 0..count {
-        let list_id = 301 + i;
-        let others: Vec<String> = (0..count)
-            .filter(|j| *j != i)
-            .map(|j| format!("!{}", 101 + j))
+    let domain = llmod.allocate_metadata_id();
+    llmod.add_metadata_line(format!("!{domain} = distinct !{{!{domain}}}"));
+    for &scope in &scopes {
+        llmod.add_metadata_line(format!("!{scope} = distinct !{{!{scope}, !{domain}}}"));
+        llmod.add_metadata_line(format!("!{} = !{{!{scope}}}", scope + 1));
+        let others: Vec<String> = scopes
+            .iter()
+            .filter(|other| **other != scope)
+            .map(|other| format!("!{other}"))
             .collect();
-        if others.is_empty() {
-            // Single buffer: empty noalias set — LLVM accepts `!{}` but
-            // it's a no-op. Still emit so `!noalias !{N}` references resolve.
-            llmod.add_metadata_line(format!("!{} = !{{}}", list_id));
-        } else {
-            llmod.add_metadata_line(format!("!{} = !{{{}}}", list_id, others.join(", ")));
-        }
+        // A single buffer still gets its (empty) noalias set so the
+        // `!noalias !{S+2}` reference resolves.
+        llmod.add_metadata_line(format!("!{} = !{{{}}}", scope + 2, others.join(", ")));
     }
 }
 

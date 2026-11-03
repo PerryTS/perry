@@ -789,6 +789,7 @@ impl Model {
             parent_value: None,
             parent_links: Vec::new(),
             null_proto: false,
+            chain_miss: false,
             species: None,
         });
         self.fn_inst.insert(f, id);
@@ -802,6 +803,10 @@ impl Model {
 
     /// `recv.key(args)` on token `t`.
     pub(super) fn method_on(&mut self, t: Tok, key: Key, call: CallId) {
+        // DECISIONS 242(2): a call of a key the receiver may not own.
+        if t != TOP {
+            self.note_chain_miss(t, key);
+        }
         // A method of a published receiver's class (DECISIONS 59).
         let virt = match key {
             Key::Named(a) if t != TOP => self.virt_load(t, a),

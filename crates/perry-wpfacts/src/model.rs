@@ -415,6 +415,14 @@ pub struct Template {
     /// stand-in has no members and no prototype, so a lookup through it ends
     /// there and never reaches `Object.prototype`.
     pub null_proto: bool,
+    /// DECISIONS 242: a lookup on an object of this template may pass its
+    /// own keys and reach the prototype chain: a [[Get]] or call of a key
+    /// that is not a definite own data key (a computed key included), or a
+    /// [[Set]] of one (which may add it). Set by the solve
+    /// (`Model::note_chain_miss`). Without one, an accessor under any key on
+    /// `Object.prototype` reaches the template only if its keys are made by
+    /// [[Set]] (a constructor's `this.k =`), never a literal's birth keys.
+    pub chain_miss: bool,
     /// An array a builtin made with ArraySpeciesCreate (ECMA-262 10.4.2.3:
     /// `slice`, `splice`, `concat`, `map`, `filter`, `flat`, `flatMap`): the
     /// node of the constructors the algorithm may take, each receiver's
@@ -1623,6 +1631,18 @@ pub struct Model {
     /// argument markers, settled after the solve (`settle_keyed_uses`):
     /// the contract publishes them.
     pub keyed_uses: FxHashMap<Tok, Vec<(Atom, u8)>>,
+    /// DECISIONS 242 (contract half): the miss sites (`note_chain_miss`)
+    /// met on a marker token during the solve, and, settled after it over
+    /// `marker_members` (`settle_marker_ops`), per parameter marker: the
+    /// contract publishes them (`reach_keys`), the caller runs them on its
+    /// argument (`Cons::Miss`).
+    pub marker_reads: FxHashMap<Tok, Vec<Key>>,
+    pub param_reads: FxHashMap<Tok, Vec<Key>>,
+    /// DECISIONS 242 (contract half): the defineProperty calls (key, `None`
+    /// computed; data) met on a marker token, and per parameter marker
+    /// after the solve (`settle_marker_ops`): `FnContract::param_defines`.
+    pub marker_defines: FxHashMap<Tok, Vec<(Option<Atom>, bool)>>,
+    pub param_defines: FxHashMap<Tok, Vec<(Option<Atom>, bool)>>,
     /// An argument marker: the uses some named key of it had, its own
     /// (its keyed reach markers') and its containers' (`keyed_use`). During
     /// the solve a keyed use matters to the markers it stands for only as

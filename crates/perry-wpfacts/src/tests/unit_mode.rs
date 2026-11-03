@@ -632,3 +632,6 @@ mod foreign_fn_own_key;
 
 #[path = "unit_mode/activation.rs"]
 mod activation;
+
+#[path = "unit_mode/chain_fact.rs"]
+mod chain_fact;

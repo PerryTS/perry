@@ -34,8 +34,9 @@ fn set_metadata_kind<'ctx>(
 /// `llvm.experimental.noalias.scope.decl` scope lists, whose scopes are
 /// `!{!"owner.N", !{!"DOMAIN"}}`. Built through the uniquing MDNode API, so
 /// equal text yields the identical node, exactly as LLVM's own parser
-/// uniques inline tuples. Numbered `!N` references name module metadata the
-/// reader cannot see and stay a loud error here.
+/// uniques inline tuples. Numbered `!N` references are not inline trees:
+/// attachments resolve them through `NumberedMetadata`, and inside an inline
+/// tree they stay a loud error here.
 pub(super) fn inline_metadata<'ctx>(ctx: &'ctx Context, tok: &str) -> Result<MetadataValue<'ctx>> {
     let (node, rest) =
         metadata_tuple(ctx, tok.trim()).with_context(|| format!("metadata operand `{tok}`"))?;
@@ -78,7 +79,7 @@ fn metadata_tuple<'ctx, 's>(
 }
 
 /// Decode LLVM's `\XX` hex byte escapes (`\5C` is a backslash).
-fn unescape_llvm_bytes(s: &str) -> Result<String> {
+pub(super) fn unescape_llvm_bytes(s: &str) -> Result<String> {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -105,12 +106,13 @@ fn unescape_llvm_bytes(s: &str) -> Result<String> {
 /// and are left off, which only drops an optimization hint.
 pub(super) fn attach_trailing_metadata<'ctx>(
     ctx: &'ctx Context,
+    metadata: &super::NumberedMetadata<'ctx>,
     inst: Option<InstructionValue<'ctx>>,
     parts: &[String],
 ) -> Result<()> {
     let Some(inst) = inst else { return Ok(()) };
     for part in parts {
-        let Some(attachment) = part.strip_prefix('!') else {
+        let Some(attachment) = part.trim().strip_prefix('!') else {
             continue;
         };
         let Some((kind, node)) = attachment.split_once(char::is_whitespace) else {
@@ -121,6 +123,12 @@ pub(super) fn attach_trailing_metadata<'ctx>(
             set_invariant_load(ctx, inst);
         } else if node.starts_with("!{") {
             set_metadata_kind(ctx, inst, kind, inline_metadata(ctx, node)?);
+        } else if let Some(id) = node.strip_prefix('!').and_then(|id| id.parse::<u32>().ok()) {
+            // A numbered node (`!alias.scope !N`, `!llvm.loop !N`): the
+            // module's own definition, never dropped.
+            set_metadata_kind(ctx, inst, kind, metadata.node(ctx, id)?);
+        } else {
+            bail!("unsupported metadata attachment `{part}`");
         }
     }
     Ok(())

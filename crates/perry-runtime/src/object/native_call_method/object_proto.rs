@@ -431,12 +431,7 @@ pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64)
     };
 
     if crate::date::is_date_value(target) {
-        let ctor = crate::object::js_get_global_this_builtin_value(b"Date".as_ptr(), 4);
-        let ctor_ptr = crate::value::js_nanbox_get_pointer(ctor) as usize;
-        if ctor_ptr == 0 {
-            return false;
-        }
-        let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
+        let proto = crate::object::builtin_prototype_value("Date");
         if let Some(proto_addr) = heap_addr(proto) {
             return proto_addr == receiver_addr;
         }

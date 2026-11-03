@@ -42,7 +42,7 @@ for.body.36:
   store i8 2, ptr %p1, align 1, !alias.scope !2, !noalias !3
   %p2 = getelementptr inbounds i8, ptr %base, i64 %i2
   store i8 3, ptr %p2, align 1, !alias.scope !2, !noalias !3
-  br label %while.body.40
+  br i1 %more36, label %for.body.36, label %while.body.40
 while.body.40:
   %noise0 = load i8, ptr %p0, align 1, !invariant.load !1, !alias.scope !2, !noalias !3
   %noise1 = load i8, ptr %p1, align 1, !invariant.load !1, !alias.scope !2, !noalias !3
@@ -53,13 +53,13 @@ while.body.40:
   %n3 = xor i32 %n2, %seed3
   %nb = trunc i32 %n3 to i8
   store i8 %nb, ptr %p0, align 1, !alias.scope !2, !noalias !3
-  br label %for.body.56
+  br i1 %more40, label %while.body.40, label %for.body.56
 for.body.56:
   %b0 = load i8, ptr %p0, align 1, !invariant.load !1, !alias.scope !2, !noalias !3
   %b1 = load i8, ptr %p1, align 1, !invariant.load !1, !alias.scope !2, !noalias !3
   %b2 = load i8, ptr %p2, align 1, !invariant.load !1, !alias.scope !2, !noalias !3
   store i8 %b0, ptr %p2, align 1, !alias.scope !2, !noalias !3
-  br label %for.body.64
+  br i1 %more56, label %for.body.56, label %for.body.64, !llvm.loop !12
 for.body.64:
   %hbyte = load i8, ptr %p2, align 1, !invariant.load !1, !alias.scope !2, !noalias !3
   %x = zext i8 %hbyte to i32
@@ -70,7 +70,15 @@ for.body.64:
 !1 = !{}
 !2 = !{}
 !3 = !{}
+!12 = distinct !{!12, !22}
+!22 = !{!"perry.region", !"image_conv_ts.module_init.blur"}
 """
+
+# The labelled image loop a GOOD_IR block belongs to (codegen records the
+# region id of the labelled loop it lowers).
+IMAGE_REGION_OF_BLOCK = {
+    "for.body.56": "image_conv_ts.module_init.blur",
+}
 
 GOOD_ASM = """
 main:
@@ -89,23 +97,33 @@ for.body.8:
   %p0 = getelementptr i8, ptr %src, i32 %i
   %b = load i8, ptr %p0
   store i8 %b, ptr %p0
-  br label %for.body.12
+  br i1 %ok, label %for.body.8, label %for.body.12, !llvm.loop !10
 for.body.12:
   %p1 = getelementptr i8, ptr %src, i32 %i
   %b1 = load i8, ptr %p1
   store i8 %b1, ptr %p1
-  br label %for.body.18
+  br i1 %ok, label %for.body.12, label %for.body.18, !llvm.loop !11
 for.body.18:
   %p2 = getelementptr i8, ptr %src, i32 %i
   %b2 = load i8, ptr %p2
   store i8 %b2, ptr %p2
-  br label %for.body.2.i
+  br i1 %ok, label %for.body.18, label %for.body.2.i, !llvm.loop !12
 for.body.2.i:
   %p3 = getelementptr i8, ptr %src, i32 %i
   %b3 = load i8, ptr %p3
   store i8 %b3, ptr %p3
+  br i1 %ok, label %for.body.2.i, label %exit, !llvm.loop !13
+exit:
   ret i32 0
 }
+!10 = distinct !{!10, !20}
+!11 = distinct !{!11, !21}
+!12 = distinct !{!12, !22}
+!13 = distinct !{!13, !23}
+!20 = !{!"perry.region", !"h1_native_rep_equivalence_ts.module_init.direct_bounded"}
+!21 = !{!"perry.region", !"h1_native_rep_equivalence_ts.module_init.local_cast"}
+!22 = !{!"perry.region", !"h1_native_rep_equivalence_ts.module_init.helper_index"}
+!23 = !{!"perry.region", !"h1_native_rep_equivalence_ts.incinplace.same_buffer"}
 """
 
 
@@ -261,7 +279,7 @@ def image_native_records():
             emitted_inbounds=True,
         ),
     ]
-    return [
+    records = [
         *input_records,
         *input_records,
         *input_records,
@@ -346,6 +364,10 @@ def image_native_records():
             expr_kind="MathImul",
             consumer="lower_expr_native_i32.structural",
         ),
+    ]
+    return [
+        {**record, "region_id": IMAGE_REGION_OF_BLOCK.get(record["block_label"])}
+        for record in records
     ]
 
 
@@ -558,10 +580,11 @@ def h1_equivalence_native_records():
         "helper_index": "h1_native_rep_equivalence_ts.module_init.helper_index",
         "same_buffer": "h1_native_rep_equivalence_ts.incinplace.same_buffer",
     }
+    # The H1_MIN_IR blocks the records name: each region resolves from them.
     blocks = {
-        "direct_bounded": "for.body.2",
-        "local_cast": "for.body.6",
-        "helper_index": "for.body.10",
+        "direct_bounded": "for.body.8",
+        "local_cast": "for.body.12",
+        "helper_index": "for.body.18",
         "same_buffer": "for.body.2.i",
     }
     records = []
@@ -891,6 +914,7 @@ entry:
         )
         fnv_record["block_label"] = "for.body.56"
         fnv_record["lowering_block"] = "for.body.56"
+        fnv_record["region_id"] = IMAGE_REGION_OF_BLOCK["for.body.56"]
 
         report = HARNESS.verify_artifacts(
             workload="image_convolution",
@@ -2412,6 +2436,203 @@ idxset.bounded_numeric_merge.5:
                 for error in report["errors"]
             )
         )
+
+    def test_loop_header_length_loads_finds_a_per_iteration_length_reload(self):
+        from compiler_output_harness.analyzers import loop_header_length_loads
+
+        reload = """define double @f(double %a) {
+entry.0:
+  %b = bitcast double %a to i64
+  %h = and i64 %b, 281474976710655
+  %p = inttoptr i64 %h to ptr
+  br label %for.cond.1
+for.cond.1:
+  %i = phi i32 [ 0, %entry.0 ], [ %n, %for.body.2 ]
+  %len = load i32, ptr %p, align 4
+  %c = icmp slt i32 %i, %len
+  br i1 %c, label %for.body.2, label %for.exit.3
+for.body.2:
+  %n = add i32 %i, 1
+  br label %for.cond.1
+for.exit.3:
+  ret double 0.0
+}
+"""
+        self.assertEqual(loop_header_length_loads(reload), {"f": ["for.cond.1"]})
+        # The same load hoisted to the preheader is loop-invariant.
+        hoisted = reload.replace(
+            "  br label %for.cond.1\nfor.cond.1:\n  %i = phi i32 [ 0, %entry.0 ], [ %n, %for.body.2 ]\n  %len = load i32, ptr %p, align 4\n",
+            "  %len = load i32, ptr %p, align 4\n  br label %for.cond.1\nfor.cond.1:\n  %i = phi i32 [ 0, %entry.0 ], [ %n, %for.body.2 ]\n",
+        )
+        self.assertNotEqual(hoisted, reload)
+        self.assertEqual(loop_header_length_loads(hoisted), {})
+        # An element load through a data pointer is not a length word.
+        element = reload.replace("inttoptr i64 %h to ptr", "inttoptr i64 %d to ptr").replace(
+            "  %h = and i64 %b, 281474976710655\n",
+            "  %h = and i64 %b, 281474976710655\n  %d = add i64 %h, 16\n",
+        )
+        self.assertEqual(loop_header_length_loads(element), {})
+
+    def test_native_id_region_resolves_by_its_loop_id_not_labels(self):
+        workloads = {
+            "native_id_region": {
+                "named_regions": [
+                    {
+                        "name": "stores",
+                        "native_region_id": "t.module_init.stores",
+                        "required": True,
+                        "no_runtime_calls": True,
+                        "checks": [{"name": "stores_bytes", "min": {"store_i8": 2}}],
+                    }
+                ],
+            }
+        }
+        ir = """
+define i32 @main() {
+entry:
+  br label %vector.body
+vector.body:
+  call void @llvm.masked.store.v64i8.p0(<64 x i8> %v, ptr align 1 %p, <64 x i1> %m)
+  br i1 %more, label %vector.body, label %scalar.body, !llvm.loop !10
+scalar.body:
+  store i8 1, ptr %p, align 1
+  br i1 %more2, label %scalar.body, label %other.body, !llvm.loop !11
+other.body:
+  store i8 2, ptr %p, align 1
+  call void @js_uint8array_set(double %x, double %y, double %z)
+  br i1 %more3, label %other.body, label %exit, !llvm.loop !12
+exit:
+  ret i32 0
+}
+!10 = distinct !{!10, !20, !21}
+!11 = distinct !{!11, !20}
+!12 = distinct !{!12, !22}
+!20 = !{!"perry.region", !"t.module_init.stores"}
+!21 = !{!"llvm.loop.isvectorized", i32 1}
+!22 = !{!"perry.region", !"t.module_init.other"}
+"""
+
+        def verify(ir_after):
+            return HARNESS.verify_artifacts(
+                workload="native_id_region",
+                ir_before=ir,
+                ir_after=ir_after,
+                assembly=GOOD_ASM,
+                benchmark={"runs": [{"exit_code": 0}]},
+                vectorization={"vectorized_count": 1, "missed_count": 0, "analysis_count": 0},
+                workloads=workloads,
+                native_reps=[{"records": []}],
+            )
+
+        # The vector body and its remainder both carry the region's loop ID;
+        # the other region's loop (and its runtime call) is not part of it.
+        report = verify(ir)
+        self.assertEqual(report["status"], "pass", report["errors"])
+        self.assertEqual(
+            report["named_regions"]["stores"]["labels"], ["vector.body", "scalar.body"]
+        )
+        self.assertEqual(report["named_regions"]["stores"]["store_i8"], 2)
+
+        # LLVM dropped the loop ID: the region is gone, the gate fails closed.
+        report = verify(ir.replace(", !llvm.loop !10", "").replace(", !llvm.loop !11", ""))
+        self.assertEqual(report["status"], "fail")
+        self.assertTrue(
+            any("named_region_stores_present" in error for error in report["errors"])
+        )
+
+        # A tagged branch that is not a back edge names no loop.
+        report = verify(
+            ir.replace(
+                "br i1 %more2, label %scalar.body, label %other.body, !llvm.loop !11",
+                "br label %other.body, !llvm.loop !11",
+            ).replace(", !llvm.loop !10", "")
+        )
+        self.assertEqual(report["status"], "fail")
+
+    BYTE_VIEW_IR = """
+define double @perry_fn_t__inc(double %buf) {
+entry:
+  %ok = call i1 @admit(double %buf)
+  br i1 %ok, label %fast.pre, label %slow.pre, !perry.byte_view.version !5
+fast.pre:
+  br label %fast.body
+fast.body:
+  %b = load i8, ptr %p, align 1
+  store i8 %b, ptr %p, align 1
+  br i1 %more, label %fast.body, label %merge, !llvm.loop !10
+slow.pre:
+  br label %slow.body
+slow.body:
+  %g = call double @js_uint8array_get(double %buf, double %i)
+  call void @js_uint8array_set(double %buf, double %i, double %g)
+  br i1 %more, label %slow.body, label %merge, !llvm.loop !11
+merge:
+  ret double 0.0
+}
+!5 = !{}
+!10 = distinct !{!10, !20}
+!11 = distinct !{!11, !20, !21}
+!20 = !{!"perry.region", !"t.inc.same_buffer"}
+!21 = !{!"perry.byte_view.fallback"}
+"""
+
+    def test_byte_view_original_copy_is_excluded_only_behind_its_admission(self):
+        ir = self.BYTE_VIEW_IR
+
+        def counts(text):
+            after = HARNESS.structural_counters("", text, "")["llvm_after"]
+            return (
+                after["buffer_slow_path_calls"],
+                after["buffer_slow_path_calls_behind_byte_view_version"],
+            )
+
+        # Both slow calls sit in the original copy behind the admission.
+        self.assertEqual(counts(ir), (0, 2))
+        regions = HARNESS.loop_tagged_regions(ir)
+        self.assertEqual(
+            sorted(label for _, label, _ in regions["t.inc.same_buffer"]), ["fast.body"]
+        )
+        # The admission's polarity does not matter (InstCombine may swap it).
+        swapped = ir.replace(
+            "br i1 %ok, label %fast.pre, label %slow.pre,",
+            "br i1 %nok, label %slow.pre, label %fast.pre,",
+        )
+        self.assertEqual(counts(swapped), (0, 2))
+        # The refused admission threaded around the branch still enters only
+        # the original copy.
+        threaded = ir.replace(
+            "entry:\n  %ok",
+            "entry:\n  br i1 %heap, label %check, label %slow.pre\ncheck:\n  %ok",
+        )
+        self.assertEqual(counts(threaded), (0, 2))
+
+    def test_byte_view_slow_path_gate_fails_without_admission_or_in_fast_copy(self):
+        ir = self.BYTE_VIEW_IR
+
+        def counted(text):
+            return HARNESS.structural_counters("", text, "")["llvm_after"][
+                "buffer_slow_path_calls"
+            ]
+
+        # No admission branch (the version check removed): everything counts.
+        self.assertEqual(counted(ir.replace(", !perry.byte_view.version !5", "")), 2)
+        # A slow call in the fast copy counts.
+        in_fast = ir.replace(
+            "  %b = load i8, ptr %p, align 1\n",
+            "  %b = call double @js_uint8array_get(double %buf, double %i)\n",
+        )
+        self.assertEqual(counted(in_fast), 1)
+        # No fallback mark on the original copy: nothing is excluded.
+        self.assertEqual(counted(ir.replace("!11 = distinct !{!11, !20, !21}", "!11 = distinct !{!11, !20}")), 2)
+        # The fast copy flowing into the original copy: nothing is excluded.
+        leaky = ir.replace(
+            "br i1 %more, label %fast.body, label %merge, !llvm.loop !10",
+            "br i1 %more, label %fast.body, label %slow.pre, !llvm.loop !10",
+        )
+        self.assertEqual(counted(leaky), 2)
+        # Both sides marked as the original copy: ambiguous, nothing excluded.
+        both = ir.replace("!10 = distinct !{!10, !20}", "!10 = distinct !{!10, !20, !21}")
+        self.assertEqual(counted(both), 2)
 
     def test_scoped_materialization_checks_ignore_out_of_region_records(self):
         workloads = {

@@ -155,7 +155,7 @@ pub(super) fn compile_module_init(
     // wrapper above, both within this module and across modules.
     let init_name = init_body_name;
     let ic_base = llmod.ic_counter;
-    let buffer_alias_base = llmod.buffer_alias_counter;
+    let buffer_alias_scopes = llmod.buffer_alias_scope_allocator();
     let init_fn = llmod.define_function(&init_name, VOID, vec![]);
     // Keep the body symbol available to the legacy direct-body worker path.
     // Worker programs use the guarded wrapper, whose state is per thread.
@@ -281,6 +281,7 @@ pub(super) fn compile_module_init(
         source_function: "module_init".to_string(),
         source_function_slug: crate::expr::native_region_slug("module_init"),
         active_region_id: None,
+        byte_view_fallback_loop: false,
         native_facts: &init_native_facts,
         locals: HashMap::new(),
         local_types: init_local_types,
@@ -307,6 +308,7 @@ pub(super) fn compile_module_init(
         loop_targets: Vec::new(),
         label_targets: HashMap::new(),
         pending_labels: Vec::new(),
+        region_only_label: None,
         classes,
         class_hierarchy: &cross_module.class_hierarchy,
         wpfacts: cross_module.wpfacts.clone(),
@@ -575,7 +577,7 @@ pub(super) fn compile_module_init(
         known_noalias_buffer_locals: init_native_facts.known_noalias_buffer_locals(),
         sealed_buffer_locals: init_native_facts.sealed_buffer_locals(),
         late_exposed_buffer_locals: init_native_facts.late_exposed_buffer_locals(),
-        buffer_alias_base,
+        buffer_alias_scopes,
     };
     // Register every module-level global's ADDRESS as a GC root —
     // same reason as the entry-module branch above (issue #36). For
@@ -698,11 +700,11 @@ pub(super) fn compile_module_init(
     let ic_end = ctx.ic_site_counter;
     let pending = std::mem::take(&mut ctx.pending_declares);
     let helpers = std::mem::take(&mut ctx.pending_helpers);
-    let buffer_alias_used = ctx.buffer_data_slots.len() as u32;
+    let buffer_alias_scopes = std::mem::take(&mut ctx.buffer_alias_scopes);
     let native_rep_records = std::mem::take(&mut ctx.native_rep_records);
     drop(ctx);
     llmod.ic_counter = ic_end;
-    llmod.buffer_alias_counter += buffer_alias_used;
+    llmod.commit_buffer_alias_scopes(buffer_alias_scopes);
     llmod.native_rep_records.extend(native_rep_records);
     for helper in helpers {
         llmod.add_outlined_helper(helper);
