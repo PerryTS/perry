@@ -43,16 +43,26 @@ pub fn class_env_state_key() -> String {
     "\u{1}perry_env_state".to_string()
 }
 
-/// Parse the outer local id from a cap field/param name. Accepts both the
-/// salted `__perry_cap_<id>m<salt>` form and the legacy `__perry_cap_<id>`
-/// (still produced by pre-salt HIR in caches/tests).
+/// The one predicate for "this name is a compiler capture param/member name":
+/// exactly `__perry_cap_<digits>m<12 hex>` (what [`cap_field_name`] makes; the
+/// runtime twin is `is_class_capture_key`). A user key such as
+/// `__perry_cap_user` or `__perry_cap_7mine` is an ordinary property. Fields
+/// are asked by origin ([`crate::ClassFieldOrigin::Capture`]); this is for
+/// constructor parameters and member names, which have no origin.
+pub fn is_cap_field_name(name: &str) -> bool {
+    cap_field_outer_id(name).is_some()
+}
+
+/// Parse the outer local id from a cap param/field name: only the exact
+/// salted spelling `__perry_cap_<id>m<12 hex>` has one.
 pub fn cap_field_outer_id(name: &str) -> Option<u32> {
     let suffix = name.strip_prefix(CAP_FIELD_PREFIX)?;
-    let end = suffix
-        .bytes()
-        .position(|b| !b.is_ascii_digit())
-        .unwrap_or(suffix.len());
+    let end = suffix.bytes().position(|b| !b.is_ascii_digit())?;
     if end == 0 {
+        return None;
+    }
+    let rest = suffix[end..].strip_prefix('m')?;
+    if rest.len() != 12 || !rest.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
     }
     suffix[..end].parse().ok()
@@ -70,8 +80,12 @@ mod tests {
     }
 
     #[test]
-    fn legacy_unsalted_parses() {
-        assert_eq!(cap_field_outer_id("__perry_cap_7"), Some(7));
+    fn unsalted_and_user_spellings_are_ordinary_names() {
+        for n in ["__perry_cap_7", "__perry_cap_user", "__perry_cap_7mine", "__perry_cap_7m0000331fa6789", "__perry_cap_7m0000331fa67g", "__perry_cap_m0000331fa678"] {
+            assert_eq!(cap_field_outer_id(n), None, "{n}");
+            assert!(!is_cap_field_name(n), "{n}");
+        }
+        assert!(is_cap_field_name(&cap_field_name(3, 7)));
     }
 
     #[test]

@@ -331,7 +331,7 @@ impl<'a> Gen<'a> {
                 // birth on unless the instance could be observed before its
                 // definition (`CtorPhase::late_fields`, a leaking parent);
                 // then it is a reservation like a constructor store.
-                perry_hir::ClassFieldOrigin::Definition
+                perry_hir::ClassFieldOrigin::Definition | perry_hir::ClassFieldOrigin::Capture
                     if parent_leaks
                         || phase
                             .as_ref()
@@ -339,7 +339,9 @@ impl<'a> Gen<'a> {
                 {
                     push_unique(&mut reserved, a)
                 }
-                perry_hir::ClassFieldOrigin::Definition => push_unique(&mut definite, a),
+                perry_hir::ClassFieldOrigin::Definition | perry_hir::ClassFieldOrigin::Capture => {
+                    push_unique(&mut definite, a)
+                }
             }
         }
         self.m.tmpls[tm as usize].declared = declared;
