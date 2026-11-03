@@ -1105,6 +1105,47 @@ mod callable_probe_tests {
         JsFunctionInfo::of(test_body as crate::codegen_abi::JsBody0<ClosureHeader>)
             .with_flags(crate::closure::FN_ARROW);
 
+    static METHOD_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    extern "C" fn method_body(
+        _closure: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
+        METHOD_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        0.0
+    }
+
+    static METHOD_INFO: JsFunctionInfo =
+        JsFunctionInfo::of(method_body as crate::codegen_abi::JsBody0<ClosureHeader>)
+            .with_flags(crate::closure::FN_NON_CONSTRUCTOR);
+
+    #[test]
+    fn distinct_new_target_rejects_method_before_invoking_body() {
+        let _global = crate::gc::global_side_table_test_lock();
+        let _threshold = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        crate::object::js_get_global_this();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let method = scope
+            .root_nanbox_f64(pointer_value(
+                crate::closure::js_closure_alloc(&METHOD_INFO, 0) as usize,
+            ));
+        let new_target = scope
+            .root_nanbox_f64(pointer_value(
+                crate::closure::js_closure_alloc(&ORDINARY_INFO, 0) as usize,
+            ));
+        METHOD_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
+        let result = crate::exception::catch_js_throw(|| unsafe {
+            js_new_function_construct_with_new_target(
+                method.get_nanbox_f64(),
+                std::ptr::null(),
+                0,
+                new_target.get_nanbox_f64(),
+            )
+        });
+        assert!(result.is_err(), "a method has no [[Construct]] slot");
+        assert_eq!(METHOD_CALLS.load(std::sync::atomic::Ordering::Relaxed), 0);
+    }
+
     fn pointer_value(ptr: usize) -> f64 {
         f64::from_bits(crate::value::POINTER_TAG | ptr as u64)
     }
