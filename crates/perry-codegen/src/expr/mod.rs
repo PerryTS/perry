@@ -174,10 +174,10 @@ pub(crate) use helpers::{
     store_needs_string_addref, unbox_ffi_str_arg, unbox_str_handle, unbox_to_i64,
 };
 pub(crate) use i32_fast_path::{
-    can_lower_expr_as_i32, can_lower_expr_as_i32_in_current_region,
+    can_lower_expr_as_i32, can_lower_expr_as_i32_in_current_region, flat_const_index_get_target,
     imul_operand_i32_lowerable_in_current_region, is_known_i32_range, lower_expr_as_i32,
     lower_expr_native, lower_imul_operand_i32, lower_packed_u32_loop_index_get,
-    flat_const_index_get_target, try_flat_const_2d_int, try_lower_flat_const_index_get,
+    try_flat_const_2d_int, try_lower_flat_const_index_get,
 };
 pub(crate) use index::lower_index_set_fast;
 pub(crate) use logical_collections::{
@@ -247,6 +247,8 @@ mod array_push_own_tests;
 mod barrier_stem_census_tests;
 #[cfg(test)]
 mod bounded_array_hole_tests;
+#[cfg(test)]
+mod class_evaluation_owner_tests;
 #[cfg(test)]
 mod class_field_barrier_tests;
 #[cfg(test)]

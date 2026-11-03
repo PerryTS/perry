@@ -1318,6 +1318,7 @@ mod hoisted_sibling_in_later_closure;
 
 #[path = "tests/anonymous_class_outer_binding.rs"]
 mod anonymous_class_outer_binding;
+mod class_expr_self_new_instanceof;
 mod forward_class_captures;
 mod function_constructor_shadow;
 mod issue_11157_class_decl_self_statics;
