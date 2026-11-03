@@ -586,8 +586,10 @@ pub extern "C" fn js_runtime_install_typedarray() {
 mod installer_registration_tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    static A_RUNS: AtomicUsize = AtomicUsize::new(0);
-    static B_RUNS: AtomicUsize = AtomicUsize::new(0);
+    per_test_global! {
+        static A_RUNS: AtomicUsize = AtomicUsize::new(0);
+        static B_RUNS: AtomicUsize = AtomicUsize::new(0);
+    }
     extern "C" fn image_a() {
         A_RUNS.fetch_add(1, Ordering::SeqCst);
     }

@@ -278,7 +278,9 @@ static STACK_MAPS_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 /// A loaded image initialized after the last build: the next [`ensure_built`]
 /// rebuilds so its section is decoded too.
-static STACK_MAPS_REBUILD_OWED: AtomicBool = AtomicBool::new(false);
+per_test_global! {
+    static STACK_MAPS_REBUILD_OWED: AtomicBool = AtomicBool::new(false);
+}
 
 /// Whether an index has been published. Exposed so a future lazy build can
 /// assert the same property at whatever point it chooses to construct the index.
