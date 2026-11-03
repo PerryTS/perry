@@ -264,3 +264,12 @@ entries remain reachable; unrelated dead dynamic imports are still pruned.
 Each `Worker.terminate()` call returns a distinct promise. Calls made before the
 `exit` event complete with the worker's exit code after that event is delivered.
 Calls made from an `exit` listener or later resolve to `undefined`.
+
+### Worker process exit
+
+Inside a Worker, `process.exit()` stops only that Worker; it does not terminate
+the parent process or resume enclosing `catch`/`finally` blocks. Explicit and
+natural exits use the Worker's own `process.exitCode` and synchronous `exit`
+listeners, including a listener's updated exit code. External `terminate()`
+still reports code1 without running those listeners. Main-thread process exit
+and finalization are unchanged.
