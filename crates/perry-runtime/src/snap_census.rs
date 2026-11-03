@@ -486,7 +486,12 @@ pub extern "C" fn js_snap_tls_program(
 ) {
     crate::effect!(pure);
     #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
-    runner::tls_program(data_begin as usize, data_end as usize, bss_begin as usize, bss_end as usize);
+    runner::tls_program(
+        data_begin as usize,
+        data_end as usize,
+        bss_begin as usize,
+        bss_end as usize,
+    );
     #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
     let _ = (data_begin, data_end, bss_begin, bss_end);
 }

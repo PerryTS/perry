@@ -88,7 +88,10 @@ impl MapStore {
 /// so the digest leaves `[start, end)` out (payload offsets).
 #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
 pub(crate) const fn snap_native_index_range() -> (usize, usize) {
-    (std::mem::offset_of!(MapStore, numeric), std::mem::size_of::<MapStore>())
+    (
+        std::mem::offset_of!(MapStore, numeric),
+        std::mem::size_of::<MapStore>(),
+    )
 }
 
 /// Bounded native publication: a creating caller allocates the store before

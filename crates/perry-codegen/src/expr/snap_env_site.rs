@@ -53,9 +53,7 @@ fn note<'e>(children: impl Iterator<Item = &'e Expr> + Clone) {
 pub(crate) fn note_store_parent(ctx: &FnCtx<'_>, expr: &Expr) {
     match expr {
         Expr::GlobalSet(_, v) => note(std::iter::once(&**v)),
-        Expr::LocalSet(id, v) if ctx.module_globals.contains_key(id) => {
-            note(std::iter::once(&**v))
-        }
+        Expr::LocalSet(id, v) if ctx.module_globals.contains_key(id) => note(std::iter::once(&**v)),
         Expr::PropertySet { value, .. } | Expr::IndexSet { value, .. } => {
             note(std::iter::once(&**value))
         }

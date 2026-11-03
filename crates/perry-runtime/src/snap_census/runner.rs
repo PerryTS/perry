@@ -58,7 +58,12 @@ static ANCHOR: Anchor = Anchor {
     on: AtomicBool::new(false),
     started: AtomicU8::new(0),
     state: AtomicPtr::new(std::ptr::null_mut()),
-    tls: [AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0)],
+    tls: [
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+    ],
     _pad: [0; PAGE - 48],
 };
 
@@ -105,7 +110,10 @@ unsafe fn map_zeroed<T>(count: usize) -> *mut T {
         -1,
         0,
     );
-    assert!(p != libc::MAP_FAILED, "snap census: mmap {bytes} bytes failed");
+    assert!(
+        p != libc::MAP_FAILED,
+        "snap census: mmap {bytes} bytes failed"
+    );
     p.cast()
 }
 
@@ -754,15 +762,19 @@ unsafe fn start(out: String) {
     // them freely). Without the anchors (not a census compile) no TLS page is
     // tracked and every TLS slot counts as untracked.
     let t: [usize; 4] = std::array::from_fn(|i| ANCHOR.tls[i].load(Relaxed));
-    let tls_whole = t[0] != 0
-        && t.iter().all(|&a| a % PAGE == 0)
-        && t[0] <= t[1]
-        && t[2] <= t[3];
-    let (tls_lo, tls_hi, tlsb_lo, tlsb_hi) =
-        if tls_whole { (t[0], t[1], t[2], t[3]) } else { (0, 0, 0, 0) };
+    let tls_whole = t[0] != 0 && t.iter().all(|&a| a % PAGE == 0) && t[0] <= t[1] && t[2] <= t[3];
+    let (tls_lo, tls_hi, tlsb_lo, tlsb_hi) = if tls_whole {
+        (t[0], t[1], t[2], t[3])
+    } else {
+        (0, 0, 0, 0)
+    };
     // x86-64 variant II: the static TLS block ends at the thread pointer.
     let mut fs = 0usize;
-    libc::syscall(libc::SYS_arch_prctl, 0x1003 /* ARCH_GET_FS */, &mut fs as *mut usize);
+    libc::syscall(
+        libc::SYS_arch_prctl,
+        0x1003, /* ARCH_GET_FS */
+        &mut fs as *mut usize,
+    );
     let tls_block = (fs.saturating_sub(executable_tls_size()), fs);
     let mut st = Box::new(State {
         out,
@@ -882,7 +894,9 @@ unsafe fn start(out: String) {
         env_storage: Vec::new(),
         slot_owner: Vec::new(),
         skip: {
-            let mut v = std::env::var("PERRY_SNAP_SKIP").map(|p| read_hex_lines(&p)).unwrap_or_default();
+            let mut v = std::env::var("PERRY_SNAP_SKIP")
+                .map(|p| read_hex_lines(&p))
+                .unwrap_or_default();
             v.sort_unstable();
             v
         },
@@ -1124,7 +1138,14 @@ fn set_mode_for_top(st: &mut State) {
     let top = st.frames.last().map_or(0, |f| f.init) as usize;
     if st.mark {
         // A syscall trace (strace) attributes what follows to this init.
-        unsafe { libc::syscall(libc::SYS_lseek, -1 as libc::c_int, top as libc::c_long, 0x5a) };
+        unsafe {
+            libc::syscall(
+                libc::SYS_lseek,
+                -1 as libc::c_int,
+                top as libc::c_long,
+                0x5a,
+            )
+        };
     }
     let want = top != 0 && st.inits[top].in_d && !st.noprotect;
     if want != st.d_mode {
@@ -1332,8 +1353,12 @@ pub(super) fn meta_installed(slot: usize, meta: usize) {
     if !st.meta_rule || !st.rule4_armed || !pre_existing(st, slot) {
         return;
     }
-    let Some(h) = object_start(st, meta) else { return };
-    let Some(size) = st.sizes.get(h as u64) else { return };
+    let Some(h) = object_start(st, meta) else {
+        return;
+    };
+    let Some(size) = st.sizes.get(h as u64) else {
+        return;
+    };
     let e = h + size as usize;
     let i = st.pre_sorted.partition_point(|&(a, _)| a <= h);
     st.pre_sorted.insert(i, (h, e));
@@ -1406,7 +1431,9 @@ pub(super) fn attached(obj: usize, cells: &[usize]) {
     if st.transparent.is_empty() {
         return;
     }
-    let Some(h) = object_start(st, obj) else { return };
+    let Some(h) = object_start(st, obj) else {
+        return;
+    };
     if !st.transp.contains(h as u64) {
         return;
     }
@@ -1433,7 +1460,10 @@ pub(super) fn dyn_code(kind: u8) {
         st.inits[top].evals += 1;
     }
     if st.dyn_defer {
-        host(Effect::HostWrite, if kind == 0 { "new_function" } else { "eval" });
+        host(
+            Effect::HostWrite,
+            if kind == 0 { "new_function" } else { "eval" },
+        );
     }
 }
 
@@ -1466,8 +1496,7 @@ pub(super) fn host(class: Effect, what: &'static str) {
         set_mode_for_top(st);
     }
     let i = &mut st.inits[top as usize];
-    if i.host.is_none() || (class != Effect::TargetFact && i.host.is_some_and(|h| h.class == 1))
-    {
+    if i.host.is_none() || (class != Effect::TargetFact && i.host.is_some_and(|h| h.class == 1)) {
         let mut pcs = [0usize; crate::error::MAX_CAPTURED_FRAMES];
         let n = crate::error::capture_ips(&mut pcs);
         let mut six = [0usize; 6];
@@ -1515,8 +1544,11 @@ pub(super) fn birth(addr: usize, size: usize) {
     // Memory handed out again (a free-list slot, a rewound bump) holds new
     // locations: an earlier birth there and what members of D did to its
     // words are gone.
-    let earlier = object_start(st, addr + size - 1)
-        .is_some_and(|h| st.sizes.get(h as u64).is_some_and(|s| addr < h + s as usize));
+    let earlier = object_start(st, addr + size - 1).is_some_and(|h| {
+        st.sizes
+            .get(h as u64)
+            .is_some_and(|s| addr < h + s as usize)
+    });
     if earlier {
         st.reborn += 1;
         for w in (addr..addr + size).step_by(8) {
@@ -1646,7 +1678,10 @@ fn executable_tls_size() -> usize {
 
 #[inline]
 fn page_flags(st: &State, addr: usize) -> Option<*mut u8> {
-    st.heap.slot(addr).or_else(|| st.bin.slot(addr)).or_else(|| tls_slot(st, addr))
+    st.heap
+        .slot(addr)
+        .or_else(|| st.bin.slot(addr))
+        .or_else(|| tls_slot(st, addr))
 }
 
 #[inline]
@@ -1865,7 +1900,6 @@ struct Prev(std::mem::MaybeUninit<libc::sigaction>);
 static mut PREV_SEGV: Prev = Prev(std::mem::MaybeUninit::uninit());
 static mut PREV_TRAP: Prev = Prev(std::mem::MaybeUninit::uninit());
 
-
 unsafe fn install_handlers() {
     // The handlers run on their own stack: a fault whose frame cannot be
     // pushed on the current stack (a protected page) still reaches them.
@@ -1880,12 +1914,20 @@ unsafe fn install_handlers() {
     a.sa_sigaction = on_segv as *const () as usize;
     a.sa_flags = libc::SA_SIGINFO | libc::SA_NODEFER | libc::SA_ONSTACK;
     libc::sigemptyset(&mut a.sa_mask);
-    libc::sigaction(libc::SIGSEGV, &a, std::ptr::addr_of_mut!(PREV_SEGV.0).cast());
+    libc::sigaction(
+        libc::SIGSEGV,
+        &a,
+        std::ptr::addr_of_mut!(PREV_SEGV.0).cast(),
+    );
     let mut t: libc::sigaction = std::mem::zeroed();
     t.sa_sigaction = on_trap as *const () as usize;
     t.sa_flags = libc::SA_SIGINFO | libc::SA_ONSTACK;
     libc::sigemptyset(&mut t.sa_mask);
-    libc::sigaction(libc::SIGTRAP, &t, std::ptr::addr_of_mut!(PREV_TRAP.0).cast());
+    libc::sigaction(
+        libc::SIGTRAP,
+        &t,
+        std::ptr::addr_of_mut!(PREV_TRAP.0).cast(),
+    );
 }
 
 /// One stderr line of hex words, without allocating (signal context).
@@ -1997,8 +2039,23 @@ unsafe fn on_segv_inner(
             let uc = ctx as *mut libc::ucontext_t;
             let pc = (*uc).uc_mcontext.gregs[libc::REG_RIP as usize] as u64;
             let flags = page_flags(st, page).map_or(0xff, |f| *f as u64);
-            let range = if st.heap.slot(addr).is_some() { 1 } else if st.bin.slot(addr).is_some() { 2 } else if tls_slot(st, addr).is_some() { 3 } else { 0 };
-            diag(&[addr as u64, pc, flags, range, st.d_mode as u64, st.top_mode as u64]);
+            let range = if st.heap.slot(addr).is_some() {
+                1
+            } else if st.bin.slot(addr).is_some() {
+                2
+            } else if tls_slot(st, addr).is_some() {
+                3
+            } else {
+                0
+            };
+            diag(&[
+                addr as u64,
+                pc,
+                flags,
+                range,
+                st.d_mode as u64,
+                st.top_mode as u64,
+            ]);
             return chain(std::ptr::addr_of!(PREV_SEGV.0).cast(), sig);
         }
         let uc = ctx as *mut libc::ucontext_t;
@@ -2180,7 +2237,9 @@ fn note_access(st: &mut State, word: usize, write: bool, pc: usize) {
         // A word outside every born object is free space the allocator
         // touched (block setup), not a location.
         let inside = cell.is_some_and(|h| {
-            st.sizes.get(h as u64).is_some_and(|s| word < h + s as usize)
+            st.sizes
+                .get(h as u64)
+                .is_some_and(|s| word < h + s as usize)
         });
         if !inside {
             st.free_space += 1;
@@ -2234,7 +2293,11 @@ fn note_access(st: &mut State, word: usize, write: bool, pc: usize) {
         for (loc, w) in locs {
             note_loc(st, top, word, loc, w, pc);
         }
-        if !had && key != 0 && st.inits[top].conflict.is_some() && st.gkey_conflicts.len() < GKEY_CONFLICTS_MAX {
+        if !had
+            && key != 0
+            && st.inits[top].conflict.is_some()
+            && st.gkey_conflicts.len() < GKEY_CONFLICTS_MAX
+        {
             // Capacity is reserved: no allocation in the fault handler.
             let e = (top as u32, key, st.gkey_name, st.gkey_len);
             st.gkey_conflicts.push(e);
@@ -2251,7 +2314,9 @@ fn note_repw(st: &mut State, word: usize) {
     if st.repw.insert(word as u64) {
         // A store classified after its step names the value before it; at
         // the fault the word still holds it (its page is open).
-        let old = st.store_before.unwrap_or_else(|| unsafe { *(word as *const u64) });
+        let old = st
+            .store_before
+            .unwrap_or_else(|| unsafe { *(word as *const u64) });
         st.repw_old.push((word as u64, old));
     }
 }
@@ -2276,7 +2341,11 @@ fn repr_access(st: &mut State, word: usize, write: bool, pc: usize) {
     } else {
         realm_cell(st, word)
     };
-    let Some(h) = cell.filter(|&h| st.sizes.get(h as u64).is_some_and(|s| word < h + s as usize)) else {
+    let Some(h) = cell.filter(|&h| {
+        st.sizes
+            .get(h as u64)
+            .is_some_and(|s| word < h + s as usize)
+    }) else {
         st.faults_ignored += 1;
         return;
     };
@@ -2392,11 +2461,7 @@ fn note_loc(st: &mut State, top: usize, word: usize, w: u64, write: bool, pc: us
         Some(if write { 3 } else { 2 })
     } else if write && st.r.contains(w) {
         Some(3)
-    } else if write
-        && st.rule4_armed
-        && st.inits[top].dynamic
-        && pre_existing(st, word)
-    {
+    } else if write && st.rule4_armed && st.inits[top].dynamic && pre_existing(st, word) {
         Some(4)
     } else {
         None
@@ -2470,9 +2535,13 @@ pub unsafe extern "C" fn getenv(name: *const libc::c_char) -> *mut libc::c_char 
         let st = state();
         let top = st.frames.last().map_or(0, |f| f.init);
         if st.env_reads.len() < 1 << 20 {
-            let value = (!found.is_null())
-                .then(|| std::ffi::CStr::from_ptr(found).to_string_lossy().into_owned());
-            st.env_reads.push((top, String::from_utf8_lossy(key).into_owned(), value));
+            let value = (!found.is_null()).then(|| {
+                std::ffi::CStr::from_ptr(found)
+                    .to_string_lossy()
+                    .into_owned()
+            });
+            st.env_reads
+                .push((top, String::from_utf8_lossy(key).into_owned(), value));
         }
     }
     found
@@ -2598,7 +2667,9 @@ extern "C" fn rset_report() {
             let _ = writeln!(f, "#hist\t<{}\t{n}", 1u64 << b);
         }
     }
-    let mut top: Vec<usize> = (0..st.cand.len()).filter(|&i| st.cand_writes[i] > 0).collect();
+    let mut top: Vec<usize> = (0..st.cand.len())
+        .filter(|&i| st.cand_writes[i] > 0)
+        .collect();
     top.sort_unstable_by_key(|&i| std::cmp::Reverse(st.cand_writes[i]));
     let births = st.births.as_slice();
     for &i in top.iter().take(200) {
@@ -2655,7 +2726,11 @@ pub(super) fn after_boundary_collection() {
     use std::io::Write;
     let path = format!("{}.live.tsv", st.out);
     if let Ok(mut f) = std::fs::File::create(&path) {
-        let _ = writeln!(f, "#unattributed\t{}\t{}", st.live_unattributed[0], st.live_unattributed[1]);
+        let _ = writeln!(
+            f,
+            "#unattributed\t{}\t{}",
+            st.live_unattributed[0], st.live_unattributed[1]
+        );
         let mut rows: Vec<_> = st.live_by.iter().collect();
         rows.sort();
         for ((id, t), row) in rows {
@@ -2850,13 +2925,22 @@ fn write_report(st: &mut State) {
                 ENV_NAME
             } else if kind == 1 {
                 let byte_len = (rolled(user) >> 32) as usize;
-                let p = user + std::mem::size_of::<crate::string::StringHeader>();
+                let p =
+                    crate::string::string_data(user as *const crate::string::StringHeader) as usize;
                 let n = byte_len.min(end.saturating_sub(p));
                 let bytes = unsafe { std::slice::from_raw_parts(p as *const u8, n) };
-                bytes.iter().fold(fnv(0x5354_5249_4e47_0000, n as u64), |h, &c| fnv(h, c as u64))
+                bytes
+                    .iter()
+                    .fold(fnv(0x5354_5249_4e47_0000, n as u64), |h, &c| {
+                        fnv(h, c as u64)
+                    })
             } else if kind == 2 {
                 let words = unsafe { crate::regex::perex_owner::snap_program_words(user) };
-                words.iter().fold(fnv(0x5052_4f47_0000_0000, words.len() as u64), |h, &x| fnv(h, x as u64))
+                words
+                    .iter()
+                    .fold(fnv(0x5052_4f47_0000_0000, words.len() as u64), |h, &x| {
+                        fnv(h, x as u64)
+                    })
             } else if kind == 3 {
                 keylists.push(b.addr);
                 0
@@ -2903,8 +2987,13 @@ fn write_report(st: &mut State) {
             let attrs = unsafe { (*(user as *const crate::gc::GcHeader).sub(1))._reserved }
                 & crate::gc::GC_ARRAY_KEY_ATTRS
                 != 0;
-            let first = user + std::mem::size_of::<crate::array::ArrayHeader>() + if attrs { 8 } else { 0 };
-            (0..n).map(|i| first + 8 * i).take_while(|&w| w + 8 <= end).map(|w| rolled(w)).collect()
+            let first =
+                user + std::mem::size_of::<crate::array::ArrayHeader>() + if attrs { 8 } else { 0 };
+            (0..n)
+                .map(|i| first + 8 * i)
+                .take_while(|&w| w + 8 <= end)
+                .map(|w| rolled(w))
+                .collect()
         };
         // Key-name rule (design §2.10.18): a key is named by what it is, never
         // by where it lives. A key in a named cell takes that cell's name: a
@@ -2936,9 +3025,19 @@ fn write_report(st: &mut State) {
             // so it is read through `symbol_description_text` (the one reader of both homes).
             let dn = match unsafe { crate::symbol::symbol_description_text(sym) } {
                 None => 0,
-                Some(b) => b.iter().fold(fnv(0x5354_5249_4e47_0000, b.len() as u64), |h, &c| fnv(h, c as u64)),
+                Some(b) => b
+                    .iter()
+                    .fold(fnv(0x5354_5249_4e47_0000, b.len() as u64), |h, &c| {
+                        fnv(h, c as u64)
+                    }),
             };
-            fnv(fnv(fnv(0x5359_4d42_0000_0000, w >> 48), (unsafe { (*sym).registered } & 1) as u64), dn)
+            fnv(
+                fnv(
+                    fnv(0x5359_4d42_0000_0000, w >> 48),
+                    (unsafe { (*sym).registered } & 1) as u64,
+                ),
+                dn,
+            )
         };
         if !keylists.is_empty() {
             keylists.sort_unstable();
@@ -2951,7 +3050,9 @@ fn write_report(st: &mut State) {
                     let len = (rolled(user) & 0xFFFF_FFFF) as usize;
                     let h = key_words(user, n.1, len)
                         .into_iter()
-                        .fold(fnv(0x4b45_5953_0000_0000, len as u64), |h, w| fnv(h, kname(&names, w)));
+                        .fold(fnv(0x4b45_5953_0000_0000, len as u64), |h, w| {
+                            fnv(h, kname(&names, w))
+                        });
                     (i, h)
                 })
                 .collect();
@@ -2964,20 +3065,34 @@ fn write_report(st: &mut State) {
         let shape_keys = |keys: u64, count: usize| -> u64 {
             let v = (keys & 0xFFFF_FFFF_FFFF) as usize;
             let i = names.partition_point(|&(a, _, _)| a <= v);
-            if !st.r2 || i == 0 || v >= names[i - 1].1 || v != names[i - 1].0 + crate::gc::GC_HEADER_SIZE {
+            if !st.r2
+                || i == 0
+                || v >= names[i - 1].1
+                || v != names[i - 1].0 + crate::gc::GC_HEADER_SIZE
+            {
                 return pname(&names, keys);
             }
             key_words(v, names[i - 1].1, count)
                 .into_iter()
-                .fold(fnv(0x4b45_5953_0000_0000, count as u64), |h, w| fnv(h, kname(&names, w)))
+                .fold(fnv(0x4b45_5953_0000_0000, count as u64), |h, w| {
+                    fnv(h, kname(&names, w))
+                })
         };
         // Diagnostic (the dig dump): a shape key input key by key: L (a named heap
         // list) or P (pointer named by pname), then each key word's raw value and name.
         let shape_keys_tok = |keys: u64, count: usize| -> String {
             let v = (keys & 0xFFFF_FFFF_FFFF) as usize;
             let i = names.partition_point(|&(a, _, _)| a <= v);
-            if !st.r2 || i == 0 || v >= names[i - 1].1 || v != names[i - 1].0 + crate::gc::GC_HEADER_SIZE {
-                let (n, o) = if i > 0 && v < names[i - 1].1 { (names[i - 1].2, v - names[i - 1].0) } else { (0, 0) };
+            if !st.r2
+                || i == 0
+                || v >= names[i - 1].1
+                || v != names[i - 1].0 + crate::gc::GC_HEADER_SIZE
+            {
+                let (n, o) = if i > 0 && v < names[i - 1].1 {
+                    (names[i - 1].2, v - names[i - 1].0)
+                } else {
+                    (0, 0)
+                };
                 return format!("P{keys:x}={n:x}+{o}");
             }
             let ws = key_words(v, names[i - 1].1, count);
@@ -2999,7 +3114,8 @@ fn write_report(st: &mut State) {
                 .iter()
                 .filter_map(|&(a, _, n)| {
                     let bits =
-                        crate::value::js_nanbox_pointer((a + crate::gc::GC_HEADER_SIZE) as i64).to_bits();
+                        crate::value::js_nanbox_pointer((a + crate::gc::GC_HEADER_SIZE) as i64)
+                            .to_bits();
                     let s = unsafe { crate::object::shapes::prototype_serial(bits) };
                     (s >= crate::object::proto_validity::FIRST_DYNAMIC_PROTOTYPE_SERIAL
                         && s < crate::object::shapes::PROTO_ID_CLASS)
@@ -3013,7 +3129,9 @@ fn write_report(st: &mut State) {
         // identity, or a MIXED one (class id beside the serial). None: not a
         // named dynamic serial (the identity hashes as before).
         let pser = |id: u64| -> Option<u64> {
-            use crate::object::shapes::{PROTO_ID_CLASS, PROTO_ID_MIXED, PROTO_ID_MIXED_SERIAL_BITS, PROTO_ID_UNIQUE};
+            use crate::object::shapes::{
+                PROTO_ID_CLASS, PROTO_ID_MIXED, PROTO_ID_MIXED_SERIAL_BITS, PROTO_ID_UNIQUE,
+            };
             let (hi, s) = if id < PROTO_ID_CLASS {
                 (0, id)
             } else if (PROTO_ID_MIXED..PROTO_ID_UNIQUE).contains(&id) {
@@ -3025,7 +3143,9 @@ fn write_report(st: &mut State) {
             if s < crate::object::proto_validity::FIRST_DYNAMIC_PROTOTYPE_SERIAL {
                 return None;
             }
-            serial_names.get(&s).map(|&n| fnv(fnv(0x5345_5249_414c_0000, hi), n))
+            serial_names
+                .get(&s)
+                .map(|&n| fnv(fnv(0x5345_5249_414c_0000, hi), n))
         };
         let name_of = |v: usize| -> Option<(u64, usize)> {
             let i = names.partition_point(|&(a, _, _)| a <= v);
@@ -3077,12 +3197,18 @@ fn write_report(st: &mut State) {
                 .or_insert((0xcbf29ce484222325, 0, 0));
             e.1 += 1;
             let ty = unsafe { (*(b.addr as *const crate::gc::GcHeader)).obj_type };
-            dump(st.inits[b.init as usize].addr, bname, 0, format!("t{ty}:{}", b.size));
+            dump(
+                st.inits[b.init as usize].addr,
+                bname,
+                0,
+                format!("t{ty}:{}", b.size),
+            );
             // R3 (design §2.10.16): a WeakStorage's bucket positions and
             // entry order are derived state (they hash raw addresses): it
             // digests its live entry set, sorted.
             if st.r3 && ty == crate::gc::GC_TYPE_WEAK_STORAGE {
-                let ws = (b.addr + crate::gc::GC_HEADER_SIZE) as *const crate::weakref::storage::WeakStorage;
+                let ws = (b.addr + crate::gc::GC_HEADER_SIZE)
+                    as *const crate::weakref::storage::WeakStorage;
                 let mut ents: Vec<(u64, u64)> = Vec::new();
                 unsafe {
                     let n = (*ws).len.min((*ws).capacity) as usize;
@@ -3112,10 +3238,17 @@ fn write_report(st: &mut State) {
                     }
                 }
                 ents.sort_unstable();
-                let h = ents.iter().fold(0xcbf29ce484222325u64, |h, &(k, v)| fnv(fnv(h, k), v));
+                let h = ents
+                    .iter()
+                    .fold(0xcbf29ce484222325u64, |h, &(k, v)| fnv(fnv(h, k), v));
                 e.2 += 1;
                 mix(&mut e.0, h);
-                dump(st.inits[b.init as usize].addr, bname, crate::gc::GC_HEADER_SIZE, format!("k{h:x}:{}", ents.len()));
+                dump(
+                    st.inits[b.init as usize].addr,
+                    bname,
+                    crate::gc::GC_HEADER_SIZE,
+                    format!("k{h:x}:{}", ents.len()),
+                );
                 continue;
             }
             // The GC header (mark and move-request bits) is no JS state.
@@ -3154,12 +3287,16 @@ fn write_report(st: &mut State) {
                 // serial of no birth hashes as its number, as before.
                 let q = if st.serial
                     && ty == crate::gc::GC_TYPE_OBJECT_META
-                    && off - 8 == crate::gc::GC_HEADER_SIZE + std::mem::offset_of!(crate::object::ObjectMeta, proto_serial)
+                    && off - 8
+                        == crate::gc::GC_HEADER_SIZE
+                            + std::mem::offset_of!(crate::object::ObjectMeta, proto_serial)
                 {
                     pser(v)
                 } else if st.symid
                     && ty == crate::gc::GC_TYPE_SYMBOL
-                    && off - 8 == crate::gc::GC_HEADER_SIZE + std::mem::offset_of!(crate::symbol::SymbolHeader, id)
+                    && off - 8
+                        == crate::gc::GC_HEADER_SIZE
+                            + std::mem::offset_of!(crate::symbol::SymbolHeader, id)
                 {
                     Some(fnv(0x5359_4d49_4400_0000, bname))
                 } else {
@@ -3167,7 +3304,12 @@ fn write_report(st: &mut State) {
                 };
                 if let Some(n) = q {
                     mix(&mut e.0, n);
-                    dump(st.inits[b.init as usize].addr, bname, off - 8, format!("q{n:x}"));
+                    dump(
+                        st.inits[b.init as usize].addr,
+                        bname,
+                        off - 8,
+                        format!("q{n:x}"),
+                    );
                     continue;
                 }
                 // An ordinary object's first header word holds its class id
@@ -3201,15 +3343,18 @@ fn write_report(st: &mut State) {
                             d.rep,
                             d.special_constfn_mask as u64,
                         ];
-                        let sname =
-                            parts.iter().fold(0xcbf29ce484222325u64, |h, &x| (h ^ x).wrapping_mul(0x100000001B3));
+                        let sname = parts.iter().fold(0xcbf29ce484222325u64, |h, &x| {
+                            (h ^ x).wrapping_mul(0x100000001B3)
+                        });
                         mix(&mut e.0, v & 0xFFFF_FFFF);
                         mix(&mut e.0, sname);
                         // The dump shows the inputs too (keys, prototype, the rest), so a
                         // differing shape word names its differing field.
-                        let rest = parts[5..].iter().fold(parts[1] ^ parts[2] << 20 ^ parts[3] << 40, |h, &x| {
-                            (h ^ x).wrapping_mul(0x100000001B3)
-                        });
+                        let rest = parts[5..]
+                            .iter()
+                            .fold(parts[1] ^ parts[2] << 20 ^ parts[3] << 40, |h, &x| {
+                                (h ^ x).wrapping_mul(0x100000001B3)
+                            });
                         let tok = format!(
                             "s{:x}:{sname:x}|k{:x}|p{:x}|r{rest:x}|K{}",
                             v & 0xFFFF_FFFF,
@@ -3227,17 +3372,32 @@ fn write_report(st: &mut State) {
                         mix(&mut e.0, hi ^ 0xA5A5);
                         mix(&mut e.0, n);
                         mix(&mut e.0, o as u64);
-                        dump(st.inits[b.init as usize].addr, bname, off - 8, format!("p{hi:x}:{n:x}+{o}"));
+                        dump(
+                            st.inits[b.init as usize].addr,
+                            bname,
+                            off - 8,
+                            format!("p{hi:x}:{n:x}+{o}"),
+                        );
                         continue;
                     }
                 }
                 if foreign(v) {
                     mix(&mut e.0, v >> 48);
-                    dump(st.inits[b.init as usize].addr, bname, off - 8, format!("f{:x}", v >> 48));
+                    dump(
+                        st.inits[b.init as usize].addr,
+                        bname,
+                        off - 8,
+                        format!("f{:x}", v >> 48),
+                    );
                     continue;
                 }
                 mix(&mut e.0, v);
-                dump(st.inits[b.init as usize].addr, bname, off - 8, format!("v{v:x}"));
+                dump(
+                    st.inits[b.init as usize].addr,
+                    bname,
+                    off - 8,
+                    format!("v{v:x}"),
+                );
             }
         }
         // The module-global slots each imaged init registered.
@@ -3257,13 +3417,23 @@ fn write_report(st: &mut State) {
                     mix(&mut e.0, hi ^ 0xA5A5);
                     mix(&mut e.0, n);
                     mix(&mut e.0, o as u64);
-                    dump(st.inits[owner as usize].addr, 0, slot, format!("p{hi:x}:{n:x}+{o}"));
+                    dump(
+                        st.inits[owner as usize].addr,
+                        0,
+                        slot,
+                        format!("p{hi:x}:{n:x}+{o}"),
+                    );
                     continue;
                 }
             }
             if foreign(v) {
                 mix(&mut e.0, v >> 48);
-                dump(st.inits[owner as usize].addr, 0, slot, format!("f{:x}", v >> 48));
+                dump(
+                    st.inits[owner as usize].addr,
+                    0,
+                    slot,
+                    format!("f{:x}", v >> 48),
+                );
                 continue;
             }
             mix(&mut e.0, v);
@@ -3287,7 +3457,13 @@ fn write_report(st: &mut State) {
     let _ = writeln!(f, "#free_space\t{}", st.free_space);
     let _ = writeln!(f, "#reborn\t{}", st.reborn);
     let _ = writeln!(f, "#silent_stores\t{}", st.silent_stores);
-    let _ = writeln!(f, "#transparent\t{}\t{}\t{}", st.transparent.len(), st.transp.len, st.transparent_hits);
+    let _ = writeln!(
+        f,
+        "#transparent\t{}\t{}\t{}",
+        st.transparent.len(),
+        st.transp.len,
+        st.transparent_hits
+    );
     let _ = writeln!(f, "#foreign_thread_faults\t{}", st.foreign_faults);
     let _ = writeln!(
         f,
@@ -3635,7 +3811,13 @@ fn slot_name(slot: usize) -> String {
 
 fn tsv_text(s: &str) -> String {
     s.chars()
-        .map(|c| if c == '\t' || c == '\n' || c == '\r' { ' ' } else { c })
+        .map(|c| {
+            if c == '\t' || c == '\n' || c == '\r' {
+                ' '
+            } else {
+                c
+            }
+        })
         .collect()
 }
 
@@ -3667,7 +3849,10 @@ fn write_env_report(st: &State, f: &mut std::fs::File, rank: &[u64]) {
     // wrote are not image words.
     let mut targets: std::collections::HashMap<u64, Vec<i64>> = Default::default();
     if st.env_obj != 0 {
-        targets.entry(st.env_obj & 0xFFFF_FFFF_FFFF).or_default().push(-1);
+        targets
+            .entry(st.env_obj & 0xFFFF_FFFF_FFFF)
+            .or_default()
+            .push(-1);
     }
     // A var some imaged init observes is a guard member: the guard makes
     // every imaged string of it right, so its store-site reads need no cell.
@@ -3675,14 +3860,19 @@ fn write_env_report(st: &State, f: &mut std::fs::File, rank: &[u64]) {
         .env_obs
         .iter()
         .filter(|o| {
-            matches!(o.kind, OBS_OBSERVE | OBS_HAS | OBS_STORE_UNSET | OBS_STORE_READ)
-                && (o.init == 0 || !in_d(o.init))
+            matches!(
+                o.kind,
+                OBS_OBSERVE | OBS_HAS | OBS_STORE_UNSET | OBS_STORE_READ
+            ) && (o.init == 0 || !in_d(o.init))
         })
         .map(|o| o.name.as_str())
         .collect();
     for (k, o) in st.env_obs.iter().enumerate() {
         if o.kind == OBS_STORE && !in_d(o.init) && !guarded.contains(o.name.as_str()) {
-            targets.entry(o.ptr as u64 & 0xFFFF_FFFF_FFFF).or_default().push(k as i64);
+            targets
+                .entry(o.ptr as u64 & 0xFFFF_FFFF_FFFF)
+                .or_default()
+                .push(k as i64);
         }
     }
     let mut found = vec![0u32; st.env_obs.len()];
@@ -3697,7 +3887,11 @@ fn write_env_report(st: &State, f: &mut std::fs::File, rank: &[u64]) {
                 found[t as usize] += 1;
                 // The alias hint at the boundary (0 shared, 1 unique).
                 let alias = unsafe { (*(o.ptr as *const crate::StringHeader)).refcount };
-                let _ = writeln!(f, "#cell\tenv_var\t{name}\t{}\t{}\talias={alias}", o.name, o.init);
+                let _ = writeln!(
+                    f,
+                    "#cell\tenv_var\t{name}\t{}\t{}\talias={alias}",
+                    o.name, o.init
+                );
             }
         }
     };
@@ -3752,7 +3946,12 @@ fn write_env_report(st: &State, f: &mut std::fs::File, rank: &[u64]) {
     // The guard: every other observation by an imaged init (the runtime's
     // own, init 0, included: the IPC probe decides the process object).
     let mut seen: std::collections::HashSet<(String, u32, &'static str)> = Default::default();
-    let mut guard = |name: &str, value: Option<&str>, init: u32, consumer: &'static str, by: (u32, usize), f: &mut std::fs::File| {
+    let mut guard = |name: &str,
+                     value: Option<&str>,
+                     init: u32,
+                     consumer: &'static str,
+                     by: (u32, usize),
+                     f: &mut std::fs::File| {
         if init != 0 && in_d(init) {
             return;
         }
@@ -3773,7 +3972,14 @@ fn write_env_report(st: &State, f: &mut std::fs::File, rank: &[u64]) {
             OBS_OBSERVE => guard(&o.name, o.value.as_deref(), o.init, "observe", (0, 0), f),
             OBS_HAS => guard(&o.name, o.value.as_deref(), o.init, "has", (0, 0), f),
             OBS_STORE_UNSET => guard(&o.name, None, o.init, "store_unset", (0, 0), f),
-            OBS_STORE_READ => guard(&o.name, o.value.as_deref(), o.init, "store_read", (o.by, o.by_pc), f),
+            OBS_STORE_READ => guard(
+                &o.name,
+                o.value.as_deref(),
+                o.init,
+                "store_read",
+                (o.by, o.by_pc),
+                f,
+            ),
             OBS_STORE if found[k] == 0 && !in_d(o.init) && !guarded.contains(o.name.as_str()) => {
                 let _ = writeln!(f, "#cell_unstored\t{}\t{}", o.name, o.init);
             }
@@ -3794,9 +4000,22 @@ fn write_env_report(st: &State, f: &mut std::fs::File, rank: &[u64]) {
         }
     }
     let takers = st.env_obs.iter().filter(|o| o.kind == OBS_OBJECT).count();
-    let _ = writeln!(f, "#env\trule={}\tq7={}\tobs={}\tobject_takers={takers}\tcheck={}", st.env_rule as u8, st.q7 as u8, st.env_obs.len(), !st.skip.is_empty() as u8);
+    let _ = writeln!(
+        f,
+        "#env\trule={}\tq7={}\tobs={}\tobject_takers={takers}\tcheck={}",
+        st.env_rule as u8,
+        st.q7 as u8,
+        st.env_obs.len(),
+        !st.skip.is_empty() as u8
+    );
     for &(init, word, pc, write) in &st.check_fail {
-        let _ = writeln!(f, "#checkfail\tpoison\t{init}\t{:x}\t{}\t{pc:x}\t{}", addr_of(init), slot_name(word), write as u8);
+        let _ = writeln!(
+            f,
+            "#checkfail\tpoison\t{init}\t{:x}\t{}\t{pc:x}\t{}",
+            addr_of(init),
+            slot_name(word),
+            write as u8
+        );
     }
     if !st.skip.is_empty() {
         for (id, i) in st.inits.iter().enumerate().skip(1) {
