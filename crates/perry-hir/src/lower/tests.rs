@@ -1298,6 +1298,7 @@ mod ambient_declare;
 mod unresolved_new_global;
 
 mod global_this_new_shadowed;
+mod nested_class_name_outside_its_scope;
 
 mod capture_stash;
 mod class_member_var_captures;
