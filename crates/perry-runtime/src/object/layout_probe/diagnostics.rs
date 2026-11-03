@@ -43,7 +43,7 @@ pub(crate) unsafe fn diag_explain(obj_handle: i64, key: *const crate::StringHead
         String::from("handle")
     } else {
         match crate::value::addr_class::try_read_gc_header(obj) {
-            Some(h) if h.obj_type != crate::gc::GC_TYPE_OBJECT => format!("gctype{}", h.obj_type),
+            Some(h) if crate::gc_type_is_not_object!(h.obj_type) => format!("gctype{}", h.obj_type),
             None => String::from("nogc"),
             Some(_) => {
                 let o = obj as *const ObjectHeader;
@@ -158,7 +158,7 @@ pub(super) unsafe fn diag_walk(obj: *const ObjectHeader, key_bits: u64, hash: u6
                     super::super::complete_layout_generation((*rn).semantic_generation),
                     (*rn).hole_count,
                     (*rn).proto_id == super::super::PROTO_ID_PER_OBJECT,
-                    (*rn).element_kind,
+                    (*rn).element_kind(),
                     !keys.is_null() && super::super::keys_prefix_is_immutable(keys),
                     (*rn).logical_key_count,
                 );

@@ -106,7 +106,7 @@ fn old_arena_bulk_capture_install_remembers_young_box() {
     unsafe {
         (*closure).capture_count = 1;
         (*closure).shape_id = LayoutWord(0);
-        (*closure).info = std::ptr::null();
+        (*closure).info = super::support::test_closure_info();
         // GC_STORE_AUDIT(INIT): fresh test closure, null props edge.
         (*closure).props = std::ptr::null_mut();
         layout_init_pointer_free(closure as *mut u8);

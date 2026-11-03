@@ -85,7 +85,7 @@ unsafe fn assert_emitted_read(obj: *mut ObjectHeader, key: *const crate::StringH
 #[test]
 fn static_layout_slot_order_registration_reflection_values_and_transitions() {
     crate::gc::initialize_runtime_fixture();
-    let desc = std::ptr::addr_of!(PERMUTED);
+    let desc = PERMUTED::desc();
     assert_ne!(
         unsafe { layout_id(desc) },
         0,
@@ -93,7 +93,7 @@ fn static_layout_slot_order_registration_reflection_values_and_transitions() {
     );
     assert_ne!(
         unsafe { layout_id(desc) },
-        unsafe { layout_id(std::ptr::addr_of!(POSITIONAL)) },
+        unsafe { layout_id(POSITIONAL::desc()) },
         "slot mapping is part of shape identity"
     );
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -291,7 +291,7 @@ fn static_layout_slot_order_pointer_slot_survives_full_gc() {
     crate::gc::initialize_runtime_fixture();
     let scope = crate::gc::RuntimeHandleScope::new();
     let object = scope.root_raw_mut_ptr(unsafe {
-        crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(PERMUTED))
+        crate::object::layout_desc::perry_alloc_layout(PERMUTED::desc())
     });
     unsafe {
         let value = crate::string::js_string_from_bytes(b"mapped-pointer-value".as_ptr(), 20);
@@ -344,25 +344,28 @@ fn static_layout_slot_order_rejects_slots_that_are_not_a_permutation() {
             atom: std::ptr::addr_of!(FIRST),
             slot: 2,
             attrs: 0,
-            _pad: [0; 3],
+            _pad: 0,
+            off: crate::object::layout_desc::layout_key_off(2 as u32),
         },
         PerryLayoutKey {
             atom: std::ptr::addr_of!(SECOND),
             slot: 0,
             attrs: 0,
-            _pad: [0; 3],
+            _pad: 0,
+            off: crate::object::layout_desc::layout_key_off(0 as u32),
         },
         PerryLayoutKey {
             atom: std::ptr::addr_of!(THIRD),
             slot: 4,
             attrs: 0,
-            _pad: [0; 3],
+            _pad: 0,
+            off: crate::object::layout_desc::layout_key_off(4 as u32),
         },
     ];
     let mut desc = PerryLayoutDesc {
         image_keys: std::ptr::null_mut(),
         shape_id: 0,
-        _layout_pad: 0,
+        gc_plan: 0,
         family: 0x7f000005,
         variant: 0,
         kind: 0,
@@ -378,6 +381,8 @@ fn static_layout_slot_order_rejects_slots_that_are_not_a_permutation() {
         class_id: 0,
         parent_class_id: 0,
         methods: std::ptr::null(),
+        gc_header_word: crate::object::layout_desc::layout_gc_header_word(5),
+        _tail_pad: [0; 32],
     };
     unsafe {
         desc.keys = std::ptr::addr_of!(KEYS).cast();
@@ -388,13 +393,6 @@ fn static_layout_slot_order_rejects_slots_that_are_not_a_permutation() {
     }
 }
 
-// Reuse main's atom and its exact StaticAtom kind/index encoding.
-#[allow(non_snake_case)]
-mod ATOM_SYMBOL_ITERATOR {
-    pub const HASH: u64 = crate::codegen_abi::well_known_symbol_atom_hash(
-        crate::codegen_abi::WELL_KNOWN_SYMBOL_ITERATOR,
-    );
-}
 runtime_layout!(
     SYMBOL_PERMUTED,
     0x7f000004,
@@ -408,7 +406,7 @@ fn static_layout_slot_order_symbol_reads_writes_reflection_and_delete() {
     crate::gc::initialize_runtime_fixture();
     let scope = crate::gc::RuntimeHandleScope::new();
     let object = scope.root_raw_mut_ptr(unsafe {
-        crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(SYMBOL_PERMUTED))
+        crate::object::layout_desc::perry_alloc_layout(SYMBOL_PERMUTED::desc())
     });
     unsafe {
         object.with_mut_ptr(|obj| {
@@ -456,7 +454,7 @@ fn static_layout_slot_order_holes_use_the_main_presence_readers() {
     crate::gc::initialize_runtime_fixture();
     let scope = crate::gc::RuntimeHandleScope::new();
     let object = scope.root_raw_mut_ptr(unsafe {
-        crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(PERMUTED))
+        crate::object::layout_desc::perry_alloc_layout(PERMUTED::desc())
     });
     unsafe {
         object.with_mut_ptr(|obj| {
@@ -509,7 +507,7 @@ fn static_layout_slot_order_by_name_scans_read_storage_slots() {
     crate::gc::initialize_runtime_fixture();
     let scope = crate::gc::RuntimeHandleScope::new();
     let object = scope.root_raw_mut_ptr(unsafe {
-        crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(PERMUTED))
+        crate::object::layout_desc::perry_alloc_layout(PERMUTED::desc())
     });
     unsafe {
         object.with_mut_ptr(|obj| {
@@ -538,7 +536,7 @@ fn static_layout_slot_order_positional_lane_invariant_fails_loudly() {
     crate::gc::initialize_runtime_fixture();
     let scope = crate::gc::RuntimeHandleScope::new();
     let object = scope.root_raw_mut_ptr(unsafe {
-        crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(PERMUTED))
+        crate::object::layout_desc::perry_alloc_layout(PERMUTED::desc())
     });
     unsafe {
         let keys = crate::object::object_keys(object.get_raw_mut_ptr::<ObjectHeader>());
@@ -554,7 +552,7 @@ fn static_layout_slot_order_positional_lane_invariant_fails_loudly() {
 fn the_probe_serves_a_holey_runtime_layout() {
     crate::gc::initialize_runtime_fixture();
     crate::object::ensure_object_intrinsics();
-    let desc = std::ptr::addr_of!(POSITIONAL);
+    let desc = POSITIONAL::desc();
     let scope = crate::gc::RuntimeHandleScope::new();
     let object =
         scope.root_raw_mut_ptr(unsafe { crate::object::layout_desc::perry_alloc_layout(desc) });
@@ -646,7 +644,7 @@ fn a_probe_store_of_a_pointer_into_an_old_object_keeps_its_write_barrier() {
     let _force_evacuation = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
     let _age = crate::gc::pin_tenuring_survivals_for_test(1);
     crate::gc::register_runtime_handle_root_scanner_for_tests();
-    let desc = std::ptr::addr_of!(POSITIONAL);
+    let desc = POSITIONAL::desc();
     let scope = crate::gc::RuntimeHandleScope::new();
     let object =
         scope.root_raw_mut_ptr(unsafe { crate::object::layout_desc::perry_alloc_layout(desc) });

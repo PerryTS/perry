@@ -28,7 +28,7 @@ use crate::runtime_abi::{
     FN_ARROW, FN_ASYNC, FN_ASYNC_GENERATOR, FN_COMPILED_BODY, FN_GENERATOR, FN_HAS_DECLARED,
     FN_HAS_LENGTH, FN_HAS_NAME, FN_HAS_SOURCE, FN_NAME_IMAGE, FN_NON_CONSTRUCTOR,
     FN_NON_STRICT_ORDINARY, FN_PERMANENT_IMAGE, FN_REST_SYNTHETIC_ARGUMENTS, FN_REST_USER,
-    FN_REST_USER_AND_ARGUMENTS, FN_SOURCE_BLOCKS, FN_STRICT, NOT_PLAIN,
+    FN_REST_USER_AND_ARGUMENTS, FN_RETURNS_CAPTURE, FN_SOURCE_BLOCKS, FN_STRICT, NOT_PLAIN,
 };
 
 /// The LLVM type of a `JsFunctionInfo`, field for field (perry-abi's
@@ -96,6 +96,8 @@ pub(crate) struct FnInfoFacts {
     pub declared: u16,
     pub trusted: Option<CloneTarget>,
     pub versioned: Option<CloneTarget>,
+    /// The body is exactly `return <captured binding>` ([`ReturnedCapture`]).
+    pub returns_capture: Option<ReturnedCapture>,
     pub source: Option<RetainedSource>,
     pub name: Option<RetainedName>,
     pub constructor_layout: Option<ConstructorLayout>,
@@ -107,6 +109,19 @@ pub(crate) struct FnInfoFacts {
     /// The one generic entry for this body's fixed-signature operation.
     pub call_entry: Option<String>,
     pub call_entry_offset_words: u8,
+    pub metadata: Option<(String, u32)>,
+}
+
+/// `FN_RETURNS_CAPTURE` (perry-abi): what a body that is exactly `return
+/// <captured binding>` loads. It takes the info's trusted-clone words, so an
+/// info carrying it names no trusted clone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ReturnedCapture {
+    /// The capture slot the body reads.
+    pub index: u32,
+    /// 0 when the capture word is the value; else one plus the value's byte
+    /// offset in the cell the capture word names (a box, a scope object).
+    pub cell: u64,
 }
 
 /// The rest kind of a body with a rest / `arguments` array.
@@ -346,7 +361,15 @@ fn render_definition(
         Some(t) => (format!("@{}", t.symbol), t.captures, t.boxed_mask),
         None => ("null".to_string(), 0, 0),
     };
-    let (trusted_code, trusted_captures, trusted_mask) = clone(&facts.trusted);
+    // A body whose whole effect is one capture read gains nothing from a
+    // trusted direct-call clone; its fact takes the clone's words.
+    let (trusted_code, trusted_captures, trusted_mask, returns_flag) = match facts.returns_capture {
+        Some(rc) => ("null".to_string(), rc.index, rc.cell, FN_RETURNS_CAPTURE),
+        None => {
+            let (code, captures, mask) = clone(&facts.trusted);
+            (code, captures, mask, 0)
+        }
+    };
     let (versioned_code, versioned_captures, versioned_mask) = clone(&facts.versioned);
     let info = info_symbol(body);
     let source_flags = facts.source.as_ref().map_or(0, |source| {
@@ -363,8 +386,14 @@ fn render_definition(
             }
     });
     let flags = facts.flags
+        | if facts.metadata.is_some() {
+            crate::runtime_abi::FN_HAS_METADATA
+        } else {
+            0
+        }
         | (u32::from(facts.call_entry_offset_words) << crate::runtime_abi::FN_CALL_ENTRY_SHIFT)
         | FN_COMPILED_BODY
+        | returns_flag
         | source_flags
         | if facts.constructor_layout.is_some() {
             crate::runtime_abi::FN_HAS_CONSTRUCTOR_LAYOUT
@@ -489,6 +518,10 @@ fn render_definition(
     if let Some(entry) = facts.call_entry {
         types.push("ptr".to_string());
         fields.push(format!("ptr @{entry}"));
+    }
+    if let Some((owner, ordinal)) = facts.metadata {
+        types.push("{ ptr, i32 }".to_string());
+        fields.push(format!("{{ ptr, i32 }} {{ ptr @{owner}, i32 {ordinal} }}"));
     }
     if types.len() == 1 {
         format!("@{info} = {linkage}constant {info_type} {value}")
@@ -654,6 +687,40 @@ mod tests {
                 "@perry_closure_m__3$info = internal constant {INFO_TYPE} {{ ptr @perry_closure_m__3, \
                  i16 2, i16 1, i32 {}, i32 1, i32 0, ptr null, i64 0, ptr null, i32 0, i16 0, i16 0, i64 0 }}",
                 FN_REST_USER | FN_HAS_LENGTH | FN_ARROW | FN_COMPILED_BODY
+            )]
+        );
+    }
+
+    /// A `return <captured binding>` body's fact takes the trusted-clone
+    /// words: flag, capture index, cell word, and no trusted clone even when
+    /// one was recorded.
+    #[test]
+    fn a_returned_capture_fact_takes_the_trusted_clone_words() {
+        let mut state = FnInfoState::default();
+        state.request("perry_closure_m__9");
+        let facts = state.facts_mut("perry_closure_m__9");
+        facts.set_arrow();
+        facts.trusted = Some(CloneTarget {
+            symbol: "perry_closure_m__9$trusted_boxes".into(),
+            captures: 1,
+            boxed_mask: 1,
+        });
+        facts.returns_capture = Some(ReturnedCapture { index: 3, cell: 17 });
+        let lines = state.render_globals(
+            |b| {
+                (b == "perry_closure_m__9")
+                    .then(|| defined(0, "internal"))
+                    .flatten()
+            },
+            [],
+            false,
+        );
+        assert_eq!(
+            lines,
+            vec![format!(
+                "@perry_closure_m__9$info = internal constant {INFO_TYPE} {{ ptr @perry_closure_m__9, \
+                 i16 0, i16 0, i32 {}, i32 0, i32 3, ptr null, i64 17, ptr null, i32 0, i16 0, i16 1, i64 0 }}",
+                FN_ARROW | FN_COMPILED_BODY | FN_RETURNS_CAPTURE
             )]
         );
     }
@@ -922,4 +989,9 @@ mod constructor_tail_tests {
         )));
         assert!(line.ends_with("{ ptr @ctor_layout, ptr @ctor_operands, i32 2, i32 0 } }"));
     }
+}
+
+/// The private scalar capture body shares the typed closure's identity.
+pub(crate) fn normalized_capture_body_symbol(typed: &str) -> String {
+    format!("{typed}.$normalized_captures")
 }

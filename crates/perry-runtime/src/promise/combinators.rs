@@ -446,7 +446,7 @@ pub(crate) fn combinator_iterable_to_array(
         let hdr = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         (*hdr).obj_type
     };
-    if obj_type == crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_object!(obj_type) {
         // #7497 (CodeRabbit): `raw` was computed above and then carried across a
         // user `[Symbol.iterator]` getter and a `"next"` key allocation before
         // being dereferenced. Root the receiver and re-derive its address after
@@ -1327,7 +1327,7 @@ pub extern "C" fn js_assimilate_thenable(value: f64) -> f64 {
         let gc_header =
             (obj_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         let gc_type = (*gc_header).obj_type;
-        if gc_type != crate::gc::GC_TYPE_OBJECT {
+        if crate::gc_type_is_not_object!(gc_type) {
             return value;
         }
         (*obj_ptr).class_id

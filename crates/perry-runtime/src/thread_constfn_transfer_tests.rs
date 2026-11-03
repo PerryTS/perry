@@ -622,7 +622,13 @@ fn constfn_transfer_compiled_anon_header_preserves_actual_worker_wire() {
         crate::object::declarations::test_declare_anonymous(ANON);
         assert!(crate::object::declarations::class_is_anonymous(ANON));
         assert_eq!(shapes::class_proto_id(ANON), shapes::class_proto_id(0));
-        assert_eq!((*arrow_info()).flags, 6200, "actual producer info flags");
+        // The producer flags are the compiled body bits; #13442 added the
+        // metadata-identity tail bit, which every fn_info! info now carries.
+        assert_eq!(
+            (*arrow_info()).flags & !crate::codegen_abi::FN_HAS_METADATA,
+            6200,
+            "actual producer info flags"
+        );
         assert_eq!(
             static_shapes::fixtures::fixture_shape_seed_plain(
                 ANON_BASE,

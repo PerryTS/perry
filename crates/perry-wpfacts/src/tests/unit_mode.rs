@@ -592,3 +592,43 @@ mod escaped_results;
 
 #[path = "unit_mode/return_transfers.rs"]
 mod return_transfers;
+
+#[path = "unit_mode/commonjs_helper.rs"]
+mod commonjs_helper;
+#[path = "unit_mode/forwarded_fn_copies.rs"]
+mod forwarded_fn_copies;
+#[path = "unit_mode/forwarded_literal_copies.rs"]
+mod forwarded_literal_copies;
+#[path = "unit_mode/pub_callable.rs"]
+mod pub_callable;
+
+#[path = "unit_mode/method_on_read.rs"]
+mod method_on_read;
+
+#[path = "unit_mode/fn_transfer.rs"]
+mod fn_transfer;
+#[path = "unit_mode/own_key_shadow.rs"]
+mod own_key_shadow;
+#[path = "unit_mode/private_fields.rs"]
+mod private_fields;
+#[path = "unit_mode/protocol_touch.rs"]
+mod protocol_touch;
+#[path = "unit_mode/unit_cycle_order.rs"]
+mod unit_cycle_order;
+
+mod ctor_receiver_calls;
+
+#[path = "unit_mode/closed_ctor_literal.rs"]
+mod closed_ctor_literal;
+
+#[path = "unit_mode/site_copies.rs"]
+mod site_copies;
+
+#[path = "unit_mode/returned_field_map.rs"]
+mod returned_field_map;
+
+#[path = "unit_mode/foreign_fn_own_key.rs"]
+mod foreign_fn_own_key;
+
+#[path = "unit_mode/chain_fact.rs"]
+mod chain_fact;

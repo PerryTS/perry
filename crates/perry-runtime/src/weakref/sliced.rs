@@ -247,7 +247,7 @@ impl FullWeakProcessingState {
                     let candidate = valid_ptrs.contains(&addr)
                         && unsafe {
                             let header = super::header_from_user_addr(addr);
-                            (*header).obj_type == crate::gc::GC_TYPE_OBJECT
+                            crate::gc_type_is_object!((*header).obj_type)
                                 && matches!(
                                     (*(addr as *const ObjectHeader)).class_id,
                                     super::CLASS_ID_WEAKREF | CLASS_ID_FINALIZATION_REGISTRY

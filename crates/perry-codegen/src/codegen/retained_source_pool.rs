@@ -34,19 +34,6 @@ pub(super) struct SourceRange {
 }
 
 impl SourceRange {
-    pub(super) fn constant_pointer(&self) -> String {
-        assert!(
-            self.decoded_offset.is_none(),
-            "compressed ranges belong in infos"
-        );
-        let base = format!("@{}", self.global);
-        if self.offset == 0 {
-            base
-        } else {
-            format!("getelementptr (i8, ptr {base}, i64 {})", self.offset)
-        }
-    }
-
     pub(super) fn pointer(&self, block: &mut LlBlock) -> String {
         assert!(
             self.decoded_offset.is_none(),
@@ -220,9 +207,8 @@ pub(super) fn prepare_ranges(
     class_sources.sort_by_key(|entry| entry.0);
     class_sources.dedup_by_key(|(cid, _)| *cid);
 
-    // An image that can be unloaded cannot leave borrowed source metadata in
-    // either a registry or a function-info record. Executables are permanent;
-    // dylibs/staticlibs retain the copying registration path below.
+    // Unloadable image owners copy these ranges before publication. Permanent
+    // image owners retain direct read-only info ranges.
 
     // #4101/#9413: mint source globals BEFORE `init_fn` borrows `llmod`.
     // Sharing changes only the backing bytes, never registration order, source
@@ -270,7 +256,7 @@ pub(super) fn prepare_ranges(
         if wrapper_sym.is_empty() {
             continue;
         }
-        let in_info = strings_outlive_registry && llmod.can_attach_fn_source(wrapper_sym);
+        let in_info = llmod.can_attach_fn_source(wrapper_sym);
         if source_text.is_empty() {
             if !*is_non_strict_ordinary {
                 continue;
@@ -646,16 +632,11 @@ mod tests {
                 out
             };
             let bit = perry_abi::FN_NON_STRICT_ORDINARY;
-            if outlive {
-                assert!(constants.is_empty());
-                assert_eq!(flags("body_sloppy"), (bit, false));
-            } else {
-                assert_eq!(constants.len(), 1);
-                assert_eq!(constants[0].0, "body_sloppy");
-                assert_eq!(constants[0].1.byte_len, 0);
-                assert!(constants[0].2);
-                assert_eq!(flags("body_sloppy").0 & bit, 0);
-            }
+            assert!(
+                constants.is_empty(),
+                "all output kinds carry kind in canonical infos"
+            );
+            assert_eq!(flags("body_sloppy"), (bit, false));
             assert_eq!(flags("body_strict"), (0, false));
         }
     }

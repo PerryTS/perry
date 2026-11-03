@@ -1155,7 +1155,7 @@ mod qstypeof_tests {
                 perry_abi::gc_header_word_is_callable(u32::from_ne_bytes(bytes)),
                 matches!(
                     kind,
-                    crate::gc::GC_TYPE_OBJECT
+                    crate::gc_object_type_pat!()
                         | crate::gc::GC_TYPE_PROXY
                         | crate::gc::GC_TYPE_CLOSURE
                 )

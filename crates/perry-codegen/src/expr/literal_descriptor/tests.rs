@@ -25,6 +25,8 @@ fn fixture(records: usize, fields: usize) -> Module {
                     object: Box::new(Expr::This),
                     property: p.name.clone(),
                     value: Box::new(Expr::LocalGet(p.id)),
+                    byte_offset: 0,
+                    byte_end: 0,
                 })
             })
             .collect(),
@@ -202,6 +204,8 @@ fn added_store(receiver: Expr, key: &str) -> Stmt {
         object: Box::new(receiver),
         property: key.into(),
         value: Box::new(Expr::Number(3.0)),
+        byte_offset: 0,
+        byte_end: 0,
     })
 }
 
@@ -212,9 +216,16 @@ fn assert_literal_width(module: &Module, width: u32) {
         .filter(|l| l.contains("call i64 @js_object_alloc_class_inline_keys_stamped("))
         .collect();
     if allocations.is_empty() {
-        let total =
-            crate::target_layout::inline_alloc_total_size_bytes("aarch64-apple-darwin", width);
-        let packed = crate::target_layout::inline_alloc_gc_packed("aarch64-apple-darwin", width);
+        let total = crate::target_layout::inline_alloc_total_size_bytes(
+            "aarch64-apple-darwin",
+            crate::target_layout::HeaderForm::Meta,
+            width,
+        );
+        let packed = crate::target_layout::inline_alloc_gc_packed(
+            "aarch64-apple-darwin",
+            crate::target_layout::HeaderForm::Meta,
+            width,
+        );
         assert!(
             text.contains("alloc.fast"),
             "fixture must emit a literal birth: {text}"
@@ -247,7 +258,11 @@ fn assert_literal_width(module: &Module, width: u32) {
             "wrong live bound: {}",
             mints[0]
         );
-        let packed = crate::target_layout::inline_alloc_gc_packed("aarch64-apple-darwin", width);
+        let packed = crate::target_layout::inline_alloc_gc_packed(
+            "aarch64-apple-darwin",
+            crate::target_layout::HeaderForm::Meta,
+            width,
+        );
         assert!(
             text.contains(&format!("<i64 {packed}, i64 ")),
             "wide allocation and image size must agree"
@@ -465,6 +480,8 @@ fn born_wide_global_binding_and_static_putvalue_key() {
         key: Box::new(Expr::String("z".into())),
         value: Box::new(Expr::Number(3.0)),
         strict: false,
+        byte_offset: 0,
+        byte_end: 0,
     })];
     // HIR globals may be materialized by an earlier pass; assert the capacity
     // evidence directly as well as emitting an ordinary birth of the class.

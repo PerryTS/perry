@@ -6,7 +6,7 @@
 
 use super::super::*;
 use super::support::*;
-use crate::gc::trace::remembered_mark_sabotage;
+use crate::gc::mark::remembered_mark_sabotage;
 
 fn run_isolated(test: fn()) {
     std::thread::spawn(move || {
@@ -444,7 +444,7 @@ fn folded_full_mark_matches_the_reference_for_arena_and_malloc_parents() {
         ];
         let mut cursor = 0;
         let mut folded = StickyRememberedSet::default();
-        while !drain_trace_worklist_step_remembering(
+        while !drain_trace_worklist_step_remembering::<{ cfg!(test) }>(
             &mut worklist,
             &mut cursor,
             &valid,
@@ -490,7 +490,7 @@ fn the_fold_neither_marks_nor_remembers_an_old_weak_holders_target() {
         let mut worklist = vec![header];
         let mut cursor = 0;
         let mut sticky = StickyRememberedSet::default();
-        while !drain_trace_worklist_step_remembering(
+        while !drain_trace_worklist_step_remembering::<{ cfg!(test) }>(
             &mut worklist,
             &mut cursor,
             &valid,

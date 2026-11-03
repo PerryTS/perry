@@ -1,0 +1,1 @@
+Small `Map` lookups (up to eight entries) scan their keys without an early exit, so where a key sits no longer decides a branch; a lookup over a few entries in varying order no longer mispredicts once per call.

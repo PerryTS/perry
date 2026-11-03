@@ -53,8 +53,16 @@ pub extern "C" fn js_object_is(a: f64, b: f64) -> f64 {
         return f64::from_bits(TAG_FALSE);
     }
 
-    // For everything else, bit-pattern equality
-    if a_bits == b_bits {
+    // For everything else, identity: bit-pattern equality, or two names of
+    // one object across array-growth / evacuation forwarding, resolved the
+    // way `===` resolves them (`value::resolve_forwarding`). A binding
+    // refreshed after a grow holds the new head while an alias keeps the stub.
+    if a_bits == b_bits
+        || (a_jsval.is_pointer()
+            && b_jsval.is_pointer()
+            && crate::value::resolve_forwarding((a_bits & crate::value::POINTER_MASK) as usize)
+                == crate::value::resolve_forwarding((b_bits & crate::value::POINTER_MASK) as usize))
+    {
         f64::from_bits(TAG_TRUE)
     } else {
         f64::from_bits(TAG_FALSE)
@@ -273,7 +281,7 @@ fn object_has_own_generic(obj_value: f64, key_value: f64) -> f64 {
             // immediates or functions). Only a class object, which owns
             // `prototype` without storing it, needs a look before the object
             // arms below.
-            Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => {
+            Some(h) if crate::gc_type_is_object!(h.obj_type) => {
                 let ptr = obj_js.as_pointer::<u8>();
                 if super::super::class_registry::parent_static::is_class_object_with_header(ptr, h)
                     && super::super::has_own_helpers::str_from_string_header(key_str).is_some_and(

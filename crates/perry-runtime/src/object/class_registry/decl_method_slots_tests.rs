@@ -98,7 +98,7 @@ fn decl_prototype_method_slot_is_a_constfn_lane_of_its_body() {
         m
     );
     assert_eq!(
-        crate::builtins::function_name_for_ptr(unsafe { (*closure).code() } as usize).as_deref(),
+        unsafe { crate::builtins::function_name_for_closure(closure) }.as_deref(),
         Some("m")
     );
 }

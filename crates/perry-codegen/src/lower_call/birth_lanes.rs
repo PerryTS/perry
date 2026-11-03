@@ -279,6 +279,7 @@ impl Walk {
                 object,
                 property,
                 value,
+                ..
             }) if matches!(object.as_ref(), Expr::This) && !observes_this(value) => {
                 self.write(property, value);
                 self.own_definitions.contains(property)
@@ -289,6 +290,7 @@ impl Walk {
                 value,
                 receiver,
                 strict: _,
+                ..
             }) if matches!(target.as_ref(), Expr::This)
                 && matches!(receiver.as_ref(), Expr::This)
                 && !observes_this(value) =>

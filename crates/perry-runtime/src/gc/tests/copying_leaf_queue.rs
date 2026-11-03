@@ -7,9 +7,13 @@ fn copied_leaves_are_not_queued_but_keep_their_survivor_and_clear_marks() {
     std::thread::spawn(|| unsafe {
         let _guard = CopyingNurseryTestGuard::new(1);
         let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let _heap_change = crate::gc::heap_generation::HeapChange::begin(
+            crate::gc::heap_generation::HeapChangeKind::CopyingMinor,
+        );
         let leaf = young_leaf();
-        let mut collector = CopyingNurseryCollector::new(CopyingPointerSet::new());
-        let moved = collector.mark_addr(leaf).unwrap();
+        let mut collector =
+            CopyingNurseryCollector::new::<{ cfg!(test) }>(CopyingPointerSet::new());
+        let moved = collector.mark_addr::<{ cfg!(test) }>(leaf).unwrap();
         assert_ne!(leaf, moved, "premise: the leaf really moved");
         let header = header_from_user_ptr(moved as *const u8);
         assert_eq!(collector.moved_headers, vec![header]);
@@ -30,10 +34,11 @@ fn promoted_leaves_are_not_queued_but_keep_survival_accounting() {
         let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
         let leaf = young_leaf();
         let promotion = crate::arena::retag_young_for_in_place_promotion(true);
-        let mut collector = CopyingNurseryCollector::new(CopyingPointerSet::new());
+        let mut collector =
+            CopyingNurseryCollector::new::<{ cfg!(test) }>(CopyingPointerSet::new());
         let ptr = collector.ptrs.classify(leaf).unwrap();
         assert_eq!(ptr.kind, CopyingPointerKind::PromotedYoung);
-        assert_eq!(collector.mark_classified_addr(leaf, ptr), leaf);
+        assert_eq!(collector.mark_classified_addr::<true>(leaf, ptr), leaf);
         assert_eq!(collector.moved_headers, vec![ptr.header]);
         assert_eq!(collector.stats.in_place_promoted_objects, 1);
         assert!(collector.worklist.is_empty());
@@ -51,10 +56,11 @@ fn nonmoving_leaves_are_marked_and_cleared_without_a_drain_entry() {
         let _guard = CopyingNurseryTestGuard::new(1);
         let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
         let leaf = crate::arena::arena_alloc_gc_longlived(32, 8, GC_TYPE_STRING) as usize;
-        let mut collector = CopyingNurseryCollector::new(CopyingPointerSet::new());
+        let mut collector =
+            CopyingNurseryCollector::new::<{ cfg!(test) }>(CopyingPointerSet::new());
         let ptr = collector.ptrs.classify(leaf).unwrap();
         assert_eq!(ptr.kind, CopyingPointerKind::Longlived);
-        assert_eq!(collector.mark_addr(leaf), Some(leaf));
+        assert_eq!(collector.mark_addr::<true>(leaf), Some(leaf));
         assert_eq!(collector.marked_headers, vec![ptr.header]);
         assert!(collector.worklist.is_empty());
         collector.clear_marks();
@@ -69,20 +75,24 @@ fn a_forwarded_leaf_still_marks_and_scans_its_nonleaf_target() {
     std::thread::spawn(|| unsafe {
         let _guard = CopyingNurseryTestGuard::new(1);
         let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let _heap_change = crate::gc::heap_generation::HeapChange::begin(
+            crate::gc::heap_generation::HeapChangeKind::CopyingMinor,
+        );
         let stub = young_leaf();
         let (target, fields) = alloc_nursery_test_object(1);
         let child = young_leaf();
         *fields = string_bits(child);
         set_forwarding_address(header_from_user_ptr(stub as *const u8), target.cast());
-        let mut collector = CopyingNurseryCollector::new(CopyingPointerSet::new());
-        let moved = collector.mark_addr(stub).unwrap();
+        let mut collector =
+            CopyingNurseryCollector::new::<{ cfg!(test) }>(CopyingPointerSet::new());
+        let moved = collector.mark_addr::<{ cfg!(test) }>(stub).unwrap();
         assert_ne!(moved, target as usize);
         let header = header_from_user_ptr(moved as *const u8);
         assert!(
             collector.worklist.contains(&header),
             "the target has real edges"
         );
-        collector.drain();
+        collector.drain::<{ cfg!(test) }>();
         let moved_fields = (moved as *const u8)
             .add(std::mem::size_of::<crate::object::ObjectHeader>())
             as *const u64;

@@ -222,10 +222,7 @@ pub extern "C" fn js_promise_resolved(value: f64) -> *mut Promise {
                     }
                     .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
                     let ctor_h = scope.root_nanbox_f64(ctor);
-                    let intrinsic = crate::object::js_get_global_this_builtin_value(
-                        b"Promise".as_ptr(),
-                        b"Promise".len(),
-                    );
+                    let intrinsic = crate::object::builtin_constructor_value("Promise");
                     ctor_h.get_nanbox_f64().to_bits() == intrinsic.to_bits()
                 } else {
                     true
@@ -461,8 +458,24 @@ fn then_backpatch_result(
     }
 }
 
+/// An awaited promise goes through PromiseResolve(%Promise%, p), which performs
+/// Get(p, "constructor") before reusing p. A promise carrying an own constructor
+/// (data or accessor) must therefore take the general path that reads it. A null
+/// metadata owner proves there is no own property, so the steady state costs one load.
+#[inline]
+fn promise_reads_own_constructor(value: f64) -> bool {
+    let inner = crate::value::js_nanbox_get_pointer(value) as *const Promise;
+    if inner.is_null() || unsafe { crate::object::cell_meta::promise_cell_meta(inner).is_null() } {
+        return false;
+    }
+    super::promise_has_own_constructor(inner as usize)
+}
+
 #[no_mangle]
 pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *mut Promise {
+    if let Some(next) = super::settled_step::try_enqueue(value, step_closure) {
+        return next;
+    }
     // PR #1004 followup: if `value` is a JS_HANDLE_TAG handle to a V8
     // Promise (the common case for `await <V8-fallback-call>(...)` —
     // e.g. `await new SignJWT(...).sign(key)` in jose), convert it to
@@ -556,6 +569,7 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
             (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize,
         )
         .is_none()
+        && !promise_reads_own_constructor(value)
     {
         let inner = crate::value::js_nanbox_get_pointer(value) as *mut Promise;
         if !inner.is_null() {
@@ -652,6 +666,18 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
         );
     };
 
+    // Native snapshot/queue allocations cannot collect. Keep the ordinary
+    // collecting path below for async_hooks resource initialization.
+    if !async_hooks_active {
+        return super::settled_step::enqueue(
+            rooted_step(),
+            queued_value,
+            next,
+            is_error,
+            trap.box_activation,
+        );
+    }
+
     // #7497: `capture_context()` allocates, and `next` / `queued_value` are the
     // OTHER two GC values this task carries, so root them across it too and take
     // every address from a handle at the push.
@@ -697,21 +723,19 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
             crate::value::js_nanbox_get_pointer(value) as *mut Promise
         }
     };
-    crate::r#box::retain_async_box_activation(trap.box_activation);
-    TASK_QUEUE.with(|q| {
-        q.borrow_mut().enqueue_promise_job(Task::AsyncStep(
-            rooted_step(),
-            queued_value_handle.get_nanbox_f64(),
-            next,
-            is_error,
-            context,
-            trap.box_activation,
-            step_async_id,
-            step_trigger_id,
-        ));
-    });
+    super::settled_step::publish(
+        rooted_step(),
+        queued_value_handle.get_nanbox_f64(),
+        next,
+        is_error,
+        context,
+        trap.box_activation,
+        step_async_id,
+        step_trigger_id,
+    );
     crate::event_pump::js_notify_promise_progress();
-    next
+    // A registered native host wake may re-enter before returning.
+    unboxed_promise(&next_handle)
 }
 
 /// Done-case companion to `js_async_step_chain`. Replaces the
@@ -1707,7 +1731,7 @@ mod tests {
                 crate::closure::js_closure_alloc(crate::fn_info!(async_step_fulfill_thunk, 1), 4);
             crate::closure::js_closure_set_capture_ptr(thunk, 0, step as i64);
             crate::closure::js_closure_set_capture_ptr(thunk, 1, captured_from as i64);
-            crate::closure::js_closure_set_capture_ptr(thunk, 2, 0);
+            crate::closure::closure_set_capture_word(thunk, 2, 0);
             crate::closure::js_closure_set_capture_f64(thunk, 3, 0.0);
 
             let original = INLINE_TRAP.with(|slot| {

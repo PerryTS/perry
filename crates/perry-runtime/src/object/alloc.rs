@@ -10,11 +10,13 @@ pub use super::alloc_basic::{
     js_object_alloc, js_object_alloc_fast, js_object_alloc_fast_with_parent, js_object_alloc_plain,
     js_object_alloc_with_parent, js_object_coerce,
 };
+use super::header::meta_form_alloc_bytes;
 use super::*;
 use crate::codegen_abi::LayoutWord;
 
 // Storage: `ObjectHotTables::class_keys_by_id` (this agent's class_id ->
-// (keys array address, field count) memo). See its field docs for why it is
+// (keys array address, field count, key count, trie node) memo: a holder of
+// a canonical list keeps its node). See its field docs for why it is
 // per agent and weak.
 
 fn remember_class_keys(class_id: u32, field_count: u32, keys: crate::object::ObjectKeys) {
@@ -25,7 +27,10 @@ fn remember_class_keys(class_id: u32, field_count: u32, keys: crate::object::Obj
         .object_hot
         .class_keys_by_id
         .borrow_mut()
-        .insert(class_id, (keys.arr() as usize, field_count, keys.count()));
+        .insert(
+            class_id,
+            (keys.arr() as usize, field_count, keys.count(), keys.node()),
+        );
 }
 
 /// Post-trace death prune. A dropped entry costs one rebuild of the class's
@@ -70,7 +75,7 @@ pub(crate) fn prune_dead_class_keys_entries(is_dead_owner: &dyn Fn(usize) -> boo
 pub(crate) fn registered_class_keys_array(
     class_id: u32,
 ) -> Option<(crate::object::ObjectKeys, u32)> {
-    let (addr, field_count, key_count) = crate::state::state()
+    let (addr, field_count, key_count, node) = crate::state::state()
         .object_hot
         .class_keys_by_id
         .borrow()
@@ -80,15 +85,14 @@ pub(crate) fn registered_class_keys_array(
         return None;
     }
     Some((
-        crate::object::ObjectKeys::new(addr as *mut ArrayHeader, key_count),
+        crate::object::ObjectKeys::with_node(addr as *mut ArrayHeader, key_count, node),
         field_count,
     ))
 }
 
 /// #1175: allocate an object whose `[[Prototype]]` is null. Same layout as
-/// `js_object_alloc`, but the `OBJ_FLAG_NULL_PROTO` bit is set on the GC
-/// header so `Object.getPrototypeOf` returns null instead of the heap
-/// pointer / synthesized proto. A runtime record born here is not marked
+/// `js_object_alloc`; its first shape names the null identity, so
+/// `Object.getPrototypeOf` (and every other reader of the link) answers null. A runtime record born here is not marked
 /// ordinary (a namespace, scope, resource or internal state record); a plain
 /// dictionary result uses [`js_object_alloc_null_proto_ordinary`].
 #[no_mangle]
@@ -159,6 +163,19 @@ pub(crate) unsafe fn object_alloc_null_proto_with_key_attrs(
     object_alloc_null_proto_with_key_attrs_and_inline(entries, attrs, entries.len() as u32)
 }
 
+/// [`object_alloc_null_proto_with_key_attrs`] with `ROOM` more inline slots
+/// than keys, for an object that will take more keys (a function's bag): its
+/// later key-adds land inline instead of in the spill buffer.
+///
+/// # Safety
+/// Same suppression and distinct-key requirements as the full-inline birth.
+pub(crate) unsafe fn object_alloc_null_proto_with_key_attrs_room<const ROOM: u32>(
+    entries: &[(&str, f64)],
+    attrs: &[u8],
+) -> *mut ObjectHeader {
+    object_alloc_null_proto_with_key_attrs_sized::<ROOM>(entries, attrs, entries.len() as u32)
+}
+
 /// The same canonical birth with a bounded inline prefix. Remaining fixed
 /// positions use the existing traced spill store; no key-add or per-key
 /// attribute transitions are needed to establish them.
@@ -166,6 +183,17 @@ pub(crate) unsafe fn object_alloc_null_proto_with_key_attrs(
 /// # Safety
 /// Same suppression and distinct-key requirements as the full-inline birth.
 pub(crate) unsafe fn object_alloc_null_proto_with_key_attrs_and_inline(
+    entries: &[(&str, f64)],
+    attrs: &[u8],
+    inline: u32,
+) -> *mut ObjectHeader {
+    object_alloc_null_proto_with_key_attrs_sized::<0>(entries, attrs, inline)
+}
+
+/// The canonical birth with `inline` live inline keys in storage of
+/// `inline + ROOM` inline slots.
+#[inline(always)]
+unsafe fn object_alloc_null_proto_with_key_attrs_sized<const ROOM: u32>(
     entries: &[(&str, f64)],
     attrs: &[u8],
     inline: u32,
@@ -180,10 +208,9 @@ pub(crate) unsafe fn object_alloc_null_proto_with_key_attrs_and_inline(
     }
     // Under suppression the unpublished bag cannot move or be traced before
     // its final keys and live bound are stamped. Publish no empty predecessor.
-    let obj = super::alloc_basic::object_alloc_unpublished(0, inline);
+    let obj = super::alloc_basic::object_alloc_unpublished(0, inline + ROOM);
     let with_attrs = attrs.iter().any(|&entry| entry != 0);
     let gc = (obj as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
-    (*gc)._reserved |= crate::gc::OBJ_FLAG_NULL_PROTO;
     if with_attrs {
         // The descriptor bit is initialized with the final attributed keys;
         // no descriptor is installed in an external table or process gate.
@@ -217,7 +244,7 @@ pub(crate) unsafe fn object_alloc_null_proto_with_key_attrs_and_inline(
         }
         canonical_keys::canonicalize(&proof, list, count)
     };
-    set_object_keys_with_live(obj, canonical.view(), inline);
+    super::set_object_keys_with_live_born_null(obj, canonical.view(), inline);
     // The shape's keys are an external child edge. A previously traced
     // newborn bag can acquire this edge while incremental marking is active.
     crate::gc::runtime_shade_external_edge(
@@ -270,6 +297,7 @@ fn alloc_instance_keeping_keys(
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn alloc_instance_keeping_keys_collecting(
     total_size: usize,
@@ -418,7 +446,6 @@ pub(super) fn object_alloc_class_inline_keys_impl(
     if parent_class_id != 0 {
         register_class(class_id, parent_class_id);
     }
-    let header_size = std::mem::size_of::<ObjectHeader>();
     // #6812 (w16): honor the learned high-water width for this class so
     // builder-pattern instances allocate their true field count inline
     // instead of spilling writes to the overflow side-table. The stored
@@ -430,8 +457,7 @@ pub(super) fn object_alloc_class_inline_keys_impl(
     let learned = crate::object::learned_inline_field_count(class_id) as usize;
     let logical_field_count = std::cmp::max(field_count as usize, learned);
     let alloc_field_count = std::cmp::max(logical_field_count, crate::object::INLINE_SLOT_FLOOR);
-    let fields_size = alloc_field_count * std::mem::size_of::<JSValue>();
-    let total_size = header_size + fields_size;
+    let total_size = meta_form_alloc_bytes(alloc_field_count);
 
     // `keys` names a raw copy of the caller's root and is not nameable past
     // this call; the helper hands back its post-allocation address.
@@ -442,7 +468,7 @@ pub(super) fn object_alloc_class_inline_keys_impl(
         (*ptr).class_id = class_id;
         (*ptr).parent_class_id = parent_class_id;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
-        (*ptr).meta = ptr::null_mut();
+        *crate::meta_slot_of!(crate::meta_obj_runtime_born!(ptr)) = ptr::null_mut();
         if premark_plain {
             // Charter step 3: marked before the first stamp, so the birth
             // shape is minted `Ordinary` and no twin is ever needed.
@@ -476,7 +502,7 @@ pub(super) fn object_alloc_class_inline_keys_impl(
         // job (the inline bump path and `json/parser.rs` both zero-filled by hand);
         // folding it in here keeps every caller — including the outlined `new C()`
         // codegen path — correct by construction.
-        let fields_ptr = (ptr as *mut u8).add(header_size) as *mut JSValue;
+        let fields_ptr = crate::meta_slots_of!(crate::meta_obj_runtime_born!(ptr)) as *mut JSValue;
         for i in 0..alloc_field_count {
             // GC_STORE_AUDIT(INIT): freshly allocated object field slot initialized to undefined.
             ptr::write(fields_ptr.add(i), JSValue::undefined());
@@ -663,10 +689,8 @@ pub extern "C" fn js_object_alloc_class_with_keys(
         register_class(class_id, parent_class_id);
     }
 
-    let header_size = std::mem::size_of::<ObjectHeader>();
     let alloc_field_count = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
-    let fields_size = alloc_field_count * std::mem::size_of::<JSValue>();
-    let total_size = header_size + fields_size;
+    let total_size = meta_form_alloc_bytes(alloc_field_count);
 
     // Use class_id as shape_id for caching the keys array.
     // Hot path: direct-mapped inline cache lookup (no RefCell, no
@@ -710,7 +734,7 @@ pub extern "C" fn js_object_alloc_class_with_keys(
         (*ptr).class_id = class_id;
         (*ptr).parent_class_id = parent_class_id;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
-        (*ptr).meta = ptr::null_mut();
+        *crate::meta_slot_of!(crate::meta_obj_runtime_born!(ptr)) = ptr::null_mut();
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
         set_object_keys_with_live(ptr, keys_arr, field_count);
         // #6759 C3 rung 2, completed: birth-stamp here too. #8009 stamped the
@@ -822,18 +846,16 @@ pub extern "C" fn js_object_alloc_class_dynamic_parent(
         )
     };
 
-    let header_size = std::mem::size_of::<ObjectHeader>();
     let alloc_field_count = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
-    let fields_size = alloc_field_count * std::mem::size_of::<JSValue>();
-    let total_size = header_size + fields_size;
+    let total_size = meta_form_alloc_bytes(alloc_field_count);
     let (ptr, arr) = alloc_instance_keeping_keys(total_size, merged_arr.arr());
     let merged_arr = crate::object::ObjectKeys::new(arr, merged_arr.count());
     unsafe {
         (*ptr).class_id = class_id;
         (*ptr).parent_class_id = parent_cid;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
-        (*ptr).meta = ptr::null_mut();
-        let fields_ptr = (ptr as *mut u8).add(header_size) as *mut JSValue;
+        *crate::meta_slot_of!(crate::meta_obj_runtime_born!(ptr)) = ptr::null_mut();
+        let fields_ptr = crate::meta_slots_of!(crate::meta_obj_runtime_born!(ptr)) as *mut JSValue;
         for i in 0..alloc_field_count {
             // GC_STORE_AUDIT(INIT): freshly allocated object field slot is initialized pointer-free.
             ptr::write(fields_ptr.add(i), JSValue::undefined());
@@ -877,11 +899,9 @@ pub extern "C" fn js_object_alloc_with_shape(
     packed_keys: *const u8,
     packed_keys_len: u32,
 ) -> *mut ObjectHeader {
-    let header_size = std::mem::size_of::<ObjectHeader>();
     // Allocate extra field slots for dynamic property growth (plain objects may get new fields)
     let alloc_field_count = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
-    let fields_size = alloc_field_count * 8;
-    let total_size = header_size + fields_size;
+    let total_size = meta_form_alloc_bytes(alloc_field_count);
     let obj_ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
 
     unsafe {
@@ -892,10 +912,11 @@ pub extern "C" fn js_object_alloc_with_shape(
         // validation; otherwise every class-less record remints these facts.
         super::shapes::store_kind::premark_plain_ordinary(obj_ptr);
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
-        (*obj_ptr).meta = ptr::null_mut();
+        *crate::meta_slot_of!(crate::meta_obj_runtime_born!(obj_ptr)) = ptr::null_mut();
 
         // Initialize all allocated field slots to undefined (including extra padding)
-        let fields_ptr = (obj_ptr as *mut u8).add(header_size) as *mut JSValue;
+        let fields_ptr =
+            crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj_ptr)) as *mut JSValue;
         for i in 0..alloc_field_count {
             // GC_STORE_AUDIT(INIT): freshly allocated object field slot is initialized pointer-free.
             ptr::write(fields_ptr.add(i), JSValue::undefined());
@@ -1020,17 +1041,17 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
         && !crate::value::addr_class::is_handle_band(src_raw)
         && matches!(
             crate::value::addr_class::try_read_gc_header(src_raw),
-            Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT
+            Some(h) if crate::gc_type_is_object!(h.obj_type)
         );
     if !src_is_object {
         let phys_slots = std::cmp::max(extra_count, crate::object::INLINE_SLOT_FLOOR as u32);
-        let total_size = header_size + phys_slots as usize * 8;
+        let total_size = meta_form_alloc_bytes(phys_slots as usize);
         let new_ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
         (*new_ptr).class_id = 0;
         (*new_ptr).parent_class_id = 0;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
-        (*new_ptr).meta = ptr::null_mut();
-        let fields_ptr = (new_ptr as *mut u8).add(header_size) as *mut u64;
+        *crate::meta_slot_of!(crate::meta_obj_runtime_born!(new_ptr)) = ptr::null_mut();
+        let fields_ptr = crate::meta_slots_of!(crate::meta_obj_runtime_born!(new_ptr)) as *mut u64;
         for i in 0..phys_slots as usize {
             // GC_STORE_AUDIT(INIT): freshly allocated clone field slot is initialized pointer-free.
             ptr::write(fields_ptr.add(i), crate::value::TAG_UNDEFINED);
@@ -1066,16 +1087,16 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
         src_field_count + extra_count,
         crate::object::INLINE_SLOT_FLOOR as u32,
     );
-    let total_size = header_size + phys_slots as usize * 8;
+    let total_size = meta_form_alloc_bytes(phys_slots as usize);
     let new_ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
     (*new_ptr).class_id = 0;
     (*new_ptr).parent_class_id = 0;
     // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
-    (*new_ptr).meta = ptr::null_mut();
+    *crate::meta_slot_of!(crate::meta_obj_runtime_born!(new_ptr)) = ptr::null_mut();
 
     // Copy source fields (as raw f64/u64 words — preserves NaN-boxing)
     let src_fields = (src_ptr as *const u8).add(header_size) as *const u64;
-    let dst_fields = (new_ptr as *mut u8).add(header_size) as *mut u64;
+    let dst_fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(new_ptr)) as *mut u64;
     for i in 0..src_field_count as usize {
         let field_val = *src_fields.add(i);
         // Guard: null POINTER_TAG (0x7FFD_0000_0000_0000) is never legitimate — replace with undefined
@@ -1177,7 +1198,7 @@ pub unsafe extern "C" fn js_object_copy_own_fields(dst_i64: i64, src_f64: f64) {
     // (Maps/Sets/Promises/etc. have their own layouts — reading their bytes
     // as ObjectHeader fields is type confusion).
     match crate::value::addr_class::try_read_gc_header(src_raw) {
-        Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => {}
+        Some(h) if crate::gc_type_is_object!(h.obj_type) => {}
         _ => return,
     }
     let src = src_raw as *const ObjectHeader;

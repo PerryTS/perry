@@ -480,7 +480,7 @@ fn note_started(now: u64, reason: StartReason) {
         if reason == StartReason::IdleElapsed {
             IDLE_ELAPSED_STARTS.fetch_add(1, Ordering::Relaxed);
         }
-        if gc_diag_enabled() {
+        if diagnostic_hooks::enabled() {
             let (_, right_size_fulls_remaining, _, usage) = super::arena_right_size::snapshot();
             eprintln!(
                 "[gc-idle-reclaim] start attempt={} reason={} external_collections={} \
@@ -538,7 +538,7 @@ pub(super) fn note_cycle_completed(freed_bytes: u64) {
         // marked by it, so they are not new work for the next attempt.
         st.external_at_last_attempt = external;
         st.last_seen_external = external;
-        if gc_diag_enabled() {
+        if diagnostic_hooks::enabled() {
             eprintln!(
                 "[gc-idle-reclaim] done old_in_use={before}->{after} reclaimed_old={reclaimed} freed={freed_bytes} bar={bar} reusable={} productive={productive} backoff_shift={}",
                 old_free_bytes(),

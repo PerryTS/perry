@@ -126,6 +126,23 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 args: lower_optional_args(ctx, new_expr.args.as_deref())?,
             });
         }
+        // node:sqlite `Database` / `DatabaseSync` are one constructor, under
+        // whatever local alias the import gave it. A distinct class name keeps
+        // it apart from better-sqlite3's `Database`.
+        if let Some((module, Some("Database" | "DatabaseSync"))) =
+            ctx.lookup_native_module(callee_ident.sym.as_ref())
+        {
+            if module.strip_prefix("node:").unwrap_or(module) == "sqlite" {
+                return Ok(Expr::New {
+                    byte_end: 0,
+                    class_name: "NodeSqliteDatabaseSync".to_string(),
+                    args: lower_optional_args(ctx, new_expr.args.as_deref())?,
+                    type_args: Vec::new(),
+                    byte_offset: new_byte_offset,
+                    cap_args_appended: 0,
+                });
+            }
+        }
         // Keep Bun's `Database` distinct from better-sqlite3's same-named
         // constructor while still allocating the shared native SQLite handle.
         if matches!(
@@ -1357,7 +1374,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                                             } else if let Some(local_id) = ctx.lookup_local(&name) {
                                                 Expr::LocalGet(local_id)
                                             } else if ctx.lookup_class(&name).is_some() {
-                                                Expr::ClassRef(name.clone())
+                                                crate::lower::class_binding_read(ctx, &name)
                                             } else {
                                                 continue;
                                             };
@@ -1903,6 +1920,34 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 .lookup_class_captures(&lookup_name)
                 .map(|c| c.to_vec())
                 .unwrap_or_default();
+            // The class table is module-wide, but a class that captures
+            // function locals is only in scope where those locals are. A
+            // `new <name>()` with no binding of its own whose class captures
+            // locals of a function this site is not inside (a bundle's
+            // `var Response = class {..}` in one factory, `new Response(..)`
+            // in another) names whatever `<name>` resolves to in the global
+            // scope — usually a global the program assigned at runtime
+            // (`globalThis.Response = require("undici").Response`). The static
+            // construct would forward those foreign locals as the class
+            // environment and run the constructor with every capture
+            // undefined. Resolve the name on globalThis when the `new` runs.
+            if callee_local_at_entry.is_none()
+                && class_binding.is_none()
+                && !class_captures.is_empty()
+                && class_captures
+                    .iter()
+                    .any(|cid| !ctx.locals.id_set().contains(cid))
+            {
+                return Ok(Expr::NewDynamic {
+                    byte_end: 0,
+                    callee: Box::new(super::unresolved_global_get_expr(
+                        source_class_name.to_string(),
+                        new_byte_offset,
+                    )),
+                    args,
+                    byte_offset: new_byte_offset,
+                });
+            }
             // #6538: record how many trailing cap forwards we append so codegen
             // reads the provenance explicitly instead of inferring it from the
             // arg shape.

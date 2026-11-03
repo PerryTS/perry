@@ -41,6 +41,7 @@ use crate::closure_local_inline::{for_each_expr_in_stmt_mut, nested_stmt_lists};
 
 pub fn run(module: &mut Module) {
     fold_module_consts(module);
+    crate::immutable_numeric_arrays::run(module);
     // Phase 2 runs unconditionally — see `rewrite_literal_index_gets`.
     rewrite_literal_index_gets(module);
 }

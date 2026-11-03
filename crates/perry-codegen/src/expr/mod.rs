@@ -120,6 +120,7 @@ mod channel;
 #[cfg(test)]
 mod class_method_arguments_object_tests;
 pub(crate) mod collection_receiver;
+pub(crate) mod facts_number;
 mod helpers;
 mod i32_fast_path;
 mod index;
@@ -173,7 +174,7 @@ pub(crate) use helpers::{
     store_needs_string_addref, unbox_ffi_str_arg, unbox_str_handle, unbox_to_i64,
 };
 pub(crate) use i32_fast_path::{
-    can_lower_expr_as_i32, can_lower_expr_as_i32_in_current_region,
+    can_lower_expr_as_i32, can_lower_expr_as_i32_in_current_region, flat_const_index_get_target,
     imul_operand_i32_lowerable_in_current_region, is_known_i32_range, lower_expr_as_i32,
     lower_expr_native, lower_imul_operand_i32, lower_packed_u32_loop_index_get,
     try_flat_const_2d_int, try_lower_flat_const_index_get,
@@ -247,6 +248,8 @@ mod barrier_stem_census_tests;
 #[cfg(test)]
 mod bounded_array_hole_tests;
 #[cfg(test)]
+mod class_evaluation_owner_tests;
+#[cfg(test)]
 mod class_field_barrier_tests;
 #[cfg(test)]
 mod class_field_get_shape_tests;
@@ -255,6 +258,8 @@ mod dispatch;
 mod ek_prefix_tests;
 #[cfg(test)]
 mod entry_block_alloca_tests;
+#[cfg(test)]
+mod family_guard_tests;
 #[cfg(test)]
 mod hit_path_access_tests;
 #[cfg(test)]
@@ -404,11 +409,6 @@ pub(crate) struct FnCtx<'a> {
     pub wpfacts_off: bool,
     pub program_has_worker: bool,
     pub program_has_thread_agents: bool,
-    /// The program's accessor names (`ClassAccessorNames`): a fixed-name read
-    /// owns a shape/slot memo only for a name some getter of the program is
-    /// declared under. `None` (a compile that did not collect them) gives
-    /// every fixed-name read its memo.
-    pub program_class_accessor_names: Option<std::sync::Arc<crate::codegen::ClassAccessorNames>>,
     /// Function being built (blocks, params, registers).
     pub func: &'a mut LlFunction,
     /// Stable slug for native-region ids derived from this module.
@@ -419,6 +419,10 @@ pub(crate) struct FnCtx<'a> {
     pub source_function_slug: String,
     /// Stable id for the labeled loop currently being lowered.
     pub active_region_id: Option<String>,
+    /// Set by `stmt/byte_view_loop.rs` right before it lowers the original
+    /// (fallback) copy of a versioned loop; the next for-loop lowering takes
+    /// it and marks its latch (see `crate::inst::LoopTag`).
+    pub byte_view_fallback_loop: bool,
     /// Full native-region fact graph collected for this lowered HIR region.
     ///
     /// Existing fields below borrow individual subgraphs for compatibility
@@ -557,6 +561,12 @@ pub(crate) struct FnCtx<'a> {
     /// `continue inner` both resolve to that same loop's blocks. Stored
     /// outermost-first; the innermost label is `.last()`.
     pub pending_labels: Vec<String>,
+    /// A label that only names its loop's region: no `break`/`continue`
+    /// targets it (`Stmt::Labeled` checked). It is NOT a pending label, so
+    /// every loop tier lowers the loop exactly as without the label; the
+    /// generic loop lowerings read it (by the loop's body address) only to
+    /// tag their latch with the region ID. A label never changes codegen.
+    pub region_only_label: Option<(String, usize)>,
     /// Map from class name → HIR Class definition. Built once in
     /// `compile_module` from `hir.classes`. Used by `Expr::New` to look up
     /// the field count, constructor body, and (eventually) method table.
@@ -851,6 +861,8 @@ pub(crate) struct FnCtx<'a> {
     /// The owner stays rooted; only capture addressing adds the frame offset.
     pub private_resume_frame: bool,
     pub private_async_resume_frame: bool,
+    /// Resume-local copies of the private controls (see resume_locals.rs).
+    pub resume_locals: Option<resume_locals::ResumeLocals>,
     /// Stack context supplied only to a compiler-private versioned-loop
     /// callback clone. Its cold arms record the exact resume index and poison
     /// the caller's private counter before executing observable fallback code.
@@ -1482,6 +1494,8 @@ pub(crate) struct FnCtx<'a> {
     pub create_families: crate::layout_desc::create_families::CreateState,
     /// The open class-guard run (`class_guard_memo`).
     pub class_guard_window: Option<class_guard_memo::Window>,
+    /// The open Map get-then-set regions (`map_entry_fusion`).
+    pub map_entry_fusion: map_entry_fusion::State,
 
     /// Parallel `i1` slots for ordinary boolean locals that have stayed inside
     /// the representation-first subset. The generic `double` slot remains as a
@@ -1870,13 +1884,10 @@ pub(crate) struct FnCtx<'a> {
     /// Exposed only by statements of their own body: their views stay trusted
     /// until `lower_stmt` meets the first statement that may expose them.
     pub late_exposed_buffer_locals: &'a std::collections::HashSet<u32>,
-    /// Starting alias-scope id for buffers registered in this function.
-    /// Seeded from `LlModule::buffer_alias_counter` at FnCtx creation so
-    /// scope ids don't collide across functions in the same LLVM module.
-    /// New scopes are allocated as `base + buffer_data_slots.len()`;
-    /// after the function finishes lowering the caller bumps the module
-    /// counter by the number of slots it used (closes #71).
-    pub buffer_alias_base: u32,
+    /// Buffer alias scopes of this function: ids continue the module's
+    /// metadata id counter (`LlModule::buffer_alias_scope_allocator`) and
+    /// are committed back after the body lowers (closes #71).
+    pub buffer_alias_scopes: crate::module::BufferAliasScopes,
 }
 
 #[derive(Clone)]
@@ -2643,18 +2654,22 @@ pub(crate) fn inline_cache_global_name(ctx: &FnCtx<'_>, site_id: u32) -> String 
 /// iteration reads `%Array.prototype%`'s fixed slot (and an array's own
 /// member); bit 1, `%ArrayIteratorPrototype%` may be named, so iteration also
 /// checks its `next`. Zero: iteration is the builtin element walk, unchecked.
-pub(crate) fn array_iteration_facts() -> u32 {
+/// The whole-program facts (#13645) clear a bit the census sets when compiled
+/// code provably never writes what it guards.
+pub(crate) fn array_iteration_facts(wpfacts: &crate::codegen::ElisionFacts) -> u32 {
     let names = crate::program_patched_proto_methods();
     let mut facts = 0;
-    if names
-        .iter()
-        .any(|n| n == perry_hir::patched_builtins::ARRAY_ITERATOR_WRITABLE)
+    if !wpfacts.array_iteration_unwritten
+        && names
+            .iter()
+            .any(|n| n == perry_hir::patched_builtins::ARRAY_ITERATOR_WRITABLE)
     {
         facts |= 1;
     }
-    if names
-        .iter()
-        .any(|n| n == perry_hir::patched_builtins::ARRAY_ITERATOR_PROTO_REACHABLE)
+    if !wpfacts.array_iterator_close_unwritten
+        && names
+            .iter()
+            .any(|n| n == perry_hir::patched_builtins::ARRAY_ITERATOR_PROTO_REACHABLE)
     {
         facts |= 2;
     }
@@ -2662,8 +2677,8 @@ pub(crate) fn array_iteration_facts() -> u32 {
 }
 
 /// Immutable whole-program array facts handed to the runtime at startup.
-pub(crate) fn array_program_facts() -> u32 {
-    array_iteration_facts()
+pub(crate) fn array_program_facts(wpfacts: &crate::codegen::ElisionFacts) -> u32 {
+    array_iteration_facts(wpfacts)
         | if crate::program_patched_proto_methods()
             .iter()
             .any(|name| name == perry_hir::patched_builtins::ARRAY_ELEMENT_DESCRIPTORS)
@@ -3280,6 +3295,8 @@ mod index_get_claim_tests;
 mod index_key;
 #[cfg(test)]
 mod kind_entry_selection_tests;
+#[cfg(test)]
+mod map_entry_fusion_tests;
 pub(crate) mod masked_window;
 #[cfg(test)]
 mod null_default_numeric_add_tests;
@@ -3291,6 +3308,7 @@ pub(crate) mod suffix_cursor;
 mod bigint_bitwise_tests;
 pub(crate) mod byte_cell;
 pub(crate) mod class_guard_memo;
+pub(crate) mod map_entry_fusion;
 mod ptr_numarray_access;
 pub(crate) mod ta_element_read;
 mod ta_param_f64_read;
@@ -3331,6 +3349,7 @@ pub(crate) mod ic_fast_split;
 mod js_runtime;
 mod literals_vars;
 pub(crate) mod private_resume_frame;
+pub(crate) mod resume_locals;
 pub(crate) use literals_vars::{bind_lowered_value_to_local, note_born_local_write};
 mod logical_collections;
 mod math_simple;
@@ -4392,6 +4411,7 @@ fn lower_compare_value(
 /// when an existing caller still expects the generic JSValue/`double` ABI.
 pub(crate) fn lower_expr_value(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<LoweredValue>> {
     let _fallback = crate::fallback_diag::enter_expr(ctx, expr);
+    let _consumed = crate::facts_consumed::enter(expr);
     match expr {
         Expr::Bool(value) => {
             let lowered = LoweredValue::i1(if *value { "true" } else { "false" });
@@ -4839,3 +4859,12 @@ mod array_layout_loop_tests;
 
 #[cfg(test)]
 mod sort_numeric_source_tests;
+
+impl ElementShapeLoopFact {
+    /// The header form predicted for the objects this record describes (`HeaderForm`:
+    /// every ordinary object has the meta word today). Sites take their slot base
+    /// from here, never from the type byte.
+    pub(crate) fn form(&self) -> crate::target_layout::HeaderForm {
+        crate::target_layout::HeaderForm::Meta
+    }
+}

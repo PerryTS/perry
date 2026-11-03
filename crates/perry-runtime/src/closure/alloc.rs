@@ -805,6 +805,7 @@ pub extern "C" fn js_closure_alloc_fixed(
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn closure_alloc_init_collecting(
     info: *const crate::closure::JsFunctionInfo,
@@ -1346,6 +1347,55 @@ pub extern "C" fn js_closure_get_capture_bits(closure: *const ClosureHeader, ind
     }
 }
 
+/// What a call of the function value `bits` returns, when its body is
+/// exactly `return <captured binding>` (`FN_RETURNS_CAPTURE` on its info):
+/// the same loads the body executes (the capture word, then the value in the
+/// cell it names when the binding lives in one), at the same moment. `None`
+/// for every other value or body, and for a binding in its dead zone
+/// (`TAG_TDZ`, which the call reports by throwing) or a hole: the caller then
+/// makes the call.
+///
+/// No allocation, no user code, no collection: a GC leaf. Every word read is
+/// the closure's own data, its cell's, or its immutable info. The flag is the
+/// license: codegen sets it only for a body that is exactly these loads, and
+/// the closure's capture slot holds the binding's cell from birth (the cell
+/// rule, `box::is_live_capture_cell`), so the cell is read as the body reads
+/// it, unchecked. The mutator never sees a forwarded object.
+///
+/// # Safety
+/// `bits` is any value of the running agent.
+#[inline]
+pub(crate) unsafe fn returned_capture_bits(bits: u64) -> Option<u64> {
+    let header = crate::value::addr_class::pointer_value_header(bits)?;
+    if header.obj_type != crate::gc::GC_TYPE_CLOSURE {
+        return None;
+    }
+    let closure = (bits & crate::value::POINTER_MASK) as *const ClosureHeader;
+    let info = (*closure).info;
+    if info.is_null() || (*info).flags & crate::codegen_abi::FN_RETURNS_CAPTURE == 0 {
+        return None;
+    }
+    debug_assert!((*info).trusted_code.is_null());
+    let index = (*info).trusted_captures;
+    if index >= real_capture_count((*closure).capture_count) {
+        return None;
+    }
+    let word = *closure_capture_slots(closure).add(index as usize);
+    let value = match (*info).trusted_boxed_mask {
+        0 => word,
+        // The binding's cell: a JSValue box (its value at offset 0) or a
+        // scope object (the binding's slot), as the body reads it.
+        cell_offset => {
+            debug_assert!(crate::r#box::is_live_capture_cell(word));
+            *(((word & crate::value::POINTER_MASK) + (cell_offset - 1)) as *const u64)
+        }
+    };
+    if value == crate::value::TAG_TDZ || value == crate::value::TAG_HOLE {
+        return None;
+    }
+    Some(value)
+}
+
 /// Set a captured value's raw JSValueBits by index.
 #[no_mangle]
 pub extern "C" fn js_closure_set_capture_bits(
@@ -1362,6 +1412,30 @@ pub extern "C" fn js_closure_set_capture_bits(
         *captures_ptr.add(index as usize) = value_bits;
         note_closure_capture_slot(closure, index as usize, value_bits);
     }
+}
+
+/// Store a plain word (an id, fd, index, flag, length, a static name pointer, a
+/// function entry address) into a capture slot of a fresh closure. The word is
+/// not a GC edge, so the closure layout is left as it is: the generic setters
+/// note the slot through `layout_pointer_bearing_bits`, which calls any
+/// 8-aligned word >= 0x1000 a pointer, so a word that merely lands 8-aligned
+/// (a link-placed address, a counter value) would demote a pointer-free
+/// closure to a pointer-bearing layout. Linking, code motion or counter values
+/// must not change runtime work. Real heap references keep the pointer setters.
+#[inline]
+pub fn closure_set_capture_word(closure: *mut ClosureHeader, index: u32, word: i64) {
+    if closure.is_null() {
+        return;
+    }
+    unsafe {
+        // GC_STORE_AUDIT(POINTER_FREE): the word is not a heap reference; the collector never reads it as an edge.
+        *closure_capture_slots_mut(closure).add(index as usize) = word as u64;
+    }
+}
+
+/// A code address (a function entry) stored as a plain capture word.
+pub(crate) fn closure_set_code_word(closure: *mut ClosureHeader, index: u32, code: usize) {
+    closure_set_capture_word(closure, index, code as i64);
 }
 
 /// Set a capture slot which codegen has proven contains a raw variable-box

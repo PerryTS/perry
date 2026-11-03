@@ -63,17 +63,9 @@ fn is_native_array_value(value: f64) -> bool {
 }
 
 pub(super) fn get_array_prototype_then_action() -> Result<Option<f64>, f64> {
-    let array_ctor = crate::object::js_get_global_this_builtin_value(b"Array".as_ptr(), 5);
-    if is_definitely_primitive(array_ctor) {
-        return Ok(None);
-    }
-    let array_proto = combinator_catch_js(|| unsafe {
-        crate::value::js_dynamic_object_get_property(
-            array_ctor,
-            b"prototype".as_ptr() as *const i8,
-            9,
-        )
-    })?;
+    // What an array inherits from: %Array.prototype%, not the writable
+    // `globalThis.Array` binding's `prototype`.
+    let array_proto = crate::object::builtin_prototype_value("Array");
     if is_definitely_primitive(array_proto) {
         return Ok(None);
     }
@@ -239,12 +231,19 @@ pub(crate) fn promise_resolve_assimilating(promise: *mut Promise, value: f64) {
             // No own `then` → intrinsic `then`. Adopt via the native job so
             // the outer settles exactly two ticks later (V8 hop parity; see
             // `enqueue_native_adoption_job`).
-            OwnThen::None => {
+            OwnThen::None
+                if !super::promise_has_own_constructor(
+                    (value.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK) as usize,
+                ) =>
+            {
                 let inner =
                     crate::value::js_nanbox_get_pointer(value.get_nanbox_f64()) as *mut Promise;
                 enqueue_native_adoption_job(p(), inner);
                 return;
             }
+            // An own constructor is read by the intrinsic then (its
+            // SpeciesConstructor step), so the job calls it as a thenable.
+            OwnThen::None => {}
         }
     }
 

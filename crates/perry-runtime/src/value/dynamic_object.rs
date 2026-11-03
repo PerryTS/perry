@@ -140,7 +140,7 @@ pub extern "C" fn js_value_length_f64(value: f64) -> f64 {
             // reassigned to an array-like object (`var x = []; … x = {0:0};
             // x.splice(1,1); x.length` — test262 splice/S15.4.4.12_A4_T1
             // #10). Read it like any field; absent stays the 0 fallback.
-            crate::gc::GC_TYPE_OBJECT => {
+            crate::gc_object_type_pat!() => {
                 let key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
                 let v = crate::object::js_object_get_field_by_name_f64(
                     handle as *const crate::object::ObjectHeader,
@@ -236,6 +236,9 @@ pub extern "C" fn js_value_length_property_key_f64(
     if let Some(length) = unsafe { crate::typedarray_named::try_get(jsval, b"length") } {
         return length;
     }
+    if let Some(length) = lazy_array_length(value) {
+        return length;
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(value);
     let key = scope.root_raw_const_ptr(key);
@@ -247,6 +250,27 @@ pub extern "C" fn js_value_length_property_key_f64(
         bits as *const crate::object::ObjectHeader,
         key.get_raw_const_ptr(),
     )
+}
+
+/// `length` of a lazy `JSON.parse` array (`GC_TYPE_LAZY_ARRAY`). It is an
+/// Array, so `length` is its own non-configurable data property: the generic
+/// named Get would only reach `js_array_length` after every exotic probe. The
+/// inline array-length guard rejects the lazy header, so a loop bound over a
+/// still-lazy array lands here on every iteration. Reading it never
+/// materializes; once materialized, the same object is an ordinary Array and
+/// passes the inline guard.
+#[inline]
+fn lazy_array_length(value: f64) -> Option<f64> {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if !jsval.is_reference() {
+        return None;
+    }
+    let raw = (value.to_bits() & POINTER_MASK) as usize;
+    let header = unsafe { crate::value::addr_class::try_read_gc_header(raw) }?;
+    if header.obj_type != crate::gc::GC_TYPE_LAZY_ARRAY {
+        return None;
+    }
+    Some(crate::array::js_array_length(raw as *const crate::array::ArrayHeader) as f64)
 }
 
 fn value_length_property(value: f64) -> f64 {
@@ -297,6 +321,10 @@ fn value_length_property(value: f64) -> f64 {
 
     if jsval.is_short_string() {
         return jsval.short_string_utf16_len() as f64;
+    }
+
+    if let Some(length) = lazy_array_length(value) {
+        return length;
     }
 
     if let Some(length) = crate::array::array_subclass_fast_length(value) {

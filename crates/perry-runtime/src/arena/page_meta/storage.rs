@@ -110,25 +110,57 @@ impl<T: Default, const N: usize> PageMap<T, N> {
         let mut at = 0;
         while at < pages.len() {
             let key = pages[at] / N;
-            let mut end = at + 1;
+            let mut end = at;
+            let mut mask = 0u64;
             while end < pages.len() && pages[end] / N == key {
+                mask |= 1u64 << (pages[end] % N);
                 end += 1;
             }
-            if let Some(chunk) = self.chunks.get_mut(&key) {
-                for &page in &pages[at..end] {
-                    let slot = page % N;
-                    let bit = 1u64 << slot;
-                    if chunk.present & bit != 0 {
-                        chunk.present &= !bit;
-                        self.len -= 1;
-                        chunk.pages[slot] = T::default();
-                    }
-                }
-                if chunk.present == 0 {
-                    self.chunks.remove(&key);
-                }
-            }
+            self.remove_mask(key, mask);
             at = end;
+        }
+    }
+
+    /// Retire a contiguous span directly from its canonical chunk presence.
+    /// No per-page request vector or replacement payload is needed for chunks
+    /// that disappear altogether. Partial chunks still reset removed slots.
+    pub(super) fn remove_range(&mut self, first: usize, last: usize) {
+        if first > last {
+            return;
+        }
+        let mut page = first;
+        loop {
+            let key = page / N;
+            let end = last.min(key * N + (N - 1));
+            let mask = (u64::MAX >> (63 - (end - page))) << (page % N);
+            self.remove_mask(key, mask);
+            if end == last {
+                break;
+            }
+            page = end + 1;
+        }
+    }
+
+    #[inline]
+    fn remove_mask(&mut self, key: usize, mask: u64) {
+        // Entry APIs may reserve on a vacant lookup. Retirement must not
+        // allocate or grow a directory when the requested chunk is absent.
+        let Some(chunk) = self.chunks.get_mut(&key) else {
+            return;
+        };
+        let mut removed = chunk.present & mask;
+        self.len -= removed.count_ones() as usize;
+        if removed == chunk.present {
+            // Drop owned payloads with the chunk instead of writing defaults
+            // into every slot just before freeing the same allocation.
+            self.chunks.remove(&key);
+        } else {
+            chunk.present &= !removed;
+            while removed != 0 {
+                let slot = removed.trailing_zeros() as usize;
+                removed &= removed - 1;
+                chunk.pages[slot] = T::default();
+            }
         }
     }
 
@@ -452,5 +484,71 @@ mod batch_tests {
         for page in [0, 63, 64, 129, usize::MAX] {
             assert_eq!(cursor.get_or_insert(page).dirty_slots, 0);
         }
+    }
+}
+
+#[cfg(test)]
+mod range_removal_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    #[test]
+    fn absent_retirement_never_allocates_or_grows_the_directory() {
+        let mut map = PageMetaMap::new();
+        map.remove_range(0, 64);
+        map.remove_pages(&[0, usize::MAX]);
+        assert_eq!(map.chunks.capacity(), 0);
+        map.get_or_insert(0);
+        let capacity = map.chunks.capacity();
+        for key in 1..capacity {
+            map.get_or_insert(key * 64);
+        }
+        assert_eq!(map.chunks.len(), capacity);
+        map.remove_range(usize::MAX - 63, usize::MAX);
+        map.remove_pages(&[usize::MAX, usize::MAX]);
+        assert_eq!(map.chunks.len(), capacity);
+        assert_eq!(map.chunks.capacity(), capacity);
+        assert_eq!(map.len(), capacity);
+    }
+
+    #[test]
+    fn range_retirement_matches_owned_payload_oracle_for_both_chunk_widths() {
+        fn check<const N: usize>() {
+            let owner = Arc::new(());
+            let mut map = PageMap::<Option<Arc<()>>, N>::new();
+            let mut oracle = BTreeMap::new();
+            for page in (0..3 * N).chain([usize::MAX, usize::MAX - 1, usize::MAX - N]) {
+                *map.get_or_insert(page) = Some(owner.clone());
+                oracle.insert(page, true);
+            }
+            for (first, last) in [
+                (3, 2),
+                (1, N - 2),
+                (0, 2 * N - 1),
+                (usize::MAX - N, usize::MAX),
+                (2 * N, 3 * N - 1),
+            ] {
+                map.remove_range(first, last);
+                oracle.retain(|&page, _| !(first <= page && page <= last));
+                assert_eq!(map.len(), oracle.len());
+                assert_eq!(Arc::strong_count(&owner), 1 + oracle.len());
+                assert_eq!(
+                    map.iter()
+                        .map(|(p, v)| (p, v.is_some()))
+                        .collect::<BTreeMap<_, _>>(),
+                    oracle,
+                );
+                if first <= last {
+                    // Includes a removed slot whose neighbors keep its chunk.
+                    assert!(map.get_or_insert(first).is_none());
+                    map.remove_range(first, first);
+                }
+            }
+            assert!(map.chunks.is_empty());
+            assert_eq!(map.len(), 0);
+        }
+        check::<8>();
+        check::<64>();
     }
 }

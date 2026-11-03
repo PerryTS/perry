@@ -131,6 +131,8 @@ fn unproven_numeric_index_store_has_an_inline_element_tier() {
             object: Box::new(Expr::LocalGet(1)),
             index: Box::new(Expr::LocalGet(2)),
             value: Box::new(Expr::LocalGet(3)),
+            byte_offset: 0,
+            byte_end: 0,
         })],
     ));
     assert!(
@@ -181,6 +183,8 @@ fn declared_typed_array_unproven_index_access_is_inline() {
             object: Box::new(Expr::LocalGet(1)),
             index: Box::new(Expr::LocalGet(2)),
             value: Box::new(Expr::LocalGet(3)),
+            byte_offset: 0,
+            byte_end: 0,
         })],
     ));
     // The erased `$generic` clone keeps the runtime dispatcher: it has no
@@ -217,6 +221,8 @@ fn owner_element_store_join_has_no_bag_arm() {
                 object: Box::new(Expr::LocalGet(1)),
                 index: Box::new(Expr::LocalGet(2)),
                 value: Box::new(Expr::LocalGet(3)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(Expr::IndexGet {
                 byte_offset: 0,
@@ -286,6 +292,8 @@ fn inline_typed_array_store_rejects_boxed_values_and_wraps_exactly() {
             object: Box::new(Expr::LocalGet(1)),
             index: Box::new(Expr::LocalGet(2)),
             value: Box::new(Expr::LocalGet(3)),
+            byte_offset: 0,
+            byte_end: 0,
         })],
     ));
     assert!(

@@ -398,6 +398,19 @@ pub(crate) fn scan_shape_prototype_words_mut(visitor: &mut crate::gc::RuntimeRoo
     }
 }
 
+/// Does a minor root the identity word at `slot`? True when the word does not
+/// name a minor-collectible object (nothing for a minor to do), or when it is in
+/// the young log `scan_shape_prototype_words_mut` roots from. The static scan
+/// plan relies on it to skip the per-carrier prototype visit in a minor
+/// (`gc::static_scan`), and its debug cross-check asserts it per object.
+#[cfg(any(test, debug_assertions))]
+pub(crate) fn prototype_word_rooted_by_minor(slot: *mut u64) -> bool {
+    let table = &crate::state::state().shapes;
+    // SAFETY: one agent, one thread; no slab reference is held across this.
+    let words = &table.slab().protos;
+    !bits_minor_collectible(unsafe { *slot }) || words.young.contains(&slot)
+}
+
 /// Post-trace prune: clear a word whose prototype died. No live receiver can
 /// carry its identity (a carrier traces the word), so nothing reads it again.
 pub(crate) fn prune_dead_shape_prototypes(is_dead_owner: &dyn Fn(usize) -> bool) {

@@ -40,7 +40,7 @@ fn test_trace_array_marks_child() {
         "parent array should be marked as a root"
     );
 
-    trace_marked_objects(&valid_ptrs);
+    trace_marked_objects::<{ cfg!(test) }>(&valid_ptrs);
 
     unsafe {
         assert_ne!(
@@ -115,7 +115,7 @@ fn test_layout_scan_trace_json_counts_pointer_free_slots() {
         POINTER_TAG | (arr as u64 & POINTER_MASK),
         &valid_ptrs
     ));
-    trace_marked_objects(&valid_ptrs);
+    trace_marked_objects::<{ cfg!(test) }>(&valid_ptrs);
 
     let event = trace.into_json(GcStepSnapshot::current());
     let layout_scans = &event["layout_scans"];
@@ -176,7 +176,7 @@ fn test_layout_scan_trace_json_counts_pointer_slot_bytes() {
         POINTER_TAG | (arr as u64 & POINTER_MASK),
         &valid_ptrs
     ));
-    trace_marked_objects(&valid_ptrs);
+    trace_marked_objects::<{ cfg!(test) }>(&valid_ptrs);
 
     let event = trace.into_json(GcStepSnapshot::current());
     let layout_scans = &event["layout_scans"];

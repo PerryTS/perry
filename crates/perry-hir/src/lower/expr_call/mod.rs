@@ -419,7 +419,7 @@ fn lower_call_inner(
                     ctx.lookup_native_module(ident.sym.as_ref())
                 {
                     if module_name.strip_prefix("node:").unwrap_or(module_name) == "sqlite"
-                        && method_name == "DatabaseSync"
+                        && matches!(method_name, "Database" | "DatabaseSync")
                     {
                         return Ok(Expr::NativeMethodCall {
                             module: "sqlite".to_string(),
@@ -656,6 +656,15 @@ fn lower_call_inner(
                         args,
                         type_args: Vec::new(),
                         byte_offset: call.span.lo.0,
+                    });
+                }
+                if native_module::namespace_call_needs_esm_binding(ctx, expr) {
+                    return Ok(Expr::Call {
+                        callee: Box::new(lower_expr(ctx, expr)?),
+                        args,
+                        type_args: Vec::new(),
+                        byte_offset: call.span.lo.0,
+                        byte_end: 0,
                     });
                 }
                 // Nested 3-level Member dispatch: process.hrtime.bigint(),

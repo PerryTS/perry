@@ -38,12 +38,17 @@ pub(crate) fn attach(wrapper: usize, kind: Kind, handle: usize) {
     }
     let _publication = crate::gc::GcSuppressScope::new();
     unsafe {
-        crate::value::addr_class::try_read_tracked_gc_header_of_type(
+        let wrapper_type = crate::value::addr_class::try_read_tracked_gc_header_of_type(
             wrapper,
             crate::gc::GC_TYPE_OBJECT,
         )
-        .expect("a Wasm binding must have a genuine managed wrapper");
-        let meta = crate::object::object_meta_ensure(wrapper as *mut crate::ObjectHeader);
+        .expect("a Wasm binding must have a genuine managed wrapper")
+        .as_ref()
+        .obj_type;
+        let meta = crate::object::object_meta_ensure(
+            crate::meta_obj_from_type!(wrapper as *mut crate::ObjectHeader, wrapper_type),
+            crate::object::MetaReason::WasmWrapper,
+        );
         let cell = crate::native_handle::native_handle_new_rust_payload(
             Box::into_raw(Box::new(WrapperState { kind, handle })).cast(),
             TYPE_ID,
@@ -71,7 +76,10 @@ pub(crate) fn handle(wrapper: usize, kind: Kind) -> Option<usize> {
         if header.as_ref().gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
             return None;
         }
-        let meta = (*(wrapper as *const crate::ObjectHeader)).meta;
+        // A1_UNPROVEN: record-first: wrapper tested by tracked type, no t (kind-A/B question for S0f).
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(
+            wrapper as *const crate::ObjectHeader as *mut _,
+        ));
         if meta.is_null() {
             return None;
         }

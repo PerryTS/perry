@@ -808,6 +808,11 @@ pub struct CompilationContext {
     /// automatic wasm imports also register bytes there but must still lower
     /// their executable adapter on a later metadata pass.
     pub file_loader_asset_paths: HashSet<PathBuf>,
+    /// Canonical paths a static import read with `{ type: "text" }`. Such a
+    /// file becomes a text module (default export = its contents) whatever
+    /// its extension, as with Bun (`import s from "./Dockerfile" with
+    /// { type: "text" }`).
+    pub text_loader_asset_paths: HashSet<PathBuf>,
     /// Stable `$perryfs` names chosen for generated asset-module members.
     /// These are keyed by canonical source path so the ordinary file-loader
     /// collection path can reuse them without knowing how the import arose.
@@ -856,6 +861,17 @@ pub struct CompilationContext {
     pub compile_package_dirs: BTreeSet<PathBuf>,
     /// Compile package roots already checked for unsupported Node native addon markers.
     pub checked_compile_package_native_addon_roots: HashSet<PathBuf>,
+    /// Canonical roots of `perry.nativeAddons` packages the walk entered. A
+    /// platform payload is approved through the wrapper copy that loads it,
+    /// which an isolated store (pnpm) keeps outside the payload's ancestors.
+    pub native_addon_wrapper_roots: BTreeSet<PathBuf>,
+    /// Names importers ask of a CommonJS module whose `module.exports` is
+    /// assigned a value its source does not spell out (a UMD `factory(…)`,
+    /// an identifier, …), keyed by the module's canonical path. The wrap
+    /// exports each as a snapshot of the `module.exports` property, as Bun
+    /// and bundlers bind them. A program-wide fact: found after the first
+    /// walk, applied by the second.
+    pub cjs_demanded_exports: BTreeMap<PathBuf, BTreeSet<String>>,
     /// #1680 (Phase 2 of #1677): build-time codegen steps declared in the
     /// host `package.json` `perry.codegen`. Each is a shell command run
     /// (in `codegen_dir`) before module collection, so a codegen library
@@ -1267,6 +1283,8 @@ pub struct CompilationContext {
     /// Sources (any enables): `PERRY_TREE_SHAKE=1` env, or
     /// `perry.experiments.treeShake: true` in the host `package.json`.
     pub tree_shake: bool,
+    /// Layer-1 dead-code elimination state across the two collection walks.
+    pub export_demand: super::export_demand::ExportDemand,
     /// #2309: refusals (`new Function` RuntimeUnknown, #463 unimplemented APIs)
     /// recorded while lowering `node_modules` modules under tree-shaking,
     /// instead of hard-erroring. After reachability is computed, any whose
@@ -1406,6 +1424,7 @@ impl CompilationContext {
             embedded_assets: Vec::new(),
             bunfs_root: None,
             file_loader_asset_paths: HashSet::new(),
+            text_loader_asset_paths: HashSet::new(),
             file_loader_asset_names: HashMap::new(),
             generated_asset_modules: BTreeMap::new(),
             module_aliases: BTreeMap::new(),
@@ -1418,6 +1437,8 @@ impl CompilationContext {
             app_metadata: perry_codegen::AppMetadata::default(),
             compile_package_dirs: BTreeSet::new(),
             checked_compile_package_native_addon_roots: HashSet::new(),
+            native_addon_wrapper_roots: BTreeSet::new(),
+            cjs_demanded_exports: BTreeMap::new(),
             codegen_steps: Vec::new(),
             codegen_dir: None,
             type_checker: None,
@@ -1509,6 +1530,7 @@ impl CompilationContext {
             allow_native_library: Vec::new(),
             allow_compile_packages: Vec::new(),
             tree_shake: false,
+            export_demand: Default::default(),
             deferred_refusals: Vec::new(),
             side_effects_cache: HashMap::new(),
             define: HashMap::new(),

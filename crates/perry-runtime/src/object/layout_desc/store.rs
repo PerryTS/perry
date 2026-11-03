@@ -27,10 +27,12 @@ pub(crate) unsafe fn later_late_key_present(
             && !d.keys.is_null()
             && d.slot_count <= super::super::object_inline_capacity(obj)
         {
-            let fields = (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
             return std::slice::from_raw_parts(d.keys, d.key_count as usize)[pos as usize + 1..]
                 .iter()
-                .any(|k| *fields.add(k.slot as usize) != crate::value::TAG_HOLE);
+                .any(|k| {
+                    *super::super::header::object_slot_at(obj as *mut _, u32::from(k.off))
+                        != crate::value::TAG_HOLE
+                });
         }
     }
     // Any present key after `pos` (a required one always is, an optional or
@@ -331,9 +333,11 @@ pub(super) unsafe fn family_overwrite(obj: *mut ObjectHeader, bytes: &[u8], valu
     if keys.is_null() {
         return false;
     }
-    let Some(pos) =
-        super::super::keys_find_property_slot_by_bytes(keys, record.logical_key_count(), bytes)
-    else {
+    let Some(pos) = super::super::keys_find_property_slot_by_bytes(
+        record.keys_view(),
+        record.logical_key_count(),
+        bytes,
+    ) else {
         return false;
     };
     if super::super::key_attrs::keys_entry(keys, pos) != super::super::key_attrs::ENTRY_OPTIONAL {
@@ -383,7 +387,7 @@ pub(super) unsafe fn family_add_kind(obj: *mut ObjectHeader, bytes: &[u8]) -> Op
     let position = if keys.is_null() {
         None
     } else {
-        super::super::keys_find_property_slot_by_bytes(keys, count, bytes)
+        super::super::keys_find_property_slot_by_bytes(record.keys_view(), count, bytes)
     };
     let held_by_overflow = || {
         super::super::overflow::has_overflow(obj)

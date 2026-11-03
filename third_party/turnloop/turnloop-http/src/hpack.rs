@@ -295,6 +295,11 @@ impl Decoder {
             failed: false,
         }
     }
+    /// The largest dynamic table size the peer's encoder may signal: the
+    /// HEADER_TABLE_SIZE this endpoint has advertised.
+    pub fn set_allowed(&mut self, size: usize) {
+        self.allowed = size;
+    }
     pub fn decode(&mut self, input: &[u8], out: &mut Vec<Header>) -> Result<()> {
         if self.failed {
             return Err(bad());

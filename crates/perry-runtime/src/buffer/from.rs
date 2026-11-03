@@ -211,7 +211,7 @@ unsafe fn buffer_from_object_value_of(
         return None;
     }
     let gc_type = *((ptr - crate::gc::GC_HEADER_SIZE) as *const u8);
-    if gc_type != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!(gc_type) {
         return None;
     }
 
@@ -253,7 +253,7 @@ unsafe fn buffer_from_array_like_object(ptr: usize) -> Option<*mut BufferHeader>
         return None;
     }
     let gc_type = *((ptr - crate::gc::GC_HEADER_SIZE) as *const u8);
-    if gc_type != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!(gc_type) {
         return None;
     }
 

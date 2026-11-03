@@ -946,6 +946,7 @@ pub fn infer_module(m: &Module, cfg: InferConfig) -> ModuleInference {
                 object,
                 property,
                 value,
+                ..
             } => {
                 if let (Some(l), Expr::Closure { func_id, .. }) = (proto_of(object), value.as_ref())
                 {

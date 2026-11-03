@@ -41,10 +41,11 @@
     "region::map",
     "region::unmap"
    ],
-   "why": "Non-Linux mapping extents, not object identities. region::register records each native map; region::unmap removes its start key before apple::unmap or allocator dealloc. arena/block.rs routes pool overflow, pool drain, allocation failure and TLS teardown through that release path. Pooled mappings remain live and listed across agent reuse. The source pins bind the registry and all production region allocation/release callers to this audit. WRT3a re-audit: current Linux reservation branch never uses REGIONS; non-Linux map/register and all block.rs release paths still remove the extent before physical unmap/dealloc. Reuse keeps live pooled maps registered. Release re-audit 2026-10-28: all four production block release paths still call region::unmap; non-Linux removes REGIONS before apple::unmap/dealloc, while pooling and test-only retained mappings stay registered. Warning cleanup re-audit: ALIGN and mapped_len are now compiled only on Linux, matching their existing Linux-only callers. Registry insertion, removal-before-unmap, pooled mapping custody, and thread-exit release paths are unchanged. Re-audited #13405: block.rs delegates the bump bound to inline::allocation_limit, which closes the fast path during black allocation. Region allocation, registration, pooling, removal-before-unmap and TLS teardown are unchanged.",
+   "why": "Non-Linux mapping extents, not object identities. region::register records each native map; region::unmap removes its start key before apple::unmap or allocator dealloc. arena/block.rs routes pool overflow, pool drain, allocation failure and TLS teardown through that release path. Pooled mappings remain live and listed across agent reuse. The source pins bind the registry and all production region allocation/release callers to this audit. WRT3a re-audit: current Linux reservation branch never uses REGIONS; non-Linux map/register and all block.rs release paths still remove the extent before physical unmap/dealloc. Reuse keeps live pooled maps registered. Release re-audit 2026-10-28: all four production block release paths still call region::unmap; non-Linux removes REGIONS before apple::unmap/dealloc, while pooling and test-only retained mappings stay registered. Warning cleanup re-audit: ALIGN and mapped_len are now compiled only on Linux, matching their existing Linux-only callers. Registry insertion, removal-before-unmap, pooled mapping custody, and thread-exit release paths are unchanged. Re-audited #13405: block.rs delegates the bump bound to inline::allocation_limit, which closes the fast path during black allocation. Region allocation, registration, pooling, removal-before-unmap and TLS teardown are unchanged. Re-audited 2026-10-30 after #13463/#13479. `unmap` still removes the start key from `REGIONS` before any physical release (`.remove(&(data as usize)).expect(...)`, then `debug_assert_eq!` on the extent length, then `reservation::unmap` / `apple::unmap` / `dealloc`), so removal still precedes release on every target. #13463 changed the map's value from a bare end offset to `BackingExtent { end, alignment }` \u2014 extent bookkeeping only; the removal still comes first. The new pinned source is a boundary caller the same two commits created: `arena/young_large.rs` now allocates large-object backings through `region::map`, and its release path (`release_arena_block` -> `region::unmap`) keeps removal ahead of release too. It is pinned so the next change to it forces this re-audit. Re-audited 2026-11-02 (RELPREP) against d70032de4..ab8fc9070: region.rs and young_large.rs changed formatting only (rustfmt of map's alignment selection, register's insert, unmap's remove/dealloc, a test call, and young_large's for_each_young_small_header/copying_capacity_bytes). unmap still removes the REGIONS key before any physical release; registration, pooling and the release paths are unchanged.",
    "source_pins": {
-    "crates/perry-runtime/src/arena/region.rs": "54bd302d181433f3f2eb4a92c8ff07f021492dcf516f9069403b61d88f5c2a01",
-    "crates/perry-runtime/src/arena/block.rs": "170b10471a821673fce65710ec719489c5c8e793fed0c806fbdd163ca18a8d1a"
+    "crates/perry-runtime/src/arena/region.rs": "bb3988070b2f3a51080669c053e18c904439c9506fc5f0b00770117d43774616",
+    "crates/perry-runtime/src/arena/block.rs": "a1e171218952b59e7d8479f613586d7841c0245cb90f896919946852c48a726e",
+    "crates/perry-runtime/src/arena/young_large.rs": "b86f56c49912ac67956f8dbfd3463c3ae0bdcf21bb7e634b63b703fe52523dc8"
    }
   },
   {
@@ -174,134 +175,6 @@
    ],
    "verdict": "process_global_allocation",
    "why": "AtomicUsize13 stores only symbol::js_symbol_for/persistent_symbol results (node_prototypes.rs277-309), both backed by leak_symbol Box::into_raw native SymbolHeaders with native Arc string descriptions and no GC descriptor. Only writer validates static atom. Identity retained process-wide; CASloser extra native allocation is not thread-arena custody."
-  },
-  {
-   "file": "crates/perry-runtime/src/object/runtime_layouts/stream_prototypes.rs",
-   "names": [
-    "READABLE_STATE_PROTO"
-   ],
-   "verdict": "process_global_allocation",
-   "why": "PerryLayoutDesc pointer fields are static image arrays/prototype family or null: {\"index\": \"READABLE_STATE_PROTO_INDEX.as_ptr()\", \"keys\": \"READABLE_STATE_PROTO_KEYS.as_ptr()\", \"layout_id\": \"super::super::layout_desc::LAYOUT_ID_CARRIED\", \"methods\": \"std::ptr::null()\", \"proto\": \"crate::object::layout_desc::LAYOUT_PROTO_OBJECT\"}. register_static_layouts writes only AtomicU32 layout_id at layout_desc.rs652-678; no thread-arena address can be installed."
-  },
-  {
-   "file": "crates/perry-runtime/src/object/runtime_layouts/stream_prototypes.rs",
-   "names": [
-    "WRITABLE_STATE_PROTO"
-   ],
-   "verdict": "process_global_allocation",
-   "why": "PerryLayoutDesc pointer fields are static image arrays/prototype family or null: {\"index\": \"WRITABLE_STATE_PROTO_INDEX.as_ptr()\", \"keys\": \"WRITABLE_STATE_PROTO_KEYS.as_ptr()\", \"layout_id\": \"super::super::layout_desc::LAYOUT_ID_CARRIED\", \"methods\": \"std::ptr::null()\", \"proto\": \"crate::object::layout_desc::LAYOUT_PROTO_OBJECT\"}. register_static_layouts writes only AtomicU32 layout_id at layout_desc.rs652-678; no thread-arena address can be installed."
-  },
-  {
-   "file": "crates/perry-runtime/src/object/runtime_layouts/stream_prototypes.rs",
-   "names": [
-    "EE_ASYNC_RESOURCE_PROTO"
-   ],
-   "verdict": "process_global_allocation",
-   "why": "PerryLayoutDesc pointer fields are static image arrays/prototype family or null: {\"index\": \"EE_ASYNC_RESOURCE_PROTO_INDEX.as_ptr()\", \"keys\": \"EE_ASYNC_RESOURCE_PROTO_KEYS.as_ptr()\", \"layout_id\": \"super::super::layout_desc::LAYOUT_ID_CARRIED\", \"methods\": \"std::ptr::null()\", \"proto\": \"crate::object::layout_desc::LAYOUT_PROTO_OBJECT\"}. register_static_layouts writes only AtomicU32 layout_id at layout_desc.rs652-678; no thread-arena address can be installed."
-  },
-  {
-   "file": "crates/perry-runtime/src/object/runtime_layouts.rs",
-   "names": [
-    "READABLE_STATE"
-   ],
-   "verdict": "process_global_allocation",
-   "why": "PerryLayoutDesc pointer fields are static image arrays/prototype family or null: {\"index\": \"READABLE_STATE_INDEX.as_ptr()\", \"keys\": \"READABLE_STATE_KEYS.as_ptr()\", \"layout_id\": \"super::layout_desc::LAYOUT_ID_CARRIED\", \"methods\": \"std::ptr::null()\", \"proto\": \"&raw const READABLE_STATE_PROTO_FAMILY\"}. register_static_layouts writes only AtomicU32 layout_id at layout_desc.rs652-678; no thread-arena address can be installed."
-  },
-  {
-   "file": "crates/perry-runtime/src/object/runtime_layouts.rs",
-   "names": [
-    "WRITABLE_STATE"
-   ],
-   "verdict": "process_global_allocation",
-   "why": "PerryLayoutDesc pointer fields are static image arrays/prototype family or null: {\"index\": \"WRITABLE_STATE_INDEX.as_ptr()\", \"keys\": \"WRITABLE_STATE_KEYS.as_ptr()\", \"layout_id\": \"super::layout_desc::LAYOUT_ID_CARRIED\", \"methods\": \"std::ptr::null()\", \"proto\": \"&raw const WRITABLE_STATE_PROTO_FAMILY\"}. register_static_layouts writes only AtomicU32 layout_id at layout_desc.rs652-678; no thread-arena address can be installed."
-  },
-  {
-   "file": "crates/perry-runtime/src/object/runtime_layouts.rs",
-   "names": [
-    "URL_SEARCH_PARAMS"
-   ],
-   "verdict": "process_global_allocation",
-   "why": "PerryLayoutDesc pointer fields are static image arrays/prototype family or null: {\"index\": \"URL_SEARCH_PARAMS_INDEX.as_ptr()\", \"keys\": \"URL_SEARCH_PARAMS_KEYS.as_ptr()\", \"layout_id\": \"super::layout_desc::LAYOUT_ID_CARRIED\", \"methods\": \"std::ptr::null()\", \"proto\": \"&raw const URL_SEARCH_PARAMS_PROTO_FAMILY\"}. register_static_layouts writes only AtomicU32 layout_id at layout_desc.rs652-678; no thread-arena address can be installed."
-  },
-  {
-   "file": "crates/perry-runtime/src/object/runtime_layouts.rs",
-   "names": [
-    "URL_COMPONENTS"
-   ],
-   "verdict": "process_global_allocation",
-   "why": "PerryLayoutDesc pointer fields are static image arrays/prototype family or null: {\"index\": \"URL_COMPONENTS_INDEX.as_ptr()\", \"keys\": \"URL_COMPONENTS_KEYS.as_ptr()\", \"layout_id\": \"super::layout_desc::LAYOUT_ID_CARRIED\", \"methods\": \"std::ptr::null()\", \"proto\": \"&raw const URL_PROTO_FAMILY\"}. register_static_layouts writes only AtomicU32 layout_id at layout_desc.rs652-678; no thread-arena address can be installed."
-  },
-  {
-   "file": "crates/perry-runtime/src/object/runtime_layouts.rs",
-   "names": [
-    "ITERATOR_RESULT"
-   ],
-   "verdict": "process_global_allocation",
-   "why": "PerryLayoutDesc pointer fields are static image arrays/prototype family or null: {\"index\": \"ITERATOR_RESULT_INDEX.as_ptr()\", \"keys\": \"ITERATOR_RESULT_KEYS.as_ptr()\", \"layout_id\": \"super::layout_desc::LAYOUT_ID_CARRIED\", \"methods\": \"std::ptr::null()\", \"proto\": \"crate::object::layout_desc::LAYOUT_PROTO_OBJECT\"}. register_static_layouts writes only AtomicU32 layout_id at layout_desc.rs652-678; no thread-arena address can be installed."
-  },
-  {
-   "file": "crates/perry-runtime/src/object/runtime_layouts.rs",
-   "names": [
-    "ITERATOR_RESULT_DONE_FIRST"
-   ],
-   "verdict": "process_global_allocation",
-   "why": "PerryLayoutDesc pointer fields are static image arrays/prototype family or null: {\"index\": \"ITERATOR_RESULT_DONE_FIRST_INDEX.as_ptr()\", \"keys\": \"ITERATOR_RESULT_DONE_FIRST_KEYS.as_ptr()\", \"layout_id\": \"super::layout_desc::LAYOUT_ID_CARRIED\", \"methods\": \"std::ptr::null()\", \"proto\": \"crate::object::layout_desc::LAYOUT_PROTO_OBJECT\"}. register_static_layouts writes only AtomicU32 layout_id at layout_desc.rs652-678; no thread-arena address can be installed."
-  },
-  {
-   "file": "crates/perry-runtime/src/object/runtime_layouts.rs",
-   "names": [
-    "TIMEOUT"
-   ],
-   "verdict": "process_global_allocation",
-   "why": "PerryLayoutDesc pointer fields are static image arrays/prototype family or null: {\"index\": \"TIMEOUT_INDEX.as_ptr()\", \"keys\": \"TIMEOUT_KEYS.as_ptr()\", \"layout_id\": \"super::layout_desc::LAYOUT_ID_CARRIED\", \"methods\": \"std::ptr::null()\", \"proto\": \"&raw const TIMEOUT_PROTO_FAMILY\"}. register_static_layouts writes only AtomicU32 layout_id at layout_desc.rs652-678; no thread-arena address can be installed."
-  },
-  {
-   "file": "crates/perry-runtime/src/object/runtime_layouts.rs",
-   "names": [
-    "IMMEDIATE"
-   ],
-   "verdict": "process_global_allocation",
-   "why": "PerryLayoutDesc pointer fields are static image arrays/prototype family or null: {\"index\": \"IMMEDIATE_INDEX.as_ptr()\", \"keys\": \"IMMEDIATE_KEYS.as_ptr()\", \"layout_id\": \"super::layout_desc::LAYOUT_ID_CARRIED\", \"methods\": \"std::ptr::null()\", \"proto\": \"&raw const IMMEDIATE_PROTO_FAMILY\"}. register_static_layouts writes only AtomicU32 layout_id at layout_desc.rs652-678; no thread-arena address can be installed."
-  },
-  {
-   "file": "crates/perry-runtime/src/object/runtime_layouts.rs",
-   "names": [
-    "REGEX_EXEC_NAMED"
-   ],
-   "verdict": "process_global_allocation",
-   "why": "PerryLayoutDesc pointer fields are static image arrays/prototype family or null: {\"index\": \"REGEX_EXEC_NAMED_INDEX.as_ptr()\", \"keys\": \"REGEX_EXEC_NAMED_KEYS.as_ptr()\", \"layout_id\": \"super::layout_desc::LAYOUT_ID_CARRIED\", \"methods\": \"std::ptr::null()\", \"proto\": \"crate::object::layout_desc::LAYOUT_PROTO_OBJECT\"}. register_static_layouts writes only AtomicU32 layout_id at layout_desc.rs652-678; no thread-arena address can be installed."
-  },
-  {
-   "file": "crates/perry-runtime/src/object/runtime_layouts.rs",
-   "names": [
-    "REGEX_EXEC_INDICES_NAMED"
-   ],
-   "verdict": "process_global_allocation",
-   "why": "PerryLayoutDesc pointer fields are static image arrays/prototype family or null: {\"index\": \"REGEX_EXEC_INDICES_NAMED_INDEX.as_ptr()\", \"keys\": \"REGEX_EXEC_INDICES_NAMED_KEYS.as_ptr()\", \"layout_id\": \"super::layout_desc::LAYOUT_ID_CARRIED\", \"methods\": \"std::ptr::null()\", \"proto\": \"crate::object::layout_desc::LAYOUT_PROTO_OBJECT\"}. register_static_layouts writes only AtomicU32 layout_id at layout_desc.rs652-678; no thread-arena address can be installed."
-  },
-  {
-   "file": "crates/perry-runtime/src/object/runtime_layouts.rs",
-   "names": [
-    "REGEX_INDICES_GROUPS_NAMED"
-   ],
-   "verdict": "process_global_allocation",
-   "why": "PerryLayoutDesc pointer fields are static image arrays/prototype family or null: {\"index\": \"REGEX_INDICES_GROUPS_NAMED_INDEX.as_ptr()\", \"keys\": \"REGEX_INDICES_GROUPS_NAMED_KEYS.as_ptr()\", \"layout_id\": \"super::layout_desc::LAYOUT_ID_CARRIED\", \"methods\": \"std::ptr::null()\", \"proto\": \"crate::object::layout_desc::LAYOUT_PROTO_OBJECT\"}. register_static_layouts writes only AtomicU32 layout_id at layout_desc.rs652-678; no thread-arena address can be installed."
-  },
-  {
-   "file": "crates/perry-runtime/src/object/runtime_layouts.rs",
-   "names": [
-    "ARRAY_NAMED"
-   ],
-   "verdict": "process_global_allocation",
-   "why": "PerryLayoutDesc pointer fields are static image arrays/prototype family or null: {\"index\": \"ARRAY_NAMED_INDEX.as_ptr()\", \"keys\": \"ARRAY_NAMED_KEYS.as_ptr()\", \"layout_id\": \"super::layout_desc::LAYOUT_ID_CARRIED\", \"methods\": \"std::ptr::null()\", \"proto\": \"crate::object::layout_desc::LAYOUT_PROTO_OBJECT\"}. register_static_layouts writes only AtomicU32 layout_id at layout_desc.rs652-678; no thread-arena address can be installed."
-  },
-  {
-   "file": "crates/perry-runtime/src/object/runtime_layouts.rs",
-   "names": [
-    "SQLITE_COLUMN_METADATA"
-   ],
-   "verdict": "process_global_allocation",
-   "why": "PerryLayoutDesc pointer fields are static image arrays/prototype family or null: {\"index\": \"SQLITE_COLUMN_INDEX.as_ptr()\", \"keys\": \"SQLITE_COLUMN_KEYS.as_ptr()\", \"layout_id\": \"super::layout_desc::LAYOUT_ID_CARRIED\", \"methods\": \"std::ptr::null()\", \"proto\": \"crate::object::layout_desc::LAYOUT_PROTO_OBJECT\"}. register_static_layouts writes only AtomicU32 layout_id at layout_desc.rs652-678; no thread-arena address can be installed."
   },
   {
    "file": "crates/perry-runtime/src/os/signal.rs",
@@ -731,22 +604,6 @@
    ],
    "verdict": "no_heap_address",
    "why": "Queue of PendingTlsEvent variants carrying only handle ids (i64 from NEXT_TLS_HANDLE_ID), Vec<u8> data and Strings; no heap addresses."
-  },
-  {
-   "file": "crates/perry-runtime/src/builtins/fn_metadata.rs",
-   "names": [
-    "REGISTRY"
-   ],
-   "verdict": "no_heap_address",
-   "why": "function_name_registry: compiled function code address (func_ptr) -> &'static name bytes in the image, written only by js_register_function_name_static from codegen module init; keys are code addresses. | (second declaration) function_source_registry (fn_metadata.rs): func_ptr code address -> &'static source bytes in the image, retained for raw method/accessor bodies and other callables without an ordinary per-body JsFunctionInfo source record."
-  },
-  {
-   "file": "crates/perry-runtime/src/builtins/fn_metadata.rs",
-   "names": [
-    "OVERRIDES"
-   ],
-   "verdict": "no_heap_address",
-   "why": "function_name_overrides: func_ptr -> Arc<[u8]> owned name, written by js_register_function_name / register_function_name_if_absent; all callers key by ClosureHeader.func_ptr or thunk addresses (symbol/properties.rs:278, keys_array.rs:692, util_promisify.rs:168, populate.rs:658) — code addresses, not the closure. | (second declaration) function_source_overrides (fn_metadata.rs:358): func_ptr code address -> Arc<[u8]> copied source + non-strict flag, written by js_register_function_source; keys are code addresses."
   },
   {
    "file": "crates/perry-runtime/src/tls_hot.rs",
@@ -1605,78 +1462,6 @@
    "why": "Stores js_async_local_storage_subclass_init's fn pointer, stored by value/handle.rs:159; every store in the tree is `func as *mut ()` (or null), so it is a code address, never a heap value."
   },
   {
-   "file": "crates/perry-runtime/src/gc/instruments.rs",
-   "names": [
-    "MARK_BARRIER_ARMED_SINCE_US"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Microseconds since the process epoch at which the current mark-barrier armed window opened (0 = closed); a timestamp set/cleared by the collector's arm/disarm instruments (instruments.rs:145/150)."
-  },
-  {
-   "file": "crates/perry-runtime/src/gc/instruments.rs",
-   "names": [
-    "SKIP_REENTRANT"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Telemetry counter of budgeted GC steps skipped for the reentrant reason, bumped by note_budgeted_step_skip; a plain count."
-  },
-  {
-   "file": "crates/perry-runtime/src/gc/instruments.rs",
-   "names": [
-    "SKIP_NO_TRIGGER"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Telemetry counter of budgeted GC steps skipped for the no-trigger reason, bumped by note_budgeted_step_skip; a plain count."
-  },
-  {
-   "file": "crates/perry-runtime/src/gc/instruments.rs",
-   "names": [
-    "SKIP_START_BLOCKED"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Telemetry counter of budgeted GC steps skipped for the start-blocked reason, bumped by note_budgeted_step_skip; a plain count."
-  },
-  {
-   "file": "crates/perry-runtime/src/gc/instruments.rs",
-   "names": [
-    "SKIP_RESUME_BLOCKED"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Telemetry counter of budgeted GC steps skipped for the resume-blocked reason, bumped by note_budgeted_step_skip; a plain count."
-  },
-  {
-   "file": "crates/perry-runtime/src/gc/instruments.rs",
-   "names": [
-    "SKIP_NURSERY_CAP_UNDISCHARGEABLE"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Telemetry counter of budgeted GC steps skipped for the nursery-cap-undischargeable reason, bumped by note_budgeted_step_skip; a plain count."
-  },
-  {
-   "file": "crates/perry-runtime/src/gc/instruments.rs",
-   "names": [
-    "STEP_MAX_US"
-   ],
-   "verdict": "no_heap_address",
-   "why": "High-water mark of a single budgeted GC step's duration in microseconds (bump_max telemetry); a duration."
-  },
-  {
-   "file": "crates/perry-runtime/src/gc/instruments.rs",
-   "names": [
-    "REMARK_MAX_US"
-   ],
-   "verdict": "no_heap_address",
-   "why": "High-water mark of the atomic final-remark duration in microseconds; a duration."
-  },
-  {
-   "file": "crates/perry-runtime/src/gc/instruments.rs",
-   "names": [
-    "WEAK_MAX_RECORDS_PER_STEP"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Most FinalizationRegistry records charged to one weak-processing step (bump_max at instruments.rs:399, reset at :464); a count."
-  },
-  {
    "file": "crates/perry-runtime/src/object/shape_mint_census.rs",
    "names": [
     "SINK"
@@ -1778,7 +1563,7 @@
     "SITES"
    ],
    "verdict": "process_global_allocation",
-   "why": "Sampled allocation-site table; `live` maps pointers returned by the process GlobalAlloc (CensusAlloc wrapping the system/mimalloc allocator, alloc_census.rs:232) to site ids, and record_free (:265) removes the entry on every dealloc — including arena blocks released through the allocator — so addresses are never stale."
+   "why": "Sampled allocation-site table; `live` maps pointers returned by the process GlobalAlloc (CensusAlloc wrapping the system/mimalloc allocator, alloc_census.rs:232) to site ids, and record_free (:265) removes the entry on every dealloc \u2014 including arena blocks released through the allocator \u2014 so addresses are never stale."
   },
   {
    "file": "crates/perry-runtime/src/dgram_reactor.rs",
@@ -1925,7 +1710,7 @@
     "MT_RUN_COUNT"
    ],
    "verdict": "no_heap_address",
-   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit — never an address."
+   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit \u2014 never an address."
   },
   {
    "file": "crates/perry-runtime/src/promise/mod.rs",
@@ -1933,7 +1718,7 @@
     "MT_DRAIN_COUNT"
    ],
    "verdict": "no_heap_address",
-   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit — never an address."
+   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit \u2014 never an address."
   },
   {
    "file": "crates/perry-runtime/src/promise/mod.rs",
@@ -1941,7 +1726,7 @@
     "MT_EMPTY_DRAIN_COUNT"
    ],
    "verdict": "no_heap_address",
-   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit — never an address."
+   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit \u2014 never an address."
   },
   {
    "file": "crates/perry-runtime/src/promise/mod.rs",
@@ -1949,7 +1734,7 @@
     "MT_THENABLE_PROBE_COUNT"
    ],
    "verdict": "no_heap_address",
-   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit — never an address."
+   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit \u2014 never an address."
   },
   {
    "file": "crates/perry-runtime/src/promise/mod.rs",
@@ -1957,7 +1742,7 @@
     "MT_PROMISE_NEW_COUNT"
    ],
    "verdict": "no_heap_address",
-   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit — never an address."
+   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit \u2014 never an address."
   },
   {
    "file": "crates/perry-runtime/src/promise/mod.rs",
@@ -1965,7 +1750,7 @@
     "MT_PROMISE_THEN_COUNT"
    ],
    "verdict": "no_heap_address",
-   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit — never an address."
+   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit \u2014 never an address."
   },
   {
    "file": "crates/perry-runtime/src/promise/mod.rs",
@@ -1973,7 +1758,7 @@
     "MT_PROMISE_RESOLVED_COUNT"
    ],
    "verdict": "no_heap_address",
-   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit — never an address."
+   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit \u2014 never an address."
   },
   {
    "file": "crates/perry-runtime/src/promise/mod.rs",
@@ -1981,7 +1766,7 @@
     "MT_FAST_PATH_HIT"
    ],
    "verdict": "no_heap_address",
-   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit — never an address."
+   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit \u2014 never an address."
   },
   {
    "file": "crates/perry-runtime/src/promise/mod.rs",
@@ -1989,7 +1774,7 @@
     "MT_FAST_PATH_MISS"
    ],
    "verdict": "no_heap_address",
-   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit — never an address."
+   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit \u2014 never an address."
   },
   {
    "file": "crates/perry-runtime/src/promise/mod.rs",
@@ -1997,7 +1782,7 @@
     "MT_STEP_CHAIN_REUSE_HIT"
    ],
    "verdict": "no_heap_address",
-   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit — never an address."
+   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit \u2014 never an address."
   },
   {
    "file": "crates/perry-runtime/src/promise/mod.rs",
@@ -2005,7 +1790,7 @@
     "MT_STEP_CHAIN_REUSE_MISS"
    ],
    "verdict": "no_heap_address",
-   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit — never an address."
+   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit \u2014 never an address."
   },
   {
    "file": "crates/perry-runtime/src/promise/mod.rs",
@@ -2013,7 +1798,7 @@
     "MT_STEP_DONE_REUSE_HIT"
    ],
    "verdict": "no_heap_address",
-   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit — never an address."
+   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit \u2014 never an address."
   },
   {
    "file": "crates/perry-runtime/src/promise/mod.rs",
@@ -2021,7 +1806,7 @@
     "MT_STEP_DONE_REUSE_MISS"
    ],
    "verdict": "no_heap_address",
-   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit — never an address."
+   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit \u2014 never an address."
   },
   {
    "file": "crates/perry-runtime/src/promise/mod.rs",
@@ -2202,7 +1987,7 @@
     "PENDING_DEFERRED"
    ],
    "verdict": "thread_exit_invalidated",
-   "why": "Queue of (owner AgentId, promise_ptr, converter) — purged per agent by async_bridge.rs purge_agent_resolutions from agent.rs:retire_agent at worker exit.",
+   "why": "Queue of (owner AgentId, promise_ptr, converter) \u2014 purged per agent by async_bridge.rs purge_agent_resolutions from agent.rs:retire_agent at worker exit.",
    "hook": "purge_agent_resolutions"
   },
   {
@@ -2583,14 +2368,6 @@
    ],
    "verdict": "no_heap_address",
    "why": "OnceLock of Option<Sink> (Sink::Stderr | Sink::File(String)) resolved once from an env var by the regex diagnostic sink getter; Rust-owned config, no addresses."
-  },
-  {
-   "file": "crates/perry-runtime/src/hot_diag.rs",
-   "names": [
-    "IC_SINK"
-   ],
-   "verdict": "no_heap_address",
-   "why": "OnceLock of Option<Sink> (Sink::Stderr | Sink::File(String)) resolved once from an env var by the IC diagnostic sink getter; Rust-owned config, no addresses."
   },
   {
    "file": "crates/perry-runtime/src/hot_diag.rs",
@@ -3421,14 +3198,6 @@
    "why": "Holds the address of the %Intl%.[[FallbackSymbol]] SymbolHeader, Box::into_raw'd once in intl_legacy_constructed_symbol (symbol.rs:688-712); never freed."
   },
   {
-   "file": "crates/perry-runtime/src/symbol.rs",
-   "names": [
-    "NEXT_SYMBOL_ID"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Monotonic u64 id counter handed out by next_id() to every new SymbolHeader."
-  },
-  {
    "file": "crates/perry-runtime/src/intl/segments_view.rs",
    "names": [
     "OPENS"
@@ -3953,14 +3722,6 @@
    "why": "Linker-owned zero-word section sentinel and COFF section bounds. Their storage and addresses are image data for the process lifetime, never managed-heap or thread-arena allocations; thread exit cannot invalidate them."
   },
   {
-   "file": "crates/perry-runtime/src/object/image_keys.rs",
-   "names": [
-    "CELL"
-   ],
-   "verdict": "process_global_allocation",
-   "why": "Descriptor-owned ImageStorage lives in the linker image. ImageList::new points only to static image strings and its own static attribute cell. prepare only tags those addresses or installs symbols from the process-global, never-reset well-known/runtime symbol tables (symbol.rs), whose Box allocations are leaked for process lifetime. Binding symbols are rejected before publication. No word refers to a thread-arena allocation."
-  },
-  {
    "file": "crates/perry-runtime/src/tls/roots/macos.rs",
    "names": [
     "API"
@@ -4066,6 +3827,22 @@
    "why": "Outstanding work count incremented on submit and decremented by OutstandingGuard at delivery. AtomicUsize contains only a job count, never a pointer."
   },
   {
+   "file": "crates/perry-runtime/src/turnloop_pool/mod.rs",
+   "names": [
+    "CANCELLED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Turnloop pool lifetime total, initialized 0, only `fetch_add(1)` on `Delivery::Cancelled` (turnloop_pool/mod.rs:655) and `load` for the `PERRY_LOOP_STATS=1` exit line (:270). An `AtomicU64` holding a job count, never a pointer or an arena address. Also appears as a property-name identifier inside the `realm_decl!` block for `node:dns` / `node:dns/promises` in `crates/perry-runtime/src/object/namespace_create.rs` (`CANCELLED = \"ECANCELLED\"`, `REFUSED = \"EREFUSED\"`). That text follows the name with `= \"E...\";`, not a counter use, so rule 2 deliberately keeps this static a manual candidate instead of discharging it; the mention belongs to a different declaration, and this verdict is the review it asks for."
+  },
+  {
+   "file": "crates/perry-runtime/src/turnloop_pool/mod.rs",
+   "names": [
+    "REFUSED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Turnloop pool lifetime total, initialized 0, only `fetch_add(1)` at the two submit rejection sites (turnloop_pool/mod.rs:460 and :464) and `load` for the stats line (:280). An `AtomicU64` holding a job count, never a pointer or an arena address. Also appears as a property-name identifier inside the `realm_decl!` block for `node:dns` / `node:dns/promises` in `crates/perry-runtime/src/object/namespace_create.rs` (`CANCELLED = \"ECANCELLED\"`, `REFUSED = \"EREFUSED\"`). That text follows the name with `= \"E...\";`, not a counter use, so rule 2 deliberately keeps this static a manual candidate instead of discharging it; the mention belongs to a different declaration, and this verdict is the review it asks for."
+  },
+  {
    "file": "crates/perry-runtime/src/wasm_discard.rs",
    "names": [
     "REUSED",
@@ -4082,6 +3859,14 @@
    ],
    "verdict": "process_global_allocation",
    "why": "The WASIp1 discard allocator owns retained System/malloc allocations after the caller deallocates them. keep takes custody instead of calling System.dealloc, so an Arena dropping its block relinquishes ownership without physically freeing the allocation. take removes the slot before handing its pointer to a new caller; idle, capacity eviction and release_all remove each slot before release calls libc::free. Only slots below len are read. These are allocator-owned freed blocks, not live GC objects or borrowed thread-arena addresses. build.rs enables the module only for the wasm32-wasip1 wasm-discard runtime, whose allocator has one thread."
+  },
+  {
+   "file": "crates/perry-runtime/src/builtins/fn_metadata_owner.rs",
+   "names": [
+    "IMAGES"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Process-global list of the function-record images registered so far (it replaced the old OWNERS map). Each element is either a &'static FunctionRecordBounds (the linker-owned record section of a permanent image) or a leaked &'static [&'static OwnerState] for an unloadable image, whose CopiedEntry holds a static code address and Arc<[u8]> name/source bytes, with overrides keyed by owner ordinal. Nothing in it is allocated in a thread Arena or is a GC-managed pointer, so Arena::drop at thread exit cannot leave it stale."
   }
  ]
 }

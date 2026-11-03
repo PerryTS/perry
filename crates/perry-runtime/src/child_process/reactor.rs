@@ -694,7 +694,7 @@ pub(super) fn cp_install_abort_signal(handle: u64, signal: Option<f64>, opts_val
     };
 
     let listener = js_closure_alloc(crate::fn_info!(cp_abort_listener, 0; with_declared(0)), 1);
-    js_closure_set_capture_ptr(listener, 0, handle as i64);
+    crate::closure::closure_set_capture_word(listener, 0, handle as i64);
     let listener_val = cp_box_ptr(listener as *const u8);
     let kill_signal = cp_read_abort_kill_signal(opts_val);
 
@@ -1111,7 +1111,7 @@ pub extern "C" fn js_child_process_spawn_streams(
                 1,
             );
             crate::closure::js_closure_set_capture_ptr(emit_closure, 0, cp.to_bits() as i64);
-            crate::timer::js_set_immediate_callback(emit_closure as i64);
+            crate::builtins::js_queue_next_tick(emit_closure as i64);
         }
     }
 
@@ -1445,9 +1445,17 @@ fn cp_reactor_pump_inner() {
 
         cp_cleanup_abort_listener(item.abort_signal_bits, item.abort_listener_bits);
         if let Some(exec) = item.exec {
-            crate::async_hook_slots::enter_resource_scope(item.process_ids);
+            // exec's callback is node's reaction to the last stdio pipe closing
+            // (node 26.12.1 reports PIPEWRAP), so it runs in the stdout pipe's
+            // resource; a child without one falls back to the process resource.
+            let ids = if item.pipe_ids[1].async_id != 0 {
+                item.pipe_ids[1]
+            } else {
+                item.process_ids
+            };
+            crate::async_hook_slots::enter_resource_scope(ids);
             cp_exec_fire_close(exec, item.code, item.signal, item.pid);
-            crate::async_hook_slots::leave_resource_scope(item.process_ids.async_id);
+            crate::async_hook_slots::leave_resource_scope(ids.async_id);
         }
         if let Some(cp_bits) = cp_lookup_cp_bits(item.handle) {
             let cp = f64::from_bits(cp_bits);

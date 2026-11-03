@@ -139,6 +139,7 @@ pub(crate) mod field_get_set;
 pub(crate) mod overflow;
 pub(crate) use field_get_set::scan_accessor_receiver_override_root_mut;
 mod field_set_by_name;
+pub(crate) mod function_own_put;
 mod gc_slots;
 pub(crate) use gc_slots::{
     gc_field_slot_range, gc_shape_keys_edge_slot, gc_shape_prototype_edge_slot,
@@ -206,6 +207,7 @@ pub(crate) use side_table_roots::{
 mod class_birth_rep_tests;
 #[cfg(test)]
 mod field_rep_store_tests;
+pub(crate) mod iterator_ctor;
 pub(crate) mod iterator_prototypes;
 pub(crate) mod map_set_subclass;
 pub mod method_call;
@@ -230,15 +232,17 @@ mod native_module_crypto_key_object;
 mod native_module_crypto_random;
 mod native_module_dispatch;
 mod native_module_registry;
+pub(crate) use native_module_registry::install_readline_constructor_metadata;
 pub(crate) use native_module_registry::js_nm_enable_install_all;
 pub(crate) use native_module_registry::nm_attach_lookup;
 pub(crate) use native_module_registry::nm_ctor_lookup;
-// Re-exported for submodule installers that delegate to a native module
-// (`fs/promises` → `fs.constants`, `sys` → `util`).
+// Re-exported for submodule installers that delegate to a native module.
 pub(crate) use native_module_registry::{
-    js_install_global_value_surfaces, js_nm_install_events, js_nm_install_fs, js_nm_install_module,
-    js_nm_install_perf, js_nm_install_readline, js_nm_install_tls, js_nm_install_util,
+    js_install_global_value_surfaces, js_nm_install_module, js_nm_install_perf, js_nm_install_tls,
+    js_nm_install_util,
 };
+#[cfg(test)]
+pub(crate) use native_module_registry::{js_nm_install_events, js_nm_install_fs};
 mod literal_constructor;
 mod native_module_stream;
 pub(crate) mod native_this_alias;
@@ -251,7 +255,8 @@ mod own_override_builtin_install_tests;
 #[cfg(test)]
 mod own_override_push_tests;
 pub(crate) use object_ops::{
-    ensure_key_in_keys_array, install_builtin_getter, install_own_builtin_accessor,
+    ensure_key_in_keys_array, install_builtin_accessor, install_builtin_getter,
+    install_own_builtin_accessor,
 };
 mod object_ops_frozen;
 mod polymorphic_index;
@@ -287,6 +292,7 @@ mod reflect_support;
 mod reserved_floor;
 pub(crate) use reserved_floor::{
     ensure_reserved_floor_keys, reserved_slot_floor_for_class_id, reserved_slot_floor_for_object,
+    runtime_receiver_declines_key_add,
 };
 pub(crate) mod regex_proto_thunks;
 #[cfg(feature = "regex-engine")]
@@ -352,9 +358,9 @@ pub(crate) use global_this_tables::*;
 pub use groupby::*;
 pub use instanceof::*;
 pub(crate) use iterator_prototypes::{
-    attach_iterator_prototype, call_overridden_iterator_next, iterator_next_property_owner,
-    iterator_prototype_for_class_id, iterator_prototypes_materialized,
-    iterator_step_method_is_builtin,
+    attach_iterator_prototype, attach_wrap_for_valid_iterator_prototype,
+    call_overridden_iterator_next, iterator_next_property_owner, iterator_prototype_for_class_id,
+    iterator_prototypes_materialized, iterator_step_method_is_builtin,
 };
 pub use namespace_create::*;
 pub use native_call_method::*;
@@ -670,7 +676,7 @@ pub(crate) struct ObjectHotTables {
     ///
     /// Iteration-order safe: the two mutating passes rewrite independent
     /// values and drop entries by a per-entry predicate.
-    pub(crate) class_keys_by_id: RefCell<crate::fast_hash::PtrHashMap<u32, (usize, u32, u32)>>,
+    pub(crate) class_keys_by_id: RefCell<crate::fast_hash::PtrHashMap<u32, (usize, u32, u32, u32)>>,
     /// Per-thread shape-transition cache for the dynamic-key write path;
     /// see the doc block above `with_transition_cache`. HEAP-allocated
     /// (`Box`) — oversized inline storage overflowed the arm64_32 ILP32
@@ -703,26 +709,26 @@ pub(crate) struct ObjectHotTables {
 }
 
 impl ObjectHotTables {
-    pub(crate) fn new() -> Self {
-        ObjectHotTables {
-            shape_inline_cache: std::cell::UnsafeCell::new(
-                [ShapeCacheEntry {
-                    shape_id: 0,
-                    runtime_shape_id: LayoutWord(0),
-                    key_count: 0,
-                    keys_array: std::ptr::null_mut(),
-                }; SHAPE_INLINE_CACHE_SIZE],
-            ),
-            shape_cache_overflow: RefCell::new(crate::fast_hash::new_ptr_hash_map()),
-            class_keys_by_id: RefCell::new(crate::fast_hash::new_ptr_hash_map()),
-            // Zero pages mapped by the first use: a thread that never takes
-            // a dynamic transition maps none of them.
-            transition_cache: crate::zeroed_cache::ZeroPages::new(),
-            array_tail_forward: crate::zeroed_cache::ZeroPages::new(),
-            array_tail_reverse: crate::zeroed_cache::ZeroPages::new(),
-            array_tail_direct: crate::zeroed_cache::ZeroPages::new(),
-            array_tail_occupied: Cell::new(false),
-        }
+    /// Initializes the tables in place. The inline shape cache is not
+    /// written: its empty entry (`shape_id` 0, `runtime_shape_id` 0,
+    /// `key_count` 0, null `keys_array`) is all-zero bits, which the slot
+    /// already holds.
+    ///
+    /// # Safety
+    ///
+    /// `slot` is valid for writes and zero-filled.
+    pub(crate) unsafe fn init_in(slot: *mut Self) {
+        (&raw mut (*slot).shape_cache_overflow)
+            .write(RefCell::new(crate::fast_hash::new_ptr_hash_map()));
+        (&raw mut (*slot).class_keys_by_id)
+            .write(RefCell::new(crate::fast_hash::new_ptr_hash_map()));
+        // Zero pages mapped by the first use: a thread that never takes
+        // a dynamic transition maps none of them.
+        (&raw mut (*slot).transition_cache).write(crate::zeroed_cache::ZeroPages::new());
+        (&raw mut (*slot).array_tail_forward).write(crate::zeroed_cache::ZeroPages::new());
+        (&raw mut (*slot).array_tail_reverse).write(crate::zeroed_cache::ZeroPages::new());
+        (&raw mut (*slot).array_tail_direct).write(crate::zeroed_cache::ZeroPages::new());
+        (&raw mut (*slot).array_tail_occupied).write(Cell::new(false));
     }
 }
 
@@ -747,6 +753,10 @@ mod call_method_depth;
 pub(crate) use call_method_depth::call_method_depth;
 #[cfg(test)]
 pub(crate) use call_method_depth::test_enter_catch_method;
+#[cfg(test)]
+mod a1_death_tests;
+pub(crate) mod header;
+pub(crate) use header::*;
 mod meta_accessors;
 use call_method_depth::CallMethodDepthGuard;
 pub(crate) use call_method_depth::{call_method_depth_check_marks, call_method_depth_unwind_to};
@@ -844,12 +854,8 @@ fn shape_cache_insert(
     // the caller holds another is exactly the divergence this stage exists to
     // remove.
     let (live, keys) = live.across(|| unsafe {
-        canonical_keys::canonicalize(
-            &canonical_keys::SharedLayout::shape_cache_entry(),
-            keys.arr(),
-            keys.count(),
-        )
-        .view()
+        canonical_keys::canonicalize_keys(&canonical_keys::SharedLayout::shape_cache_entry(), keys)
+            .view()
     });
     let keys_array = keys.arr();
     // Mark the array as shape-shared so `js_object_set_field_by_name`
@@ -877,7 +883,7 @@ fn shape_cache_insert(
         LayoutWord(0)
     } else {
         shapes::publish_shape_result(shapes::class_birth_shape_ensure(
-            keys_array,
+            keys,
             keys.count(),
             keys.count(),
             0,
@@ -1564,6 +1570,7 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
         &iterator_prototypes::STRING_ITERATOR_PROTOTYPE_PTR,
         &iterator_prototypes::REGEXP_STRING_ITERATOR_PROTOTYPE_PTR,
         &iterator_prototypes::ITERATOR_HELPER_PROTOTYPE_PTR,
+        &iterator_prototypes::WRAP_FOR_VALID_ITERATOR_PROTOTYPE_PTR,
     ] {
         slot.with_slot(|slot| {
             visitor.visit_atomic_i64_slot(slot, Ordering::Acquire, Ordering::Release);
@@ -1669,7 +1676,7 @@ pub struct ObjectHeader {
     /// objects (the common case). MUST stay the LAST field: codegen reads
     /// the earlier header fields at fixed offsets (0/4), and the
     /// field-slot region begins at `size_of::<ObjectHeader>()`, mirrored
-    /// by `perry-codegen/src/target_layout.rs::object_header_size_bytes`.
+    /// by `perry-codegen/src/target_layout.rs::object_slot_base_bytes`.
     /// See [`ObjectMeta`].
     pub meta: *mut ObjectMeta,
 }
@@ -1711,11 +1718,7 @@ pub(crate) unsafe fn object_keys_from_shape_record(
     }
 
     if record.keys() != 0 {
-        let keys = ObjectKeys::new(
-            record.keys() as usize as *mut ArrayHeader,
-            record.logical_key_count(),
-        );
-        return keys;
+        return record.keys_view();
     }
     ObjectKeys::NONE
 }
@@ -1731,15 +1734,8 @@ pub(crate) unsafe fn object_keys_and_live_slots(
         return None;
     }
 
-    shapes::object_shape_record(obj).map(|record| {
-        (
-            ObjectKeys::new(
-                record.keys() as usize as *mut ArrayHeader,
-                record.logical_key_count(),
-            ),
-            record.live_inline_slot_count(),
-        )
-    })
+    shapes::object_shape_record(obj)
+        .map(|record| (record.keys_view(), record.live_inline_slot_count()))
 }
 
 pub(crate) mod meta_flags;
@@ -1759,7 +1755,7 @@ pub(crate) unsafe fn object_is_regular(obj: *const ObjectHeader) -> bool {
     let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
         return false;
     };
-    header.obj_type == crate::gc::GC_TYPE_OBJECT
+    crate::gc_type_is_object!(header.obj_type)
         && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
         && shapes::shape_object_kind_of_receiver((*obj).shape_word())
             .is_some_and(|kind| kind.is_ordinary_layout())
@@ -1773,7 +1769,7 @@ pub(crate) unsafe fn object_is_shaped(obj: *const ObjectHeader) -> bool {
     let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
         return false;
     };
-    header.obj_type == crate::gc::GC_TYPE_OBJECT
+    crate::gc_type_is_object!(header.obj_type)
         && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
 }
 
@@ -1818,6 +1814,25 @@ unsafe fn set_object_keys_with_live(
     live_inline_slot_count: u32,
 ) {
     set_object_keys_with_live_rep(obj, keys, live_inline_slot_count, field_rep::REP_ANY);
+}
+
+/// [`set_object_keys_with_live`] for an unstamped null-prototype newborn: its
+/// first shape names `PROTO_ID_NULL` (`shapes::publish_object_shape_from_rep_born`).
+#[cfg_attr(feature = "shape-mint-diag", track_caller)]
+pub(crate) unsafe fn set_object_keys_with_live_born_null(
+    obj: *mut ObjectHeader,
+    keys: ObjectKeys,
+    live_inline_slot_count: u32,
+) {
+    debug_assert!(shapes::object_shape_descriptor(obj).is_none());
+    shapes::publish_object_shape_from_rep_born(
+        obj,
+        None,
+        keys,
+        live_inline_slot_count,
+        field_rep::REP_ANY,
+        Some(shapes::PROTO_ID_NULL),
+    );
 }
 
 /// `set_object_keys_with_live` publishing the successor with field

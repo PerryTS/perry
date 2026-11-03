@@ -109,6 +109,7 @@ impl<'a> Flow<'a> {
                 object,
                 property,
                 value,
+                ..
             } => {
                 self.write(expr(object), property);
                 let field = self.field(scope, object, property);
@@ -119,6 +120,7 @@ impl<'a> Flow<'a> {
                 object,
                 index,
                 value,
+                ..
             } => {
                 if let Expr::String(key) = index.as_ref() {
                     self.write(expr(object), key);

@@ -62,12 +62,12 @@ fn full_mark_does_not_remember_one_shared_keys_word_for_every_carrier() {
         let valid = build_valid_pointer_set();
         let mut worklist = Vec::new();
         for header in headers {
-            visit_gc_rewrite_slots(header, |slot| {
+            visit_gc_rewrite_slots::<{ cfg!(test) }>(header, |slot| {
                 if slot.slot == keys_slot {
                     shared_words += 1;
                 }
             });
-            trace::trace_heap_rewrite_slots_remembering(
+            mark::trace_heap_rewrite_slots_remembering::<{ cfg!(test) }>(
                 header,
                 &valid,
                 &mut worklist,

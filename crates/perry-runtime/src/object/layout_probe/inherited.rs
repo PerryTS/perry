@@ -8,7 +8,8 @@ use super::*;
 pub(super) unsafe fn walks_from(obj: *const ObjectHeader, r: *const ShapeRecord) -> bool {
     match (*r).object_kind() {
         super::super::ShapeObjectKind::Ordinary => {
-            let meta = (*obj).meta;
+            // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
+            let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
             meta.is_null()
                 || (*meta).flags & crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER == 0
         }
@@ -33,7 +34,8 @@ pub(super) const READ_BEYOND_LIST: u64 = crate::object::OBJECT_META_FLAG_EXOTIC_
 /// [`crate::object::builtin_proto::on_static_layout`]).
 #[inline(always)]
 pub(super) unsafe fn listed(obj: *const ObjectHeader, kind: super::super::ShapeObjectKind) -> bool {
-    let meta = (*obj).meta;
+    // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     let flags = if meta.is_null() { 0 } else { (*meta).flags };
     if flags & crate::object::meta_flags::OBJECT_META_FLAG_SEALED_INTRINSIC != 0 {
         return flags & READ_BEYOND_LIST == 0
@@ -93,8 +95,10 @@ pub(super) unsafe fn prototype_of(
     r: *const ShapeRecord,
 ) -> Next {
     let header = crate::gc::header_from_trusted_user_ptr(obj.cast());
+    // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
     if (*header)._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
-        && ((*obj).meta.is_null() || (*(*obj).meta).prototype == 0)
+        && (crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)).is_null()
+            || (*crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _))).prototype == 0)
         && (*r).proto_id == super::super::PROTO_ID_DEFAULT
     {
         return Next::Unknown;
@@ -111,7 +115,8 @@ pub(super) unsafe fn realm_default_link(cur: *const ObjectHeader, rc: *const Sha
     if (*header)._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0 {
         return false;
     }
-    let meta = (*cur).meta;
+    // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(cur as *mut _));
     if !meta.is_null()
         && ((*meta).flags & crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0
             || (*meta).prototype != 0)
@@ -131,7 +136,8 @@ pub(super) unsafe fn link_of(
     cur: *const ObjectHeader,
     rc: *const ShapeRecord,
 ) -> Next {
-    let meta = (*cur).meta;
+    // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(cur as *mut _));
     let mut bits = 0u64;
     if !meta.is_null() {
         if (*meta).flags & crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0 {
@@ -263,11 +269,12 @@ pub(super) unsafe fn chain_from<const ABSENT: bool>(
                 if v.to_bits() != TAG_HOLE {
                     return v;
                 }
-                // An accessor or a private entry declines (the slow entry
-                // calls a getter); a hole slot is absent on this hop, and the
-                // complete walk continues past it.
+                // An accessor is the holder's answer (the slow entry calls a
+                // getter that needs the call), a private entry declines; a
+                // hole slot is absent on this hop, and the complete walk
+                // continues past it.
                 if load == NO_LOAD && attributed_at(rn, pos) {
-                    return hole();
+                    return accessor_answer_at(next, rn, pos);
                 }
                 return walk(cur, next);
             }
@@ -425,10 +432,14 @@ pub(super) unsafe fn walk_step<const ABSENT: bool>(
         }
     };
     if !walks_from(cur, rc) {
+        // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
         // A runtime-born record (unmarked, its keys all in its list and
         // overflow) whose chain ends here proves absence.
         if (*rc).object_kind() == super::super::ShapeObjectKind::OrdinaryUnmarked
-            && ((*cur).meta.is_null() || (*(*cur).meta).flags & READ_BEYOND_LIST == 0)
+            && (crate::meta_read!(crate::meta_obj_runtime_born!(cur as *mut _)).is_null()
+                || (*crate::meta_read!(crate::meta_obj_runtime_born!(cur as *mut _))).flags
+                    & READ_BEYOND_LIST
+                    == 0)
             && matches!(prototype_of(dir, cur, rc), Next::End)
         {
             return Err(absent());
@@ -461,9 +472,13 @@ pub(super) unsafe fn inherited_walk_at<const ABSENT: bool>(
         match own_position(rn, key_bits, hash) {
             Ok(pos) => {
                 let v = value_at(next, rn, pos);
-                // A hole slot of a plain data key: absent on this hop.
-                if v.to_bits() != TAG_HOLE || !plain_data_at(rn, pos) {
+                if v.to_bits() != TAG_HOLE {
                     return v;
+                }
+                // An accessor (or private entry) on the holder: the shape's
+                // answer. A hole slot of a plain data key: absent on this hop.
+                if !plain_data_at(rn, pos) {
+                    return accessor_answer_at(next, rn, pos);
                 }
             }
             Err(false) => return hole(),

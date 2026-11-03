@@ -75,13 +75,14 @@ unsafe fn own_numeric_key(bits: u64, key_bits: u64, bytes: &[u8]) -> Option<f64>
     }
     let addr = (bits & crate::value::POINTER_MASK) as usize;
     let header = crate::value::addr_class::try_read_gc_header(addr)?;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         return None;
     }
     let object = addr as *const crate::object::ObjectHeader;
-    let meta = (*object).meta;
+    // A1_UNPROVEN: record-first: A-tested admission, meta read follows (kind-A/B question for S0f).
+    let meta = crate::object::header::object_meta_if_present(object as *mut _, header.obj_type);
     if (!meta.is_null() && (*meta).elements != 0) || crate::object::overflow::has_overflow(object) {
         return None;
     }

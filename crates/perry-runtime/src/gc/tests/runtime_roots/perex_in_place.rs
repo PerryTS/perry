@@ -87,7 +87,7 @@ fn perex_in_place_search_reacquires_bases_a_poll_moved() {
         crate::arena::ProtectionModeGuard::set(crate::arena::FromSpaceProtection::PoisonOnly);
     register_host_roots();
     let scope = RuntimeHandleScope::new();
-    let receiver = regex(&scope, "(a+)(b)", "");
+    let receiver = regex(&scope, "(a+)(b)(?=)", "");
     // Several quanta of work before the match is decided, so the search
     // pauses and polls with both bases held; under the large-object
     // threshold, so the string is born in the nursery and can move.

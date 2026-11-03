@@ -3,6 +3,8 @@
 //! targets for the budgeted stepper, plus the debt-pacing gain constant used
 //! by `gc_mutator_assist_scaled_work_units` (policy.rs).
 
+use super::*;
+
 /// Initial work budget for ordinary automatic GC steps. The cycle grows its
 /// slice on each successful automatic poll so the barrier window is bounded.
 pub const GC_NORMAL_INCREMENTAL_WORK_UNITS: usize = 2_048;
@@ -152,4 +154,154 @@ impl Default for GcProgressContract {
 /// Return Perry's process-wide GC progress contract.
 pub fn gc_progress_contract() -> GcProgressContract {
     GcProgressContract::default()
+}
+
+/// Number of most-recent pause samples retained per thread (#6187).
+pub const GC_RECENT_PAUSE_WINDOW: usize = 32;
+
+pub struct GcStats {
+    // Cumulative collector work, observed by diagnostics without hot-path hooks.
+    pub(super) forwarded_stub_membership_recoveries: u64,
+    pub(super) block_persist_force_marks: u64,
+    pub(super) adopted_blocks: u64,
+    pub(super) hole_rebuild_blocks_skipped: u64,
+    pub(super) block_skip_reclaimed_blocks: u64,
+    pub(super) block_skip_reclaimed_objects: u64,
+    pub(super) block_skip_reclaimed_bytes: u64,
+
+    pub collection_count: u64,
+    pub total_freed_bytes: u64,
+    pub last_pause_us: u64,
+    /// 2026-07-09 audit (#6187): always-on pause observability. A frame
+    /// scheduler or an ops dashboard needs more than the last sample; the
+    /// max-since-start plus a small ring of recent pauses costs a few
+    /// stores per collection and a few hundred bytes of TLS. The rich
+    /// per-phase traces stay behind PERRY_GC_TRACE.
+    pub max_pause_us: u64,
+    pub recent_pauses_us: [u64; GC_RECENT_PAUSE_WINDOW],
+    pub recent_cursor: u8,
+    pub recent_len: u8,
+}
+
+impl GcStats {
+    /// Single funnel for per-collection accounting: last/max pause and the
+    /// recent-pause ring advance together with the counters, so no future
+    /// collection path can update one without the others.
+    ///
+    pub(super) fn record_collection(&mut self, freed_bytes: u64, elapsed_us: u64) {
+        super::json_defer::collection_completed();
+        self.collection_count += 1;
+        self.total_freed_bytes = self.total_freed_bytes.saturating_add(freed_bytes);
+        self.last_pause_us = elapsed_us;
+        if elapsed_us > self.max_pause_us {
+            self.max_pause_us = elapsed_us;
+        }
+        self.recent_pauses_us[self.recent_cursor as usize] = elapsed_us;
+        self.recent_cursor = ((self.recent_cursor as usize + 1) % GC_RECENT_PAUSE_WINDOW) as u8;
+        if (self.recent_len as usize) < GC_RECENT_PAUSE_WINDOW {
+            self.recent_len += 1;
+        }
+    }
+}
+
+thread_local! {
+    pub(super) static GC_STATS: RefCell<GcStats> = const { RefCell::new(GcStats {
+        forwarded_stub_membership_recoveries: 0,
+        block_persist_force_marks: 0,
+        adopted_blocks: 0,
+        hole_rebuild_blocks_skipped: 0,
+        block_skip_reclaimed_blocks: 0,
+        block_skip_reclaimed_objects: 0,
+        block_skip_reclaimed_bytes: 0,
+
+        collection_count: 0,
+        total_freed_bytes: 0,
+        last_pause_us: 0,
+        max_pause_us: 0,
+        recent_pauses_us: [0; GC_RECENT_PAUSE_WINDOW],
+        recent_cursor: 0,
+        recent_len: 0,
+    }) };
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct GcDebtSnapshot {
+    pub(super) arena_debt_bytes: u64,
+    pub(super) malloc_debt_objects: u64,
+    pub(super) old_reclaim_debt_bytes: u64,
+}
+
+impl GcDebtSnapshot {
+    #[inline]
+    pub(super) fn current() -> Self {
+        let total = crate::arena::arena_total_bytes();
+        // #6950: read the SAME trigger the arming path compares against.
+        // `gc_budgeted_due_trigger` uses `effective_next_arena_trigger()`, which
+        // substitutes the device/`PERRY_GC_HEAP_LIMIT`-derived ceiling while the
+        // raw cell still holds its 128 MB desktop-default const initializer
+        // (`GC_TRIGGER_ARMED == false`). Reading the raw cell here made the two
+        // disagree: a cycle armed at a 2 MB effective trigger measured its own
+        // debt against 128 MB and therefore reported ZERO debt, so
+        // `gc_mutator_assist_scaled_work_units` never scaled past its 256-unit
+        // floor and the budgeted cycle crawled without ever completing —
+        // 300k escaping allocations / 330 MB RSS with ZERO collections. That is
+        // exactly the unbounded-growth failure the debt-proportional pacing was
+        // introduced to prevent.
+        let next_arena_trigger = effective_next_arena_trigger();
+        let malloc_count = malloc_object_count();
+        let next_malloc_trigger = GC_NEXT_MALLOC_TRIGGER.with(|c| c.get());
+        let old_in_use = crate::arena::old_gen_in_use_bytes();
+        let old_baseline = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.get());
+
+        Self {
+            arena_debt_bytes: total.saturating_sub(next_arena_trigger) as u64,
+            malloc_debt_objects: malloc_count.saturating_sub(next_malloc_trigger) as u64,
+            old_reclaim_debt_bytes: gc_old_reclaim_debt_bytes(old_in_use, old_baseline),
+        }
+    }
+
+    #[inline]
+    pub(super) fn max_components(self, other: Self) -> Self {
+        Self {
+            arena_debt_bytes: self.arena_debt_bytes.max(other.arena_debt_bytes),
+            malloc_debt_objects: self.malloc_debt_objects.max(other.malloc_debt_objects),
+            old_reclaim_debt_bytes: self
+                .old_reclaim_debt_bytes
+                .max(other.old_reclaim_debt_bytes),
+        }
+    }
+}
+
+pub(super) fn gc_last_pause_us() -> u64 {
+    GC_STATS.with(|stats| stats.borrow().last_pause_us)
+}
+
+/// Total collections so far on this thread. `js_gc_module_idle_hint` compares
+/// this before/after a trigger check to report whether a collection ran.
+pub(super) fn gc_total_collection_count() -> u64 {
+    GC_STATS.with(|stats| stats.borrow().collection_count)
+}
+
+pub(crate) struct GcCollectOutcome {
+    pub(super) freed_bytes: u64,
+    pub(super) malloc_swept: bool,
+    pub(super) trace: Option<GcCycleTrace>,
+}
+
+pub(super) struct CopiedMinorFastPathOutcome {
+    pub(super) freed_bytes: u64,
+    pub(super) malloc_swept: bool,
+}
+
+impl GcCollectOutcome {
+    #[inline]
+    pub(super) fn emit_after_current(self) -> u64 {
+        let Self {
+            freed_bytes, trace, ..
+        } = self;
+        if let Some(trace) = trace {
+            super::diagnostic_hooks::emit_trace(trace);
+        }
+        freed_bytes
+    }
 }

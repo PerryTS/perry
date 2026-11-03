@@ -62,11 +62,12 @@ pub(crate) unsafe fn table(obj: *const ObjectHeader) -> *mut Table {
         || !crate::value::addr_class::is_plausible_heap_addr(obj as usize)
         || !shadowed(obj)
         || !super::object_is_shaped(obj)
-        || (*obj).meta.is_null()
+        || crate::meta_read!(crate::meta_obj_from_kind!(obj as *mut _, ())).is_null()
     {
         return std::ptr::null_mut();
     }
-    (*(*obj).meta).overflow as usize as *mut Table
+    (*crate::meta_read!(crate::meta_obj_from_kind!(obj as *mut _, ()))).overflow as usize
+        as *mut Table
 }
 
 #[inline]
@@ -232,7 +233,7 @@ pub(crate) unsafe fn find(t: *const Table, key: u64) -> Option<u32> {
 }
 
 unsafe fn install(obj: *mut ObjectHeader, t: *mut Table) {
-    let meta = (*obj).meta;
+    let meta = crate::meta_read!(crate::meta_obj_from_storage!(obj as *mut _, t));
     (*meta).overflow = t as usize as u64;
     // The slot owner is the live metadata record, whose generation can
     // differ from the receiver's after a collection. Its header decides
@@ -263,7 +264,11 @@ pub(crate) unsafe fn ensure_adding(obj: *mut ObjectHeader, adding: Option<u32>) 
     super::layout_desc::diag_note_install(obj);
     let scope = crate::gc::RuntimeHandleScope::new();
     let owner = scope.root_raw_mut_ptr(obj);
-    super::object_meta_ensure(obj);
+    // A1_UNPROVEN: a user object whose keys overflow, no type test (kind-A/B question for S0b-S0e).
+    super::object_meta_ensure(
+        crate::meta_obj_runtime_born!(obj),
+        super::MetaReason::Overflow,
+    );
     let obj = owner.get_raw_mut_ptr::<ObjectHeader>();
     let shape = super::shapes::object_shape_descriptor(obj).unwrap();
     let prefix = shape
@@ -673,9 +678,11 @@ pub(crate) unsafe fn delete(obj: *mut ObjectHeader, key: &[u8]) -> bool {
         // orders, so it is established before the atom is looked up.
         if let Some(record) = super::shapes::object_shape_record(obj) {
             let keys = record.keys() as usize as *const ArrayHeader;
-            if let Some(slot) =
-                super::keys_find_property_slot_by_bytes(keys, record.logical_key_count(), key)
-            {
+            if let Some(slot) = super::keys_find_property_slot_by_bytes(
+                record.keys_view(),
+                record.logical_key_count(),
+                key,
+            ) {
                 // A hole is an absent property, including allocator-owned
                 // placeholders before a derived constructor's super call.
                 // Deleting it changes neither membership nor insertion order.
@@ -807,8 +814,9 @@ pub(crate) unsafe fn site_miss_own_get(
 ) -> Option<crate::JSValue> {
     if (obj as u64) >> 48 != 0
         || !crate::value::addr_class::is_above_handle_band(obj as usize)
-        || (*crate::gc::header_from_trusted_user_ptr(obj.cast())).obj_type
-            != crate::gc::GC_TYPE_OBJECT
+        || crate::object_lacks_meta_word!(
+            (*crate::gc::header_from_trusted_user_ptr(obj.cast())).obj_type
+        )
         || !shadowed(obj)
     {
         return None;
@@ -844,7 +852,7 @@ pub(crate) unsafe fn own_has_key(obj: *const ObjectHeader, key_bits: u64) -> Opt
     if overflow_key(key_bits).is_some_and(|key| find(t, key).is_some()) {
         return Some(true);
     }
-    let meta = (*obj).meta;
+    let meta = crate::meta_read!(crate::meta_obj_from_storage!(obj as *mut _, t));
     let conclusive = (*meta).elements == 0
         && super::object_is_regular(obj)
         && super::native_this_alias::object_alias(obj).is_none();
@@ -914,7 +922,7 @@ pub(crate) unsafe fn store_routed(
     // an overflow entry shadows (`install` sets the bit).
     let record = super::shapes::object_shape_record(obj).unwrap();
     let fixed = super::keys_find_property_slot_by_key_ptr(
-        record.keys() as usize as *const ArrayHeader,
+        record.keys_view(),
         record.logical_key_count(),
         atom,
     );

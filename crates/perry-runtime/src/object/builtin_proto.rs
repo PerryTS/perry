@@ -54,56 +54,7 @@ use super::ObjectHeader;
 /// Number of [`BuiltinProto`] families.
 pub const FAMILIES: usize = crate::codegen_abi::BUILTIN_PROTO_FAMILIES;
 
-/// A family of intrinsic prototypes whose methods compiled code calls by
-/// name. The discriminant is the family's agent slot offset
-/// (`AGENT_PTR_INTRINSIC_PROTO + k`); `perry-codegen` mirrors these values
-/// (`builtin_proto.rs`), and a test pins the two lists together.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(u8)]
-pub enum BuiltinProto {
-    Object = 0,
-    Function = 1,
-    Array = 2,
-    String = 3,
-    Number = 4,
-    Boolean = 5,
-    Symbol = 6,
-    BigInt = 7,
-    Map = 8,
-    Set = 9,
-    Date = 10,
-    RegExp = 11,
-    Promise = 12,
-    Error = 13,
-    WeakMap = 14,
-    WeakSet = 15,
-}
-
-impl BuiltinProto {
-    /// Every family, with the global constructor whose `prototype` it is.
-    pub const ALL: [(BuiltinProto, &'static str); FAMILIES] = [
-        (BuiltinProto::Object, "Object"),
-        (BuiltinProto::Function, "Function"),
-        (BuiltinProto::Array, "Array"),
-        (BuiltinProto::String, "String"),
-        (BuiltinProto::Number, "Number"),
-        (BuiltinProto::Boolean, "Boolean"),
-        (BuiltinProto::Symbol, "Symbol"),
-        (BuiltinProto::BigInt, "BigInt"),
-        (BuiltinProto::Map, "Map"),
-        (BuiltinProto::Set, "Set"),
-        (BuiltinProto::Date, "Date"),
-        (BuiltinProto::RegExp, "RegExp"),
-        (BuiltinProto::Promise, "Promise"),
-        (BuiltinProto::Error, "Error"),
-        (BuiltinProto::WeakMap, "WeakMap"),
-        (BuiltinProto::WeakSet, "WeakSet"),
-    ];
-
-    fn from_index(i: usize) -> Option<BuiltinProto> {
-        Self::ALL.get(i).map(|(f, _)| *f)
-    }
-}
+pub use perry_abi::BuiltinProto;
 
 /// `Pristine(family)`: neither `family`'s prototype nor `%Object.prototype%`
 /// has been modified: the shadow bit of this agent's intrinsic prototype.
@@ -194,7 +145,10 @@ pub(crate) unsafe fn seal_object_family(obj: *mut ObjectHeader, family: usize) {
     let _ = super::proto_validity::mark_object_as_prototype(obj as usize);
     // Marking may have moved nothing (startup runs with collection
     // suppressed by the caller) but it did ensure a meta record.
-    let meta = super::object_meta_ensure(obj);
+    let meta = super::object_meta_ensure(
+        crate::meta_obj_runtime_born!(obj),
+        super::MetaReason::BuiltinSeal,
+    );
     if meta.is_null() {
         return;
     }
@@ -271,7 +225,10 @@ pub(crate) unsafe fn name_runtime_prototype(
     serial: u64,
 ) -> Option<*mut super::ObjectMeta> {
     let _no_move = crate::gc::GcSuppressScope::new();
-    let meta = super::object_meta_ensure(proto);
+    let meta = super::object_meta_ensure(
+        crate::meta_obj_runtime_born!(proto),
+        super::MetaReason::RuntimePrototypeName,
+    );
     if meta.is_null() {
         return None;
     }
@@ -304,7 +261,7 @@ pub(crate) fn seal_realm(global: *mut ObjectHeader) {
                 continue;
             };
             match header.obj_type {
-                crate::gc::GC_TYPE_OBJECT => {
+                crate::gc_object_type_pat!() => {
                     trace_seal(family, (*(proto as *const ObjectHeader)).parent_class_id);
                     seal_object(proto as *mut ObjectHeader, family);
                     crate::agent_ptrs::publish_intrinsic_proto(
@@ -385,7 +342,8 @@ pub(crate) unsafe fn note_write(obj: *const ObjectHeader, site: &'static str) {
     if obj.is_null() {
         return;
     }
-    let meta = (*obj).meta;
+    // A1_UNPROVEN: record-first: caller intrinsic-proto membership (kind-A/B question for S0f).
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     if meta.is_null() {
         return;
     }
@@ -456,7 +414,8 @@ pub(crate) unsafe fn note_value_store(
     spill: bool,
     site: &'static str,
 ) {
-    let meta = (*obj).meta;
+    // A1_UNPROVEN: record-first: caller intrinsic-proto membership (kind-A/B question for S0f).
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     if meta.is_null() || (*meta).flags & super::OBJECT_META_FLAG_IS_PROTOTYPE == 0 {
         return;
     }
@@ -496,7 +455,7 @@ pub(crate) fn note_write_addr(addr: usize, site: &'static str) {
         return;
     };
     match header.obj_type {
-        crate::gc::GC_TYPE_OBJECT => unsafe { note_write(addr as *const ObjectHeader, site) },
+        crate::gc_object_type_pat!() => unsafe { note_write(addr as *const ObjectHeader, site) },
         crate::gc::GC_TYPE_ARRAY => note_array_prototype_write(addr, site),
         crate::gc::GC_TYPE_CLOSURE => unsafe {
             note_write(

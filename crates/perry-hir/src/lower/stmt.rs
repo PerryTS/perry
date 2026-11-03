@@ -1028,6 +1028,8 @@ fn lower_stmt_inner(
                                         value: Box::new(Expr::LocalGet(id)),
                                         receiver: Box::new(Expr::GlobalThisExpr),
                                         strict: false,
+                                        byte_offset: 0,
+                                        byte_end: 0,
                                     }));
                                 }
                             }
@@ -1268,18 +1270,21 @@ fn lower_stmt_inner(
         }
         ast::Stmt::While(while_stmt) => {
             let condition = lower_expr(ctx, &while_stmt.test)?;
+            // A loop owns its block's statement list exactly as in a function
+            // body (`lower_control_body_stmt`): a module-level loop lowers
+            // like the same loop anywhere else.
             let body = if matches!(*while_stmt.body, ast::Stmt::Block(_)) {
-                lower_body_stmt(ctx, &while_stmt.body)?
+                crate::lower_decl::lower_control_body_stmt(ctx, &while_stmt.body)?
             } else {
                 let mark = ctx.push_block_scope();
-                let stmts = lower_body_stmt(ctx, &while_stmt.body)?;
+                let stmts = crate::lower_decl::lower_control_body_stmt(ctx, &while_stmt.body)?;
                 ctx.pop_block_scope(mark);
                 stmts
             };
             module.init.push(Stmt::While { condition, body });
         }
         ast::Stmt::DoWhile(do_while_stmt) => {
-            let body = lower_body_stmt(ctx, &do_while_stmt.body)?;
+            let body = crate::lower_decl::lower_control_body_stmt(ctx, &do_while_stmt.body)?;
             let condition = lower_expr(ctx, &do_while_stmt.test)?;
             module.init.push(Stmt::DoWhile { body, condition });
         }
@@ -1323,10 +1328,16 @@ fn lower_stmt_inner(
             }
             let label_scope = ctx.iterator_loop_labels.len();
             crate::lower::record_iterator_loop_label(ctx, &labeled_stmt.body, &label);
-            let mut inner = lower_body_stmt(ctx, &labeled_stmt.body)?;
+            // The labelled loop lowers exactly as the same loop without the
+            // label would at module level (`lower_stmt`), then the label is
+            // put on it. Lowering it as a function-body statement instead gave
+            // a module-level loop a different HIR (body list, hoists) only
+            // because it carried a label.
+            let start = module.init.len();
+            let lowered = lower_stmt(ctx, module, &labeled_stmt.body);
             ctx.iterator_loop_labels.truncate(label_scope);
-            crate::lower::label_lowered_loop(&mut inner, label);
-            module.init.extend(inner);
+            lowered?;
+            crate::lower::label_lowered_loop(&mut module.init[start..], label);
         }
         ast::Stmt::Break(break_stmt) => {
             if let Some(ref label) = break_stmt.label {
@@ -1545,14 +1556,13 @@ fn lower_stmt_inner(
                 .as_ref()
                 .map(|e| lower_expr(ctx, e))
                 .transpose()?;
-            let body = lower_body_stmt(ctx, &for_stmt.body)?;
+            // Same body list and receiver hoist as a `for` in a function body.
+            let body = crate::lower_decl::lower_control_body_stmt(ctx, &for_stmt.body)?;
+            let lowered_for = crate::lower_decl::finish_for_with_property_array_hoist(
+                ctx, init, condition, update, body,
+            );
             ctx.pop_block_scope(for_scope_mark);
-            module.init.push(Stmt::For {
-                init,
-                condition,
-                update,
-                body,
-            });
+            module.init.extend(lowered_for);
         }
         ast::Stmt::Block(block) => {
             // Bare block: introduce a lexical scope so inner let/const shadow

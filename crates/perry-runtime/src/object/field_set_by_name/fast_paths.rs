@@ -93,7 +93,7 @@ unsafe fn existing_own_data_overwrite(
         | crate::gc::OBJ_FLAG_SEALED
         | crate::gc::OBJ_FLAG_NO_EXTEND
         | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
-    if obj_gc.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(obj_gc.obj_type)
         || obj_gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || obj_gc._reserved & BLOCKING_FLAGS != 0
         // #10287: an own descriptor is vetted per KEY. Overwriting a key the
@@ -188,9 +188,13 @@ unsafe fn existing_own_data_overwrite(
                 // plan was flushed — the same miss-path cost #8936 and #8950
                 // removed from their sides of the property paths.
                 own_idx = if shape.summary & crate::object::key_attrs::SUMMARY_PRIVATE == 0 {
-                    crate::object::keys_find_slot_by_key_ptr(keys, key_count as u32, key)
+                    crate::object::keys_find_slot_by_key_ptr(keys_view, key_count as u32, key)
                 } else {
-                    crate::object::keys_find_property_slot_by_key_ptr(keys, key_count as u32, key)
+                    crate::object::keys_find_property_slot_by_key_ptr(
+                        keys_view,
+                        key_count as u32,
+                        key,
+                    )
                 };
                 if let Some(i) = own_idx {
                     super::prop_plan::read_plan_record(
@@ -211,9 +215,9 @@ unsafe fn existing_own_data_overwrite(
             // The key list's own keying: content, most-derived declaration
             // first (#10595), exactly as the interned lookup resolves it.
             if shape.summary & crate::object::key_attrs::SUMMARY_PRIVATE == 0 {
-                crate::object::keys_find_slot_by_bytes(keys, key_count, bytes)
+                crate::object::keys_find_slot_by_bytes(keys_view, key_count, bytes)
             } else {
-                crate::object::keys_find_property_slot_by_bytes(keys, key_count, bytes)
+                crate::object::keys_find_property_slot_by_bytes(keys_view, key_count, bytes)
             }
         }
     };
@@ -495,7 +499,7 @@ pub(crate) fn try_readd_stable_tombstone(
     }
 
     let initial_gc = unsafe { crate::value::addr_class::try_read_gc_header(obj as usize)? };
-    if initial_gc.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(initial_gc.obj_type)
         || initial_gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || initial_gc._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES == 0
     {
@@ -517,7 +521,7 @@ pub(crate) fn try_readd_stable_tombstone(
         let eligible = obj_handle.with_mut_ptr(|obj: *mut ObjectHeader| {
             let gc = crate::value::addr_class::try_read_gc_header(obj as usize)?;
             Some(
-                gc.obj_type == crate::gc::GC_TYPE_OBJECT
+                crate::gc_type_is_object!(gc.obj_type)
                     && gc.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
                     && gc._reserved & BLOCKING_FLAGS == 0
                     && gc._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES != 0
@@ -554,7 +558,7 @@ pub(crate) fn try_readd_stable_tombstone(
             || keys_gc.gc_flags & (crate::gc::GC_FLAG_FORWARDED | crate::gc::GC_FLAG_SHAPE_SHARED)
                 != 0
             || crate::object::keys_find_property_slot_by_bytes(
-                keys,
+                shape.keys_view(),
                 shape.logical_key_count,
                 key_bytes,
             )
@@ -615,7 +619,7 @@ unsafe fn try_readd_stable_tombstone_sso_no_grow(
     // Stable-tombstone admission already excludes real class/prototype
     // receivers; only class-less and registered anonymous-shape ordinary
     // objects can carry the flag into this append lane.
-    if gc.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(gc.obj_type)
         || gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || gc._reserved & BLOCKING_FLAGS != 0
         || gc._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES == 0
@@ -652,8 +656,12 @@ unsafe fn try_readd_stable_tombstone_sso_no_grow(
     // All-holes is a constructive absence proof and is the steady state of a
     // one-live-key receiver immediately after delete.
     if shape.hole_count != shape.logical_key_count
-        && crate::object::keys_find_property_slot_by_bytes(keys, shape.logical_key_count, key_bytes)
-            .is_some()
+        && crate::object::keys_find_property_slot_by_bytes(
+            shape.keys_view(),
+            shape.logical_key_count,
+            key_bytes,
+        )
+        .is_some()
     {
         return None;
     }
@@ -792,7 +800,7 @@ fn object_set_field_by_name_transition_fast_impl_value<const CHAIN_PROVEN: bool>
             Some(h) => h as *const crate::gc::GcHeader,
             None => return None,
         };
-        if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT
+        if crate::gc_type_is_not_object!((*gc_header).obj_type)
             || (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return None;
@@ -826,10 +834,11 @@ fn object_set_field_by_name_transition_fast_impl_value<const CHAIN_PROVEN: bool>
         let object_kind = super::shapes::shape_object_kind_of_receiver(
             (super::shapes::object_shape_stamp(obj)).0,
         )?;
-        if !object_kind.is_ordinary_layout() || (*obj).class_id == NATIVE_MODULE_CLASS_ID {
+        // A native-module namespace is declined at the edge below
+        // (`runtime_receiver_declines_key_add`), before any write.
+        if !object_kind.is_ordinary_layout() {
             return None;
         }
-
         let key_gc =
             (key as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         if (*key_gc).obj_type != crate::gc::GC_TYPE_STRING {
@@ -917,6 +926,13 @@ fn object_set_field_by_name_transition_fast_impl_value<const CHAIN_PROVEN: bool>
         let prev_shape_id = super::shapes::object_shape_stamp(obj);
         let hit = transition_cache_lookup(prev_shape_id, interned_key)?;
         if hit.0.is_null() {
+            return None;
+        }
+        // #9019: an unseeded reserved-field receiver can share its keyless
+        // shape with an ordinary receiver of the same prototype, whose
+        // learned edge names a slot below its raw fields; a seeding funnel
+        // takes that add.
+        if crate::object::runtime_receiver_declines_key_add(obj) {
             return None;
         }
 

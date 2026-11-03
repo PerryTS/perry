@@ -23,6 +23,7 @@ mod flat_clone;
 mod forwarding;
 mod from_concat;
 mod generic;
+pub(crate) use generic::{al_get as arraylike_get, al_length as arraylike_length};
 mod generic_copy;
 pub use self::generic_copy::{js_arraylike_toReversed, js_arraylike_toSorted, js_arraylike_with};
 #[cfg(test)]
@@ -98,6 +99,8 @@ mod dynamic_numeric_key_tests;
 #[cfg(test)]
 mod forwarding_tests;
 #[cfg(test)]
+mod identity_growth_tests;
+#[cfg(test)]
 mod hole_tail_tests;
 #[cfg(test)]
 mod index_get_exit_tests;
@@ -105,6 +108,8 @@ mod index_get_exit_tests;
 mod numeric_write_value_tests;
 #[cfg(test)]
 mod push_pop_tests;
+#[cfg(test)]
+mod record_lazy_tests;
 #[cfg(test)]
 mod refresh_traversal_evidence_tests;
 #[cfg(test)]
@@ -130,7 +135,7 @@ pub(crate) use self::alloc::{
 pub use self::alloc::{
     js_array_alloc, js_array_alloc_literal, js_array_alloc_with_length,
     js_array_alloc_with_length_longlived, js_array_constructor_single, js_array_create,
-    js_array_from_arraylike_holey_value, js_array_from_f64,
+    js_array_from_arraylike_holey_value, js_array_from_f64, realm_array_alloc, realm_string_array,
 };
 pub(crate) use self::buffer_receiver::{
     buffer_receiver_dispatch, callback_arg, dispatch_result_as_array,
@@ -157,6 +162,9 @@ pub use self::flat_clone::{
     js_arraylike_flat, js_short_packed_spread_values,
 };
 pub(crate) use self::forwarding::clean_owned_arr_ptr;
+pub(crate) use self::forwarding::{
+    array_growth_epoch, array_identity_token, arrays_share_identity, is_array_value_bits,
+};
 pub use self::from_concat::{
     array_from_full, array_of_full, js_array_concat_variadic, js_array_from_mapped,
     js_array_from_value,
@@ -251,6 +259,8 @@ pub use self::iterator::{
     js_iterator_to_array,
 };
 pub use self::join::{js_array_join, js_array_join_value};
+/// The element kind a realm array birth declares.
+pub use perry_abi::realm_header::ArrayElements;
 
 pub use self::numeric_range::{
     js_array_fill_range_strided_tagged, js_array_numeric_range_add, js_array_numeric_range_add_len,
@@ -258,9 +268,11 @@ pub use self::numeric_range::{
 pub use self::prototype_addr::scan_prototype_addr_cache_roots_mut;
 pub(crate) use self::prototype_addr::{
     array_prototype_addr, array_prototype_addr_if_resolved, forget_object_prototype_intrinsic,
-    function_prototype_addr, map_prototype_addr, note_object_prototype_intrinsic,
+    function_prototype_addr, intrinsic_constructor_addr, intrinsic_prototype_addr,
+    note_object_prototype_intrinsic, note_realm_intrinsic,
     object_prototype_addr, object_prototype_addr_if_resolved, object_prototype_addr_matches,
     object_prototype_cell, prime_prototype_addr_cache, primitive_wrapper_prototype_addr,
+    RealmIntrinsics,
 };
 #[cfg(test)]
 pub(crate) use self::prototype_addr::{
@@ -271,6 +283,8 @@ pub(crate) use self::push_pop::throw_non_extensible_array_push;
 pub(crate) use self::sort::object_prototype_has_index_prop;
 pub(crate) use self::sort::object_prototype_index_get as sort_object_prototype_index_get;
 pub(crate) use self::sort::object_prototype_index_get_with_receiver as sort_object_prototype_index_get_with_receiver;
+#[cfg(test)]
+pub(crate) use self::subclass::js_packed_arraylike_index_get;
 pub use self::subclass::{
     array_subclass_dense_snapshot, array_subclass_has_iterator_override, is_array_subclass_instance,
 };

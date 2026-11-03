@@ -161,11 +161,15 @@ pub(crate) fn for_head_binding_stmts(
                     object,
                     property: prop.sym.to_string(),
                     value: Box::new(source),
+                    byte_offset: 0,
+                    byte_end: 0,
                 },
                 ast::MemberProp::Computed(c) => Expr::IndexSet {
                     object,
                     index: Box::new(lower_expr(ctx, &c.expr)?),
                     value: Box::new(source),
+                    byte_offset: 0,
+                    byte_end: 0,
                 },
                 ast::MemberProp::PrivateName(p) => {
                     // `for (o.#f of iter)` — assign each iteration value to the
@@ -185,6 +189,8 @@ pub(crate) fn for_head_binding_stmts(
                         object,
                         property,
                         value: Box::new(source),
+                        byte_offset: 0,
+                        byte_end: 0,
                     }
                 }
             };

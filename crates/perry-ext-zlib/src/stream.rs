@@ -881,7 +881,7 @@ unsafe fn create_stream(
     np::own(owner.get(), "bytesWritten", 0.0);
     let handle = roots.root_nanbox(f64::from_bits(
         JsValue::from_object_ptr(perry_ffi::runtime_layouts::alloc_runtime_record(
-            std::ptr::addr_of!(perry_ffi::runtime_layouts::RECORD_PCHECKED031),
+            perry_ffi::runtime_layouts::RECORD_PCHECKED031::desc(),
         ))
         .bits(),
     ));

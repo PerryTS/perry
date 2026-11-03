@@ -59,3 +59,11 @@ for comparison, with the integration source hashes recorded separately.
 
 The IOCP unit-test module is extracted to `backend/iocp/tests.rs` to meet
 Perry’s 2,000-line source cap; its module path and visibility are unchanged.
+
+Patched by Perry after the qualification above (HTTP/2): PUSH_PROMISE received and sent,
+role-aware ENABLE_PUSH validation (a client no longer sends ENABLE_PUSH = 0), a
+HEADER_TABLE_SIZE cap that follows the advertised value, GOAWAY(INTERNAL_ERROR) for a PING
+acknowledgement with no PING outstanding, and SETTINGS that carry only the options the host
+names. Touched: `turnloop-http/src/http2.rs`, `src/hpack.rs`, `tests/http2_settings.rs`,
+`tests/codecs.rs`; their hashes in `source-manifest.json` are the patched ones, and
+`cargo test -p turnloop-http` passes on this tree in a scratch workspace.

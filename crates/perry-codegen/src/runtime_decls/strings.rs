@@ -61,6 +61,17 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // second arg is the count. Returns a raw string handle.
     // (`crates/perry-runtime/src/string.rs::js_string_concat_chain`)
     module.declare_function("js_string_concat_chain", I64, &[I64, I32]);
+    // Literal operands as constant data (`string/concat_parts.rs`).
+    module.declare_function("js_string_concat_parts", I64, &[I64, I32]);
+    // The same operation for a part count the compiler knows (2..=5).
+    for n in 2..=5 {
+        module.declare_function(&format!("js_string_concat_parts_{n}"), I64, &[I64]);
+    }
+    module.declare_function(
+        "js_string_concat_lit_value_box",
+        DOUBLE,
+        &[I64, I64, DOUBLE],
+    );
     module.declare_function("js_to_primitive_default_for_add", DOUBLE, &[DOUBLE]);
     module.declare_function("js_add_throw_if_symbol", VOID, &[DOUBLE]);
     // Self-append variant of the N-way chain. The first part is the binding's
@@ -298,8 +309,6 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         I64,
         &[I32, DOUBLE, DOUBLE],
     );
-    // `new assert.AssertionError({...})` — Expr::NewDynamic special-case.
-    module.declare_function("js_assert_assertion_error_ctor", DOUBLE, &[DOUBLE]);
     // `new assert.Assert(options)` — Expr::NewDynamic special-case.
     module.declare_function("js_assert_assert_ctor", DOUBLE, &[DOUBLE]);
     // Issue #462: thrown by PropertyGet codegen on undefined/null receiver.
@@ -341,6 +350,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_map_set_string_string", I64, &[I64, I64, I64]);
     module.declare_function("js_map_set_number_key", I64, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_map_get", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function("js_map_get_entry", DOUBLE, &[I64, DOUBLE, PTR]);
+    module.declare_function("js_map_get_entry__Map", DOUBLE, &[I64, DOUBLE, PTR]);
     // Kind-typed twin (`perry-runtime` `entry_contracts`): a receiver the
     // compiler constructed as a Map.
     module.declare_function("js_map_get__Map", DOUBLE, &[I64, DOUBLE]);
@@ -738,11 +749,12 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function(
         "perry_wpfacts_check_field",
         I32,
-        &[DOUBLE, DOUBLE, I64, I64, I64, I32, I32, I32, I64],
+        &[DOUBLE, DOUBLE, I64, I64, I64, I32, I32, I32, I32, I64],
     );
     // FVA: the contract witness of an elided call (`lower_call/proven_call.rs`).
     module.declare_function("perry_wpfacts_check_call", PTR, &[DOUBLE, I64, I64]);
     module.declare_function("perry_wpfacts_check_call_miss", I32, &[PTR, I64]);
+    module.declare_function("perry_wpfacts_check_miss", I32, &[DOUBLE, I64]);
     // #8655: guarded packed-array / dense Array-subclass read before the
     // fully generic dynamic dispatcher. Used by unknown-receiver loop reads,
     // and (#T2) the single out-of-line exit of the emitted dynamic `obj[i]`
@@ -949,6 +961,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // `js_process_stdin/out/err`) are declared as DOUBLE.
     module.declare_function("js_process_cwd", I64, &[]);
     module.declare_function("js_process_argv", I64, &[]);
+    module.declare_function("js_process_argv_value", DOUBLE, &[]);
     module.declare_function("js_process_pid", DOUBLE, &[]);
     module.declare_function("js_process_ppid", DOUBLE, &[]);
     module.declare_function("js_process_uptime", DOUBLE, &[]);

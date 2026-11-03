@@ -151,6 +151,10 @@ pub(crate) fn is_native_dispatch_member(module: &str, class: &str, prop: &str) -
     }
 }
 
+pub(crate) fn is_worker_messaging_heap_object(module: &str, class: &str) -> bool {
+    module == "worker_threads" && matches!(class, "MessagePort" | "BroadcastChannel")
+}
+
 pub(crate) fn is_blob_getter_name(prop: &str) -> bool {
     matches!(prop, "size" | "type" | "name" | "lastModified")
 }
@@ -627,5 +631,55 @@ mod tests {
             "WebSocketServer",
             "readyState"
         ));
+    }
+}
+
+#[cfg(test)]
+mod messaging_property_tests {
+    #[test]
+    fn messaging_heap_objects_use_property_values_and_receiver_calls() {
+        for class in ["MessagePort", "BroadcastChannel"] {
+            assert!(super::is_worker_messaging_heap_object(
+                "worker_threads",
+                class
+            ));
+        }
+        assert!(!super::is_worker_messaging_heap_object(
+            "worker_threads",
+            "Worker"
+        ));
+        assert!(!super::is_worker_messaging_heap_object(
+            "other",
+            "BroadcastChannel"
+        ));
+        let source = r#"
+            import { BroadcastChannel } from 'node:worker_threads';
+            const channel = new BroadcastChannel('properties');
+            const name = channel.name;
+            const handler = channel.onmessage;
+            const missing = channel.unknown;
+            channel.postMessage('value');
+            channel.onmessage();
+            channel.custom();
+            channel.close();
+        "#;
+        let parsed = perry_parser::parse_typescript(source, "messaging-properties.ts").unwrap();
+        let hir = crate::lower_module(&parsed, "messaging-properties", "messaging-properties.ts")
+            .unwrap();
+        let dump = format!("{hir:#?}");
+        for property in [
+            "name",
+            "onmessage",
+            "unknown",
+            "postMessage",
+            "custom",
+            "close",
+        ] {
+            assert!(!dump.contains(&format!("method: \"{property}\"")), "{dump}");
+            assert!(
+                dump.contains(&format!("property: \"{property}\"")),
+                "{dump}"
+            );
+        }
     }
 }

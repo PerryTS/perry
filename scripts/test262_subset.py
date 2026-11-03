@@ -149,6 +149,20 @@ _HOST_DEP = re.compile(
 # `runtime-fail` (#5593).
 _AOT_DEFER = re.compile(r"cannot run in an ahead-of-time compiled binary")
 
+# --full-corpus judges Perry alone, so it runs what a one-realm, one-thread host
+# can provide: `module` cases compile as ES modules, and a minimal `$262` shim
+# (`global`, `gc`, `detachArrayBuffer` via `ArrayBuffer.prototype.transfer`)
+# covers the host hooks below. Multi-agent, realm and script-eval hooks stay
+# out of reach.
+_HOST_UNSUPPORTED = re.compile(r"createRealm|evalScript|IsHTMLDDA|\bagent\.")
+_FULL_CORPUS_SKIP_FLAGS = {"CanBlockIsFalse", "CanBlockIsTrue"}
+_HARNESS_BINDING = re.compile(r"^(?:function\*?|var|let|const|class)\s+([A-Za-z_$][\w$]*)", re.M)
+_HOST_SHIM = """var $262 = {
+  global: globalThis,
+  gc: function () {},
+  detachArrayBuffer: function (buffer) { buffer.transfer(); return null; },
+};"""
+
 # Frontmatter flags that make a case un-runnable as a plain script under this
 # differential. `module` needs ESM loader semantics; the agent/Can-block flags
 # need a multi-realm host.
@@ -196,6 +210,7 @@ class Meta:
     negative: bool = False
     self_validate: bool = False  # judge Perry-only (oracle lacks the feature)
     excluded: str = ""  # --full-corpus: why the case cannot run as a plain script
+    host_shim: bool = False  # --full-corpus: prepend the minimal `$262` shim
 
 
 def parse_frontmatter(src: str) -> Meta | None:
@@ -265,10 +280,18 @@ def assemble(src: str, meta: Meta, harness: Path, preamble_text: str) -> str:
     parts.append((harness / "sta.js").read_text())
     parts.append((harness / "assert.js").read_text())
     parts.append(preamble_text)
+    if meta.host_shim:
+        parts.append(_HOST_SHIM)
     if "async" in meta.flags:
         parts.append((harness / "doneprintHandle.js").read_text())
     for inc in meta.includes:
         parts.append((harness / inc).read_text())
+    if "module" in meta.flags:
+        # A host evaluates the harness as a global script before the module;
+        # concatenated here it would be module-scoped, so publish its
+        # top-level bindings (`asyncTest` checks `globalThis.$DONE`).
+        names = sorted(set(_HARNESS_BINDING.findall("\n".join(parts))))
+        parts.append("".join(f"globalThis.{n} = {n};" for n in names))
     parts.append(src)
     return "\n".join(parts)
 
@@ -311,10 +334,13 @@ def discover(root: Path, dirs: list[str], applicable: set[str],
             if full_corpus:
                 # Every case counts; one that cannot run here counts as failed.
                 meta.self_validate = True
-                if meta.flags & _SKIP_FLAGS:
-                    meta.excluded = "flag: " + ",".join(sorted(meta.flags & _SKIP_FLAGS))
-                elif _HOST_DEP.search(src):
+                if meta.flags & _FULL_CORPUS_SKIP_FLAGS:
+                    blocking = meta.flags & _FULL_CORPUS_SKIP_FLAGS
+                    meta.excluded = "flag: " + ",".join(sorted(blocking))
+                elif _HOST_UNSUPPORTED.search(src):
                     meta.excluded = "needs a $262 host API"
+                elif _HOST_DEP.search(src):
+                    meta.host_shim = True
                 yield rel, src, meta
                 continue
             if meta.flags & _SKIP_FLAGS:
@@ -486,7 +512,8 @@ def main() -> int:
         except OSError as e:
             return (rel, cat, "skip", f"assemble: {e}", False, meta.self_validate)
         workdir = Path(tempfile.mkdtemp(dir=stage))
-        staged = workdir / "case.js"
+        is_module = "module" in meta.flags
+        staged = workdir / ("case.mjs" if is_module else "case.js")
         try:
             staged.write_text(program)
             # `import('./x_FIXTURE.js')` resolves next to the case.
@@ -497,8 +524,9 @@ def main() -> int:
                 # the case's own `assert.*` self-checks (#4792).
                 out_bin = workdir / "case.out"
                 c_env = dict(base_env, PERRY_ALLOW_UNIMPLEMENTED="1",
-                             PERRY_NO_AUTO_OPTIMIZE="1", PERRY_ALLOW_EVAL="1",
-                             PERRY_GLOBAL_SCRIPT_THIS="1")
+                             PERRY_NO_AUTO_OPTIMIZE="1", PERRY_ALLOW_EVAL="1")
+                if not is_module:  # a module's top-level `this` is undefined
+                    c_env["PERRY_GLOBAL_SCRIPT_THIS"] = "1"
                 c_exit, c_out = run(
                     [str(args.perry_bin), "compile", str(staged), "-o",
                      str(out_bin)], c_env, args.timeout, cwd=str(workdir))

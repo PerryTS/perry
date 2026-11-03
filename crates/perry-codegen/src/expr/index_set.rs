@@ -526,11 +526,13 @@ pub(crate) fn lower(
     assignment_strict: bool,
 ) -> Result<String> {
     let _fallback = crate::fallback_diag::enter_expr(ctx, expr);
+    let _consumed = crate::facts_consumed::enter(expr);
     match expr {
         Expr::IndexSet {
             object,
             index,
             value,
+            ..
         } => {
             if let Some(result) = crate::layout_desc::function_families::lower_symbol_store(
                 ctx,
@@ -1875,7 +1877,7 @@ pub(crate) fn lower(
                     // receiver had an ArrayHeader (8-byte header) layout. That's
                     // a load-bearing assumption for `arr[i] = v` against an
                     // unknown-typed receiver where `is_array_expr` couldn't
-                    // narrow it statically — but the header spans object_header_size_bytes(...) bytes, then inline slots, plus
+                    // narrow it statically — but the header spans object_slot_base_bytes(.., form) bytes, then inline slots, plus
                     // `max(field_count, 8)` inline slots, so writing at offset
                     // `8 + idx*8` for any `idx ≥ 7` overflows the object's
                     // allocation and corrupts the adjacent heap object. The

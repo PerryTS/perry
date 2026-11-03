@@ -119,6 +119,17 @@ pub struct ObjectHeader {
     pub meta: *mut core::ffi::c_void,
 }
 
+impl ObjectHeader {
+    /// Whether the object carries no metadata record.
+    ///
+    /// # Safety
+    /// `this` points at a live object header.
+    #[inline(always)]
+    pub unsafe fn meta_is_null(this: *const ObjectHeader) -> bool {
+        (*this).meta.is_null()
+    }
+}
+
 /// Opaque runtime byte value. Resolve bytes through `bytes`, never pointer arithmetic.
 #[repr(C)]
 pub struct BufferHeader {

@@ -227,13 +227,21 @@ pub(crate) fn dense_spread_copy(value: f64) -> *mut ArrayHeader {
             // GC_STORE_AUDIT(BARRIERED): bulk copy into an unpublished array,
             // followed by the exact layout/barrier rebuild below.
             ptr::copy_nonoverlapping(src_elements, dst_elements, len as usize);
-            for i in 0..len as usize {
+            // The source's dense prefix (`ek_prefix`, element_kind.rs) proves
+            // `[0, P)` holds no hole, so only `[P, len)` can need the
+            // conversion: a hole-free array copies exactly like
+            // `js_array_clone`, a holey one still reads `undefined` per hole.
+            let prefix = (*src).ek_prefix.min(len) as usize;
+            for i in prefix..len as usize {
                 if ptr::read(dst_elements.add(i)) == crate::value::TAG_HOLE {
+                    // GC_STORE_AUDIT(POINTER_FREE): replaces a hole word with the immediate undefined tag in the fresh clone; no heap edge is stored or overwritten.
                     ptr::write(dst_elements.add(i), crate::value::TAG_UNDEFINED);
                 }
             }
             (*array).length = len;
             rebuild_array_layout_exact(array);
+            // After the conversion no slot is a hole: the copy is dense.
+            crate::array::ek_birth_prefix(array, len);
         }
         array
     }
@@ -586,7 +594,7 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
                 as *const crate::gc::GcHeader;
             (*hdr).obj_type
         };
-        if obj_type == crate::gc::GC_TYPE_OBJECT {
+        if crate::gc_type_is_object!(obj_type) {
             let obj = raw_addr as *mut crate::ObjectHeader;
             // #1668: `[...searchParams]` / `Array.from(searchParams)` yield the
             // `[key, value]` entry pairs. Detect a URLSearchParams by its shape

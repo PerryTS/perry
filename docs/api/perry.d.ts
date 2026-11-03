@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2024 entries across 111 modules
+// Coverage: 2030 entries across 112 modules
 
 type PerryI8 = number & { readonly __perryI8?: never };
 type PerryI16 = number & { readonly __perryI16?: never };
@@ -3566,19 +3566,25 @@ declare module "sharp" {
 
 declare module "sqlite" {
   /** stdlib */
+  export class Database { [key: string]: any; }
+  /** stdlib */
   export class DatabaseSync { [key: string]: any; }
   /** stdlib */
-  export class SQLTagStore { [key: string]: any; }
-  /** stdlib */
   export class Session { [key: string]: any; }
+  /** stdlib */
+  export class Statement { [key: string]: any; }
   /** stdlib */
   export class StatementSync { [key: string]: any; }
   /** stdlib */
   export const constants: any;
   /** stdlib */
+  export function Database(...args: any[]): any;
+  /** stdlib */
   export function DatabaseSync(...args: any[]): any;
   /** stdlib */
   export function Session(...args: any[]): any;
+  /** stdlib */
+  export function Statement(...args: any[]): any;
   /** stdlib */
   export function StatementSync(...args: any[]): any;
   /** stdlib */
@@ -3925,6 +3931,16 @@ declare module "tls" {
   export function getCiphers(...args: any[]): any;
   /** stdlib */
   export function setDefaultCACertificates(certs: any): any;
+}
+
+declare module "trace_events" {
+  /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
+  export function createTracing(...args: any[]): any;
+  /** stdlib */
+  export function getEnabledCategories(...args: any[]): any;
 }
 
 declare module "tty" {
@@ -4381,7 +4397,7 @@ declare module "zlib" {
   /** stdlib */
   export function brotliCompress(buffer: any, options?: any, callback?: any): void;
   /** stdlib */
-  export function brotliCompressSync(p0: string): Buffer;
+  export function brotliCompressSync(buffer: any, options?: any): Buffer;
   /** stdlib */
   export function brotliDecompress(buffer: any, options?: any, callback?: any): void;
   /** stdlib */

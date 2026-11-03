@@ -20,13 +20,17 @@ fn object_header_word() -> String {
     const GC_FLAG_ARENA: u64 = 0x02;
     let slots = std::cmp::max(2, crate::target_layout::INLINE_SLOT_FLOOR);
     let size =
-        8 + crate::target_layout::object_header_size_bytes("aarch64-apple-darwin") + 8 * slots;
+        8 + crate::target_layout::object_slot_base_bytes(
+            "aarch64-apple-darwin",
+            crate::target_layout::HeaderForm::Meta,
+        ) + 8 * slots;
     let word = (size << 32) | (GC_FLAG_ARENA << 8) | GC_TYPE_OBJECT;
     format!("constant <2 x i64> <i64 {word}, i64 ")
 }
 
 fn ir_opts() -> CompileOptions {
     CompileOptions {
+        namespace_self_import: false,
         static_shape_ids: Vec::new(),
         program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),
@@ -58,7 +62,6 @@ fn ir_opts() -> CompileOptions {
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
         short_spread_method_candidates: std::sync::Arc::default(),
-        program_class_accessor_names: Default::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -149,11 +152,15 @@ fn two_field_ctor(f0: &str, f1: &str, f1_ty: Type) -> Function {
                 object: Box::new(Expr::This),
                 property: f0.to_string(),
                 value: Box::new(Expr::LocalGet(A_ID)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Expr(Expr::PropertySet {
                 object: Box::new(Expr::This),
                 property: f1.to_string(),
                 value: Box::new(Expr::LocalGet(B_ID)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
         ],
         is_async: false,

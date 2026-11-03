@@ -102,7 +102,7 @@ pub fn scan_cjs_main_module_root_mut(visitor: &mut crate::gc::RuntimeRootVisitor
             // cache followed it" -- the load-bearing question for this
             // holder's identity guarantee, not visible from the generic
             // per-cycle counters.
-            if rewritten && crate::gc::gc_diag_enabled() {
+            if rewritten && crate::gc::diagnostic_hooks::enabled() {
                 CJS_MAIN_MODULE_REWRITES.with(|c| c.set(c.get() + 1));
                 eprintln!(
                     "[cjs-main-module] rewritten: new_bits={:#018x} total_rewrites={}",
@@ -457,27 +457,6 @@ fn package_parts(specifier: &str) -> (&str, Option<&str>) {
     }
 }
 
-fn resolve_exports(value: &serde_json::Value, key: &str) -> Option<String> {
-    match value {
-        serde_json::Value::String(target) => Some(target.clone()),
-        serde_json::Value::Array(items) => items.iter().find_map(|v| resolve_exports(v, key)),
-        serde_json::Value::Object(map) => {
-            if let Some(target) = map.get(key) {
-                return resolve_exports(target, key);
-            }
-            for (condition, target) in map {
-                if matches!(condition.as_str(), "node" | "require" | "default") {
-                    if let Some(found) = resolve_exports(target, key) {
-                        return Some(found);
-                    }
-                }
-            }
-            None
-        }
-        _ => None,
-    }
-}
-
 fn resolve_request(
     base: &std::path::Path,
     specifier: &str,
@@ -502,11 +481,12 @@ fn resolve_request(
         }
         if let Ok(text) = std::fs::read_to_string(package_dir.join("package.json")) {
             if let Ok(manifest) = serde_json::from_str::<serde_json::Value>(&text) {
-                if let Some(exports) = manifest.get("exports") {
+                if let Some(exports) = package_exports::manifest_exports(&text) {
                     let key = subpath
                         .map(|s| format!("./{s}"))
                         .unwrap_or_else(|| ".".into());
-                    let target = resolve_exports(exports, &key).ok_or(ResolveError::NotExported)?;
+                    let target = package_exports::resolve_require(&exports, &key)
+                        .ok_or(ResolveError::NotExported)?;
                     return resolve_file(&package_dir.join(target)).ok_or(ResolveError::NotFound);
                 }
                 if let Some(subpath) = subpath {
@@ -1054,6 +1034,7 @@ pub extern "C" fn js_module_create_require_devirt(filename_or_url: f64) -> f64 {
     js_module_create_require(filename_or_url)
 }
 
+mod package_exports;
 mod path_registry;
 pub(crate) use path_registry::path_registry_census;
 pub use path_registry::{adopt_path_init_image, current_path_init_image, PathInitImage};

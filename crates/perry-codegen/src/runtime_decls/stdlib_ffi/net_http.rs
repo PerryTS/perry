@@ -19,6 +19,11 @@ pub(crate) fn declare_net_http(module: &mut LlModule) {
     // ========== worker_threads ==========
     module.declare_function("js_worker_threads_worker_new", DOUBLE, &[I64, DOUBLE]);
     module.declare_function(
+        "js_worker_threads_worker_new_with_source",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, I64],
+    );
+    module.declare_function(
         "js_worker_threads_worker_new_by_spec",
         DOUBLE,
         &[DOUBLE, DOUBLE],

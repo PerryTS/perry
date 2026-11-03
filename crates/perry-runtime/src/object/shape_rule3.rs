@@ -253,6 +253,12 @@ pub(crate) const RULE3_KINDS: &[(u8, &str, &str, Rule3Word)] = &[
         "high half of word_count (< 2^30)",
         Rule3Word::NotPointerTagged,
     ),
+    (
+        gc::GC_TYPE_REGEX_CACHE,
+        "RegexCache",
+        "perex::dfa header word 1: zero before the first build, then the layout number (2)",
+        Rule3Word::NotPointerTagged,
+    ),
     // Cells are compiler-private raw addresses, never JavaScript receivers.
     (
         gc::GC_TYPE_BOX,
@@ -346,7 +352,7 @@ pub(crate) const RULE3_KINDS: &[(u8, &str, &str, Rule3Word)] = &[
     (
         gc::GC_TYPE_WEAK_STORAGE,
         "WeakStorage",
-        "len: u32 <= capacity; storage::grow bounds capacity by the u32 allocation size / 28",
+        "len: u32 <= capacity; storage::grow bounds capacity by the u32 allocation size / 32",
         Rule3Word::BoundedBelowRange,
     ),
     (
@@ -424,6 +430,7 @@ pub(crate) fn clamp_plus_four_word(kind: &'static str, word: u32) -> u32 {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn throw_plus_four_range_error(message: &'static [u8]) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);

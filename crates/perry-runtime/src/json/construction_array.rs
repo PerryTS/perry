@@ -259,12 +259,14 @@ mod tests {
             }
             assert_eq!(young.ptr, before, "a presized record array must not regrow");
 
-            // records_*_20m shape: past the ceiling the single allocation is old.
+            // records_*_20m shape: past the ceiling the single allocation is
+            // young large storage: non-moving, but still young.
             let mut batch = None;
-            let old = ConstructionArray::presized_records(&mut batch, young_slots + 1_000);
+            let large = ConstructionArray::presized_records(&mut batch, young_slots + 1_000);
             assert!(
-                crate::arena::pointer_in_old_gen(old.ptr as usize),
-                "an estimate past the ceiling keeps the old-gen birth"
+                crate::arena::pointer_in_nursery(large.ptr as usize)
+                    && crate::arena::is_large_storage(large.ptr as usize),
+                "an estimate past the ceiling takes young large storage"
             );
         }
     }

@@ -101,7 +101,7 @@ fn decode_buffer_set_source(value: f64) -> BufferSetSource {
 
     match gc_type_at(addr) {
         Some(crate::gc::GC_TYPE_ARRAY) => BufferSetSource::Array(addr as *const ArrayHeader),
-        Some(crate::gc::GC_TYPE_OBJECT) => {
+        Some(crate::gc_object_type_pat!()) => {
             BufferSetSource::Object(addr as *const crate::object::ObjectHeader)
         }
         _ => BufferSetSource::Empty,

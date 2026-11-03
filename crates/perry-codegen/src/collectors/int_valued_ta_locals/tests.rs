@@ -120,6 +120,8 @@ fn bcrypt_feistel_accumulator_is_eligible() {
             value: Box::new(Expr::LocalGet(9)),
             receiver: Box::new(Expr::LocalGet(0)),
             strict: false,
+            byte_offset: 0,
+            byte_end: 0,
         }),
     ];
     let got = run(&stmts, &params);
@@ -297,6 +299,8 @@ fn guarded_number_array_seed_is_native_after_bitwise_normalization() {
             object: Box::new(Expr::LocalGet(0)),
             index: Box::new(Expr::Integer(0)),
             value: Box::new(Expr::LocalGet(5)),
+            byte_offset: 0,
+            byte_end: 0,
         }),
     ];
     let guarded = HashSet::from([0]);
@@ -385,6 +389,8 @@ fn plain_array_store_value_excludes_local() {
             object: Box::new(Expr::LocalGet(7)),
             index: Box::new(Expr::LocalGet(1)),
             value: Box::new(Expr::LocalGet(5)),
+            byte_offset: 0,
+            byte_end: 0,
         }),
     ];
     let got = run(&stmts, &params);
@@ -646,6 +652,8 @@ fn bigint_capable_bitwise_write_is_not_an_i32_write() {
             object: Box::new(Expr::LocalGet(0)),
             index: Box::new(Expr::Integer(1)),
             value: Box::new(Expr::LocalGet(id)),
+            byte_offset: 0,
+            byte_end: 0,
         })
     };
     let bigint_capable = vec![

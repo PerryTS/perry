@@ -5,7 +5,7 @@
 //! header constants and their anti-drift tests stay there.
 
 use super::method_override::{
-    GC_OBJECT_METHOD_GUARD_MASK_I32, GC_TYPE_OBJECT, LAYOUT_TAG_NEG_I32, ORDINARY_LAYOUT_RANGE_LEN,
+    GC_OBJECT_METHOD_GUARD_MASK_I32, LAYOUT_TAG_NEG_I32, ORDINARY_LAYOUT_RANGE_LEN,
     POINTER_TAG_HI16,
 };
 use crate::expr::FnCtx;
@@ -79,7 +79,7 @@ pub(crate) fn emit_inline_direct_method_shape_guard(
         let gc_header_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-8")]);
         let gc_header = blk.load(I32, &gc_header_ptr);
         let guarded_gc_bits = blk.and(I32, &gc_header, GC_OBJECT_METHOD_GUARD_MASK_I32);
-        let gc_header_ok = blk.icmp_eq(I32, &guarded_gc_bits, GC_TYPE_OBJECT);
+        let gc_header_ok = crate::target_layout::emit_gc_type_is_object(blk, I32, &guarded_gc_bits);
 
         // ObjectHeader begins with adjacent `class_id: u32` and
         // `shape_id: u32`. Compare them as one packed word. The expected
@@ -154,11 +154,32 @@ pub(crate) fn family_method_word(
     if fam.keys.iter().any(|(k, _)| k == property) {
         return None;
     }
+    family_layout_id(ctx, class_id)
+}
+
+/// The i32 layout id of class `class_id`'s family descriptor, loaded from the
+/// descriptor's `layout_id` word (written once at startup, before user code);
+/// `None` without layouts or a family. 0 when the runtime could not register
+/// the layout (then no birth uses it): compare it against 0 before use.
+pub(crate) fn family_layout_id(ctx: &mut FnCtx<'_>, class_id: u32) -> Option<String> {
+    if !crate::layout_desc::layouts_enabled("executable", ctx.target_triple) {
+        return None;
+    }
+    ctx.program_layouts.families.get(&class_id)?;
     let desc = crate::layout_desc::note_family_desc_use(class_id);
     let offset = crate::layout_desc::DESC_LAYOUT_ID_OFFSET.to_string();
     let blk = ctx.block();
     let id_ptr = blk.gep(I8, &desc, &[(I64, &offset)]);
     Some(blk.load(I32, &id_ptr))
+}
+
+/// Is every instance of class `class_id` at the layout its birth pair
+/// describes once it can be observed? A class with no family is born on the
+/// pair itself; one with a family is born on the family layout, which then
+/// has to hold the pair's instance ([`family_holds_birth_layout`]).
+pub(crate) fn births_match_clone_layout(ctx: &FnCtx<'_>, class_name: &str, class_id: u32) -> bool {
+    !ctx.program_layouts.families.contains_key(&class_id)
+        || family_holds_birth_layout(ctx, class_name, class_id)
 }
 
 /// Does class `class_name`'s family layout hold exactly the instance its

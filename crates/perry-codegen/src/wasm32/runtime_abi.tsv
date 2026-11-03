@@ -392,6 +392,7 @@ js_async_resource_subclass_init	f64	f64,f64,f64
 js_async_resource_trigger_async_id	f64	i64
 js_async_step_chain	ptr	f64,ptr
 js_async_step_done	ptr	f64,ptr
+js_async_step_resume_now	f64	f64,ptr
 js_atob	ptr	f64
 js_atomics_add	f64	ptr,i64,f64,f64,f64
 js_atomics_and	f64	ptr,i64,f64,f64,f64
@@ -1912,7 +1913,6 @@ js_i32_box_get	i32s	ptr
 js_i32_box_release	void	ptr
 js_i32_box_scope_release	void	ptr
 js_i32_box_set	void	ptr,i32s
-js_ic_diag_note_hit	void	i64,i32s
 js_immediate_has_pending	i32s	
 js_import_meta_resolve	f64	f64,f64,f64
 js_import_meta_resolve_value	f64	f64
@@ -2076,6 +2076,8 @@ js_map_from_array	ptr	ptr
 js_map_from_iterable	ptr	f64
 js_map_get	f64	ptr,f64
 js_map_get__Map	f64	ptr,f64
+js_map_get_entry	f64	ptr,f64,ptr
+js_map_get_entry__Map	f64	ptr,f64,ptr
 js_map_get_number_key	f64	ptr,f64
 js_map_get_string_key	f64	ptr,ptr
 js_map_group_by	f64	f64,f64
@@ -2528,6 +2530,7 @@ js_node_http_res_write_head	i64	i64,f64,i64,i64
 js_node_http_res_write_processing	void	i64
 js_node_http_res_write_with_cb	i32s	i64,f64,i64
 js_node_http_response_layout_receiver	i32s	f64
+js_node_http_response_prototype_method	f64	i32s,ptr,usize
 js_node_http_response_state_get	f64	f64
 js_node_http_response_state_set	void	f64,f64
 js_node_http_server_address_json	ptr	i64
@@ -3142,6 +3145,7 @@ js_perry_payload_prototype	f64	ptr,ptr,usize
 js_perry_payload_receiver_link	usize	f64,ptr,ptr
 js_perry_payload_reopen	i32s	f64,ptr,ptr,usize
 js_perry_read_embedded	ptr	f64
+js_perry_schedule_native_timeout	i64	i64,f64
 js_perry_smtp_add_recipient	void	i64,ptr,usize
 js_perry_smtp_available	i32s	
 js_perry_smtp_begin	i64	
@@ -3242,6 +3246,7 @@ js_process_active_resources_info	f64
 js_process_add_listener	f64	i64,i64
 js_process_add_uncaught_exception_capture_callback	f64	f64
 js_process_argv	ptr	
+js_process_argv_value	f64	
 js_process_available_memory	f64	
 js_process_binding	f64	f64
 js_process_chdir	void	ptr
@@ -3564,13 +3569,8 @@ js_register_ffi_handle_exists_probe	void	ptr
 js_register_filehandle_readable_web_stream_factory	void	ptr
 js_register_foreach_render_handler	void	ptr
 js_register_foreign_promise_adapter	void	ptr
-js_register_function_name	void	ptr,ptr,i32u
-js_register_function_name_static	void	ptr,ptr,i32u
-js_register_function_names_static	void	ptr,i32u
+js_register_function_metadata	void	ptr,i32s
 js_register_function_prototype_method	i32u	f64,ptr,usize,f64
-js_register_function_source	void	ptr,ptr,i32u,i32s
-js_register_function_source_static	void	ptr,ptr,i32u,i32s
-js_register_function_sources_static	void	ptr,i32u
 js_register_global_fetch_body_init_ptr	void	ptr
 js_register_global_fetch_constructors	void	ptr,ptr,ptr,ptr,ptr,ptr,ptr,ptr,ptr
 js_register_global_fetch_notify_abort	void	ptr
@@ -3612,6 +3612,8 @@ js_register_stream_handle_probe	void	ptr
 js_register_text_id_handler	void	ptr
 js_register_tls_handle_kind_probe	void	ptr
 js_register_widget_hidden_handler	void	ptr
+js_register_worker_threads_environment_data	void	ptr,ptr
+js_register_worker_threads_message_port_dispatch	void	ptr
 js_register_worker_threads_messaging_constructors	void	ptr,ptr
 js_register_worker_threads_namespace_getters	void	ptr,ptr,ptr,ptr,ptr,ptr
 js_register_worker_threads_worker_constructor	void	ptr
@@ -3883,6 +3885,7 @@ js_sqlite_stmt_columns	ptr	i64
 js_sqlite_stmt_get	f64	i64,ptr
 js_sqlite_stmt_raw	i64	i64
 js_sqlite_stmt_run	ptr	i64,ptr
+js_sqlite_stmt_safe_integers	i64	i64,f64
 js_sqlite_transaction	ptr	i64,i64
 js_stack_overflow	void	
 js_state_get	f64	f64
@@ -4012,6 +4015,12 @@ js_string_compare_value	i32s	f64,f64
 js_string_concat	ptr	ptr,ptr
 js_string_concat_box	f64	f64,f64
 js_string_concat_chain	ptr	ptr,i32s
+js_string_concat_lit_value_box	f64	ptr,i64,f64
+js_string_concat_parts	ptr	ptr,i32s
+js_string_concat_parts_2	ptr	ptr
+js_string_concat_parts_3	ptr	ptr
+js_string_concat_parts_4	ptr	ptr
+js_string_concat_parts_5	ptr	ptr
 js_string_concat_site_value	f64	ptr,ptr,f64
 js_string_concat_value	ptr	ptr,f64
 js_string_concat_value_box	f64	ptr,f64
@@ -4787,6 +4796,7 @@ js_worker_threads_worker_get_heap_snapshot	f64	i64,f64
 js_worker_threads_worker_get_heap_statistics	f64	i64
 js_worker_threads_worker_new	f64	i64,f64
 js_worker_threads_worker_new_by_spec	f64	f64,f64
+js_worker_threads_worker_new_with_source	f64	f64,f64,i64
 js_worker_threads_worker_off	f64	i64,f64,i64
 js_worker_threads_worker_on	f64	i64,f64,i64
 js_worker_threads_worker_once	f64	i64,f64,i64
@@ -4798,6 +4808,7 @@ js_worker_threads_worker_start_cpu_profile	f64	i64
 js_worker_threads_worker_start_heap_profile	f64	i64
 js_worker_threads_worker_terminate	f64	i64
 js_worker_threads_worker_unref	f64	i64
+js_worker_transfer_sequence	f64	f64
 js_workload_api_inspectGraph	ptr	f64
 js_workload_graph	ptr	ptr,ptr
 js_workload_handle_down	ptr	i64,i32s
@@ -4885,7 +4896,7 @@ js_zlib_brotli_decompress_init	f64	f64,f64
 js_zlib_brotli_decompress_sync	f64	i64,f64
 js_zlib_brotli_dictionary	f64	f64
 js_zlib_brotli_max_output_length	usize	f64
-js_zlib_brotli_quality	i32	f64
+js_zlib_brotli_quality	i32s	f64
 js_zlib_crc32	f64	f64,f64
 js_zlib_create_brotli_compress	f64	f64
 js_zlib_create_brotli_decompress	f64	f64
@@ -5334,5 +5345,6 @@ perry_updater_refresh_due	i64
 perry_watchos_classes_registered	void	
 perry_wpfacts_check_call	ptr	f64,i64,i64
 perry_wpfacts_check_call_miss	i32s	ptr,i64
-perry_wpfacts_check_field	i32s	f64,f64,i64,i64,i64,i32s,i32s,i32s,i64
+perry_wpfacts_check_field	i32s	f64,f64,i64,i64,i64,i32s,i32s,i32s,i32s,i64
+perry_wpfacts_check_miss	i32s	f64,i64
 setInterval	i64	i64,f64

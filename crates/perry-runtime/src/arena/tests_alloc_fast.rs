@@ -92,6 +92,7 @@ fn thread_exit_finalizes_owned_payloads_in_the_pending_runtime_burst() {
                     space: HeapSpace::NurseryEden,
                     allocated_bytes: 0,
                     large_allocated_bytes: 0,
+                    young_large_bytes: 0,
                 },
             )
         });
@@ -113,6 +114,7 @@ fn thread_exit_finalizes_owned_payloads_in_the_pending_runtime_burst() {
                 space: HeapSpace::Old,
                 allocated_bytes: 0,
                 large_allocated_bytes: 0,
+                young_large_bytes: 0,
             };
             std::mem::replace(arena, empty)
         });
@@ -145,7 +147,10 @@ fn zero_bound_birth_keeps_hidden_floor_slots_out_of_initialization() {
         let state = js_inline_arena_state();
         sync_inline_arena_state();
         let expected = (*state).data.add((*state).offset + GC_HEADER_SIZE);
-        let floor = expected.add(std::mem::size_of::<crate::object::ObjectHeader>()) as *mut u64;
+        let floor = crate::object::header::object_slot_at(
+            expected as *mut crate::object::ObjectHeader,
+            crate::object::header::meta_form_alloc_bytes(0) as u32,
+        );
         let poison = 0x0123_4567_89ab_cdef;
         for i in 0..crate::object::INLINE_SLOT_FLOOR {
             // GC_STORE_AUDIT(POINTER_FREE): Fixture writes finite numeric poison0x0123456789abcdef into allocation slack before object birth; no JS pointer tag and later asserts slack never becomes a live slot.

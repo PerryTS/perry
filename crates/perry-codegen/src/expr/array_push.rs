@@ -204,14 +204,72 @@ fn emit_dynamic_pointer_push_store(
     let done_idx = ctx.new_block("apush.pointer_layout.done");
     let bookkeeping_label = ctx.block_label(bookkeeping_idx);
     let done_label = ctx.block_label(done_idx);
-    {
+    // A heap string is pointer-bearing exactly like an object pointer, so it
+    // is admitted by the same header proof; what it still owes is the shared-
+    // string demote, and only when the string is not already shared.
+    // `layout_pointer_bearing_bits` accepts a `STRING_TAG` payload iff it is
+    // non-zero; the `>= 0x1000` floor is what makes the refcount read below
+    // safe, and a string that fails it takes the full sequence.
+    let admit_strings = string_addref_needed;
+    // Created only for the string arm: an unterminated block is invalid IR.
+    let (fast_idx, string_addref_idx, string_demote_idx) = if admit_strings {
+        (
+            ctx.new_block("apush.pointer_layout.fast"),
+            ctx.new_block("apush.pointer_layout.str_addref"),
+            ctx.new_block("apush.pointer_layout.str_demote"),
+        )
+    } else {
+        (done_idx, done_idx, done_idx)
+    };
+    let fast_label = ctx.block_label(fast_idx);
+    let string_addref_label = ctx.block_label(string_addref_idx);
+    let string_demote_label = ctx.block_label(string_demote_idx);
+    let (is_heap_string, payload) = {
         let blk = ctx.block();
         let top16 = blk.lshr(I64, &value_bits, "48");
         let is_object_pointer = blk.icmp_eq(I64, &top16, crate::nanbox::POINTER_TAG_TOP16_I64);
+        let is_heap_string = blk.icmp_eq(I64, &top16, crate::nanbox::STRING_TAG_TOP16_I64);
+        let payload = blk.and(I64, &value_bits, crate::nanbox::POINTER_MASK_I64);
+        let admitted_value = if admit_strings {
+            let payload_valid = blk.icmp_uge(I64, &payload, "4096");
+            let string_ok = blk.and(I1, &is_heap_string, &payload_valid);
+            blk.or(I1, &is_object_pointer, &string_ok)
+        } else {
+            is_object_pointer
+        };
         let proof_bits = blk.and(I16, object_flags, ARRAY_PUSH_POINTER_LAYOUT_MASK_I16);
         let pointer_layout = blk.icmp_eq(I16, &proof_bits, ARRAY_PUSH_POINTER_LAYOUT_EXPECT_I16);
-        let fast = blk.and(I1, &is_object_pointer, &pointer_layout);
-        blk.cond_br(&fast, &done_label, &bookkeeping_label);
+        let fast = blk.and(I1, &admitted_value, &pointer_layout);
+        if admit_strings {
+            blk.cond_br(&fast, &fast_label, &bookkeeping_label);
+        } else {
+            blk.cond_br(&fast, &done_label, &bookkeeping_label);
+        }
+        (is_heap_string, payload)
+    };
+
+    if admit_strings {
+        ctx.current_block = fast_idx;
+        ctx.block()
+            .cond_br(&is_heap_string, &string_addref_label, &done_label);
+        ctx.current_block = string_addref_idx;
+        {
+            let blk = ctx.block();
+            // `StringHeader.refcount` (offset 12): 0 is already shared. A fresh
+            // concat result is born shared, so the helper runs only for a
+            // uniquely-owned string that must be demoted.
+            let refcount_addr = blk.add(I64, &payload, "12");
+            let refcount_ptr = blk.inttoptr(I64, &refcount_addr);
+            let refcount = blk.load(I32, &refcount_ptr);
+            let unique = blk.icmp_ne(I32, &refcount, "0");
+            blk.cond_br(&unique, &string_demote_label, &done_label);
+        }
+        ctx.current_block = string_demote_idx;
+        {
+            let blk = ctx.block();
+            blk.call_void("js_string_addref_if_heap_string", &[(DOUBLE, value_double)]);
+            blk.br(&done_label);
+        }
     }
 
     ctx.current_block = bookkeeping_idx;
@@ -659,7 +717,6 @@ const FIELD_WRITEBACK_BLOCKING_FLAGS_I16: &str = "2055";
 const POINTER_TAG_HI16: &str = "32765"; // 0x7FFD
 const HANDLE_BAND_TOP: &str = crate::expr::receiver_range::HANDLE_BAND_TOP_LITERAL;
 const HANDLE_MASK_48: &str = "281474976710655"; // 0x0000_FFFF_FFFF_FFFF
-const GC_TYPE_OBJECT_I8: &str = "2";
 
 /// `Expr::ArrayPush`. When `field_writeback` names a class field (the
 /// `perry-transform::field_push_local_bind` expansion of `this.f.push(v)`),
@@ -759,7 +816,7 @@ fn emit_field_push_writeback(
         // GcHeader precedes the object: obj_type @-8 (i8), _reserved @-6 (i16).
         let gtype_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-8")]);
         let gtype = blk.load(I8, &gtype_ptr);
-        let is_object = blk.icmp_eq(I8, &gtype, GC_TYPE_OBJECT_I8);
+        let is_object = crate::target_layout::emit_object_has_meta_word(blk, I8, &gtype);
         let res_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-6")]);
         let reserved = blk.load(I16, &res_ptr);
         let blocking = blk.and(I16, &reserved, FIELD_WRITEBACK_BLOCKING_FLAGS_I16);
@@ -794,6 +851,8 @@ fn emit_field_push_writeback(
             object: Box::new(Expr::This),
             property: field.to_string(),
             value: Box::new(Expr::LocalGet(array_id)),
+            byte_offset: 0,
+            byte_end: 0,
         },
     )?;
     ctx.block().br(&done_label);
@@ -1060,9 +1119,11 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
             // branches both update the slot via the existing
             // boxed/captured/local fall-through below.
             if let Some(home) = PushReceiverHome::resolve(ctx, *array_id) {
-                let apush_meta_offset =
-                    crate::target_layout::object_meta_slot_offset_bytes(ctx.target_triple)
-                        .to_string();
+                let apush_meta_offset = crate::target_layout::object_meta_slot_offset_bytes(
+                    ctx.target_triple,
+                    crate::target_layout::HeaderForm::Meta,
+                )
+                .to_string();
                 let blk = ctx.block();
                 let arr_handle = unbox_to_i64(blk, &arr_box);
 
@@ -1118,6 +1179,8 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                 // it, so `sub.push(v)` stops paying a runtime entry whose only
                 // job is to follow one pointer.
                 let elem_idx = ctx.new_block("apush.elements");
+                let elem_meta_idx = ctx.new_block("apush.elements.meta");
+                let elem_store_idx = ctx.new_block("apush.elements.store");
                 let elem_check_idx = ctx.new_block("apush.elements.check");
                 let nofwd_idx = ctx.new_block("apush.nofwd");
                 let inbounds_idx = ctx.new_block("apush.inbounds");
@@ -1126,6 +1189,8 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
 
                 let fwd_label = ctx.block_label(fwd_idx);
                 let elem_label = ctx.block_label(elem_idx);
+                let elem_meta_label = ctx.block_label(elem_meta_idx);
+                let elem_store_label = ctx.block_label(elem_store_idx);
                 let elem_check_label = ctx.block_label(elem_check_idx);
                 let nofwd_label = ctx.block_label(nofwd_idx);
                 let inbounds_label = ctx.block_label(inbounds_idx);
@@ -1140,31 +1205,53 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                 }
                 let _ = &is_fwd;
 
+                // Every load below sits behind a branch that proved its address
+                // is inside a live allocation: an Array receiver goes straight
+                // to the inline store, only a GC_TYPE_OBJECT receiver reads its
+                // meta slot, and `ObjectMeta.elements` (word 12) is read only
+                // through a non-null meta pointer. A `select` that substituted
+                // the receiver for a null meta pointer still loaded
+                // `receiver + 96`, past the end of a small array allocated at
+                // the end of a page (an access violation on Windows).
                 ctx.current_block = elem_idx;
-                let elem_store = {
+                {
                     let blk = ctx.block();
                     let array_receiver = blk.icmp_eq(I8, &gc_type, "1");
+                    blk.cond_br(&array_receiver, &nofwd_label, &elem_meta_label);
+                }
+                let elem_probe_end = ctx.block_label(elem_idx);
+
+                ctx.current_block = elem_meta_idx;
+                let meta = {
+                    let blk = ctx.block();
+                    let is_object = blk.icmp_eq(I8, &gc_type, "2");
                     let meta_addr = blk.add(I64, &arr_handle, &apush_meta_offset);
-                    let meta_slot = blk.inttoptr(I64, &meta_addr);
+                    blk.cond_br(&is_object, &elem_store_label, &fwd_label);
+                    meta_addr
+                };
+
+                ctx.current_block = elem_store_idx;
+                let elem_load_idx = ctx.new_block("apush.elements.load");
+                let elem_load_label = ctx.block_label(elem_load_idx);
+                let meta = {
+                    let blk = ctx.block();
+                    let meta_slot = blk.inttoptr(I64, &meta);
                     let meta = blk.load(I64, &meta_slot);
                     let has_meta = blk.icmp_ne(I64, &meta, "0");
-                    let is_object = blk.icmp_eq(I8, &gc_type, "2");
-                    let can_read_meta = blk.and(I1, &is_object, &has_meta);
-                    // `select` keeps the word-12 load off a null meta pointer.
-                    let safe_meta = blk.select(I1, &can_read_meta, I64, &meta, &arr_handle);
-                    let meta_ptr = blk.inttoptr(I64, &safe_meta);
+                    blk.cond_br(&has_meta, &elem_load_label, &fwd_label);
+                    meta
+                };
+
+                ctx.current_block = elem_load_idx;
+                let elem_store = {
+                    let blk = ctx.block();
+                    let meta_ptr = blk.inttoptr(I64, &meta);
                     let store_slot = blk.gep(I64, &meta_ptr, &[(I64, "12")]);
                     let store = blk.load(I64, &store_slot);
                     let has_store = blk.icmp_ne(I64, &store, "0");
-                    let backed = blk.and(I1, &can_read_meta, &has_store);
-                    // The payload for the check block, materialised BEFORE the
-                    // terminator so it dominates its uses; an ordinary Array
-                    // receiver skips the probe entirely.
-                    let payload = blk.select(I1, &backed, I64, &store, &arr_handle);
-                    blk.cond_br(&array_receiver, &nofwd_label, &elem_check_label);
-                    payload
+                    blk.cond_br(&has_store, &elem_check_label, &fwd_label);
+                    store
                 };
-                let elem_probe_end = ctx.block_label(elem_idx);
 
                 ctx.current_block = elem_check_idx;
                 {
@@ -1873,3 +1960,7 @@ mod parent_gate_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "array_push_string_gate_tests.rs"]
+mod string_gate_tests;

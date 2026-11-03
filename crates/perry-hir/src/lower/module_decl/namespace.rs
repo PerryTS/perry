@@ -195,6 +195,8 @@ fn namespace_object(
                                 object: Box::new(Expr::LocalGet(outer.object)),
                                 property: name.to_string(),
                                 value: Box::new(Expr::Object(Vec::new())),
+                                byte_offset: 0,
+                                byte_end: 0,
                             }),
                         }
                     }
@@ -416,6 +418,8 @@ fn lower_namespace_block(
             object: Box::new(Expr::LocalGet(object_id)),
             property: name,
             value: Box::new(value),
+            byte_offset: 0,
+            byte_end: 0,
         }));
     };
     for item in items.iter() {

@@ -125,7 +125,7 @@ pub(crate) unsafe fn define(addr: usize, symbol: usize, bits: u64, entry: u8) ->
             let index = keys.count();
             let key = JSValue::from_bits(symbol.get_nanbox_u64());
             let next = if let Some(proof) = canonical_keys::SharedLayout::of_receiver(current) {
-                let parent = canonical_keys::canonicalize(&proof, keys.arr(), keys.count());
+                let parent = canonical_keys::canonicalize_keys(&proof, keys);
                 canonical_keys::extend_slot(
                     &proof,
                     parent,
@@ -161,6 +161,53 @@ pub(crate) unsafe fn define(addr: usize, symbol: usize, bits: u64, entry: u8) ->
             (symbol.get_nanbox_u64() & crate::value::POINTER_MASK) as usize,
             entry,
         );
+        true
+    })
+}
+
+/// The store probe's symbol key add (`layout_probe::symbol_store`, which
+/// proved `obj` an ordinary object with no overflow, `symbol` absent from its
+/// complete own list, and the add admitted by its chain): the canonical
+/// key-add transition with a plain data entry, as a string key's add. The
+/// object is its own holder, so there is no HolderEdit and no owner lookup.
+/// `false`, having changed nothing, when the receiver's keys are not a
+/// shared canonical layout or it still lacks its reserved-slot keys.
+pub(crate) unsafe fn append(obj: *mut ObjectHeader, symbol: usize, bits: u64) -> bool {
+    let keys = object_keys(obj);
+    if keys.is_null() && reserved_slot_floor_for_object(obj) != 0 {
+        return false;
+    }
+    let Some(proof) = canonical_keys::SharedLayout::of_receiver(obj) else {
+        return false;
+    };
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_mut_ptr(obj);
+    let key = scope.root_nanbox_u64(crate::value::POINTER_TAG | symbol as u64);
+    let value = scope.root_nanbox_u64(bits);
+    obj.with_mut_ptr::<ObjectHeader, _>(|current| {
+        let keys = object_keys(current);
+        let index = keys.count();
+        let parent = canonical_keys::canonicalize_keys(&proof, keys);
+        let next = canonical_keys::extend_slot(
+            &proof,
+            parent,
+            canonical_keys::Appended::Slot(JSValue::from_bits(key.get_nanbox_u64())),
+            0,
+        )
+        .view();
+        // One transition: the successor names the appended key and, for an
+        // inline slot, the live bound that covers it (a separate live-count
+        // publish would mint a second shape per append).
+        let inline = index < object_inline_capacity(current);
+        let live = object_live_slot_count(current);
+        let live = if inline { live.max(index + 1) } else { live };
+        super::set_object_keys_with_live(current, next, live);
+        if inline {
+            js_object_set_field(current, index, JSValue::from_bits(value.get_nanbox_u64()));
+        } else {
+            overflow_set(current as usize, index as usize, value.get_nanbox_u64());
+        }
         true
     })
 }

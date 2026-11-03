@@ -42,6 +42,7 @@ use native_proof_support::{
 
 fn empty_opts() -> CompileOptions {
     CompileOptions {
+        namespace_self_import: false,
         static_shape_ids: Vec::new(),
         program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),
@@ -71,7 +72,6 @@ fn empty_opts() -> CompileOptions {
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
         short_spread_method_candidates: std::sync::Arc::default(),
-        program_class_accessor_names: Default::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -798,6 +798,8 @@ fn array_set(array_id: u32, index: Expr, value: Expr) -> Stmt {
         object: Box::new(local(array_id)),
         index: Box::new(index),
         value: Box::new(value),
+        byte_offset: 0,
+        byte_end: 0,
     })
 }
 
@@ -1039,6 +1041,8 @@ fn artifact_schema_v6_records_c_layout_pod_manifest() {
             object: Box::new(local(1)),
             property: "tag".to_string(),
             value: Box::new(int(9)),
+            byte_offset: 0,
+            byte_end: 0,
         }),
         Stmt::Return(Some(Expr::PropertyGet {
             byte_end: 0,
@@ -1380,21 +1384,18 @@ fn guards_array_read_inline(ir: &str) -> bool {
         && ir.contains("call double @perry_array_read_cold_shared(")
 }
 
-#[path = "native_proof_support/read_memo_contract.rs"]
-mod read_memo_contract;
-
 /// #12986 selects validated shape/slot memos where getters are reachable.
 /// Both variants retain a complete [[Get]] miss; selected memo entrances must
 /// pass the same site storage to that miss.
+/// The layout probe with the complete `[[Get]]` behind it: the leaf
+/// (`perry_probe_get*`, which answers data and accessor slots from the shape)
+/// and a collecting exit, either the receiver's slow entry or the shared
+/// boxed-receiver refusal. A named read owns no shape/slot storage.
 fn is_layout_probe_read(body: &str) -> bool {
-    if body.contains("call double @perry_probe_get_memo(")
-        || body.contains("call double @perry_probe_get_value_memo(")
-    {
-        read_memo_contract::paired_memo_reads(body).is_some()
-    } else {
-        body.contains("call double @perry_probe_get")
-            && body.contains("call double @js_object_get_field_slow(")
-    }
+    body.contains("call double @perry_probe_get")
+        && (body.contains("call double @js_object_get_field_slow(")
+            || body.contains("call double @js_object_get_field_value("))
+        && !body.contains("_read_shape_slots")
 }
 
 /// Whether `ir` births a HEAP receiver object. A class instance is born by the
@@ -1816,6 +1817,8 @@ fn artifact_schema_v6_records_pod_dynamic_write_fallback() {
             object: Box::new(local(1)),
             property: "tag".to_string(),
             value: Box::new(Expr::String("x".to_string())),
+            byte_offset: 0,
+            byte_end: 0,
         }),
         Stmt::Return(Some(Expr::PropertyGet {
             byte_end: 0,
@@ -1865,6 +1868,8 @@ fn pod_field_read_after_dynamic_materialization_uses_dynamic_numeric_sub() {
             object: Box::new(local(1)),
             property: "tag".to_string(),
             value: Box::new(Expr::String("x".to_string())),
+            byte_offset: 0,
+            byte_end: 0,
         }),
         Stmt::Return(Some(Expr::Binary {
             op: BinaryOp::Sub,
@@ -1973,6 +1978,8 @@ fn typed_array_f64_store_coerces_annotation_only_numeric_value() {
                 object: Box::new(local(2)),
                 index: Box::new(int(0)),
                 value: Box::new(local(3)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(int(0))),
         ],
@@ -2024,6 +2031,8 @@ fn scalar_replaced_raw_f64_field_store_keeps_numeric_array_fallback_boxed() {
                     object: Box::new(local(3)),
                     index: Box::new(int(0)),
                 }),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(Expr::PropertyGet {
                 byte_end: 0,
@@ -2957,6 +2966,8 @@ fn compound_alias_body(array_id: u32, counter_id: u32, base_temp: u32, key_temp:
                 },
                 int(1),
             )),
+            byte_offset: 0,
+            byte_end: 0,
         }),
     ]
 }
@@ -7436,6 +7447,8 @@ fn artifact_records_dynamic_property_set_value_bits_before_helper() {
                 object: Box::new(local(1)),
                 property: "field".to_string(),
                 value: Box::new(local(2)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(int(0))),
         ],
@@ -7477,6 +7490,8 @@ fn artifact_records_sloppy_dynamic_property_set_value_bits_before_helper() {
                 object: Box::new(local(1)),
                 property: "field".to_string(),
                 value: Box::new(local(2)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(int(0))),
         ],
@@ -7514,6 +7529,8 @@ fn artifact_records_dynamic_index_set_value_bits_before_helper() {
                 object: Box::new(local(1)),
                 index: Box::new(local(2)),
                 value: Box::new(local(3)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(int(0))),
         ],
@@ -7551,6 +7568,8 @@ fn artifact_records_array_runtime_key_index_set_value_bits_before_helper() {
                 object: Box::new(local(1)),
                 index: Box::new(local(2)),
                 value: Box::new(local(3)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(int(0))),
         ],
@@ -7585,6 +7604,8 @@ fn artifact_records_direct_f64_to_js_value_bits_for_write_barrier() {
                 object: Box::new(local(1)),
                 index: Box::new(local(2)),
                 value: Box::new(local(3)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(int(0))),
         ],
@@ -7633,6 +7654,8 @@ fn artifact_records_direct_i1_to_js_value_bits_for_write_barrier() {
                 object: Box::new(local(1)),
                 index: Box::new(local(2)),
                 value: Box::new(local(3)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(int(0))),
         ],
@@ -7674,6 +7697,8 @@ fn artifact_records_static_write_barrier_elision_for_primitive_array_store() {
                 object: Box::new(local(1)),
                 index: Box::new(local(2)),
                 value: Box::new(Expr::Bool(true)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(int(0))),
         ],
@@ -7936,11 +7961,15 @@ fn abrupt_constructor_argument_stops_anonymous_object_construction() {
                 object: Box::new(Expr::This),
                 property: "worker".to_string(),
                 value: Box::new(local(82)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Expr(Expr::PropertySet {
                 object: Box::new(Expr::This),
                 property: "stamp".to_string(),
                 value: Box::new(local(83)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
         ],
         is_async: false,
@@ -9985,6 +10014,8 @@ fn typed_f64_receiver_method_negative_module(case: &str) -> Module {
                     object: Box::new(Expr::This),
                     property: "x".to_string(),
                     value: Box::new(number(1.0)),
+                    byte_offset: 0,
+                    byte_end: 0,
                 }),
                 Stmt::Return(Some(this_field("x"))),
             ];
@@ -10911,11 +10942,15 @@ fn scalar_method_summary_module() -> Module {
                 object: Box::new(Expr::This),
                 property: "x".to_string(),
                 value: Box::new(local(10)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Expr(Expr::PropertySet {
                 object: Box::new(Expr::This),
                 property: "y".to_string(),
                 value: Box::new(local(11)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
         ],
         is_async: false,
@@ -11041,6 +11076,8 @@ fn scalar_method_field_write_module() -> Module {
             object: Box::new(Expr::This),
             property: "value".to_string(),
             value: Box::new(local(10)),
+            byte_offset: 0,
+            byte_end: 0,
         })],
         is_async: false,
         is_generator: false,
@@ -11071,6 +11108,8 @@ fn scalar_method_field_write_module() -> Module {
                     }),
                     right: Box::new(int(1)),
                 }),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(Expr::PropertyGet {
                 byte_end: 0,
@@ -11414,11 +11453,15 @@ fn scalar_method_int32_bitwise_module(case: &str, field_ty: Type, arg_ty: Type) 
                 object: Box::new(Expr::This),
                 property: "mask".to_string(),
                 value: Box::new(local(10)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Expr(Expr::PropertySet {
                 object: Box::new(Expr::This),
                 property: "salt".to_string(),
                 value: Box::new(local(11)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
         ],
         is_async: false,
@@ -11597,6 +11640,8 @@ fn scalar_method_boolean_negative_module(case: &str) -> Module {
                     object: Box::new(Expr::This),
                     property: "x".to_string(),
                     value: Box::new(local(12)),
+                    byte_offset: 0,
+                    byte_end: 0,
                 }),
                 Stmt::Return(Some(scalar_predicate_method_body("x"))),
             ];
@@ -15404,6 +15449,8 @@ fn static_property_access_on_computed_class_uses_property_id_wrappers() {
                 object: Box::new(local(1)),
                 property: "score".to_string(),
                 value: Box::new(local(2)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(Expr::PropertyGet {
                 byte_end: 0,
@@ -15449,6 +15496,8 @@ fn sloppy_static_property_store_on_computed_class_avoids_property_id_setter() {
                 object: Box::new(local(1)),
                 property: "score".to_string(),
                 value: Box::new(local(2)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(Expr::PropertyGet {
                 byte_end: 0,
@@ -15714,6 +15763,8 @@ fn raw_numeric_class_field_rejects_unknown_or_dynamic_shape_receiver() {
                 object: Box::new(local(1)),
                 property: "x".to_string(),
                 value: Box::new(number(7.0)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(Expr::PropertyGet {
                 byte_end: 0,
@@ -15737,6 +15788,8 @@ fn raw_numeric_class_field_rejects_unknown_or_dynamic_shape_receiver() {
                 object: Box::new(local(1)),
                 property: "x".to_string(),
                 value: Box::new(number(7.0)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(Expr::PropertyGet {
                 byte_end: 0,
@@ -15844,6 +15897,8 @@ fn put_value_set_index_keeps_the_numeric_array_fast_path() {
                 }),
                 receiver: Box::new(Expr::LocalGet(arr)),
                 strict: false,
+                byte_offset: 0,
+                byte_end: 0,
             })],
         },
     ];
@@ -15917,6 +15972,8 @@ fn static_put_value_uses_write_pic_for_call_free_rhs() {
                 }),
                 receiver: Box::new(Expr::LocalGet(object)),
                 strict: false,
+                byte_offset: 0,
+                byte_end: 0,
             })),
         ],
     );
@@ -15970,6 +16027,8 @@ fn immutable_string_key_reuses_static_write_pic() {
                 value: Box::new(Expr::LocalGet(value)),
                 receiver: Box::new(Expr::LocalGet(object)),
                 strict: false,
+                byte_offset: 0,
+                byte_end: 0,
             })),
         ],
     );
@@ -16012,6 +16071,8 @@ fn module_global_immutable_string_key_reuses_static_write_pic() {
             value: Box::new(Expr::Integer(1)),
             receiver: Box::new(Expr::LocalGet(object)),
             strict: false,
+            byte_offset: 0,
+            byte_end: 0,
         }),
     ];
 
@@ -16049,6 +16110,8 @@ fn mutable_string_key_rejects_static_write_pic() {
                 value: Box::new(Expr::LocalGet(value)),
                 receiver: Box::new(Expr::LocalGet(object)),
                 strict: false,
+                byte_offset: 0,
+                byte_end: 0,
             })),
         ],
     );
@@ -16082,6 +16145,8 @@ fn static_put_value_keeps_the_inline_store_when_rhs_can_allocate() {
             value: Box::new(Expr::Object(vec![("value".to_string(), Expr::Integer(1))])),
             receiver: Box::new(Expr::LocalGet(object)),
             strict: false,
+            byte_offset: 0,
+            byte_end: 0,
         }))],
     );
 
@@ -16158,6 +16223,8 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
             }),
             receiver: Box::new(Expr::LocalGet(object)),
             strict: false,
+            byte_offset: 0,
+            byte_end: 0,
         })
     };
 
@@ -16585,6 +16652,8 @@ fn sloppy_class_field_number_store_takes_the_inline_raw_store() {
                     value: Box::new(Expr::Number(7.0)),
                     receiver: Box::new(local(1)),
                     strict,
+                    byte_offset: 0,
+                    byte_end: 0,
                 }),
                 Stmt::Return(Some(int(0))),
             ],
@@ -16676,6 +16745,8 @@ fn sloppy_class_field_pointer_store_takes_the_inline_boxed_store() {
                     value: Box::new(local(2)),
                     receiver: Box::new(local(1)),
                     strict,
+                    byte_offset: 0,
+                    byte_end: 0,
                 }),
                 Stmt::Return(Some(int(0))),
             ],
@@ -16866,4 +16937,77 @@ fn static_method_shape_guard_retains_canonical_layout_clone() {
             && !caller.contains("js_native_call_method_by_id_learn"),
         "a detached validity/learned proof must not replace live shape authority: {caller}"
     );
+}
+
+/// `value <op> 3840`, where `value` is a number local that is reassigned
+/// (statically numeric, but read as a JS value: a loop counter such as `x` in
+/// `x < W`) or an unknown parameter.
+fn literal_compare_materializations(numeric: bool, op: CompareOp) -> Vec<serde_json::Value> {
+    let compare = Stmt::Return(Some(Expr::Compare {
+        op,
+        left: Box::new(local(1)),
+        right: Box::new(int(3840)),
+    }));
+    let (params, body) = if numeric {
+        let step = Stmt::Expr(Expr::LocalSet(
+            1,
+            Box::new(Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(local(1)),
+                right: Box::new(int(1)),
+            }),
+        ));
+        (
+            Vec::new(),
+            vec![number_let(1, "value", true, int(0)), step, compare],
+        )
+    } else {
+        (vec![param(1, "value", Type::Any)], vec![compare])
+    };
+    let module = module_with_classes_and_params(
+        "literal_compare_boundary.ts",
+        Vec::new(),
+        params,
+        Type::Boolean,
+        body,
+    );
+    let artifact = compile_artifact_json_for_module(module);
+    artifact["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|record| {
+            record["consumer"] == "materialize_js_value"
+                && record["native_value_state"] == "materialized"
+                && record["native_abi_transition"]["from_native_rep"] == "f64"
+                && record["native_abi_transition"]["to_native_rep"] == "js_value"
+        })
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn a_literal_compared_with_a_number_by_fcmp_is_not_materialized() {
+    for op in [CompareOp::Lt, CompareOp::Le, CompareOp::Eq, CompareOp::Ne] {
+        let materialized = literal_compare_materializations(true, op);
+        assert!(
+            materialized.is_empty(),
+            "`value {op:?} 3840` on a number is a bare fcmp of the literal's own \
+             constant; no JS-value materialization crosses a boundary:\n{materialized:#?}"
+        );
+    }
+}
+
+#[test]
+fn a_literal_compared_through_a_runtime_helper_is_materialized_at_that_boundary() {
+    for op in [CompareOp::Lt, CompareOp::Eq] {
+        let materialized = literal_compare_materializations(false, op);
+        assert!(
+            materialized
+                .iter()
+                .any(|record| record["materialization_reason"] == "runtime_api"),
+            "`value {op:?} 3840` on an unknown value can reach a runtime compare \
+             helper, so the literal's boxing records its runtime_api boundary:\n{materialized:#?}"
+        );
+    }
 }

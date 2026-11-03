@@ -26,8 +26,9 @@ use super::builtin_proto::{pristine, BuiltinProto};
 use crate::value::{JSValue, POINTER_MASK, POINTER_TAG, TAG_UNDEFINED};
 
 const UNDEFINED: f64 = f64::from_bits(TAG_UNDEFINED);
-/// An array whose header records a named property, a descriptor or its own
-/// `[[Prototype]]` is not answered by `Array.prototype` alone.
+/// An array whose header records a descriptor or its own `[[Prototype]]` is
+/// not answered by `Array.prototype` alone; nor is one with a named layout
+/// (tested beside these bits in [`array_recv`]).
 const ARRAY_NOT_DEFAULT: u16 = crate::gc::GC_ARRAY_KEY_ATTRS | crate::gc::GC_ARRAY_CUSTOM_PROTO;
 
 #[inline(always)]
@@ -87,8 +88,15 @@ unsafe fn array_recv(v: f64) -> Option<f64> {
             return None;
         }
     }
-    (header._reserved & ARRAY_NOT_DEFAULT == 0 && pristine(BuiltinProto::Array))
-        .then(|| f64::from_bits(POINTER_TAG | live as u64))
+    // An own named property (`a.indexOf = f`) lives in the named layout, not
+    // in a header bit: an array that has one is not answered by
+    // `Array.prototype` alone.
+    (header._reserved & ARRAY_NOT_DEFAULT == 0
+        && (*(live as *const crate::array::ArrayHeader))
+            .named
+            .is_null()
+        && pristine(BuiltinProto::Array))
+    .then(|| f64::from_bits(POINTER_TAG | live as u64))
 }
 
 /// The live head a forwarded array alias names, or `None`.
@@ -106,7 +114,7 @@ unsafe fn forwarded_head(addr: usize) -> Option<usize> {
 unsafe fn map_ok(v: f64) -> bool {
     heap_cell(v).is_some_and(|h| {
         (*h).obj_type == crate::gc::GC_TYPE_MAP
-            && (*(raw(v) as *const crate::map::MapHeader)).meta.is_null()
+            && super::cell_meta::map_cell_meta(raw(v) as *const crate::map::MapHeader).is_null()
     }) && pristine(BuiltinProto::Map)
 }
 
@@ -115,7 +123,7 @@ unsafe fn map_ok(v: f64) -> bool {
 unsafe fn set_ok(v: f64) -> bool {
     heap_cell(v).is_some_and(|h| {
         (*h).obj_type == crate::gc::GC_TYPE_SET
-            && (*(raw(v) as *const crate::set::SetHeader)).meta.is_null()
+            && super::cell_meta::set_cell_meta(raw(v) as *const crate::set::SetHeader).is_null()
     }) && pristine(BuiltinProto::Set)
 }
 
@@ -127,7 +135,7 @@ unsafe fn set_ok(v: f64) -> bool {
 #[inline(always)]
 unsafe fn weak_ok(v: f64, brand: u32) -> bool {
     heap_cell(v).is_some_and(|h| {
-        (*h).obj_type == crate::gc::GC_TYPE_OBJECT
+        crate::gc_type_is_object!((*h).obj_type)
             && (*(raw(v) as *const super::ObjectHeader)).parent_class_id
                 == super::shapes::branded_birth_layout(brand)
     }) && pristine(if brand == crate::weakref::CLASS_ID_WEAKSET {
@@ -1933,7 +1941,7 @@ pub unsafe extern "C-unwind" fn js_bm_lookup(
             // The Map and Set families' entries name only methods a WeakMap
             // and a WeakSet also have (`get`/`set`/`has`/`delete`,
             // `add`/`has`/`delete`).
-            crate::gc::GC_TYPE_OBJECT => {
+            crate::gc_object_type_pat!() => {
                 (families & FAMILY_MAP != 0 && weak_ok(recv, WEAKMAP))
                     || (families & FAMILY_SET != 0 && weak_ok(recv, WEAKSET))
             }

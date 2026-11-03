@@ -1,0 +1,14 @@
+import * as dns from "node:dns";
+import { promises as dnsPromises } from "node:dns";
+import * as stream from "node:stream";
+import { promises as streamPromises } from "node:stream";
+import * as readline from "node:readline";
+import { promises as readlinePromises } from "node:readline";
+console.log("values", typeof dnsPromises, typeof streamPromises, typeof readlinePromises);
+console.log("methods", typeof dnsPromises.lookup, typeof streamPromises.pipeline, typeof readlinePromises.createInterface);
+console.log("parent", dnsPromises === dns.promises, streamPromises === stream.promises, readlinePromises === readline.promises);
+const dnsNamespace = await import("node:dns/promises");
+const streamNamespace = await import("node:stream/promises");
+const readlineNamespace = await import("node:readline/promises");
+console.log("default", dnsPromises === dnsNamespace.default, streamPromises === streamNamespace.default, readlinePromises === readlineNamespace.default);
+console.log("namespace", dnsPromises === dnsNamespace, streamPromises === streamNamespace, readlinePromises === readlineNamespace);

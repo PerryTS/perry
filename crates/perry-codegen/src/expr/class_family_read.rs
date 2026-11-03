@@ -129,7 +129,9 @@ pub(crate) fn begin(
     ctx.current_block = word_idx;
     let word_ptr = super::receiver_range::emit_field_ptr(ctx.block(), &recv.biased, 4);
     let word = ctx.block().load(I32, &word_ptr);
-    let header = crate::target_layout::object_header_size_bytes(ctx.target_triple) as i64;
+    let header =
+        crate::target_layout::object_slot_base_bytes(ctx.target_triple, ctx.program_layouts.form())
+            as i64;
     let mut slots = std::collections::BTreeMap::<u32, Vec<Candidate>>::new();
     for arm in arms {
         slots.entry(arm.slot).or_default().push(arm);

@@ -77,6 +77,22 @@
 //! refused because a loop backedge could bring the mutated array to an
 //! earlier proven access on the next iteration.
 //!
+//! A proven array's `for…of` now lowers to the compiler-owned IteratorRecord
+//! (`perry-hir/src/iterator_record.rs`): ONE counted loop whose body is shared
+//! by the iterator mode and the indexed mode (`r = __iterator_value` in both).
+//! The terminal-escape argument above does not transfer to it: a patched
+//! iterator would hand the shared body an arbitrary object. The record is
+//! admitted only when the iterator mode is statically unreachable for an
+//! Array — the program's array-iteration facts are 0 and
+//! `%ArrayIteratorPrototype%` never gains `return`
+//! ([`ModuleDispatchFacts::array_record_protocol_dead`]) — so the record over
+//! an E1 root is exactly the indexed walk: payload = source = `A`, bound =
+//! live `A.length`, update = `++`, value = `A[__idx]`. Under that fact the
+//! walk reads only the indexed arm of every mode-selected expression, and the
+//! value local is licensed as an E5 read at the record's exact binding prefix
+//! (`__value = ForValue(mode, __value, A[__idx]); state = n; const r =
+//! __value`), provided the private value local has no other read.
+//!
 //! ## What the facts are used for
 //!
 //! Two halves, both consumed in `ptr_shape.rs`:
@@ -376,6 +392,10 @@ pub(crate) fn collect_element_shape_facts(
     let mut array_roots: HashMap<u32, u32> = array_seeds.keys().map(|id| (*id, *id)).collect();
     let mut alias_edges: Vec<(u32, u32)> = Vec::new();
     super::ptr_shape::collect_alias_edges(stmts, &mut alias_edges);
+    let record_dead = module_dispatch.array_record_protocol_dead();
+    if record_dead {
+        collect_record_payload_edges(stmts, &mut alias_edges);
+    }
     loop {
         let mut changed = false;
         for (alias, src) in &alias_edges {
@@ -408,6 +428,12 @@ pub(crate) fn collect_element_shape_facts(
         idx_writes: HashMap::new(),
         bounded: Vec::new(),
         in_closure: false,
+        record_dead,
+        record_modes: HashSet::new(),
+        record_locals: HashSet::new(),
+        index_resets: HashMap::new(),
+        escaped_locals: HashSet::new(),
+        overwritten_locals: HashSet::new(),
     };
     walk.walk_region_stmts(stmts);
     let ArrayWalk {
@@ -417,6 +443,9 @@ pub(crate) fn collect_element_shape_facts(
         direct_reads,
         callbacks,
         idx_writes,
+        index_resets,
+        escaped_locals,
+        overwritten_locals,
         ..
     } = walk;
 
@@ -527,7 +556,22 @@ pub(crate) fn collect_element_shape_facts(
         };
         // The induction variable must be written exactly twice in the whole
         // region — its `Let` and its `++` — and by the loop that bounds it.
-        if idx_writes.get(&read.index).copied().unwrap_or(0) != 2
+        // A record index also has the record's pre-loop `= 0` reset: every
+        // write but the one `++` is a reset to zero.
+        let writes = idx_writes.get(&read.index).copied().unwrap_or(0);
+        let index_ok = match read.carrier {
+            None => writes == 2,
+            Some(carrier) => {
+                let resets = index_resets.get(&read.index).copied().unwrap_or(0);
+                resets >= 1
+                    && writes == resets + 1
+                    && !escaped_locals.contains(&carrier)
+                    && !overwritten_locals.contains(&carrier)
+                    && !boxed_vars.contains(&carrier)
+                    && !module_globals.contains_key(&carrier)
+            }
+        };
+        if !index_ok
             || boxed_vars.contains(&read.index)
             || module_globals.contains_key(&read.index)
         {
@@ -618,6 +662,9 @@ struct ReadSite {
     index: u32,
     /// The local the element was bound to.
     local: u32,
+    /// The IteratorRecord's private value local the element passed through
+    /// (`None` for a direct `const r = A[i]`).
+    carrier: Option<u32>,
 }
 
 struct DirectReadSite {
@@ -651,6 +698,85 @@ struct ArrayWalk<'a> {
     /// last.
     bounded: Vec<(u32, u32)>,
     in_closure: bool,
+    /// [`ModuleDispatchFacts::array_record_protocol_dead`].
+    record_dead: bool,
+    /// IteratorRecord mode locals whose source is a tracked array: always
+    /// false under `record_dead`.
+    record_modes: HashSet<u32>,
+    /// IteratorRecord private source/payload locals of a tracked array; their
+    /// `= undefined` releases are not escapes.
+    record_locals: HashSet<u32>,
+    /// `Let i = arrayRecordIndex(0)` resets per index local.
+    index_resets: HashMap<u32, u32>,
+    /// Locals read (or captured, or pushed) anywhere the walk did not admit.
+    escaped_locals: HashSet<u32>,
+    /// Locals assigned a value other than `undefined` by a plain `LocalSet`.
+    overwritten_locals: HashSet<u32>,
+}
+
+fn runtime_call<'e>(e: &'e Expr, name: &str) -> Option<&'e [Expr]> {
+    match e {
+        Expr::NativeMethodCall {
+            module,
+            object: None,
+            method,
+            args,
+            ..
+        } if module == "__perry_runtime" && method == name => Some(args.as_slice()),
+        _ => None,
+    }
+}
+
+fn is_record_index_zero(e: &Expr) -> bool {
+    matches!(runtime_call(e, "arrayRecordIndex"), Some([Expr::Integer(0)]))
+}
+
+/// `arrayRecordPayload(s, p := mode ? GetIterator(s) : s, s := undefined)`
+/// bound to `p`: returns `(s, mode)`.
+fn record_payload_source(id: u32, init: &Expr) -> Option<(u32, &Expr)> {
+    let [Expr::LocalGet(source), Expr::LocalSet(payload, value), Expr::LocalSet(released, undef)] =
+        runtime_call(init, "arrayRecordPayload")?
+    else {
+        return None;
+    };
+    if *payload != id || released != source || !matches!(undef.as_ref(), Expr::Undefined) {
+        return None;
+    }
+    let Expr::Conditional {
+        condition,
+        then_expr,
+        else_expr,
+    } = value.as_ref()
+    else {
+        return None;
+    };
+    let Expr::GetIterator(iterated) = then_expr.as_ref() else {
+        return None;
+    };
+    if !matches!(iterated.as_ref(), Expr::LocalGet(i) if i == source)
+        || !matches!(else_expr.as_ref(), Expr::LocalGet(e) if e == source)
+    {
+        return None;
+    }
+    Some((*source, condition.as_ref()))
+}
+
+/// The record payload edges `p -> s`, added to the alias pre-pass only when
+/// the iterator mode is unreachable (then `p` holds exactly `s`).
+fn collect_record_payload_edges(stmts: &[Stmt], out: &mut Vec<(u32, u32)>) {
+    walk_stmts(stmts, &mut |s| {
+        if let Stmt::Let {
+            id,
+            mutable: false,
+            init: Some(init),
+            ..
+        } = s
+        {
+            if let Some((source, _)) = record_payload_source(*id, init) {
+                out.push((*id, source));
+            }
+        }
+    });
 }
 
 impl<'a> ArrayWalk<'a> {
@@ -666,6 +792,64 @@ impl<'a> ArrayWalk<'a> {
 
     fn note_write(&mut self, id: u32) {
         *self.idx_writes.entry(id).or_insert(0) += 1;
+    }
+
+    /// `mode == true` for a record mode local over a tracked array, which is
+    /// false whenever the walk admits records at all.
+    fn record_mode(&self, e: &Expr) -> bool {
+        self.record_dead
+            && matches!(e, Expr::Compare {
+                op: perry_hir::CompareOp::Eq,
+                left,
+                right,
+            } if matches!(right.as_ref(), Expr::Bool(true))
+                && matches!(left.as_ref(), Expr::LocalGet(m) if self.record_modes.contains(m)))
+    }
+
+    /// The record loop's exact binding prefix for an indexed-mode element:
+    /// `v = ForValue(mode, v, A[arrayRecordIndex(i)]); state = n; const r = v`.
+    /// On a match the read is licensed (with `v` as its carrier) and the rest
+    /// of the body is returned for the ordinary walk.
+    fn record_binding_prefix<'b>(&mut self, body: &'b [Stmt], bound: (u32, u32)) -> Option<&'b [Stmt]> {
+        let (index, root) = bound;
+        let [Stmt::Expr(Expr::LocalSet(value, read)), Stmt::Expr(Expr::LocalSet(state, state_value)), Stmt::Let {
+            id: local,
+            init: Some(Expr::LocalGet(bound_value)),
+            ..
+        }, rest @ ..] = body
+        else {
+            return None;
+        };
+        let [mode, Expr::LocalGet(previous), Expr::IndexGet { object, index: key, .. }] =
+            runtime_call(read, "arrayRecordForValue")?
+        else {
+            return None;
+        };
+        let Expr::LocalGet(array) = object.as_ref() else {
+            return None;
+        };
+        if self.in_closure
+            || !self.record_mode(mode)
+            || previous != value
+            || bound_value != value
+            || self.root_of(*array) != Some(root)
+            || !matches!(runtime_call(key, "arrayRecordIndex"), Some([Expr::LocalGet(i)]) if *i == index)
+            || !matches!(state_value.as_ref(), Expr::Number(_))
+            || self.root_of(*state).is_some()
+            || state == value
+        {
+            return None;
+        }
+        self.note_write(*value);
+        self.note_write(*state);
+        self.note_write(*local);
+        self.reads.push(ReadSite {
+            root,
+            index,
+            local: *local,
+            carrier: Some(*value),
+        });
+        Some(rest)
     }
 
     fn walk_stmts(&mut self, stmts: &[Stmt]) {
@@ -789,6 +973,43 @@ impl<'a> ArrayWalk<'a> {
                             return;
                         }
                     }
+                    if self.record_dead {
+                        if is_record_index_zero(e) {
+                            *self.index_resets.entry(*id).or_insert(0) += 1;
+                            return;
+                        }
+                        // The record entry re-binds its private source to the
+                        // same array (the runtime only strips the pointer's
+                        // tag); the result is the record's mode.
+                        if let Some(args) = runtime_call(e, "arrayRecordNeedsIterator") {
+                            if let Some(Expr::LocalSet(source, rebound)) = args.first() {
+                                if self.root_of(*source).is_some()
+                                    && matches!(rebound.as_ref(), Expr::LocalGet(s) if s == source)
+                                {
+                                    self.record_modes.insert(*id);
+                                    self.record_locals.insert(*source);
+                                    for arg in &args[1..] {
+                                        self.walk_expr(arg);
+                                    }
+                                    return;
+                                }
+                            }
+                        }
+                        // The payload alias edge itself, admitted only when its
+                        // mode is a dead record mode over the same array.
+                        if let Some((source, mode)) = record_payload_source(*id, e) {
+                            if self.root_of(*id).is_some() {
+                                if self.record_mode(mode)
+                                    && self.root_of(source) == self.root_of(*id)
+                                    && self.record_locals.contains(&source)
+                                {
+                                    self.record_locals.insert(*id);
+                                    return;
+                                }
+                                self.disq(*id);
+                            }
+                        }
+                    }
                     // E5: `const r = A[i]` at a licensed site. This is the
                     // ONLY position an element read is admitted in — see the
                     // `Expr::IndexGet` arm for why every other one is an
@@ -805,6 +1026,7 @@ impl<'a> ArrayWalk<'a> {
                                         root,
                                         index: *i,
                                         local: *id,
+                                        carrier: None,
                                     });
                                     return;
                                 }
@@ -863,7 +1085,10 @@ impl<'a> ArrayWalk<'a> {
                 if let Some(b) = bound {
                     self.bounded.push(b);
                 }
-                self.walk_stmts(body);
+                match bound.and_then(|b| self.record_binding_prefix(body, b)) {
+                    Some(rest) => self.walk_stmts(rest),
+                    None => self.walk_stmts(body),
+                }
                 if pushed_bound {
                     self.bounded.pop();
                 }
@@ -927,6 +1152,7 @@ impl<'a> ArrayWalk<'a> {
         match zero {
             Expr::Number(n) if *n == 0.0 => {}
             Expr::Integer(0) => {}
+            e if self.record_dead && is_record_index_zero(e) => {}
             _ => return None,
         }
         let Some(Expr::Compare {
@@ -940,19 +1166,34 @@ impl<'a> ArrayWalk<'a> {
         if !matches!(left.as_ref(), Expr::LocalGet(l) if l == idx) {
             return None;
         }
-        let Expr::PropertyGet {
-            object, property, ..
-        } = right.as_ref()
-        else {
-            return None;
+        // The record's bound is the live length in the indexed mode, the
+        // only mode a dead record has.
+        let array = match right.as_ref() {
+            Expr::PropertyGet {
+                object, property, ..
+            } if property == "length" => object.as_ref(),
+            bound => match runtime_call(bound, "arrayRecordForBound") {
+                Some([mode, length, ..]) if self.record_mode(mode) => {
+                    match runtime_call(length, "arrayRecordLength") {
+                        Some([array]) => array,
+                        _ => return None,
+                    }
+                }
+                _ => return None,
+            },
         };
-        if property != "length" {
-            return None;
-        }
-        let Expr::LocalGet(a) = object.as_ref() else {
+        let Expr::LocalGet(a) = array else {
             return None;
         };
         let root = self.root_of(*a)?;
+        let update = match update {
+            Some(e) => match runtime_call(e, "arrayRecordForUpdate") {
+                Some([mode, step]) if self.record_mode(mode) => Some(step),
+                Some(_) => return None,
+                None => Some(e),
+            },
+            None => None,
+        };
         match update {
             Some(Expr::Update {
                 id,
@@ -965,6 +1206,9 @@ impl<'a> ArrayWalk<'a> {
     }
 
     fn walk_expr(&mut self, e: &Expr) {
+        if self.record_dead && self.walk_record_expr(e) {
+            return;
+        }
         match e {
             // An inline callback is a closed, single-use argument route: the
             // runtime passes the element at parameter 0 (or parameter 1 for
@@ -1043,6 +1287,7 @@ impl<'a> ArrayWalk<'a> {
                 object,
                 property,
                 value,
+                ..
             } => {
                 if let Expr::LocalGet(id) = object.as_ref() {
                     if self.root_of(*id).is_some() {
@@ -1088,6 +1333,7 @@ impl<'a> ArrayWalk<'a> {
                     // is not a tracked root, so the admitted `PushValue::Local`
                     // case is unaffected. (CodeRabbit, PR #7149.)
                     if let Expr::LocalGet(v) = value.as_ref() {
+                        self.escaped_locals.insert(*v);
                         self.disq(*v);
                         return;
                     }
@@ -1110,6 +1356,7 @@ impl<'a> ArrayWalk<'a> {
                 object,
                 index,
                 value,
+                ..
             } => {
                 if let Expr::LocalGet(id) = object.as_ref() {
                     self.disq(*id);
@@ -1150,6 +1397,9 @@ impl<'a> ArrayWalk<'a> {
             Expr::LocalSet(id, v) => {
                 self.note_write(*id);
                 self.disq(*id);
+                if !matches!(v.as_ref(), Expr::Undefined) {
+                    self.overwritten_locals.insert(*id);
+                }
                 self.walk_expr(v);
             }
             Expr::Update { id, .. } => {
@@ -1161,7 +1411,10 @@ impl<'a> ArrayWalk<'a> {
             // another container, a spread, an untracked `Let` init (mutable,
             // boxed, or module-global, so the alias pre-pass skipped it) —
             // creates an alias this walk cannot follow.
-            Expr::LocalGet(id) => self.disq(*id),
+            Expr::LocalGet(id) => {
+                self.escaped_locals.insert(*id);
+                self.disq(*id)
+            }
             Expr::Closure {
                 body,
                 captures,
@@ -1169,6 +1422,7 @@ impl<'a> ArrayWalk<'a> {
                 ..
             } => {
                 for c in captures.iter().chain(mutable_captures.iter()) {
+                    self.escaped_locals.insert(*c);
                     self.disq(*c);
                 }
                 let outer = self.in_closure;
@@ -1180,6 +1434,69 @@ impl<'a> ArrayWalk<'a> {
                 perry_hir::walker::walk_expr_children(e, &mut |c| self.walk_expr(c));
             }
         }
+    }
+
+    /// Mode-selected record expressions under a dead iterator mode: only the
+    /// indexed arm runs. Returns true when `e` was consumed.
+    fn walk_record_expr(&mut self, e: &Expr) -> bool {
+        if let Expr::Conditional {
+            condition,
+            else_expr,
+            ..
+        } = e
+        {
+            if self.record_mode(condition) {
+                self.walk_expr(else_expr);
+                return true;
+            }
+            return false;
+        }
+        if let Some([mode, length, index, _protocol, completion]) =
+            runtime_call(e, "arrayRecordForBound")
+        {
+            if self.record_mode(mode) {
+                self.walk_expr(length);
+                self.walk_expr(index);
+                self.walk_expr(completion);
+                return true;
+            }
+        }
+        if let Some([mode, step]) = runtime_call(e, "arrayRecordForUpdate") {
+            if self.record_mode(mode) {
+                self.walk_expr(step);
+                return true;
+            }
+        }
+        if let Some([mode, _previous, element]) = runtime_call(e, "arrayRecordForValue") {
+            if self.record_mode(mode) {
+                self.walk_expr(element);
+                return true;
+            }
+        }
+        // The record's `A.length`.
+        if let Some([Expr::LocalGet(array)]) = runtime_call(e, "arrayRecordLength") {
+            if self.root_of(*array).is_some() {
+                return true;
+            }
+        }
+        // The array arm of IteratorClose lowers to nothing when `return` is
+        // never reachable; the receiver is not handed anywhere.
+        if let Some([Expr::LocalGet(array), rest @ ..]) = runtime_call(e, "arrayRecordClose") {
+            if self.record_locals.contains(array) {
+                for arg in rest {
+                    self.walk_expr(arg);
+                }
+                return true;
+            }
+        }
+        // A record's private source/payload released after the loop.
+        if let Expr::LocalSet(id, value) = e {
+            if self.record_locals.contains(id) && matches!(value.as_ref(), Expr::Undefined) {
+                self.note_write(*id);
+                return true;
+            }
+        }
+        false
     }
 
     fn walk_inline_array_callback(
@@ -1327,7 +1644,7 @@ pub(super) fn element_read_seeds(
     walk_stmts(stmts, &mut |s| {
         if let Stmt::Let {
             id,
-            init: Some(Expr::IndexGet { .. }),
+            init: Some(Expr::IndexGet { .. } | Expr::LocalGet(_)),
             ..
         } = s
         {

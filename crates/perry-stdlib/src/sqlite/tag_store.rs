@@ -17,13 +17,13 @@ use std::ffi::CString;
 
 perry_runtime::birth_memo!(static TAG_STORE_BIRTH);
 
-macro_rules! builtin {
+#[rustfmt::skip] macro_rules! builtin {
     ($body:path, $n:tt) => {
         perry_runtime::fn_info!($body, $n; with_declared($n), with_flags(perry_runtime::closure::FN_BUILTIN))
     };
 }
 
-macro_rules! builtin_rest {
+#[rustfmt::skip] macro_rules! builtin_rest {
     ($body:path) => {
         perry_runtime::fn_info!(
             $body, 1;
@@ -63,30 +63,24 @@ impl NodeTagStore {
     }
 }
 
+/// `db.createTagStore(maxSize)`: `undefined` is the default 1000, any other
+/// value must be an integer in 1..i32::MAX.
 pub(crate) fn node_sqlite_tag_store_capacity(value: f64) -> usize {
     let js = value_from_f64(value);
+    if js.is_undefined() {
+        return 1000;
+    }
     let number = if js.is_int32() {
         js.as_int32() as f64
     } else if js.is_number() {
         js.as_number()
     } else {
-        return 1000;
+        throw_type("The \"maxSize\" argument must be a positive integer.");
     };
-    if !number.is_finite() {
-        return if number.is_sign_positive() {
-            i32::MAX as usize
-        } else {
-            0
-        };
+    if number.fract() != 0.0 || number < 1.0 || number > i32::MAX as f64 {
+        throw_range("The \"maxSize\" argument must be a positive integer.");
     }
-    let truncated = number.trunc();
-    if truncated <= 0.0 {
-        0
-    } else if truncated >= i32::MAX as f64 {
-        i32::MAX as usize
-    } else {
-        truncated as usize
-    }
+    number as usize
 }
 
 /// `db.createTagStore(maxSize)`.
@@ -149,7 +143,7 @@ unsafe fn template_args(args_arr: *const ArrayHeader) -> (String, Vec<f64>) {
 
 /// Compile the template on the store's database (recording it in the LRU)
 /// and bind its values positionally.
-macro_rules! with_template {
+#[rustfmt::skip] macro_rules! with_template {
     ($this:expr, $rest:expr, |$stepper:ident| $body:expr) => {{
         let scope = RuntimeHandleScope::new();
         let this = scope.root_nanbox_f64($this);

@@ -39,10 +39,8 @@ mod readable_from_promises;
 mod event_emitter;
 use event_emitter::{
     add_stream_listener_for_event, call_listener_args, emit_stream_event,
-    emit_stream_event_from_array, emit_stream_event_via_method, is_callable_value, ns_event_names,
-    ns_get_max_listeners, ns_listener_count, ns_listeners, ns_off2, ns_on2, ns_once2,
-    ns_prepend_listener2, ns_prepend_once_listener2, ns_raw_listeners, ns_remove_listener2,
-    ns_set_max_listeners, remove_stream_listener_for_event, stream_listener_count_for_event,
+    emit_stream_event_from_array, emit_stream_event_via_method, is_callable_value, ns_once2,
+    remove_stream_listener_for_event, stream_listener_count_for_event,
 };
 pub(crate) use event_emitter::{emit_stream_event_rooted, RootedArgs};
 
@@ -153,7 +151,7 @@ const STREAM_EMIT_CLOSE_KEY: Slot = Slot::EmitClose;
 const STREAM_PIPELINE_CALLBACK_DONE_KEY: Slot = Slot::PipelineCallbackDone;
 const STREAM_READABLE_LIVE_PUSH_KEY: Slot = Slot::ReadableLivePush;
 
-use destroy_state::{destroy_stream, ns_destroy1};
+use destroy_state::destroy_stream;
 pub use destroy_state::{js_node_stream_method_destroy, js_node_stream_method_destroyed};
 
 // ─────────────────────────────────────────────────────────────────
@@ -165,7 +163,7 @@ pub use destroy_state::{js_node_stream_method_destroy, js_node_stream_method_des
 // ─────────────────────────────────────────────────────────────────
 
 #[inline]
-fn this_value(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+fn method_receiver(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
     // Slot 0 was set by `build_object` to the NaN-boxed bits of the
     // host object value cast to i64; reverse the cast.
     if !closure.is_null() {
@@ -180,10 +178,22 @@ fn this_value(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f6
         // captures a real object pointer, so existing instance-bound closures
         // never hit this branch.
         if bits != crate::value::TAG_UNDEFINED {
-            return constructors::ensure_lazy_stream(f64::from_bits(bits));
+            return f64::from_bits(bits);
         }
     }
-    constructors::ensure_lazy_stream(this.as_f64())
+    this.as_f64()
+}
+
+#[inline]
+fn this_value(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    constructors::ensure_lazy_stream(method_receiver(closure, this))
+}
+
+/// Emitter methods also serve stream receivers. Only a stream owner can
+/// create lazy stream state, and that owner installs the existing hook.
+#[inline]
+fn emitter_this_value(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    crate::stream_hooks::ensure_lazy_stream(method_receiver(closure, this))
 }
 
 extern "C" fn ns_chain1(
@@ -555,7 +565,7 @@ extern "C" fn ns_emit_rest(
     rest: f64,
 ) -> f64 {
     emit_stream_event_from_array(
-        this_value(closure, this),
+        emitter_this_value(closure, this),
         event,
         raw_ptr_from_value(rest) as *const _,
     )
@@ -574,7 +584,7 @@ unsafe extern "C" fn ns_emit_args(
     } else {
         std::slice::from_raw_parts(args, len)
     };
-    let target = this_value(closure, this);
+    let target = emitter_this_value(closure, this);
     match args.split_first() {
         Some((event, rest)) => event_emitter::emit_stream_event(target, *event, rest),
         None => event_emitter::emit_stream_event(target, f64::from_bits(TAG_UNDEFINED), &[]),
@@ -625,7 +635,7 @@ pub(crate) unsafe fn emitter_emit_call(
     };
     // No allocation precedes the read of the closure's receiver capture; the
     // emit roots everything it holds before it allocates.
-    let target = this_value(closure, crate::closure::JsThis::from_f64(recv));
+    let target = emitter_this_value(closure, crate::closure::JsThis::from_f64(recv));
     Some(match args.split_first() {
         Some((event, rest)) => event_emitter::emit_stream_event(target, *event, rest),
         None => event_emitter::emit_stream_event(target, f64::from_bits(TAG_UNDEFINED), &[]),
@@ -1112,7 +1122,7 @@ fn schedule_pipe_destination_finish_check(dest: f64) {
         1,
     );
     js_closure_set_capture_f64(closure, 0, dest);
-    crate::timer::js_set_immediate_callback(closure as i64);
+    crate::timer::schedule_native_immediate(closure as i64, &[], "Immediate");
 }
 
 fn request_pipe_destination_finish(dest: f64) {
@@ -1938,5 +1948,3 @@ pub(crate) fn test_append_chunk_bytes(value: f64, out: &mut Vec<u8>) {
 pub(crate) fn test_buffer_value_from_bytes(bytes: &[u8]) -> f64 {
     buffer_value_from_bytes(bytes)
 }
-
-crate::realm_decl!("node_stream.realm.json#*");

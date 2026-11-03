@@ -282,7 +282,7 @@ pub(super) fn select_old_page_defrag_pages(force: bool) -> OldPageDefragSelectio
         // pause and no bytes.
         LAST_IDLE_PREDICTED_RELEASE.with(|c| c.set(selection.selected_releasable_block_bytes));
     }
-    if idle_compact_armed() && crate::gc::gc_diag_enabled() {
+    if idle_compact_armed() && crate::gc::diagnostic_hooks::enabled() {
         let dead: usize = snapshot.iter().map(|m| m.dead_bytes).sum();
         let live: usize = snapshot.iter().map(|m| m.live_bytes).sum();
         eprintln!(

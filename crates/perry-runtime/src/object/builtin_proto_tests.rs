@@ -1,8 +1,8 @@
 use super::*;
 
 #[test]
-fn the_codegen_mirror_matches_the_family_slots() {
-    // `perry-codegen/src/builtin_proto.rs` mirrors these discriminants.
+fn shared_intrinsic_families_keep_their_abi_slots() {
+    // Both runtime and compiler use perry-abi::BuiltinProto.
     let expected: [(BuiltinProto, u8); FAMILIES] = [
         (BuiltinProto::Object, 0),
         (BuiltinProto::Function, 1),

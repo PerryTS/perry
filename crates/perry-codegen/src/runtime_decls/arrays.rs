@@ -370,6 +370,7 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
         &[DOUBLE, DOUBLE, DOUBLE],
     );
     module.declare_function("js_iterator_next_method", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_worker_transfer_sequence", DOUBLE, &[DOUBLE]);
     module.declare_function("js_iterator_close_if_not_done", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function(
         "js_iterator_close_on_throw",

@@ -16,6 +16,7 @@ pub(crate) mod type_infer;
 /// `lower_decl/body_stmt.rs`, which that change did not reach.
 pub(crate) use type_infer::for_init_decl_type;
 
+pub(crate) use alias_tracking::builtin_proto_method_alias;
 use alias_tracking::track_decl_aliases;
 use binding_guards::apply_binding_guards;
 use native_fetch::register_native_fetch_and_streams;
@@ -313,6 +314,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
                     value,
                     receiver,
                     strict,
+                    ..
                 }) if matches!(value.as_ref(), Expr::New { .. } | Expr::Object(_)) => {
                     let tmp_id = ctx.define_local("__nx_member_init".to_string(), Type::Any);
                     result.push(Stmt::Let {
@@ -328,6 +330,8 @@ pub(crate) fn lower_var_decl_with_destructuring(
                         value: Box::new(Expr::LocalGet(tmp_id)),
                         receiver,
                         strict,
+                        byte_offset: 0,
+                        byte_end: 0,
                     }));
                     result.push(Stmt::Let {
                         id,

@@ -278,6 +278,8 @@ fn arr_length_store_roots_the_receiver_across_an_allocating_rhs() {
                     object: Box::new(Expr::LocalGet(1)),
                     property: "length".to_string(),
                     value: Box::new(value),
+                    byte_offset: 0,
+                    byte_end: 0,
                 }),
             ]
         },
@@ -312,6 +314,8 @@ fn array_string_key_store_roots_both_operands_across_an_allocating_rhs() {
                     object: Box::new(Expr::LocalGet(1)),
                     index: Box::new(Expr::LocalGet(2)),
                     value: Box::new(value),
+                    byte_offset: 0,
+                    byte_end: 0,
                 }),
             ]
         },
@@ -346,6 +350,8 @@ fn polymorphic_index_store_roots_both_operands_across_an_allocating_rhs() {
                     object: Box::new(Expr::LocalGet(1)),
                     index: Box::new(Expr::LocalGet(2)),
                     value: Box::new(value),
+                    byte_offset: 0,
+                    byte_end: 0,
                 }),
             ]
         },
@@ -410,6 +416,8 @@ fn typed_array_runtime_key_store_roots_operands_only_when_rhs_collects() {
                 object: Box::new(Expr::LocalGet(1)),
                 index: Box::new(Expr::LocalGet(2)),
                 value: Box::new(value),
+                byte_offset: 0,
+                byte_end: 0,
             })],
         )
     };
@@ -458,6 +466,8 @@ fn erased_receiver_inline_store_roots_receiver_and_key_across_rhs() {
                 object: Box::new(Expr::LocalGet(1)),
                 index: Box::new(Expr::LocalGet(2)),
                 value: Box::new(value),
+                byte_offset: 0,
+                byte_end: 0,
             })],
         )
     };
@@ -512,6 +522,8 @@ fn put_value_index_fast_path_preserves_explicit_module_strictness() {
             value: Box::new(Expr::Integer(1)),
             receiver: Box::new(receiver),
             strict: true,
+            byte_offset: 0,
+            byte_end: 0,
         })],
         false,
     );
@@ -535,6 +547,8 @@ fn collecting_native_view_operands_decline_the_cached_pointer_fast_path() {
             object: Box::new(Expr::LocalGet(11)),
             index: Box::new(Expr::Integer(0)),
             value: Box::new(Expr::Number(1.0)),
+            byte_offset: 0,
+            byte_end: 0,
         })),
     );
     assert!(
@@ -555,6 +569,8 @@ fn collecting_native_view_operands_decline_the_cached_pointer_fast_path() {
             object: Box::new(Expr::LocalGet(11)),
             index: Box::new(Expr::Integer(0)),
             value: Box::new(Expr::NumberCoerce(Box::new(allocating_value()))),
+            byte_offset: 0,
+            byte_end: 0,
         })),
     );
     assert!(
@@ -979,6 +995,8 @@ fn growing_array_store_uses_the_reallocated_head_for_its_barrier() {
                 object: Box::new(Expr::LocalGet(1)),
                 index: Box::new(Expr::Integer(8)),
                 value: Box::new(allocating_value()),
+                byte_offset: 0,
+                byte_end: 0,
             }),
         ],
     );

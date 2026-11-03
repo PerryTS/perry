@@ -15,12 +15,16 @@ use std::collections::{BTreeMap, BTreeSet};
 #[path = "indexed_owner_string.rs"]
 mod string;
 const STRING_KIND: u8 = 12;
+#[path = "indexed_owner_sarray.rs"]
+mod sarray;
+const SARRAY_KIND: u8 = 13;
 
 #[derive(Default)]
 struct Plan {
     counter: u32,
     arrays: BTreeMap<u32, u8>,
     strings: BTreeSet<u32>,
+    sarrays: BTreeSet<u32>,
     aliases: BTreeMap<u32, u32>,
     defs: BTreeMap<u32, Expr>,
     inputs: BTreeSet<u32>,
@@ -63,7 +67,7 @@ impl Plan {
                     .and_then(crate::expr::typed_element::type_kind)
             })
             .or_else(|| crate::expr::ta_element_read::receiver_kind(ctx, &Expr::LocalGet(root)))?;
-        if matches!(kind, 9 | 10) || self.strings.contains(&root) {
+        if matches!(kind, 9 | 10) || self.strings.contains(&root) || self.sarrays.contains(&root) {
             return None;
         }
         self.arrays.insert(root, kind);
@@ -85,11 +89,31 @@ impl Plan {
         if self.body_bindings.contains(&id)
             || !plain_binding(ctx, id)
             || self.arrays.contains_key(&id)
+            || self.sarrays.contains(&id)
         {
             return None;
         }
         self.strings.insert(id);
         Some((id, index))
+    }
+
+    /// `array[i].length` of a declared `string[]` binding.
+    fn sarray_read<'a>(&mut self, ctx: &FnCtx<'_>, e: &'a Expr) -> Option<(u32, &'a Expr)> {
+        let (id, index) = sarray::read(e)?;
+        if !self.sarray_binding(ctx, id) {
+            return None;
+        }
+        self.sarrays.insert(id);
+        Some((id, index))
+    }
+
+    fn sarray_binding(&self, ctx: &FnCtx<'_>, id: u32) -> bool {
+        !self.body_bindings.contains(&id)
+            && !self.aliases.contains_key(&id)
+            && plain_binding(ctx, id)
+            && !self.arrays.contains_key(&id)
+            && !self.strings.contains(&id)
+            && sarray::declared(ctx, id)
     }
 
     fn condition(&mut self, ctx: &FnCtx<'_>, e: &Expr) -> bool {
@@ -104,6 +128,13 @@ impl Plan {
 
     fn numeric(&mut self, ctx: &FnCtx<'_>, e: &Expr) -> bool {
         if let Some((root, index)) = self.string_read(ctx, e) {
+            if !self.numeric(ctx, index) {
+                return false;
+            }
+            self.indices.push((root, index.clone()));
+            return true;
+        }
+        if let Some((root, index)) = self.sarray_read(ctx, e) {
             if !self.numeric(ctx, index) {
                 return false;
             }
@@ -215,6 +246,8 @@ impl Plan {
                         object: target.clone(),
                         index: key.clone(),
                         value: value.clone(),
+                        byte_offset: 0,
+                        byte_end: 0,
                     },
                 )
             }
@@ -228,12 +261,15 @@ impl Plan {
                     object: array.clone(),
                     index: index.clone(),
                     value: value.clone(),
+                    byte_offset: 0,
+                    byte_end: 0,
                 },
             ),
             Expr::IndexSet {
                 object,
                 index,
                 value,
+                ..
             } => {
                 let Some(root) = self.receiver(ctx, object) else {
                     return false;
@@ -441,7 +477,11 @@ fn numeric_function<'a>(
         }
         _ => return None,
     };
-    ctx.wpfacts.numeric_functions.get(&id)
+    let f = ctx.wpfacts.numeric_functions.get(&id);
+    if f.is_some() {
+        crate::facts_consumed::used();
+    }
+    f
 }
 
 fn owner_proof<'a>(
@@ -452,10 +492,15 @@ fn owner_proof<'a>(
     if ctx.wpfacts_off || ctx.wpfacts.interp_guard {
         return None;
     }
-    ctx.wpfacts
+    let p = ctx
+        .wpfacts
         .indexed_owners
         .get(&id)
-        .filter(|p| p.kind == kind)
+        .filter(|p| p.kind == kind);
+    if p.is_some() {
+        crate::facts_consumed::used();
+    }
+    p
 }
 
 fn static_interval(ctx: &FnCtx<'_>, p: &Plan, e: &Expr, bound: i64) -> Option<(i64, i64)> {
@@ -576,6 +621,24 @@ fn boxed_binding(ctx: &mut FnCtx<'_>, id: u32) -> String {
         .cloned()
         .unwrap_or_else(|| format!("@{}", ctx.module_globals[&id]));
     ctx.block().load(DOUBLE, &slot)
+}
+
+/// A facts-verification build (`verify_facts`): the input the facts prove a
+/// Number is one, or the witness reports the site.
+fn verify_number_input(ctx: &mut FnCtx<'_>, number: &str, value: &str, id: u32) {
+    let miss = ctx.new_block("indexed.owner.verify_miss");
+    let miss_l = ctx.block_label(miss);
+    branch_guard(ctx, number, &miss_l);
+    let ok = ctx.current_block;
+    ctx.current_block = miss;
+    let site = crate::verify_facts::site_arg(ctx, &format!("number input local {id}"));
+    let _ = ctx.block().call(
+        crate::types::I32,
+        "perry_wpfacts_check_miss",
+        &[(DOUBLE, value), (crate::types::I64, &site)],
+    );
+    ctx.block().unreachable();
+    ctx.current_block = ok;
 }
 
 fn branch_guard(ctx: &mut FnCtx<'_>, pass: &str, slow: &str) {
@@ -891,6 +954,11 @@ fn numeric(
     values: &mut BTreeMap<u32, Number>,
     storage: &BTreeMap<u32, Storage>,
 ) -> Number {
+    if let Some((id, index)) = sarray::read(e) {
+        let s = &storage[&id];
+        let index = index_value(ctx, p, index, values, storage);
+        return Number::U(sarray::element_length(ctx, s, &index));
+    }
     if let Some((id, index)) = string::read(e) {
         let s = &storage[&id];
         let index = index_value(ctx, p, index, values, storage);
@@ -1112,6 +1180,8 @@ fn expression(
                 object: target.clone(),
                 index: key.clone(),
                 value: value.clone(),
+                byte_offset: 0,
+                byte_end: 0,
             },
             values,
             storage,
@@ -1127,6 +1197,8 @@ fn expression(
                 object: array.clone(),
                 index: index.clone(),
                 value: value.clone(),
+                byte_offset: 0,
+                byte_end: 0,
             },
             values,
             storage,
@@ -1135,6 +1207,7 @@ fn expression(
             object,
             index,
             value,
+            ..
         } => {
             let Expr::LocalGet(id) = object.as_ref() else {
                 unreachable!()
@@ -1403,7 +1476,10 @@ pub(super) fn lower(
             object, property, ..
         } if property == "length" => {
             if let Expr::LocalGet(id) = object.as_ref() {
-                if p.strings.contains(id) {
+                if p.strings.contains(id) || p.sarrays.contains(id) {
+                    Some(*id)
+                } else if p.sarray_binding(ctx, *id) {
+                    p.sarrays.insert(*id);
                     Some(*id)
                 } else {
                     p.receiver(ctx, object)
@@ -1443,11 +1519,12 @@ pub(super) fn lower(
     // captured cells. The raw binding and any i32 shadow are flushed on exit.
     if p.strings
         .iter()
+        .chain(p.sarrays.iter())
         .any(|id| p.inputs.contains(id) || p.writes.contains(id))
     {
         return Ok(false);
     }
-    if !p.strings.is_empty() {
+    if !p.strings.is_empty() || !p.sarrays.is_empty() {
         // The original condition/body can drain work deferred by a preceding
         // allocation even though this admitted region cannot allocate. Keep
         // that entry safepoint before loading any owner or raw string bytes;
@@ -1473,6 +1550,11 @@ pub(super) fn lower(
         ) || ctx.numeric_accumulator_f64_slots.contains_key(id);
         if !native_number && (ctx.wpfacts_off || !ctx.wpfacts.number_inputs.contains(id)) {
             branch_guard(ctx, &number, &slow_l);
+        } else if !native_number {
+            crate::facts_consumed::used();
+            if crate::verify_facts::enabled() {
+                verify_number_input(ctx, &number, &v, *id);
+            }
         }
         values.insert(*id, Number::F(v));
     }
@@ -1486,6 +1568,9 @@ pub(super) fn lower(
     for id in &p.strings {
         storage.insert(*id, string::admit(ctx, *id, &slow_l));
     }
+    for id in &p.sarrays {
+        storage.insert(*id, sarray::admit(ctx, *id, &slow_l));
+    }
     // Read-only regions require no alias separation. For writes, allocation
     // identities can prove separation before falling back to live spans.
     if !p.stores.is_empty() {
@@ -1493,6 +1578,7 @@ pub(super) fn lower(
     }
     if let Some(id) = length_receiver.filter(|id| {
         storage[id].kind != STRING_KIND
+            && storage[id].kind != SARRAY_KIND
             && !(ctx.wpfacts.indexed_metadata_pristine
                 && owner_proof(ctx, *id, storage[id].kind).is_some())
     }) {
@@ -1703,7 +1789,10 @@ pub(super) fn lower(
             false,
             false,
             vec![
-                format!("owners={:?};ascii_strings={:?}", p.arrays, p.strings),
+                format!(
+                    "owners={:?};ascii_strings={:?};string_arrays={:?}",
+                    p.arrays, p.strings, p.sarrays
+                ),
                 format!("index_windows={}", indices.len()),
                 format!(
                     "dynamic_entry_guards={dynamic_entry_guards};nested_loops={}",

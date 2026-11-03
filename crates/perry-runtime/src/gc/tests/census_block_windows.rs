@@ -11,7 +11,7 @@
 
 use super::super::*;
 use super::support::*;
-use crate::gc::trace::block_window_sabotage;
+use crate::gc::mark::block_window_sabotage;
 
 fn run_isolated(test: fn()) {
     std::thread::spawn(move || {

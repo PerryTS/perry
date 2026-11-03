@@ -5,7 +5,7 @@ pub(super) fn try_keys(obj: *const ObjectHeader) -> Option<*mut ArrayHeader> {
     let addr = strip_nanbox_addr(obj);
     let header = unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }?;
     unsafe {
-        if header.as_ref().obj_type != crate::gc::GC_TYPE_OBJECT {
+        if crate::gc_type_is_not_object!(header.as_ref().obj_type) {
             return None;
         }
         let obj = addr as *const ObjectHeader;

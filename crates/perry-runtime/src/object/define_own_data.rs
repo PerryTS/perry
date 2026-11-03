@@ -88,6 +88,14 @@ unsafe fn define_other(
     record: Option<super::shapes::ShapeRecordRef>,
 ) -> Option<f64> {
     let addr = (obj_value.to_bits() & crate::value::POINTER_MASK) as usize;
+    // A function object: its own keys are its bag's layout, which its keyed
+    // Function shape names (`function_own_put`).
+    if record.is_none()
+        && crate::value::addr_class::try_read_gc_header(addr)
+            .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_CLOSURE)
+    {
+        return super::function_own_put::function_own_put(obj_value, key_value, value, true);
+    }
     let obj = addr as *mut ObjectHeader;
     if let Some(record) = record {
         if record.object_kind() == super::shapes::ShapeObjectKind::Ordinary
@@ -122,7 +130,7 @@ unsafe fn define_other(
             | crate::gc::OBJ_FLAG_SEALED
             | crate::gc::OBJ_FLAG_NO_EXTEND
             | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
-        if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        if crate::gc_type_is_not_object!(header.obj_type)
             || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
             || header._reserved & BLOCKING != 0
         {
@@ -383,7 +391,7 @@ unsafe fn definition_admitted(obj_bits: u64, key_value: f64) -> Option<Admitted>
         | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
         | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES
         | crate::gc::OBJ_FLAG_ARGUMENTS;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::object_lacks_meta_word!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || header._reserved & BLOCKING != 0
     {
@@ -396,7 +404,7 @@ unsafe fn definition_admitted(obj_bits: u64, key_value: f64) -> Option<Admitted>
     {
         return None;
     }
-    let meta = (*obj).meta;
+    let meta = crate::meta_read!(crate::meta_obj_from_type!(obj as *mut _, header.obj_type));
     if !meta.is_null()
         && ((*meta).elements != 0
             || (*meta).flags
@@ -446,8 +454,7 @@ unsafe fn definition_admitted(obj_bits: u64, key_value: f64) -> Option<Admitted>
     }
     let keys = super::object_keys(obj);
     if !keys.is_null() {
-        if let Some(pos) = super::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), bytes)
-        {
+        if let Some(pos) = super::keys_find_property_slot_by_bytes(keys, keys.count(), bytes) {
             return Some(Admitted::Own(pos as u32));
         }
     }

@@ -75,6 +75,12 @@ fn register_key_table_scanners() {
     gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
 }
 
+fn custom_proto_bit(user: usize) -> u16 {
+    let reserved =
+        unsafe { (*crate::gc::header_from_trusted_user_ptr(user as *const u8))._reserved };
+    reserved & crate::gc::GC_ARRAY_CUSTOM_PROTO
+}
+
 /// The claim as reported against #10381: a lazy array's prototype, set through
 /// the real `Object.setPrototypeOf` entry, across a copying minor that moves
 /// both the array and its prototype.
@@ -114,18 +120,31 @@ fn test_lazy_array_explicit_prototype_survives_a_copying_minor() {
         f64::from_bits(ptr_bits(lazy)),
         f64::from_bits(ptr_bits(proto)),
     );
+    let lazy_before = lazy;
     let lazy = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
     let proto = (js_shadow_slot_get(1) & POINTER_MASK) as usize;
+    // Publishing the prototype into the owner bag materializes the lazy array
+    // IN PLACE: the same address, now an ordinary array that keeps the
+    // per-array custom-prototype bit `setPrototypeOf` set on the lazy header.
+    assert_eq!(
+        lazy, lazy_before,
+        "premise: materialization keeps the address"
+    );
     assert_eq!(
         obj_type_at(lazy),
-        GC_TYPE_LAZY_ARRAY,
-        "premise: setPrototypeOf left the receiver a lazy array"
+        GC_TYPE_ARRAY,
+        "premise: setPrototypeOf materialized the lazy array in place"
+    );
+    assert_ne!(
+        custom_proto_bit(lazy),
+        0,
+        "premise: the flip kept GC_ARRAY_CUSTOM_PROTO, so the inline guards decline"
     );
     assert_eq!(
         crate::object::prototype_chain::object_static_prototype(lazy),
         Some(ptr_bits(proto)),
-        "premise: the prototype is recorded in the owned bag under the lazy \
-         header's own address"
+        "premise: the prototype is recorded in the owned bag under the array's \
+         own (unchanged) address"
     );
     assert_eq!(
         crate::object::js_object_get_prototype_of(f64::from_bits(ptr_bits(lazy))).to_bits(),
@@ -146,7 +165,12 @@ fn test_lazy_array_explicit_prototype_survives_a_copying_minor() {
         proto_after, proto,
         "the prototype must move too, or a stale recorded address would go unseen"
     );
-    assert_eq!(obj_type_at(lazy_after), GC_TYPE_LAZY_ARRAY);
+    assert_eq!(obj_type_at(lazy_after), GC_TYPE_ARRAY);
+    assert_ne!(
+        custom_proto_bit(lazy_after),
+        0,
+        "the copying minor must carry GC_ARRAY_CUSTOM_PROTO to the new header"
+    );
 
     let recorded = crate::object::prototype_chain::object_static_prototype(lazy_after);
     let resolved =

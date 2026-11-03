@@ -28,6 +28,7 @@ pub(super) const COMPILE_ENV_VARS: &[&str] = &[
     "PERRY_ASSERT_CAPTURE_CELLS",
     "PERRY_B4_SABOTAGE",
     "PERRY_BOX_CAPTURE_ENTRY_CELLS",
+    "PERRY_BYTE_VIEW_LOOP",
     "PERRY_CALLEE_BINDING_RESOLUTION",
     "PERRY_CALL_DEVIRT",
     "PERRY_CANONICAL_I32_LOCALS",
@@ -46,9 +47,12 @@ pub(super) const COMPILE_ENV_VARS: &[&str] = &[
     "PERRY_DISABLE_BUFFER_FAST_PATH",
     "PERRY_DISABLE_WELL_KNOWN",
     "PERRY_DYNAMIC_ADD_PAIR_GUARD",
+    "PERRY_DYNAMIC_REACH",
+    "PERRY_DYNAMIC_REACH_MAX_WORK",
     "PERRY_ENTRY_SYMBOL",
     "PERRY_ENUM_DIAG",
     "PERRY_EVAL_CSP",
+    "PERRY_EXPORT_DEMAND",
     "PERRY_EXTRA_LINK_ARGS",
     "PERRY_FACTS_BUDGET_SECS",
     "PERRY_FACTS_ELIDE",
@@ -85,7 +89,6 @@ pub(super) const COMPILE_ENV_VARS: &[&str] = &[
     "PERRY_GLOBAL_SCRIPT_THIS",
     "PERRY_GUARDED_ARITH",
     "PERRY_GUARDED_PREINLINE_MAX_IR_BYTES",
-    "PERRY_IC_DIAG",
     "PERRY_INLINE_CTOR",
     "PERRY_INLINE_HOT_SMALL",
     "PERRY_INLINE_HOT_SMALL_CAP",
@@ -108,6 +111,7 @@ pub(super) const COMPILE_ENV_VARS: &[&str] = &[
     "PERRY_LD",
     "PERRY_LD64.LLD",
     "PERRY_LIB_DIR",
+    "PERRY_LINK_PAD",
     "PERRY_LINUX_ARM64_CC",
     "PERRY_LINUX_ARM64_SYSROOT",
     "PERRY_LINUX_MUSL_AARCH64_CC",
@@ -145,6 +149,7 @@ pub(super) const COMPILE_ENV_VARS: &[&str] = &[
     "PERRY_OUTLINE_METHOD_DISPATCH",
     "PERRY_PACKED_LOOP_ABRUPT",
     "PERRY_PACKED_LOOP_NUMERIC_ACCUMULATOR",
+    "PERRY_PIP_SABOTAGE",
     "PERRY_PRECOMPILE_CAPTURE",
     "PERRY_PROBE_VERIFY",
     "PERRY_PROGRAM_FACTS",
@@ -152,6 +157,7 @@ pub(super) const COMPILE_ENV_VARS: &[&str] = &[
     "PERRY_PTR_NUMARRAY_LOCALS",
     "PERRY_PTR_SHAPE_LOCALS",
     "PERRY_PTR_SHAPE_THIS",
+    "PERRY_REALM_REACH_NAMES",
     "PERRY_REALM_TEST_FIXTURE",
     "PERRY_RECEIVER_REPR_DIAG",
     "PERRY_RECV_ROUTE_COUNT",
@@ -194,6 +200,7 @@ pub(super) const COMPILE_ENV_VARS: &[&str] = &[
     "PERRY_TYPED_FEEDBACK_TRACE",
     "PERRY_TYPED_LOCALS",
     "PERRY_U8_INLINE_READ",
+    "PERRY_VERIFY_FACTS",
     "PERRY_VERIFY_NATIVE_REGIONS",
     "PERRY_VISIONOS_SYSROOT",
     "PERRY_WASM_DISCARD",
@@ -227,6 +234,8 @@ pub(super) fn compile_env_value(name: &str) -> Option<String> {
 
 #[cfg(test)]
 const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
+    ("PERRY_DYNAMIC_REACH_REPORT", "Writes the dynamic-reach report file only; no pruning decision or emitted code depends on it."),
+    ("PERRY_EXPORT_DEMAND_REPORT", "Writes the export-demand report file only; no pruning decision or emitted code depends on it."),
     ("PERRY_REALM_REACH", "Compiler-only diagnostic of source facts; changes no emitted bytes, runtime state or archive selection."),
     ("PERRY_REACH_REPORT", "Compiler-only diagnostic; bypasses object caches and does not change emitted code."),
     ("PERRY_SOURCE_NEED_REPORT", "Compiler-only retained-source census; bypasses object caches and does not change emitted code."),
@@ -388,6 +397,10 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
     (
         "PERRY_EVAL_DIAG",
         "Prints lowering diagnostics; no emitted instructions depend on the report.",
+    ),
+    (
+        "PERRY_FACTS_CONSUMED",
+        "Diagnostics/analysis-only output of the program-facts pass; emitted code does not depend on it.",
     ),
     (
         "PERRY_FACTS_DUMP",
@@ -554,6 +567,14 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
         "Controls cache storage or reuse policy; identical compile inputs emit identical bytes.",
     ),
     (
+        "PERRY_HOST_TRIPLE",
+        "Set by build.rs to the triple perry itself was built for; it selects package roots, never emitted code.",
+    ),
+    (
+        "PERRY_NO_AUTO_FETCH",
+        "Decides only whether a missing ext package is downloaded before the link; the archives linked are the same verified bytes either way.",
+    ),
+    (
         "PERRY_NO_CACHE",
         "Controls cache storage or reuse policy; identical compile inputs emit identical bytes.",
     ),
@@ -598,6 +619,14 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
         "Writes IR/report files or diagnostic output without changing emitted objects.",
     ),
     (
+        "PERRY_RELEASE_MIRROR",
+        "Where a missing package is downloaded from; its signed manifest pins the same bytes from any source.",
+    ),
+    (
+        "PERRY_RELEASE_TAG",
+        "Baked in by release CI: the GitHub release perry target add and the ext fetch download from; no emitted code depends on it.",
+    ),
+    (
         "PERRY_REPSEL_DEBUG",
         "Writes IR/report files or diagnostic output without changing emitted objects.",
     ),
@@ -624,6 +653,10 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
     (
         "PERRY_SKIP_CODEGEN",
         "Stops before object emission; the build-cache probe rejects diagnostic/no-link modes.",
+    ),
+    (
+        "PERRY_SOURCE_REVISION",
+        "Baked in by release CI: the commit a target or ext package target.json must name; it selects package roots, never emitted code.",
     ),
     (
         "PERRY_SOURCE_ROOT",
@@ -662,7 +695,7 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
         "Test-only fixture/child-process control; absent from compiler production paths.",
     ),
     (
-        "PERRY_TEST_DESERIALIZER_FEATURES_CHILD",
+        "PERRY_TEST_ISOLATED_FEATURES_CHILD",
         "Test-only child-process isolation marker; never read by the compiler's production path.",
     ),
     (

@@ -230,7 +230,7 @@ fn gc_obj_type(value: f64) -> Option<u8> {
 /// node `validateObject(value, name)` with default options: rejects `null`,
 /// arrays, functions, and primitives.
 pub fn validate_object(value: f64, name: &str) {
-    let is_plain_object = gc_obj_type(value) == Some(crate::gc::GC_TYPE_OBJECT)
+    let is_plain_object = matches!(gc_obj_type(value), Some(crate::gc_object_type_pat!()))
         && !is_closure_value(value)
         && crate::buffer::js_buffer_is_buffer(value.to_bits() as i64) != 1;
     if !is_plain_object {

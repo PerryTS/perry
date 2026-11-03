@@ -66,7 +66,7 @@ fn hold_list() -> std::sync::MutexGuard<'static, ()> {
 /// The runtime's `{value, done}` keys (ITERATOR_RESULT's atoms).
 fn keys() -> &'static [PerryLayoutKey] {
     unsafe {
-        let desc = std::ptr::addr_of!(crate::object::runtime_layouts::ITERATOR_RESULT);
+        let desc = crate::object::runtime_layouts::ITERATOR_RESULT::desc();
         std::slice::from_raw_parts((*desc).keys, 2)
     }
 }

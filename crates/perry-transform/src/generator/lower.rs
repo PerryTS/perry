@@ -23,6 +23,7 @@ pub(crate) use abrupt::{
 };
 pub(crate) use async_step::build_async_step_driver_direct;
 pub(crate) use call_this::generator_body_uses_call_this;
+pub(crate) use private_brand::restore_in_class_closures;
 pub(crate) use resume::{wrap_async_gen_step_body, wrap_generator_resume_body};
 pub(crate) use yield_await::await_async_generator_yield_operands;
 
@@ -528,7 +529,7 @@ pub fn transform_generator_function_with_extra_captures(
         .into_iter()
         .filter(|(id, _, _)| !no_hoist_ids.contains(id))
         .collect();
-    if fixed_state {
+    if fixed_state || func.was_plain_async {
         let locals = fixed_state::state_local_ids(
             &states,
             &shared_with_user,

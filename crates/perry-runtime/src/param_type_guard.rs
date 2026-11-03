@@ -296,7 +296,7 @@ impl GuardState<'_> {
         }
         let address = (value.bits() & POINTER_MASK) as usize;
         let header = crate::value::addr_class::try_read_gc_header(address)?;
-        if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        if crate::gc_type_is_not_object!(header.obj_type)
             || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return None;
@@ -320,7 +320,7 @@ impl GuardState<'_> {
         }
         let inline_fields = live_slots.max(crate::object::INLINE_SLOT_FLOOR);
         let required = crate::gc::GC_HEADER_SIZE
-            .checked_add(std::mem::size_of::<ObjectHeader>())?
+            .checked_add(crate::object::header::meta_form_alloc_bytes(0))?
             .checked_add(inline_fields.checked_mul(std::mem::size_of::<JSValue>())?)?;
         if required > header.size as usize {
             return None;
@@ -490,8 +490,10 @@ impl GuardState<'_> {
                 // the inline bound (spill) still take the runtime getter,
                 // which owns that path.
                 if index < live_slots {
-                    let fields = (object as *const u8).add(std::mem::size_of::<ObjectHeader>())
-                        as *const u64;
+                    // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+                    let fields =
+                        crate::meta_slots_of!(crate::meta_obj_runtime_born!(object as *mut _))
+                            as *const u64;
                     let bits = std::ptr::read(fields.add(index));
                     // Mirror `js_object_get_field`: a null POINTER_TAG payload
                     // is never a legitimate value and reads as `undefined`.
@@ -929,7 +931,7 @@ mod tests {
                 shape_descriptor_of_receiver((object_shape_stamp(object)).0).expect("live shape");
             let rep = with_slot_rep(with_slot_rep(REP_ANY, 0, REP_F64), 1, REP_F64);
             let id = publish_shape_result(shape_descriptor_ensure_with_rep(
-                d.keys as usize as *const crate::array::ArrayHeader,
+                d.keys_view(),
                 d.logical_key_count,
                 d.live_inline_slot_count,
                 d.semantic_generation,

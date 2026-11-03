@@ -8,6 +8,13 @@ impl<'a> Gen<'a> {
 
     pub fn walk_all(&mut self) {
         let modules = self.modules.clone();
+        // RPG1b: the once closures and the evaluation order (`derive`'s
+        // ordered writers).
+        self.once_ids = modules
+            .iter()
+            .map(|(_, m)| once::once_closures(m))
+            .collect();
+        self.m.eval_deps = (0..modules.len()).map(|mi| self.eval_deps_of(mi)).collect();
         // Constructor phase analysis first (needs every class).
         for mi in 0..modules.len() {
             for c in self.classes_of(mi) {
@@ -31,51 +38,211 @@ impl<'a> Gen<'a> {
                 self.compute_birth_keys(tm, module);
             }
         }
+        // DECISIONS 225: a module only `import()` loads runs when an active
+        // body loads it; its body is walked then (`PendingWalk::Module`).
+        if self.m.act.is_some() {
+            self.dynamic_only = self.dynamic_only_modules();
+        }
+        if !self.dynamic_only.is_empty() {
+            for mi in 0..modules.len() as u32 {
+                let f = self.synthetic_fn(mi, "<init>");
+                self.init_fn_of.insert(mi, f);
+            }
+        }
         for mi in 0..modules.len() {
             // Over a bound: the program gets no facts; stop generating.
             if self.m.aborted {
                 return;
             }
             let mi = mi as u32;
-            let init_fn = self.synthetic_fn(mi, "<init>");
-            let this = self.m.funcs[init_fn as usize].this;
-            // Module top-level `this`: CJS `module.exports`-like object or
-            // undefined in ESM; ⊤-free: a fresh literal-ish object.
-            self.m.add_prim(this, prim::UNDEF);
-            let fx = Fx {
-                module: mi,
-                f: init_fn,
-                this,
-                ret: self.m.funcs[init_fn as usize].ret,
-                class: None,
-                ctor_of: None,
-                new_target: self.m.all_prim_node,
-                fn_ctor: false,
+            let init_fn = match self.init_fn_of.get(&mi) {
+                Some(&f) => f,
+                None => {
+                    let f = self.synthetic_fn(mi, "<init>");
+                    self.init_fn_of.insert(mi, f);
+                    f
+                }
             };
-            for g in self.globals_of(mi as usize) {
-                if let Some(init) = &g.init {
-                    let v = self.expr(&fx, init);
-                    let gn = self.global(mi, g.id);
-                    self.m.edge(v, gn);
+            if !modules[mi as usize].1.has_top_level_await {
+                self.m.once_fns.insert(init_fn, (mi, false));
+            }
+            if self.dynamic_only.contains(&mi) && self.defer_walk(init_fn, PendingWalk::Module(mi))
+            {
+                continue;
+            }
+            self.walk_module(mi, init_fn);
+            if self.m.aborted {
+                return;
+            }
+        }
+    }
+
+    /// RPG1b: module `mi`'s static evaluation dependencies (`Model::eval_deps`).
+    fn eval_deps_of(&self, mi: usize) -> Vec<u32> {
+        let mut out: Vec<u32> = self
+            .imports_of(mi)
+            .iter()
+            .filter(|i| {
+                !i.is_dynamic && !i.type_only && !i.runtime_erased && !i.is_deferred_require
+            })
+            .filter_map(|i| i.resolved_path.as_ref())
+            .filter_map(|r| self.path_index.get(r).copied())
+            .filter(|&t| t as usize != mi)
+            .collect();
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
+    /// The modules that load only through `import()`: no static import or
+    /// re-export reaches them from a module no edge enters (the entry, a
+    /// worker). Empty when a re-export source does not resolve (every
+    /// module loads).
+    fn dynamic_only_modules(&self) -> crate::pts::FxHashSet<u32> {
+        let n = self.modules.len();
+        let mut entered = vec![false; n];
+        let mut succ: Vec<Vec<u32>> = vec![Vec::new(); n];
+        for mi in 0..n {
+            let imports = self.imports_of(mi);
+            let path = self.modules[mi].0;
+            // A re-export source as the compile driver resolved it
+            // (`export_sources`), else through an import of the same source.
+            let target = |source: &str| {
+                self.export_sources
+                    .get(path)
+                    .and_then(|m| m.get(source))
+                    .and_then(|r| self.path_index.get(r).copied())
+                    .or_else(|| {
+                        imports
+                            .iter()
+                            .find(|i| i.source == source)
+                            .and_then(|i| i.resolved_path.as_ref())
+                            .and_then(|r| self.path_index.get(r).copied())
+                    })
+            };
+            for i in &imports {
+                if i.type_only || i.runtime_erased {
+                    continue;
+                }
+                let Some(t) = i
+                    .resolved_path
+                    .as_ref()
+                    .and_then(|r| self.path_index.get(r).copied())
+                else {
+                    continue;
+                };
+                entered[t as usize] = true;
+                if !i.is_dynamic {
+                    succ[mi].push(t);
                 }
             }
-            for s in self.init_of(mi as usize) {
-                self.stmt(&fx, s);
-                self.name_enum_object(mi, s);
-            }
-            for f in self.functions_of(mi as usize) {
-                if self.m.aborted {
-                    return;
+            for e in &self.modules[mi].1.exports {
+                let source = match e {
+                    perry_hir::Export::ReExport { source, .. }
+                    | perry_hir::Export::ExportAll { source }
+                    | perry_hir::Export::NamespaceReExport { source, .. } => source,
+                    perry_hir::Export::Named { .. } => continue,
+                };
+                if source.starts_with("node:")
+                    || !(source.starts_with('.') || source.starts_with('/'))
+                {
+                    if let Some(t) = target(source) {
+                        entered[t as usize] = true;
+                        succ[mi].push(t);
+                    }
+                    continue;
                 }
-                let fxi = self.mods[mi as usize].funcs[&f.id];
-                self.walk_fn(mi, fxi, f, None, None);
-            }
-            for c in self.classes_of(mi as usize) {
-                if self.m.aborted {
-                    return;
+                match target(source) {
+                    Some(t) => {
+                        entered[t as usize] = true;
+                        succ[mi].push(t);
+                    }
+                    None => {
+                        return Default::default();
+                    }
                 }
-                self.walk_class(mi, c, &fx);
             }
+        }
+        let mut eager = vec![false; n];
+        let mut work: Vec<u32> = (0..n as u32)
+            .filter(|&m| {
+                !entered[m as usize] || self.roots.iter().any(|r| r == self.modules[m as usize].0)
+            })
+            .collect();
+        for &m in &work {
+            eager[m as usize] = true;
+        }
+        while let Some(m) = work.pop() {
+            for &t in &succ[m as usize] {
+                if !eager[t as usize] {
+                    eager[t as usize] = true;
+                    work.push(t);
+                }
+            }
+        }
+        (0..n as u32).filter(|&m| !eager[m as usize]).collect()
+    }
+
+    /// The body of module `mi`: its globals, top-level statements, functions
+    /// and classes. A module it loads statically loads with it.
+    pub(crate) fn walk_module(&mut self, mi: u32, init_fn: FnIdx) {
+        if !self.dynamic_only.is_empty() {
+            for i in self.imports_of(mi as usize) {
+                if i.is_dynamic || i.type_only || i.runtime_erased {
+                    continue;
+                }
+                let t = i
+                    .resolved_path
+                    .as_ref()
+                    .and_then(|r| self.path_index.get(r).copied());
+                if let Some(t) = t.filter(|t| self.dynamic_only.contains(t)) {
+                    let f = self.init_fn_of[&t];
+                    self.m.activate(f, "import");
+                }
+            }
+        }
+        self.m.note_walked(init_fn);
+        let this = self.m.funcs[init_fn as usize].this;
+        // Module top-level `this`: CJS `module.exports`-like object or
+        // undefined in ESM; ⊤-free: a fresh literal-ish object.
+        self.m.add_prim(this, prim::UNDEF);
+        let fx = Fx {
+            guard: None,
+            module: mi,
+            f: init_fn,
+            this,
+            ret: self.m.funcs[init_fn as usize].ret,
+            class: None,
+            ctor_of: None,
+            new_target: self.m.all_prim_node,
+            fn_ctor: false,
+        };
+        for g in self.globals_of(mi as usize) {
+            if let Some(init) = &g.init {
+                let v = self.expr(&fx, init);
+                let gn = self.global(mi, g.id);
+                self.m.edge(v, gn);
+            }
+        }
+        let saved = (self.order_ok, self.loop_depth);
+        (self.order_ok, self.loop_depth) = (true, 0);
+        for s in self.init_of(mi as usize) {
+            self.stmt(&fx, s);
+            self.name_enum_object(mi, s);
+        }
+        (self.order_ok, self.loop_depth) = saved;
+        for f in self.functions_of(mi as usize) {
+            if self.m.aborted {
+                return;
+            }
+            let fxi = self.mods[mi as usize].funcs[&f.id];
+            self.walk_fn(mi, fxi, f, None, None);
+        }
+        for c in self.classes_of(mi as usize) {
+            if self.m.aborted {
+                return;
+            }
+            self.walk_class(mi, c, &fx);
         }
     }
 
@@ -86,6 +253,7 @@ impl<'a> Gen<'a> {
         }
         let mut keys = Vec::new();
         let mut definite = Vec::new();
+        let mut reserved = Vec::new();
         if let Some(p) = self.m.tmpls[tm as usize].parent {
             if let TmplKind::Class { module: pm, .. } = self.m.tmpls[p as usize].kind {
                 let pmod = self.modules[pm as usize].1;
@@ -93,6 +261,7 @@ impl<'a> Gen<'a> {
             }
             keys = self.m.tmpls[p as usize].birth_keys.clone();
             definite = self.m.tmpls[p as usize].definite.clone();
+            reserved = self.m.tmpls[p as usize].reserved.clone();
         }
         if let Some((_, np)) = self.m.tmpls[tm as usize].native_parent.clone() {
             // Keys the native parent constructor defines (summary, E21).
@@ -101,34 +270,68 @@ impl<'a> Gen<'a> {
                 push_unique(&mut keys, a);
             }
         }
-        let TmplKind::Class { name, .. } = self.m.tmpls[tm as usize].kind.clone() else {
+        let TmplKind::Class {
+            module: mi, name, ..
+        } = self.m.tmpls[tm as usize].kind.clone()
+        else {
             return;
         };
         let Some(c) = module.classes.iter().find(|c| c.name == name) else {
             return;
         };
         let mut declared = Vec::new();
-        for f in &c.fields {
-            if f.is_private || f.key_expr.is_some() {
-                continue;
-            }
-            let a = self.m.atom(&f.name);
-            push_unique(&mut keys, a);
-            if f.origin == perry_hir::ClassFieldOrigin::Declared {
-                push_unique(&mut declared, a);
+        let phase = self.ctor_phase.get(&tm).cloned();
+        // A parent constructor that leaks `this` lets an observer see the
+        // instance before any key of this class is stored or defined. Asked
+        // of the chain as it stands: `CtorPhase::parent_leaks` was taken
+        // before the solve, when a parent value not yet settled counts as a
+        // leak; `settle_parent_layouts` recomputes these keys once it is.
+        let parent_leaks = !self.parent_pending(tm) && self.parent_chain_leaks(tm);
+        // The keys in the order construction defines them
+        // (`perry_hir::private_names::construction_entries`): a private
+        // field's entry is claimed at its declaration, so it holds the next
+        // slot like a public field's (#8969).
+        for f in perry_hir::private_names::construction_entries([c.fields.as_slice()]) {
+            let a = if f.is_private {
+                let key = self.private_field_key(mi, c, &f.name);
+                self.m.private_atom(&key)
             } else {
-                push_unique(&mut definite, a);
+                self.m.atom(&f.name)
+            };
+            push_unique(&mut keys, a);
+            match f.origin {
+                perry_hir::ClassFieldOrigin::Declared => push_unique(&mut declared, a),
+                // A reservation holds the hole until the constructor stores
+                // it: present from birth on only when the construction phase
+                // stores it before anyone can observe the instance
+                // (`CtorPhase::definite`, below).
+                perry_hir::ClassFieldOrigin::ConstructorStore => push_unique(&mut reserved, a),
+                // A field is defined at the birth, in order: present from
+                // birth on unless the instance could be observed before its
+                // definition (`CtorPhase::late_fields`, a leaking parent);
+                // then it is a reservation like a constructor store.
+                perry_hir::ClassFieldOrigin::Definition
+                    if parent_leaks
+                        || phase
+                            .as_ref()
+                            .is_some_and(|ph| ph.late_fields.contains(&f.name)) =>
+                {
+                    push_unique(&mut reserved, a)
+                }
+                perry_hir::ClassFieldOrigin::Definition => push_unique(&mut definite, a),
             }
         }
         self.m.tmpls[tm as usize].declared = declared;
-        if let Some(ph) = self.ctor_phase.get(&tm).cloned() {
+        if let Some(ph) = phase {
             for k in &ph.assigned_order {
                 let a = self.m.atom(k);
                 push_unique(&mut keys, a);
             }
-            for k in &ph.definite {
-                let a = self.m.atom(k);
-                push_unique(&mut definite, a);
+            if !parent_leaks {
+                for k in &ph.definite {
+                    let a = self.m.atom(k);
+                    push_unique(&mut definite, a);
+                }
             }
         }
         // A parent that is a value (§17.2) is not known before the solve
@@ -138,14 +341,17 @@ impl<'a> Gen<'a> {
         // keys are the prefix (`settle_parent_layouts`).
         if self.parent_pending(tm) {
             definite.clear();
+            reserved.clear();
         } else if self.value_parent_on_chain(tm) && self.parent_chain_leaks(tm) {
             let n = self.m.tmpls[tm as usize]
                 .parent
                 .map_or(0, |p| self.m.tmpls[p as usize].definite.len());
             definite.truncate(n);
         }
+        reserved.retain(|a| !definite.contains(a));
         self.m.tmpls[tm as usize].birth_keys = keys;
         self.m.tmpls[tm as usize].definite = definite;
+        self.m.tmpls[tm as usize].reserved = reserved;
     }
 
     /// Some class on `tm`'s chain has a parent value not settled to one
@@ -181,6 +387,30 @@ impl<'a> Gen<'a> {
     /// (published as `ClassContract::ctor_leaks`).
     pub(crate) fn chain_leaks(&self, tm: TmplId) -> bool {
         self.ctor_phase.get(&tm).map_or(true, |ph| ph.leaks) || self.parent_chain_leaks(tm)
+    }
+
+    /// Whether `tm`'s constructor, or one up its chain, may return an object
+    /// other than its `this` (published as `ClassContract::ctor_returns`).
+    /// `new` then yields the returned value, so the class's instance is not
+    /// the whole result. Unsettled parents and another unit's constructors
+    /// that return answer yes.
+    pub(crate) fn chain_returns(&self, tm: TmplId) -> bool {
+        if self.parent_pending(tm) {
+            return true;
+        }
+        let mut cur = Some(tm);
+        while let Some(c) = cur {
+            if self.stand_in_cc.get(&c).is_some_and(|cc| cc.ctor_returns) {
+                return true;
+            }
+            if let Some(f) = self.m.tmpls[c as usize].ctor {
+                if self.m.ctor_returns_object(f) {
+                    return true;
+                }
+            }
+            cur = self.m.tmpls[c as usize].parent;
+        }
+        false
     }
 
     fn parent_chain_leaks(&self, tm: TmplId) -> bool {
@@ -221,6 +451,7 @@ impl<'a> Gen<'a> {
         for &(tm, _) in &redo {
             self.m.tmpls[tm as usize].birth_keys.clear();
             self.m.tmpls[tm as usize].definite.clear();
+            self.m.tmpls[tm as usize].reserved.clear();
         }
         for (tm, mi) in redo {
             self.compute_birth_keys(tm, modules[mi].1);
@@ -231,17 +462,94 @@ impl<'a> Gen<'a> {
         &mut self,
         mi: u32,
         fxi: FnIdx,
-        f: &Function,
+        f: &'a Function,
         class: Option<TmplId>,
         ctor_of: Option<TmplId>,
     ) {
-        let info = self.m.funcs[fxi as usize].clone();
         let fn_ctor = class.is_none() && ctor_of.is_none();
         if fn_ctor {
             self.note_fn_phase(fxi, crate::ctor_phase::analyze_fn(f));
         }
         self.rooted_stores.extend(crate::rooted::stores(&f.body));
+        // DECISIONS 225: a body generation walks once it can run.
+        if self.defer_walk(fxi, PendingWalk::Fn(mi, fxi, f, class, ctor_of)) {
+            return;
+        }
+        self.walk_fn_body(mi, fxi, f, class, ctor_of);
+    }
+
+    /// DECISIONS 225: whether the body of `f` waits (it is not active):
+    /// kept for `walk_activated`, or, with the set final, never walked.
+    pub(crate) fn defer_walk(&mut self, f: FnIdx, w: PendingWalk<'a>) -> bool {
+        if self.m.body_active(f) {
+            return false;
+        }
+        if !self.m.act.as_ref().is_some_and(|a| a.fixed) {
+            self.pending_walk.entry(f).or_default().push(w);
+        }
+        true
+    }
+
+    /// DECISIONS 225: walk the bodies activated since the last walk (their
+    /// rules apply as generation emits them). Whether any was walked.
+    pub(crate) fn walk_activated(&mut self) -> bool {
+        let mut any = false;
+        loop {
+            let q = match self.m.act.as_mut() {
+                Some(a) if !a.queue.is_empty() => std::mem::take(&mut a.queue),
+                _ => return any,
+            };
+            for f in q {
+                if self.m.aborted {
+                    return any;
+                }
+                for w in self.pending_walk.remove(&f).unwrap_or_default() {
+                    any = true;
+                    match w {
+                        PendingWalk::Fn(mi, fxi, func, class, ctor_of) => {
+                            self.walk_fn_body(mi, fxi, func, class, ctor_of)
+                        }
+                        PendingWalk::Fields(mi, c) => self.walk_fields_body(mi, c),
+                        PendingWalk::Closure(cfx, e) => self.walk_closure_body(&cfx, e),
+                        PendingWalk::Module(mi) => {
+                            let f = self.init_fn_of[&mi];
+                            self.walk_module(mi, f);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// A declared function's or method's body: never a once body, so its
+    /// stores are unordered (RPG1b).
+    fn walk_fn_body(
+        &mut self,
+        mi: u32,
+        fxi: FnIdx,
+        f: &'a Function,
+        class: Option<TmplId>,
+        ctor_of: Option<TmplId>,
+    ) {
+        let saved = (self.order_ok, self.loop_depth);
+        (self.order_ok, self.loop_depth) = (false, 0);
+        self.walk_fn_body_inner(mi, fxi, f, class, ctor_of);
+        (self.order_ok, self.loop_depth) = saved;
+    }
+
+    fn walk_fn_body_inner(
+        &mut self,
+        mi: u32,
+        fxi: FnIdx,
+        f: &'a Function,
+        class: Option<TmplId>,
+        ctor_of: Option<TmplId>,
+    ) {
+        self.m.note_walked(fxi);
+        let info = self.m.funcs[fxi as usize].clone();
+        let fn_ctor = class.is_none() && ctor_of.is_none();
         let fx = Fx {
+            guard: None,
             module: mi,
             f: fxi,
             this: info.this,
@@ -285,18 +593,49 @@ impl<'a> Gen<'a> {
         for p in params {
             let n = self.local(fx.module, p.id);
             if let Some(d) = &p.default {
+                // The default is the parameter's value only when a call
+                // passes `undefined` or nothing (missing arguments are
+                // `undefined`, `bind_args`).
                 let v = self.expr(fx, d);
-                self.m.edge(v, n);
+                self.m.cons(
+                    n,
+                    Cons::Guard {
+                        test: crate::model::guard::UNDEF,
+                        from: v,
+                        dst: n,
+                    },
+                );
             }
         }
     }
 
-    fn walk_class(&mut self, mi: u32, c: &Class, outer: &Fx) {
+    fn walk_class(&mut self, mi: u32, c: &'a Class, outer: &Fx) {
+        let tm = self.mods[mi as usize].classes[&c.name];
+        // DECISIONS 225: the field initializers run when an instance is
+        // constructed (`run_ctor_chain`).
+        let fi = self.field_init_fn[&tm];
+        if !self.defer_walk(fi, PendingWalk::Fields(mi, c)) {
+            self.walk_fields_body(mi, c);
+        }
+        self.walk_class_rest(mi, c, outer);
+    }
+
+    /// Field initializers run per construction: unordered (RPG1b).
+    fn walk_fields_body(&mut self, mi: u32, c: &'a Class) {
+        let saved = (self.order_ok, self.loop_depth);
+        (self.order_ok, self.loop_depth) = (false, 0);
+        self.walk_fields_body_inner(mi, c);
+        (self.order_ok, self.loop_depth) = saved;
+    }
+
+    fn walk_fields_body_inner(&mut self, mi: u32, c: &'a Class) {
         let tm = self.mods[mi as usize].classes[&c.name];
         // Instance field initializers run in the field-init context.
         let fi = self.field_init_fn[&tm];
+        self.m.note_walked(fi);
         let fthis = self.m.funcs[fi as usize].this;
         let ffx = Fx {
+            guard: None,
             module: mi,
             f: fi,
             this: fthis,
@@ -307,11 +646,14 @@ impl<'a> Gen<'a> {
             fn_ctor: false,
         };
         let inst = self.m.tok(TokKind::Obj(tm, NO_CTX));
+        // A declared field's `undefined` is unobservable only when the
+        // constructor body stores the key on every path first (`stored`; its
+        // key being present from birth, `definite`, is not enough).
         let ctor_definite: Vec<String> = self
             .ctor_phase
             .get(&tm)
             .filter(|ph| !ph.parent_leaks)
-            .map(|ph| ph.definite.clone())
+            .map(|ph| ph.stored.clone())
             .unwrap_or_default();
         for f in &c.fields {
             let site = self.store_site(mi, fi, format!("field {}", f.name), Some(tm), true);
@@ -320,7 +662,13 @@ impl<'a> Gen<'a> {
                 // `x: T;` defines `undefined` first; when the constructor
                 // assigns it before anyone can observe the instance, that
                 // `undefined` is never seen.
-                None if f.key_expr.is_none() && ctor_definite.contains(&f.name) => continue,
+                None if f.key_expr.is_none()
+                    && (ctor_definite.contains(&f.name) || c.is_literal_shape()) =>
+                {
+                    // An object literal's shape: its constructor stores
+                    // every key from the literal's values first.
+                    continue;
+                }
                 None => self.prim_node(prim::UNDEF),
             };
             match &f.key_expr {
@@ -339,11 +687,15 @@ impl<'a> Gen<'a> {
                     );
                 }
                 None => {
-                    if f.is_private {
-                        // `#x`: a private slot, never reachable by name.
-                        continue;
-                    }
-                    let a = self.m.atom(&f.name);
+                    // `#x`: the class's private field, a key apart from
+                    // every public one (`Model::private_atom`).
+                    let a = match f.is_private {
+                        true => {
+                            let key = self.private_field_key(mi, c, &f.name);
+                            self.m.private_atom(&key)
+                        }
+                        false => self.m.atom(&f.name),
+                    };
                     let thisn = self.m.node_l("field-this");
                     self.m.edge(fthis, thisn);
                     self.m.cons(
@@ -357,9 +709,15 @@ impl<'a> Gen<'a> {
                 }
             }
         }
+    }
+
+    fn walk_class_rest(&mut self, mi: u32, c: &'a Class, outer: &Fx) {
+        let tm = self.mods[mi as usize].classes[&c.name];
         // Static fields and static blocks: `this` is the class object.
         let si = self.static_init_fn[&tm];
+        self.m.note_walked(si);
         let sfx = Fx {
+            guard: None,
             module: mi,
             f: si,
             this: self.m.funcs[si as usize].this,
@@ -374,9 +732,15 @@ impl<'a> Gen<'a> {
             // A declared static field (`Model::static_fields`), whether the
             // walk sees its initializer here or where a nested class is
             // evaluated.
+            let named = match f.is_private {
+                true => {
+                    let key = self.private_field_key(mi, c, &f.name);
+                    self.m.private_atom(&key)
+                }
+                false => self.m.atom(&f.name),
+            };
             if f.key_expr.is_none() {
-                let a = self.m.atom(&f.name);
-                self.m.static_fields.insert((tm, a));
+                self.m.static_fields.insert((tm, named));
             }
             if c.is_nested && (f.init.is_some() || f.key_expr.is_some()) {
                 // A nested class's static initializers run where the class
@@ -390,13 +754,12 @@ impl<'a> Gen<'a> {
                 Some(e) => self.expr(&sfx, e),
                 None => self.prim_node(prim::UNDEF),
             };
-            let a = self.m.atom(&f.name);
             let fl = match &f.key_expr {
                 Some(k) => {
                     let _ = self.expr(&sfx, k);
                     self.m.field_any(cobj)
                 }
-                None => self.m.field(cobj, a),
+                None => self.m.field(cobj, named),
             };
             self.m.edge(v, fl);
         }
@@ -428,6 +791,10 @@ impl<'a> Gen<'a> {
         for cm in &c.computed_members {
             let _ = self.expr(outer, &cm.key_expr);
             let f = self.mods[mi as usize].funcs[&cm.function.id];
+            // DECISIONS 225: a computed accessor runs on reads through the
+            // prototype under any key (its `this` is seeded at
+            // registration), never through a call: active with its class.
+            self.m.activate(f, "computed");
             self.walk_fn(mi, f, &cm.function, Some(tm), None);
         }
         for d in c.fields.iter().chain(c.static_fields.iter()) {
@@ -466,6 +833,7 @@ impl<'a> Gen<'a> {
             rooted: false,
             deep: false,
             key_value: None,
+            in_loop: self.order_ok.then_some(self.loop_depth > 0),
         });
         id
     }
@@ -569,15 +937,25 @@ impl<'a> Gen<'a> {
                 then_branch,
                 else_branch,
             } => {
-                let _ = self.expr(fx, condition);
-                self.stmts(fx, then_branch);
+                let (t, then_test, else_test) = self.guard_test(fx, condition);
+                let then_fx = Fx {
+                    guard: Some((t, then_test)),
+                    ..fx.clone()
+                };
+                self.stmts(&then_fx, then_branch);
                 if let Some(e) = else_branch {
-                    self.stmts(fx, e);
+                    let else_fx = Fx {
+                        guard: Some((t, else_test)),
+                        ..fx.clone()
+                    };
+                    self.stmts(&else_fx, e);
                 }
             }
             Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+                self.loop_depth += 1;
                 let _ = self.expr(fx, condition);
                 self.stmts(fx, body);
+                self.loop_depth -= 1;
             }
             Stmt::For {
                 init,
@@ -588,6 +966,7 @@ impl<'a> Gen<'a> {
                 if let Some(i) = init {
                     self.stmt(fx, i);
                 }
+                self.loop_depth += 1;
                 if let Some(c) = condition {
                     let _ = self.expr(fx, c);
                 }
@@ -598,6 +977,7 @@ impl<'a> Gen<'a> {
                     Some(f) => self.for_in_body(fx, &f),
                     None => self.stmts(fx, body),
                 }
+                self.loop_depth -= 1;
             }
             Stmt::Labeled { body, .. } => self.stmt(fx, body),
             Stmt::Break

@@ -277,7 +277,7 @@ fn element_identity_of_bits(value_bits: u64) -> Option<(u32, LayoutWord)> {
         let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
             return None;
         };
-        if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        if crate::gc_type_is_not_object!(header.obj_type)
             || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return None;
@@ -324,7 +324,7 @@ fn element_matches_record(value_bits: u64, record: ElementShapeRecord) -> bool {
         let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
             return false;
         };
-        if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        if crate::gc_type_is_not_object!(header.obj_type)
             || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return false;

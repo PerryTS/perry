@@ -1885,9 +1885,9 @@ mod static_record_layout_tests {
         perry_ffi::initialize_runtime_fixture();
         let roots = perry_ffi::TransientRootScope::enter();
         let record = roots.root_addr(unsafe {
-            perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
-                perry_ffi::runtime_layouts::RECORD_F37_0
-            ))
+            perry_ffi::runtime_layouts::alloc_runtime_record(
+                perry_ffi::runtime_layouts::RECORD_F37_0::desc(),
+            )
         } as i64);
         for slot in 0..3 {
             assert_eq!(

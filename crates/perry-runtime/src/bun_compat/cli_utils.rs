@@ -1128,7 +1128,7 @@ unsafe fn yaml_add_js_value(
     };
     if !matches!(
         header.obj_type,
-        crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_OBJECT
+        crate::gc::GC_TYPE_ARRAY | crate::gc_object_type_pat!()
     ) {
         return 0;
     }

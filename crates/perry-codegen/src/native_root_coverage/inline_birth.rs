@@ -77,6 +77,8 @@ fn fixture(with_args: bool) -> Module {
                         object: Box::new(Expr::This),
                         property: property.into(),
                         value: Box::new(Expr::LocalGet(id)),
+                        byte_offset: 0,
+                        byte_end: 0,
                     })
                 })
                 .collect(),

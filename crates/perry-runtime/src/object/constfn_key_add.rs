@@ -55,7 +55,7 @@ unsafe fn try_cached_constfn_key_add(
     }
     let base_rep = field_rep::with_slot_rep(d.rep, slot, field_rep::REP_ANY);
     let Some(any) = shapes::shape_descriptor_find_with_rep(
-        keys.arr(),
+        keys,
         d.logical_key_count,
         d.live_inline_slot_count,
         d.semantic_generation,

@@ -120,6 +120,8 @@ mod tests {
             value: Box::new(Expr::Number(1.0)),
             receiver: Box::new(Expr::LocalGet(0)),
             strict: true,
+            byte_offset: 0,
+            byte_end: 0,
         }
     }
 
@@ -136,6 +138,8 @@ mod tests {
                 object: Box::new(Expr::LocalGet(0)),
                 property: "d".to_string(),
                 value: Box::new(Expr::Number(2.0)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
         ];
         assert_eq!(count_straight_line_store_sites(&stmts), 4);

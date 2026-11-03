@@ -82,7 +82,9 @@ pub(crate) fn evacuate_realm_image() -> RealmEvacuation {
         // GC_STORE_AUDIT(INIT): an unpublished copy, filled byte for byte; its
         // pointer slots are forwarded and barriered below.
         std::ptr::copy_nonoverlapping((header as *const u8).add(GC_HEADER_SIZE), user, payload);
-        if (*copy).obj_type == GC_TYPE_OBJECT && !crate::arena::pointer_in_nursery(user as usize) {
+        if crate::gc_type_is_object!((*copy).obj_type)
+            && !crate::arena::pointer_in_nursery(user as usize)
+        {
             // What an old-generation birth of this layout records.
             let word = crate::codegen_abi::LayoutWord(
                 (*(user as *const crate::object::ObjectHeader)).parent_class_id,
@@ -97,7 +99,7 @@ pub(crate) fn evacuate_realm_image() -> RealmEvacuation {
     for copy in evacuation.copies() {
         let user = unsafe { (copy as *mut u8).add(GC_HEADER_SIZE) } as usize;
         unsafe {
-            visit_gc_rewrite_slots(copy, |slot| {
+            visit_gc_rewrite_slots::<{ cfg!(test) }>(copy, |slot| {
                 let Some(new_bits) = forward_bits(&evacuation, slot.read()) else {
                     return;
                 };

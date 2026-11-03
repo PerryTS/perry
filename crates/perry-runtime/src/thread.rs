@@ -455,9 +455,11 @@ mod clone_read;
 #[cfg(perry_gc_instruments)]
 mod clone_timing;
 mod clone_write;
+mod transfer_list;
 pub use clone_read::deserialize_nanbox_on_current_thread;
 use clone_write::serialize_capture_for_thread;
 pub use clone_write::{serialize_message, serialize_nanbox_for_thread};
+pub use transfer_list::js_worker_transfer_sequence;
 
 pub(crate) use crate::thread_hook_slots::fs_thread_codec;
 

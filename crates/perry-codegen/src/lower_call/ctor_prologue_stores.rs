@@ -276,6 +276,7 @@ fn param_store(stmt: &perry_hir::Stmt) -> Option<(&str, u32, Option<f64>)> {
             object,
             property,
             value,
+            ..
         }) if matches!(object.as_ref(), Expr::This) => {
             let (id, addend) = value_spec(value.as_ref())?;
             Some((property.as_str(), id, addend))
@@ -286,6 +287,7 @@ fn param_store(stmt: &perry_hir::Stmt) -> Option<(&str, u32, Option<f64>)> {
             value,
             receiver,
             strict: _,
+            ..
         }) if matches!(target.as_ref(), Expr::This) && matches!(receiver.as_ref(), Expr::This) => {
             let Expr::String(property) = key.as_ref() else {
                 return None;

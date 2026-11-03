@@ -30,7 +30,7 @@ l2c.word.3:
   %r11 = inttoptr i64 %r9 to ptr
   %r12 = getelementptr i8, ptr %r11, i64 2097156
   %r13 = load i32, ptr %r12
-  %r14 = and i32 %r13, -1073741825
+  %r14 = and i32 %r13, -1275068417
   %r15 = sub i32 %r14, -2147483648
   %r16 = zext i32 %r15 to i64
   %r17 = getelementptr i8, ptr @PERRY_AGENT_PTRS, i64 0
@@ -144,7 +144,7 @@ l2s.word.3:
   %r15 = inttoptr i64 %r13 to ptr
   %r16 = getelementptr i8, ptr %r15, i64 2097156
   %r17 = load i32, ptr %r16
-  %r18 = and i32 %r17, -1073741825
+  %r18 = and i32 %r17, -1275068417
   %r19 = sub i32 %r18, -2147483648
   %r20 = zext i32 %r19 to i64
   %r21 = getelementptr i8, ptr @PERRY_AGENT_PTRS, i64 0
@@ -294,7 +294,7 @@ class_family.word.64:
   %r264 = getelementptr i8, ptr @perry_layout_class_1, i64 12
   %r265 = load i32, ptr %r264
   %r266 = sub i32 %r265, -2147483648
-  %r267 = icmp ult i32 %r266, 1073741824
+  %r267 = icmp ult i32 %r266, 268435456
   %r268 = icmp eq i32 %r263, %r265
   %r269 = and i1 %r267, %r268
   %r270 = or i1 false, %r269

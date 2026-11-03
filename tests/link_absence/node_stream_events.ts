@@ -10,3 +10,7 @@ emitter.on("value", (value) => console.log(value));
 emitter.emit("value", "ok");
 console.log(emitter.asyncId > 0, emitter.asyncResource.eventEmitter === emitter);
 emitter.emitDestroy();
+
+// This positive witness also exercises the complete module installer.
+import * as moduleSurface from "node:events";
+if (Object.keys(moduleSurface).length === 0) throw new Error("empty builtin namespace");

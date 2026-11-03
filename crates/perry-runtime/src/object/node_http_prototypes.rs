@@ -45,9 +45,9 @@ impl HttpProto {
 
     fn layout(self) -> *const crate::object::layout_desc::PerryLayoutDesc {
         match self {
-            HttpProto::OutgoingMessage => &raw const layouts::OUTGOING_MESSAGE_PROTOTYPE,
-            HttpProto::ServerResponse => &raw const layouts::SERVER_RESPONSE_PROTOTYPE,
-            HttpProto::IncomingMessage => &raw const layouts::INCOMING_MESSAGE_PROTOTYPE,
+            HttpProto::OutgoingMessage => layouts::OUTGOING_MESSAGE_PROTOTYPE::desc(),
+            HttpProto::ServerResponse => layouts::SERVER_RESPONSE_PROTOTYPE::desc(),
+            HttpProto::IncomingMessage => layouts::INCOMING_MESSAGE_PROTOTYPE::desc(),
         }
     }
 
@@ -144,8 +144,8 @@ fn named_closure(
     length: u32,
 ) -> f64 {
     let closure = crate::closure::js_closure_alloc(info, 2);
-    crate::closure::js_closure_set_capture_ptr(closure, 0, name.as_ptr() as i64);
-    crate::closure::js_closure_set_capture_ptr(closure, 1, name.len() as i64);
+    crate::closure::closure_set_capture_word(closure, 0, name.as_ptr() as i64);
+    crate::closure::closure_set_capture_word(closure, 1, name.len() as i64);
     let closure = scope.root_raw_mut_ptr(closure);
     closure.with_mut_ptr(|c| crate::object::set_bound_native_closure_name(c, name));
     closure
@@ -175,12 +175,12 @@ fn method_info(name: &str) -> *const crate::closure::JsFunctionInfo {
             return info as *const crate::closure::JsFunctionInfo;
         }
     }
-    crate::fn_info!(js_node_http_method_fallback, 3; with_declared(3))
+    crate::fn_info!(#[realm(realm_decl! { "node:http.IncomingMessage.prototype._addHeaderLine", capture = property_key, constructible = true; "node:http.IncomingMessage.prototype._addHeaderLineDistinct", capture = property_key, constructible = true; "node:http.OutgoingMessage.prototype._send", capture = property_key, constructible = true; "node:http.OutgoingMessage.prototype._writeRaw", capture = property_key, constructible = true; "node:http.IncomingMessage.prototype._addHeaderLines", capture = property_key, constructible = true, spec = {length = 2}, emit = metadata(realm_node_http_incomingmessage_prototype_addheaderlines_metadata); "node:http.IncomingMessage.prototype._destroy", capture = property_key, constructible = true, spec = {length = 2}, emit = metadata(realm_node_http_incomingmessage_prototype_destroy_metadata); "node:http.IncomingMessage.prototype._dump", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_incomingmessage_prototype_dump_metadata); "node:http.IncomingMessage.prototype._dumpAndCloseReadable", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_incomingmessage_prototype_dumpandclosereadable_metadata); "node:http.IncomingMessage.prototype._read", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_node_http_incomingmessage_prototype_read_metadata); "node:http.IncomingMessage.prototype.setTimeout", capture = property_key, constructible = true, spec = {length = 2}, emit = metadata(realm_node_http_incomingmessage_prototype_settimeout_metadata); "node:http.OutgoingMessage.prototype._finish", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_outgoingmessage_prototype_finish_metadata); "node:http.OutgoingMessage.prototype._flush", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_outgoingmessage_prototype_flush_metadata); "node:http.OutgoingMessage.prototype._flushOutput", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_node_http_outgoingmessage_prototype_flushoutput_metadata); "node:http.OutgoingMessage.prototype._implicitHeader", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_outgoingmessage_prototype_implicitheader_metadata); "node:http.OutgoingMessage.prototype._isLenientHeaderValidation", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_outgoingmessage_prototype_islenientheadervalidation_metadata); "node:http.OutgoingMessage.prototype._renderHeaders", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_outgoingmessage_prototype_renderheaders_metadata); "node:http.OutgoingMessage.prototype._storeHeader", capture = property_key, constructible = true, spec = {length = 2}, emit = metadata(realm_node_http_outgoingmessage_prototype_storeheader_metadata); "node:http.OutgoingMessage.prototype.addTrailers", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_node_http_outgoingmessage_prototype_addtrailers_metadata); "node:http.OutgoingMessage.prototype.appendHeader", capture = property_key, constructible = true, spec = {length = 2}, emit = metadata(realm_node_http_outgoingmessage_prototype_appendheader_metadata); "node:http.OutgoingMessage.prototype.cork", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_outgoingmessage_prototype_cork_metadata); "node:http.OutgoingMessage.prototype.destroy", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_node_http_outgoingmessage_prototype_destroy_metadata); "node:http.OutgoingMessage.prototype.flushHeaders", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_outgoingmessage_prototype_flushheaders_metadata); "node:http.OutgoingMessage.prototype.getHeader", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_node_http_outgoingmessage_prototype_getheader_metadata); "node:http.OutgoingMessage.prototype.getHeaderNames", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_outgoingmessage_prototype_getheadernames_metadata); "node:http.OutgoingMessage.prototype.getHeaders", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_outgoingmessage_prototype_getheaders_metadata); "node:http.OutgoingMessage.prototype.getRawHeaderNames", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_outgoingmessage_prototype_getrawheadernames_metadata); "node:http.OutgoingMessage.prototype.hasHeader", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_node_http_outgoingmessage_prototype_hasheader_metadata); "node:http.OutgoingMessage.prototype.pipe", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_outgoingmessage_prototype_pipe_metadata); "node:http.OutgoingMessage.prototype.removeHeader", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_node_http_outgoingmessage_prototype_removeheader_metadata); "node:http.OutgoingMessage.prototype.setHeaders", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_node_http_outgoingmessage_prototype_setheaders_metadata); "node:http.OutgoingMessage.prototype.setTimeout", capture = property_key, constructible = true, spec = {length = 2}, emit = metadata(realm_node_http_outgoingmessage_prototype_settimeout_metadata); "node:http.OutgoingMessage.prototype.uncork", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_outgoingmessage_prototype_uncork_metadata); "node:http.ServerResponse.prototype._finish", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_serverresponse_prototype_finish_metadata); "node:http.ServerResponse.prototype._implicitHeader", capture = property_key, constructible = true, spec = {length = 0}, emit = metadata(realm_node_http_serverresponse_prototype_implicitheader_metadata); "node:http.ServerResponse.prototype.assignSocket", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_node_http_serverresponse_prototype_assignsocket_metadata); "node:http.ServerResponse.prototype.detachSocket", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_node_http_serverresponse_prototype_detachsocket_metadata); "node:http.ServerResponse.prototype.writeContinue", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_node_http_serverresponse_prototype_writecontinue_metadata); "node:http.ServerResponse.prototype.writeEarlyHints", capture = property_key, constructible = true, spec = {length = 2}, emit = metadata(realm_node_http_serverresponse_prototype_writeearlyhints_metadata); "node:http.ServerResponse.prototype.writeInformation", capture = property_key, constructible = true, spec = {length = 2}, emit = metadata(realm_node_http_serverresponse_prototype_writeinformation_metadata); "node:http.ServerResponse.prototype.writeProcessing", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_node_http_serverresponse_prototype_writeprocessing_metadata); "node:http.IncomingMessage.prototype[\"@runtime:kAttachAbortSignal\"]", capture = public_name, constructible = true, spec = {name = "kAttachAbortSignal", length = 0}, emit = metadata(realm_http_symbol_attach_public); "node:http.IncomingMessage.prototype[\"@runtime:kDetachAbortSignal\"]", capture = public_name, constructible = true, spec = {name = "kDetachAbortSignal", length = 0}, emit = metadata(realm_http_symbol_detach_public); "node:http.OutgoingMessage.prototype[\"@runtime:nodejs.rejection\"]", capture = public_name, constructible = true, spec = {name = "destroy", length = 0}, emit = metadata(realm_http_symbol_rejection_public); })] export crate::object::node_http_prototypes::js_node_http_method_fallback, 3; with_declared(3))
 }
 
 /// Build `kind`'s prototype for `constructor`: born on its layout, every slot
 /// filled, sealed.
-fn build_http_prototype(constructor: f64, kind: HttpProto) -> f64 {
+#[rustfmt::skip] fn build_http_prototype(constructor: f64, kind: HttpProto) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let constructor = scope.root_nanbox_f64(constructor);
     ensure_parent(kind);
@@ -201,10 +201,10 @@ fn build_http_prototype(constructor: f64, kind: HttpProto) -> f64 {
         fill(name, value);
     };
     let accessor = |name: &'static str, setter: bool| {
-        let get = named_closure(&scope, crate::fn_info!(http_getter_thunk, 0), name, 0);
+        let get = named_closure(&scope, crate::fn_info!(#[realm(realm_decl! { "node:http.IncomingMessage.prototype.connection.<get>", capture = property_key, constructible = true, spec = {name = property_key}, emit = metadata(realm_node_http_incomingmessage_prototype_connection_get_name_metadata); "node:http.IncomingMessage.prototype.headers.<get>", capture = property_key, constructible = true, spec = {name = property_key}, emit = metadata(realm_node_http_incomingmessage_prototype_headers_get_name_metadata); "node:http.IncomingMessage.prototype.headersDistinct.<get>", capture = property_key, constructible = true, spec = {name = property_key}, emit = metadata(realm_node_http_incomingmessage_prototype_headersdistinct_get_name_metadata); "node:http.IncomingMessage.prototype.signal.<get>", capture = property_key, constructible = true, spec = {name = property_key}, emit = metadata(realm_node_http_incomingmessage_prototype_signal_get_name_metadata); "node:http.IncomingMessage.prototype.trailers.<get>", capture = property_key, constructible = true, spec = {name = property_key}, emit = metadata(realm_node_http_incomingmessage_prototype_trailers_get_name_metadata); "node:http.IncomingMessage.prototype.trailersDistinct.<get>", capture = property_key, constructible = true, spec = {name = property_key}, emit = metadata(realm_node_http_incomingmessage_prototype_trailersdistinct_get_name_metadata); "node:http.OutgoingMessage.prototype.closed.<get>", capture = property_key, constructible = true, spec = {name = property_key}, emit = metadata(realm_node_http_outgoingmessage_prototype_closed_get_name_metadata); "node:http.OutgoingMessage.prototype.connection.<get>", capture = property_key, constructible = true, spec = {name = property_key}, emit = metadata(realm_node_http_outgoingmessage_prototype_connection_get_name_metadata); "node:http.OutgoingMessage.prototype.errored.<get>", capture = property_key, constructible = true, spec = {name = property_key}, emit = metadata(realm_node_http_outgoingmessage_prototype_errored_get_name_metadata); "node:http.OutgoingMessage.prototype.headersSent.<get>", capture = property_key, constructible = true, spec = {name = property_key}, emit = metadata(realm_node_http_outgoingmessage_prototype_headerssent_get_name_metadata); "node:http.OutgoingMessage.prototype.socket.<get>", capture = property_key, constructible = true, spec = {name = property_key}, emit = metadata(realm_node_http_outgoingmessage_prototype_socket_get_name_metadata); "node:http.OutgoingMessage.prototype.writableCorked.<get>", capture = property_key, constructible = true, spec = {name = property_key}, emit = metadata(realm_node_http_outgoingmessage_prototype_writablecorked_get_name_metadata); "node:http.OutgoingMessage.prototype.writableEnded.<get>", capture = property_key, constructible = true, spec = {name = property_key}, emit = metadata(realm_node_http_outgoingmessage_prototype_writableended_get_name_metadata); "node:http.OutgoingMessage.prototype.writableFinished.<get>", capture = property_key, constructible = true, spec = {name = property_key}, emit = metadata(realm_node_http_outgoingmessage_prototype_writablefinished_get_name_metadata); "node:http.OutgoingMessage.prototype.writableHighWaterMark.<get>", capture = property_key, constructible = true, spec = {name = property_key}, emit = metadata(realm_node_http_outgoingmessage_prototype_writablehighwatermark_get_name_metadata); "node:http.OutgoingMessage.prototype.writableLength.<get>", capture = property_key, constructible = true, spec = {name = property_key}, emit = metadata(realm_node_http_outgoingmessage_prototype_writablelength_get_name_metadata); "node:http.OutgoingMessage.prototype.writableNeedDrain.<get>", capture = property_key, constructible = true, spec = {name = property_key}, emit = metadata(realm_node_http_outgoingmessage_prototype_writableneeddrain_get_name_metadata); "node:http.OutgoingMessage.prototype.writableObjectMode.<get>", capture = property_key, constructible = true, spec = {name = property_key}, emit = metadata(realm_node_http_outgoingmessage_prototype_writableobjectmode_get_name_metadata); })] export crate::object::node_http_prototypes::http_getter_thunk, 0), name, 0);
         let get = scope.root_nanbox_f64(get);
         let set = if setter {
-            named_closure(&scope, crate::fn_info!(http_setter_thunk, 1), name, 1).to_bits()
+            named_closure(&scope, crate::fn_info!(#[realm(realm_decl! { "node:http.IncomingMessage.prototype.connection.<set>", capture = property_key, constructible = true, spec = {name = property_key}, emit = metadata(realm_node_http_incomingmessage_prototype_connection_get_name_metadata); "node:http.IncomingMessage.prototype.headers.<set>", capture = property_key, constructible = true, spec = {name = property_key}, emit = metadata(realm_node_http_incomingmessage_prototype_headers_get_name_metadata); "node:http.IncomingMessage.prototype.headersDistinct.<set>", capture = property_key, constructible = true, spec = {name = property_key}, emit = metadata(realm_node_http_incomingmessage_prototype_headersdistinct_get_name_metadata); "node:http.IncomingMessage.prototype.trailers.<set>", capture = property_key, constructible = true, spec = {name = property_key}, emit = metadata(realm_node_http_incomingmessage_prototype_trailers_get_name_metadata); "node:http.IncomingMessage.prototype.trailersDistinct.<set>", capture = property_key, constructible = true, spec = {name = property_key}, emit = metadata(realm_node_http_incomingmessage_prototype_trailersdistinct_get_name_metadata); "node:http.OutgoingMessage.prototype.connection.<set>", capture = property_key, constructible = true, spec = {name = property_key}, emit = metadata(realm_node_http_outgoingmessage_prototype_connection_get_name_metadata); "node:http.OutgoingMessage.prototype.socket.<set>", capture = property_key, constructible = true, spec = {name = property_key}, emit = metadata(realm_node_http_outgoingmessage_prototype_socket_get_name_metadata); })] export crate::object::node_http_prototypes::http_setter_thunk, 1), name, 1).to_bits()
         } else {
             0
         };
@@ -219,79 +219,79 @@ fn build_http_prototype(constructor: f64, kind: HttpProto) -> f64 {
             )
         };
     };
-    let symbol = |atom: *const crate::object::layout_desc::StaticAtom, name: &'static str| {
-        let value = named_closure(&scope, method_info(name), name, 0);
+    let symbol = |atom: *const crate::object::layout_desc::StaticAtom, name: &'static str, length: u32| {
+        let value = named_closure(&scope, method_info(name), name, length);
         // SAFETY: as above; `atom` is a key of the layout.
         unsafe { layout.symbol_data(p(), atom, value) };
     };
     match kind {
         HttpProto::OutgoingMessage => {
-            method("_isLenientHeaderValidation", 0);
+            method("_isLenientHeaderValidation", realm_node_http_outgoingmessage_prototype_islenientheadervalidation_metadata!(length));
             for name in [
-                "errored",
-                "closed",
-                "writableFinished",
-                "writableObjectMode",
-                "writableLength",
-                "writableHighWaterMark",
-                "writableCorked",
+                realm_node_http_outgoingmessage_prototype_errored_get_name_metadata!(name),
+                realm_node_http_outgoingmessage_prototype_closed_get_name_metadata!(name),
+                realm_node_http_outgoingmessage_prototype_writablefinished_get_name_metadata!(name),
+                realm_node_http_outgoingmessage_prototype_writableobjectmode_get_name_metadata!(name),
+                realm_node_http_outgoingmessage_prototype_writablelength_get_name_metadata!(name),
+                realm_node_http_outgoingmessage_prototype_writablehighwatermark_get_name_metadata!(name),
+                realm_node_http_outgoingmessage_prototype_writablecorked_get_name_metadata!(name),
             ] {
                 accessor(name, false);
             }
-            accessor("connection", true);
-            accessor("socket", true);
+            accessor(realm_node_http_outgoingmessage_prototype_connection_get_name_metadata!(name), true);
+            accessor(realm_node_http_outgoingmessage_prototype_socket_get_name_metadata!(name), true);
             for (name, length) in [
-                ("_renderHeaders", 0),
-                ("cork", 0),
-                ("uncork", 0),
-                ("setTimeout", 2),
-                ("destroy", 1),
+                ("_renderHeaders", realm_node_http_outgoingmessage_prototype_renderheaders_metadata!(length)),
+                ("cork", realm_node_http_outgoingmessage_prototype_cork_metadata!(length)),
+                ("uncork", realm_node_http_outgoingmessage_prototype_uncork_metadata!(length)),
+                ("setTimeout", realm_node_http_outgoingmessage_prototype_settimeout_metadata!(length)),
+                ("destroy", realm_node_http_outgoingmessage_prototype_destroy_metadata!(length)),
                 ("_send", 3),
                 ("_writeRaw", 3),
-                ("_storeHeader", 2),
-                ("setHeader", 2),
-                ("setHeaders", 1),
-                ("appendHeader", 2),
-                ("getHeader", 1),
-                ("getHeaderNames", 0),
-                ("getRawHeaderNames", 0),
-                ("getHeaders", 0),
-                ("hasHeader", 1),
-                ("removeHeader", 1),
-                ("_implicitHeader", 0),
+                ("_storeHeader", realm_node_http_outgoingmessage_prototype_storeheader_metadata!(length)),
+                ("setHeader", realm_http_set_header_public!(length)),
+                ("setHeaders", realm_node_http_outgoingmessage_prototype_setheaders_metadata!(length)),
+                ("appendHeader", realm_node_http_outgoingmessage_prototype_appendheader_metadata!(length)),
+                ("getHeader", realm_node_http_outgoingmessage_prototype_getheader_metadata!(length)),
+                ("getHeaderNames", realm_node_http_outgoingmessage_prototype_getheadernames_metadata!(length)),
+                ("getRawHeaderNames", realm_node_http_outgoingmessage_prototype_getrawheadernames_metadata!(length)),
+                ("getHeaders", realm_node_http_outgoingmessage_prototype_getheaders_metadata!(length)),
+                ("hasHeader", realm_node_http_outgoingmessage_prototype_hasheader_metadata!(length)),
+                ("removeHeader", realm_node_http_outgoingmessage_prototype_removeheader_metadata!(length)),
+                ("_implicitHeader", realm_node_http_outgoingmessage_prototype_implicitheader_metadata!(length)),
             ] {
                 method(name, length);
             }
-            accessor("headersSent", false);
-            accessor("writableEnded", false);
-            accessor("writableNeedDrain", false);
+            accessor(realm_node_http_outgoingmessage_prototype_headerssent_get_name_metadata!(name), false);
+            accessor(realm_node_http_outgoingmessage_prototype_writableended_get_name_metadata!(name), false);
+            accessor(realm_node_http_outgoingmessage_prototype_writableneeddrain_get_name_metadata!(name), false);
             for (name, length) in [
                 ("write", 3),
-                ("addTrailers", 1),
+                ("addTrailers", realm_node_http_outgoingmessage_prototype_addtrailers_metadata!(length)),
                 ("end", 3),
-                ("_finish", 0),
-                ("_flush", 0),
-                ("_flushOutput", 1),
-                ("flushHeaders", 0),
-                ("pipe", 0),
+                ("_finish", realm_node_http_outgoingmessage_prototype_finish_metadata!(length)),
+                ("_flush", realm_node_http_outgoingmessage_prototype_flush_metadata!(length)),
+                ("_flushOutput", realm_node_http_outgoingmessage_prototype_flushoutput_metadata!(length)),
+                ("flushHeaders", realm_node_http_outgoingmessage_prototype_flushheaders_metadata!(length)),
+                ("pipe", realm_node_http_outgoingmessage_prototype_pipe_metadata!(length)),
             ] {
                 method(name, length);
             }
             // node: `this.destroy(error)`.
-            symbol(&raw const layouts::NP_SYMBOL_NODEJS_REJECTION, "destroy");
+            symbol(&raw const layouts::NP_SYMBOL_NODEJS_REJECTION, realm_http_symbol_rejection_public!(name), realm_http_symbol_rejection_public!(length));
         }
         HttpProto::ServerResponse => {
-            method("_finish", 0);
+            method("_finish", realm_node_http_serverresponse_prototype_finish_metadata!(length));
             fill("statusCode", 200.0);
             fill("statusMessage", undefined());
             for (name, length) in [
-                ("assignSocket", 1),
-                ("detachSocket", 1),
-                ("writeInformation", 2),
-                ("writeContinue", 1),
-                ("writeProcessing", 1),
-                ("writeEarlyHints", 2),
-                ("_implicitHeader", 0),
+                ("assignSocket", realm_node_http_serverresponse_prototype_assignsocket_metadata!(length)),
+                ("detachSocket", realm_node_http_serverresponse_prototype_detachsocket_metadata!(length)),
+                ("writeInformation", realm_node_http_serverresponse_prototype_writeinformation_metadata!(length)),
+                ("writeContinue", realm_node_http_serverresponse_prototype_writecontinue_metadata!(length)),
+                ("writeProcessing", realm_node_http_serverresponse_prototype_writeprocessing_metadata!(length)),
+                ("writeEarlyHints", realm_node_http_serverresponse_prototype_writeearlyhints_metadata!(length)),
+                ("_implicitHeader", realm_node_http_serverresponse_prototype_implicitheader_metadata!(length)),
                 ("writeHead", 3),
             ] {
                 method(name, length);
@@ -299,34 +299,34 @@ fn build_http_prototype(constructor: f64, kind: HttpProto) -> f64 {
         }
         HttpProto::IncomingMessage => {
             for name in [
-                "connection",
-                "headers",
-                "headersDistinct",
-                "trailers",
-                "trailersDistinct",
+                realm_node_http_incomingmessage_prototype_connection_get_name_metadata!(name),
+                realm_node_http_incomingmessage_prototype_headers_get_name_metadata!(name),
+                realm_node_http_incomingmessage_prototype_headersdistinct_get_name_metadata!(name),
+                realm_node_http_incomingmessage_prototype_trailers_get_name_metadata!(name),
+                realm_node_http_incomingmessage_prototype_trailersdistinct_get_name_metadata!(name),
             ] {
                 accessor(name, true);
             }
-            accessor("signal", false);
+            accessor(realm_node_http_incomingmessage_prototype_signal_get_name_metadata!(name), false);
             for (name, length) in [
-                ("setTimeout", 2),
-                ("_read", 1),
-                ("_destroy", 2),
-                ("_addHeaderLines", 2),
+                ("setTimeout", realm_node_http_incomingmessage_prototype_settimeout_metadata!(length)),
+                ("_read", realm_node_http_incomingmessage_prototype_read_metadata!(length)),
+                ("_destroy", realm_node_http_incomingmessage_prototype_destroy_metadata!(length)),
+                ("_addHeaderLines", realm_node_http_incomingmessage_prototype_addheaderlines_metadata!(length)),
                 ("_addHeaderLine", 3),
                 ("_addHeaderLineDistinct", 3),
-                ("_dumpAndCloseReadable", 0),
-                ("_dump", 0),
+                ("_dumpAndCloseReadable", realm_node_http_incomingmessage_prototype_dumpandclosereadable_metadata!(length)),
+                ("_dump", realm_node_http_incomingmessage_prototype_dump_metadata!(length)),
             ] {
                 method(name, length);
             }
             symbol(
                 &raw const layouts::NP_SYMBOL_K_ATTACH_ABORT_SIGNAL,
-                "kAttachAbortSignal",
+                realm_http_symbol_attach_public!(name), realm_http_symbol_attach_public!(length),
             );
             symbol(
                 &raw const layouts::NP_SYMBOL_K_DETACH_ABORT_SIGNAL,
-                "kDetachAbortSignal",
+                realm_http_symbol_detach_public!(name), realm_http_symbol_detach_public!(length),
             );
         }
     }
@@ -341,7 +341,10 @@ fn build_http_prototype(constructor: f64, kind: HttpProto) -> f64 {
             0,
         ));
         proto.with_mut_ptr(|proto: *mut ObjectHeader| unsafe {
-            let meta = crate::object::object_meta_ensure(proto);
+            let meta = crate::object::object_meta_ensure(
+                crate::meta_obj_runtime_born!(proto),
+                crate::object::MetaReason::HttpPrototypes,
+            );
             if !meta.is_null() {
                 (*meta).native_state = nop.get_nanbox_u64();
                 crate::gc::runtime_write_barrier_slot(
@@ -365,7 +368,7 @@ fn pending_data_nop() -> f64 {
         return undefined();
     };
     // SAFETY: the agent's live, sealed OutgoingMessage.prototype.
-    let meta = unsafe { (*proto).meta };
+    let meta = unsafe { crate::meta_read!(crate::meta_obj_runtime_born!(proto as *mut _)) };
     if meta.is_null() {
         return undefined();
     }
@@ -384,8 +387,9 @@ fn native_receiver(receiver: f64) -> Option<f64> {
         return Some(receiver);
     }
     let obj = crate::object::field_get_set::runtime_read_site::object_receiver(receiver)?;
+    // A1_UNPROVEN: record-first: native payload receiver (kind-A/B question for S0f).
     // SAFETY: a live ordinary object.
-    let meta = unsafe { (*obj).meta };
+    let meta = unsafe { crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)) };
     if meta.is_null() {
         return None;
     }
@@ -412,7 +416,8 @@ pub extern "C" fn js_node_http_response_layout_receiver(receiver: f64) -> i32 {
         {
             return 0;
         }
-        let meta = (*obj).meta;
+        // A1_UNPROVEN: record-first: receiver layout (kind-A/B question for S0f).
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
         if meta.is_null() {
             return 0;
         }
@@ -477,6 +482,54 @@ pub extern "C" fn js_node_http_method_fallback(
     } else {
         result
     }
+}
+
+/// The method a native-handle response inherits under `name`: the function
+/// object `ServerResponse.prototype` (or, for a bare `OutgoingMessage`,
+/// `OutgoingMessage.prototype`) holds, own or from its parent prototype, so
+/// `res.writeHead === ServerResponse.prototype.writeHead` as in node.
+/// Calling it runs the native method on its `this`
+/// ([`js_node_http_method_fallback`] for a handle), never the receiver's own
+/// replacement. `undefined` when neither prototype defines `name` as a method.
+#[no_mangle]
+pub extern "C" fn js_node_http_response_prototype_method(
+    outgoing_only: i32,
+    name_ptr: *const u8,
+    name_len: usize,
+) -> f64 {
+    if name_ptr.is_null() || name_len == 0 {
+        return undefined();
+    }
+    // SAFETY: the caller passes a live name byte range.
+    let name = unsafe { std::slice::from_raw_parts(name_ptr, name_len) };
+    let chain: &[HttpProto] = if outgoing_only != 0 {
+        &[HttpProto::OutgoingMessage]
+    } else {
+        &[HttpProto::ServerResponse, HttpProto::OutgoingMessage]
+    };
+    for &kind in chain {
+        let proto = ensure_http_prototype(kind);
+        let holder = JSValue::from_bits(proto.to_bits());
+        if !holder.is_pointer() {
+            return undefined();
+        }
+        // SAFETY: a live sealed prototype; its method slots are data slots,
+        // so no getter runs.
+        let Some(value) =
+            (unsafe { crate::object::own_property_get_by_bytes(holder.as_pointer(), name, proto) })
+        else {
+            continue;
+        };
+        let bits = value.bits();
+        let is_method = JSValue::from_bits(bits).is_pointer()
+            && crate::closure::is_closure_ptr((bits & crate::value::POINTER_MASK) as usize);
+        return if is_method {
+            f64::from_bits(bits)
+        } else {
+            undefined()
+        };
+    }
+    undefined()
 }
 
 fn bool_value(b: bool) -> f64 {
@@ -727,7 +780,7 @@ unsafe fn message_init(this: f64, req: Option<f64>) {
     // stays on those keys.
     let plain_chain = crate::node_stream::instance_birth::on_layout_with_plain_chain(
         receiver,
-        &raw const layouts::SERVER_RESPONSE,
+        layouts::SERVER_RESPONSE::WORD,
     );
     let on_layout = || {
         plain_chain
@@ -735,8 +788,9 @@ unsafe fn message_init(this: f64, req: Option<f64>) {
                 this.get_nanbox_f64(),
             )
             .is_some_and(|obj| {
-                crate::node_stream::instance_birth::instance_layout(obj)
-                    == Some(&raw const layouts::SERVER_RESPONSE)
+                crate::node_stream::instance_birth::instance_layout(obj).is_some_and(
+                    |desc| unsafe { (*desc).layout_id } == layouts::SERVER_RESPONSE::WORD,
+                )
             })
     };
     let put = |slot: u32, name: &'static [u8], value: f64| {
@@ -901,7 +955,7 @@ pub unsafe extern "C" fn js_node_http_server_response_birth(proto: f64, req: f64
     let proto = scope.root_nanbox_f64(proto);
     let obj = match crate::node_stream::instance_birth::alloc_on_layout(
         proto.get_nanbox_f64(),
-        &raw const layouts::SERVER_RESPONSE,
+        layouts::SERVER_RESPONSE::desc(),
     ) {
         Some(obj) => boxed(obj),
         None => crate::object::js_object_create(proto.get_nanbox_f64()),
@@ -941,8 +995,9 @@ mod tests {
     }
 
     unsafe fn on_layout(obj: usize) -> bool {
-        crate::node_stream::instance_birth::instance_layout(obj as *const ObjectHeader)
-            == Some(&raw const crate::object::runtime_layouts::SERVER_RESPONSE)
+        crate::node_stream::instance_birth::instance_layout(obj as *const ObjectHeader).is_some_and(
+            |desc| (*desc).layout_id == crate::object::runtime_layouts::SERVER_RESPONSE::WORD,
+        )
     }
 
     #[test]
@@ -1043,5 +1098,3 @@ mod incoming_init_tests {
         }
     }
 }
-
-crate::realm_decl!("node_http_prototypes.realm.json#*");

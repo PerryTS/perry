@@ -873,8 +873,6 @@ const VM_MODULE_NAMESPACE_KEYS: &[&[u8]] = &[
     b"SyntheticModule",
 ];
 
-const VM_CONSTANTS_KEYS: &[&[u8]] = &[b"USE_MAIN_CONTEXT_DEFAULT_LOADER", b"DONT_CONTEXTIFY"];
-
 const PERF_HOOKS_DEFAULT_KEYS: &[&[u8]] = &[
     b"Performance",
     b"PerformanceEntry",
@@ -1282,8 +1280,10 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         // The table lives beside crypto's value-resolution in `constants.rs`.
         "crypto" => Some(super::constants::CRYPTO_NAMESPACE_KEYS),
         "sqlite" => Some(&[
+            b"Database",
             b"DatabaseSync",
             b"Session",
+            b"Statement",
             b"StatementSync",
             b"backup",
             b"constants",
@@ -1596,7 +1596,6 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         } else {
             VM_NAMESPACE_KEYS
         }),
-        "vm.constants" => Some(VM_CONSTANTS_KEYS),
         "timers/promises" => Some(&[b"setTimeout", b"setImmediate", b"setInterval", b"scheduler"]),
         "readline/promises" => Some(&[b"Interface", b"Readline", b"createInterface"]),
         "wasi" => Some(&[b"WASI", b"default"]),
@@ -1644,6 +1643,9 @@ pub(crate) fn zlib_readonly_property_enumerability(module_name: &str, key: &str)
 }
 
 pub(crate) fn native_module_has_enumerable_key(module_name: &str, key: &str) -> bool {
+    if crate::process::worker_restrictions::worker_process_member_hidden(module_name, key) {
+        return false;
+    }
     if matches!(
         module_name,
         "process" | "process.namespace" | "process.default"

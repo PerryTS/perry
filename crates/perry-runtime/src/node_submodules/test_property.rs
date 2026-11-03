@@ -470,14 +470,14 @@ extern "C" fn tracker_property_thunk(
     create(target, property, value_present, value)
 }
 
-pub(super) fn tracker_property_value() -> f64 {
+#[rustfmt::skip] pub(super) fn tracker_property_value() -> f64 { const PROPERTY_TRACKER_ID: i64 = 0;
     let value = rest_closure_value_with_id(
-        crate::fn_info!(tracker_property_thunk, 3; with_rest(2)),
+        crate::fn_info!(#[realm("node:test.mock.property", provider = closure, capture = [pointer_constant(PROPERTY_TRACKER_ID)], spec = {length = 3}, emit = metadata(realm_mock_property_public))] export crate::node_submodules::test::property_mock::tracker_property_thunk, 3; with_rest(2)),
         2,
-        0,
+        PROPERTY_TRACKER_ID,
     );
     let raw = raw_ptr_from_value(value);
-    crate::object::set_builtin_closure_length(raw, 3);
+    crate::object::set_builtin_closure_length(raw, realm_mock_property_public!(length));
     value
 }
 

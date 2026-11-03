@@ -6,7 +6,7 @@ pub const SHADOW_STACK_HEADER_SLOTS: usize = 1;
 /// Entries the backing buffer reserves the first time it grows.
 pub const SHADOW_STACK_GROW_RESERVE: usize = 1024;
 
-/// Liveness bit, stored in bit 0 of [`ShadowEntry::meta`].
+/// Liveness bit, stored in bit 0 of [`ShadowEntry::bound`].
 ///
 /// A bound slot pointer is the address of a compiled `i64`/`double` local
 /// slot and is therefore 8-byte aligned, so bit 0 is always free to carry the
@@ -40,22 +40,22 @@ pub(crate) struct ShadowEntry {
     /// the original slot, not the stale mirror copy. The `SLOT_ACTIVE` bit is
     /// the liveness flag: it lets codegen stop reporting a dead local without
     /// mutating the compiled local slot after last use.
-    pub(crate) meta: usize,
+    pub(crate) bound: usize,
 }
 
 #[cfg(any(test, not(perry_native_stack_maps)))]
 impl ShadowEntry {
-    pub(crate) const EMPTY: ShadowEntry = ShadowEntry { value: 0, meta: 0 };
+    pub(crate) const EMPTY: ShadowEntry = ShadowEntry { value: 0, bound: 0 };
 
     #[inline(always)]
     pub(crate) fn is_active(self) -> bool {
-        self.meta & SLOT_ACTIVE != 0
+        self.bound & SLOT_ACTIVE != 0
     }
 
     /// The compiled local slot this entry mirrors, or null when unbound.
     #[inline(always)]
     pub(crate) fn bound_ptr(self) -> *mut u64 {
-        (self.meta & SLOT_PTR_MASK) as *mut u64
+        (self.bound & SLOT_PTR_MASK) as *mut u64
     }
 }
 
@@ -128,7 +128,7 @@ pub const SHADOW_STATE_CAP_OFFSET: usize = 2 * std::mem::size_of::<usize>();
 /// Size of one [`ShadowEntry`]. Part of the codegen contract: generated code
 /// indexes the buffer by shifting, so this must stay a power of two.
 pub const SHADOW_ENTRY_SIZE: usize = 16;
-/// Byte offset of [`ShadowEntry::meta`] within an entry. Part of the codegen
+/// Byte offset of [`ShadowEntry::bound`] within an entry. Part of the codegen
 /// contract.
 pub const SHADOW_ENTRY_META_OFFSET: usize = 8;
 /// [`SLOT_ACTIVE`] as a public constant, for the codegen contract.
@@ -142,7 +142,7 @@ const _: () = {
     assert!(std::mem::size_of::<ShadowEntry>() == SHADOW_ENTRY_SIZE);
     assert!(std::mem::align_of::<ShadowEntry>() == 8);
     assert!(std::mem::offset_of!(ShadowEntry, value) == 0);
-    assert!(std::mem::offset_of!(ShadowEntry, meta) == SHADOW_ENTRY_META_OFFSET);
+    assert!(std::mem::offset_of!(ShadowEntry, bound) == SHADOW_ENTRY_META_OFFSET);
     // Generated code computes `entry = ptr + slot * SHADOW_ENTRY_SIZE` with a
     // shift, and the GC hands out `&mut entry.value` as a `*mut u64` root slot.
     assert!(SHADOW_ENTRY_SIZE.is_power_of_two());

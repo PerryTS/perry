@@ -76,6 +76,12 @@ pub(super) fn emit_export_value_wrappers(c: ExportValueWrapperCtx<'_>) {
         let getter = llmod.define_function(&getter_name, DOUBLE, vec![]);
         let _ = getter.create_block("entry");
         let blk = getter.block_mut(0).unwrap();
+        if let Some(export) = crate::native_export_value::prepare(strings, source, imported, false)
+        {
+            let value = export.emit(blk);
+            blk.ret(DOUBLE, &value);
+            continue;
+        }
         // An object-valued native named export can be a builtin submodule
         // (`fs.promises`, `util.types`, ...). Its namespace getter must arm
         // that precise submodule before reading the ESM export cell, just as

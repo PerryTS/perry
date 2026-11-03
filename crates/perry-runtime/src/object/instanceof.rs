@@ -119,7 +119,7 @@ fn recorded_prototype_instanceof_builtin(
     constructor: Option<&crate::gc::RuntimeHandle<'_>>,
 ) -> Option<bool> {
     let addr = value_addr(value.get_nanbox_f64());
-    if addr == 0 || super::prototype_chain::object_static_prototype(addr).is_none() {
+    if addr == 0 || !super::prototype_chain::has_recorded_prototype(addr) {
         return None;
     }
     prototype_instanceof_builtin(value, name, constructor)
@@ -160,7 +160,7 @@ fn is_native_module_namespace_value(value: f64, expected: &str) -> bool {
     // (`0x38000`), and `x instanceof EventEmitter` asks this probe first — the
     // null check alone let it read `class_id` out of unmapped low memory.
     let is_object = unsafe { crate::value::addr_class::try_read_gc_header(obj as usize) }
-        .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_OBJECT);
+        .is_some_and(|header| crate::gc_type_is_object!(header.obj_type));
     if !is_object {
         return false;
     }
@@ -356,7 +356,20 @@ fn ordinary_has_instance_prototype_walk_rooted(
     };
     let target = scope.root_nanbox_f64(proto);
     if proto_identity_addr(target.get_nanbox_f64()) == 0 {
-        return false; // non-object `.prototype` can never be on the chain
+        // A function whose `.prototype` was never materialized (a fresh
+        // `function F(){}` that has not been constructed or read through the
+        // materializing path) answers undefined to the dynamic read; its real
+        // `.prototype` is the object the materializing read creates.
+        let materialized =
+            crate::object::js_function_prototype_value_for_read(type_ref.get_nanbox_f64());
+        if proto_identity_addr(materialized) != 0 {
+            target.set_nanbox_f64(materialized);
+        }
+    }
+    if proto_identity_addr(target.get_nanbox_f64()) == 0 {
+        // OrdinaryHasInstance step 5: "If P is not an Object, throw a
+        // TypeError" (the left operand is an object here, step 3 above).
+        throw_non_object_prototype(target.get_nanbox_f64());
     }
     // A live shape's terminal link is already the complete chain. Read the
     // actual RHS prototype first, then compare DEFAULT against the realm's
@@ -448,7 +461,7 @@ fn terminal_prototype_matches_id(identity: u64, target: f64) -> Option<bool> {
 fn terminal_prototype_id(value: f64) -> Option<u64> {
     let addr = value_addr(value);
     if !unsafe { crate::value::addr_class::try_read_gc_header(addr) }
-        .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_OBJECT)
+        .is_some_and(|header| crate::gc_type_is_object!(header.obj_type))
     {
         return None;
     }
@@ -482,6 +495,36 @@ fn proto_identity_addr(v: f64) -> usize {
     } else {
         0
     }
+}
+
+/// OrdinaryHasInstance step 5, with V8's message:
+/// `Function has non-object prototype '<P>' in instanceof check`.
+#[cold]
+fn throw_non_object_prototype(proto: f64) -> ! {
+    let jv = crate::JSValue::from_bits(proto.to_bits());
+    let shown = if jv.is_undefined() {
+        "undefined".to_string()
+    } else if jv.is_null() {
+        "null".to_string()
+    } else if jv.is_bool() {
+        (proto.to_bits() == crate::value::TAG_TRUE).to_string()
+    } else if jv.is_int32() {
+        jv.as_int32().to_string()
+    } else if jv.is_number() {
+        if proto.is_nan() {
+            "NaN".to_string()
+        } else if proto.is_infinite() {
+            if proto > 0.0 { "Infinity" } else { "-Infinity" }.to_string()
+        } else {
+            proto.to_string()
+        }
+    } else {
+        // A string, bigint or symbol: the TypeError is what the spec requires;
+        // the message names the kind instead of quoting it.
+        "[primitive]".to_string()
+    };
+    let message = format!("Function has non-object prototype '{shown}' in instanceof check");
+    throw_type_error(message.as_bytes())
 }
 
 #[cold]
@@ -602,12 +645,53 @@ enum HasInstanceOutcome {
     Fallthrough,
 }
 
+/// C's `@@hasInstance`: the value already resolved by the caller, or read
+/// here from C with the given `@@hasInstance` key.
+#[derive(Clone, Copy)]
+enum OwnHook {
+    Value(f64),
+    Read(f64),
+}
+
 /// Spec `InstanceofOperator` / `GetMethod(C, @@hasInstance)`: a `null`/`undefined`
 /// value means "no hook" (→ ordinary `instanceof`), but a present **non-callable**
-/// value is a `TypeError` rather than a silent fall-through. `cb` is the already
-/// resolved OWN `@@hasInstance` value; this never resolves the inherited
-/// `Function.prototype` default thunk, so there is no `instanceof` recursion.
-fn dispatch_own_has_instance(cb: f64, value: f64) -> HasInstanceOutcome {
+/// value is a `TypeError` rather than a silent fall-through. `hook` is the
+/// `@@hasInstance` value of `target` (C), or the key to read it with; a read
+/// runs a getter that can collect, so both operands are rooted across it and
+/// written back refreshed. A callable hook runs as `Call(cb, C, « value »)`:
+/// C is its receiver.
+///
+/// `Function.prototype[@@hasInstance]` (the intrinsic default, reached through
+/// a linked chain or copied onto C) answers `OrdinaryHasInstance(C, value)`,
+/// which is the ordinary dispatch the caller continues with, so it falls
+/// through. It is recognized by its code, the function's identity: comparing
+/// value bits against a fresh read of `Function.prototype`'s slot misses it
+/// whenever that read allocates and the collector moves `cb` first, and the
+/// thunk run with C would re-enter this same dispatch.
+///
+/// Out of line and cold: a hook is the rare case, and its handle scope and
+/// calls stay out of the ordinary dispatch's frame.
+#[cold]
+#[inline(never)]
+fn dispatch_own_has_instance(
+    hook: OwnHook,
+    target: &mut f64,
+    value: &mut f64,
+) -> HasInstanceOutcome {
+    let cb = match hook {
+        OwnHook::Value(cb) => cb,
+        OwnHook::Read(key) => {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let lhs = scope.root_nanbox_f64(*value);
+            let rhs = scope.root_nanbox_f64(*target);
+            let cb =
+                unsafe { crate::symbol::js_object_get_symbol_property(rhs.get_nanbox_f64(), key) };
+            *value = lhs.get_nanbox_f64();
+            *target = rhs.get_nanbox_f64();
+            cb
+        }
+    };
+    let (target, value) = (*target, *value);
     let jv = crate::JSValue::from_bits(cb.to_bits());
     if jv.is_undefined() || jv.is_null() {
         return HasInstanceOutcome::Fallthrough;
@@ -615,11 +699,14 @@ fn dispatch_own_has_instance(cb: f64, value: f64) -> HasInstanceOutcome {
     if !value_is_callable(cb) {
         throw_type_error(b"Symbol(Symbol.hasInstance) is not a function");
     }
+    if is_intrinsic_has_instance(cb) {
+        return HasInstanceOutcome::Fallthrough;
+    }
     let args = [value];
     let r = unsafe {
         crate::closure::js_native_call_value(
             cb,
-            crate::closure::plain_call_receiver(),
+            crate::closure::JsThis::from_f64(target),
             args.as_ptr(),
             1,
         )
@@ -629,6 +716,20 @@ fn dispatch_own_has_instance(cb: f64, value: f64) -> HasInstanceOutcome {
     } else {
         f64::from_bits(crate::value::TAG_FALSE)
     })
+}
+
+/// Is `cb` the intrinsic `Function.prototype[@@hasInstance]`? Its code is
+/// [`function_prototype_has_instance_thunk`]; only the runtime mints a
+/// function with that code.
+fn is_intrinsic_has_instance(cb: f64) -> bool {
+    let jv = crate::JSValue::from_bits(cb.to_bits());
+    if !jv.is_reference() {
+        return false;
+    }
+    let addr = jv.as_pointer::<u8>() as usize;
+    crate::closure::is_closure_ptr(addr)
+        && unsafe { (*(addr as *const crate::closure::ClosureHeader)).code() }
+            == function_prototype_has_instance_thunk as *const u8
 }
 
 fn is_event_emitter_instance_value(value: f64) -> bool {
@@ -753,7 +854,7 @@ fn subclass_of_builtin_reaches(value: f64, class_id: u32) -> bool {
     }
     let gc_header =
         unsafe { (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader };
-    if unsafe { (*gc_header).obj_type } != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!(unsafe { (*gc_header).obj_type }) {
         return false;
     }
     // Builtin native brands below still answer cells with no physical chain.
@@ -1022,5 +1123,3 @@ mod tagged_native_handle_tests {
         assert_eq!(result.to_bits(), crate::value::TAG_FALSE);
     }
 }
-
-crate::realm_decl!("instanceof.realm.json#*");

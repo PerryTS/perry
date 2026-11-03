@@ -131,6 +131,8 @@ fn setter() -> Function {
                 }),
                 index: Box::new(Expr::LocalGet(IDX_ID)),
                 value: Box::new(Expr::LocalGet(VAL_ID)),
+                byte_offset: 0,
+                byte_end: 0,
             })],
         }],
         is_async: false,

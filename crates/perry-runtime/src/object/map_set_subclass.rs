@@ -74,7 +74,7 @@ unsafe fn instance_object_ptr(this: f64) -> Option<*mut ObjectHeader> {
         return None;
     }
     let header = crate::value::addr_class::try_read_gc_header(raw)?;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!(header.obj_type) {
         return None;
     }
     Some(raw as *mut ObjectHeader)
@@ -116,8 +116,11 @@ pub static ITERATOR_PROTOCOL_TOUCHED: std::sync::atomic::AtomicBool =
 /// (#2856). There is therefore nothing to patch on a prototype, and the only
 /// channel that can override a plain collection's default iteration is an OWN
 /// symbol property on that instance — which is exactly what this hook sees.
-/// A Map/Set SUBCLASS instance is an ordinary object, not a registered
-/// collection, so the lane already declines it and the subclass arm decides.
+/// A derived-class construction (`new (class extends Map)()`) builds a real
+/// registered collection whose newTarget prototype is recorded on it; that
+/// prototype can declare its own `[Symbol.iterator]`, so
+/// [`plain_collection_default_iteration`] admits only a collection with no
+/// recorded prototype.
 pub fn note_iterator_symbol_write(obj_key: usize, sym_key: usize) {
     if sym_key == 0
         || obj_key == 0
@@ -156,12 +159,23 @@ pub(crate) fn plain_collection_default_iteration(value: f64) -> Option<Collectio
         return None;
     }
     if crate::map::is_registered_map(raw) {
-        return Some(CollectionBacking::Map(raw as *mut MapHeader));
+        return collection_has_intrinsic_prototype(raw)
+            .then_some(CollectionBacking::Map(raw as *mut MapHeader));
     }
     if crate::set::is_registered_set(raw) {
-        return Some(CollectionBacking::Set(raw as *mut SetHeader));
+        return collection_has_intrinsic_prototype(raw)
+            .then_some(CollectionBacking::Set(raw as *mut SetHeader));
     }
     None
+}
+
+/// A registered collection inherits `%Map.prototype%` / `%Set.prototype%`
+/// (whose `@@iterator` perry answers intrinsically) exactly when no prototype
+/// is recorded on it. A derived class's instance, or one re-parented with
+/// `Object.setPrototypeOf`, carries its prototype and reads `@@iterator`
+/// through it.
+fn collection_has_intrinsic_prototype(raw: usize) -> bool {
+    super::prototype_chain::object_static_prototype(raw).is_none()
 }
 
 pub(crate) fn subclass_backing_of(value: f64) -> Option<CollectionBacking> {
@@ -231,6 +245,7 @@ pub(crate) fn subclass_backing_of(value: f64) -> Option<CollectionBacking> {
 /// This probe is a GC leaf: `subclass_backing_of` reads only the receiver's
 /// own internal backing field, without allocating a key or invoking JavaScript.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(crate) fn redirect_collection_receiver(addr: usize, want: CollectionKind) -> usize {
     let boxed = f64::from_bits(JSValue::pointer(addr as *const u8).bits());

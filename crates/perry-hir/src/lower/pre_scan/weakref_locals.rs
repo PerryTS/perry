@@ -120,20 +120,10 @@ pub(crate) fn pre_scan_weakref_locals(ast_module: &ast::Module, ctx: &mut Loweri
                         );
                     }
                 }
-                // #3144: `const m = [].map` / `const s = "".slice` /
-                // `const f = Array.prototype.filter` — track the local so a
-                // later `m.call(arr, ...)` / `m.apply(arr, [...])` rewrites to a
-                // direct call. Uses the same receiver rule as the existing
-                // `.call`/`.apply` builtin-prototype rewrite.
-                if let Some(method) =
-                    crate::lower::expr_call::intrinsics::as_builtin_proto_method_ref(
-                        ctx,
-                        init_unwrapped,
-                    )
-                {
-                    ctx.builtin_proto_method_locals
-                        .insert(ident.id.sym.to_string(), method);
-                }
+                // #3144 builtin-prototype method aliases (`const m = [].map`)
+                // are NOT tracked here: this scan is keyed by bare name, and
+                // the `.call`/`.apply` fold needs the resolved binding. See
+                // `track_decl_aliases` / `builtin_proto_method_local_ids`.
             }
         }
     }

@@ -68,7 +68,7 @@ pub(crate) fn object_ptr_from_value(value: f64) -> Option<*mut ObjectHeader> {
         return None;
     }
     unsafe {
-        if gc_type_for_ptr(raw) != Some(crate::gc::GC_TYPE_OBJECT) {
+        if !matches!(gc_type_for_ptr(raw), Some(crate::gc_object_type_pat!())) {
             return None;
         }
     }
@@ -716,5 +716,3 @@ pub(crate) extern "C" fn thunk_streamP_finished(
         pending_finished_promise(stream, signal, need_readable, need_writable)
     }
 }
-
-crate::realm_decl!("stream_promises.realm.json#*");

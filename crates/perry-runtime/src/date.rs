@@ -29,7 +29,7 @@ pub fn alloc_date_cell(ts: f64) -> f64 {
         // as a pointer. Since the rule-3 relayout it is also the word the
         // emitted read path loads as a ShapeId, so it is written FIRST: the
         // cell must never be observable carrying a dead tenant's shape.
-        (*ptr).meta = std::ptr::null_mut();
+        *crate::object::cell_meta::date_cell_meta_slot(ptr) = std::ptr::null_mut();
         #[cfg(target_pointer_width = "32")]
         {
             // The arena does not zero reused memory, and a pointer-width store
@@ -58,12 +58,7 @@ pub fn date_cell_prototype(value: f64) -> f64 {
     if let Some(bits) = crate::object::prototype_chain::object_static_prototype(addr) {
         return f64::from_bits(bits);
     }
-    let ctor = crate::object::js_get_global_this_builtin_value(b"Date".as_ptr(), 4);
-    let ctor_ptr = crate::value::js_nanbox_get_pointer(ctor) as usize;
-    if ctor_ptr == 0 {
-        return f64::from_bits(crate::value::TAG_UNDEFINED);
-    }
-    crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype")
+    crate::object::builtin_prototype_value("Date")
 }
 
 /// Mutate the `DateCell` `value` points at, writing `ts` into it. No-op if

@@ -577,11 +577,28 @@ pub unsafe extern "C" fn js_set_process_entry_path(ptr: *const u8, len: u32) {
     }
 }
 
+#[no_mangle]
+pub extern "C" fn js_process_argv_value() -> f64 {
+    if crate::process::worker_restrictions::in_node_worker() {
+        if let Some(value) = crate::object::native_namespace_prop_override_get("process", "argv") {
+            return value;
+        }
+    }
+    crate::value::js_nanbox_pointer(js_process_argv() as i64)
+}
+
+pub(crate) fn allocate_process_argv(capacity: u32) -> *mut ArrayHeader {
+    crate::realm_decl! {
+        birth crate::array::realm_array_alloc(capacity, perry_abi::realm_header::ArrayElements::Pointers, false);
+        realm { process.argv, value = dynamic, elements = string; "node:process.argv", value = dynamic, elements = string; }
+    }
+}
+
 /// Get command line arguments as an array of strings
 /// Returns: string[] (array of NaN-boxed string pointers)
 #[no_mangle]
 pub extern "C" fn js_process_argv() -> *mut ArrayHeader {
-    use crate::array::{js_array_alloc, js_array_push_f64};
+    use crate::array::js_array_push_f64;
     use crate::value::js_nanbox_string;
 
     // #9401: never `std::env::args()` — it panics on a non-UTF-8 argument.
@@ -592,7 +609,7 @@ pub extern "C" fn js_process_argv() -> *mut ArrayHeader {
     // Compiled: ["/path/to/binary", "/path/to/entry.ts", ...user_args]
     // If an older/foreign codegen does not seed the entry path, retain the
     // historical binary-path fallback while keeping user args at index 2+.
-    let arr = js_array_alloc((args.len() + 1) as u32);
+    let arr = allocate_process_argv((args.len() + 1) as u32);
 
     let mut result = arr;
     if let Some(binary_path) = args.first() {
@@ -702,7 +719,7 @@ pub extern "C" fn js_process_versions() -> f64 {
 
     // Fill the declared record slots. Order MUST match the
     // js_object_set_field calls below — slot indices are positional.
-    crate::object::runtime_layouts::runtime_record!(obj, RECORD_F411_0);
+    crate::realm_decl! { record obj, RECORD_F411_0; realm { process.versions, kind = namespace, members = { node = "22.0.0", attrs = writable | enumerable | configurable; v8 = "12.4.254.21", attrs = writable | enumerable | configurable; perry = "0.4.71", attrs = writable | enumerable | configurable; uv = "1.51.0", attrs = writable | enumerable | configurable; modules = "0", attrs = writable | enumerable | configurable; openssl = "0", attrs = writable | enumerable | configurable; zlib = "1.3.0", attrs = writable | enumerable | configurable; ares = "0", attrs = writable | enumerable | configurable; icu = "0", attrs = writable | enumerable | configurable; unicode = "16.0", attrs = writable | enumerable | configurable; napi = "0", attrs = writable | enumerable | configurable; llhttp = "0", attrs = writable | enumerable | configurable; nghttp2 = "0", attrs = writable | enumerable | configurable; undici = "0", attrs = writable | enumerable | configurable; }; "node:process.versions", kind = namespace, members = { node = "22.0.0", attrs = writable | enumerable | configurable; v8 = "12.4.254.21", attrs = writable | enumerable | configurable; perry = "0.4.71", attrs = writable | enumerable | configurable; uv = "1.51.0", attrs = writable | enumerable | configurable; modules = "0", attrs = writable | enumerable | configurable; openssl = "0", attrs = writable | enumerable | configurable; zlib = "1.3.0", attrs = writable | enumerable | configurable; ares = "0", attrs = writable | enumerable | configurable; icu = "0", attrs = writable | enumerable | configurable; unicode = "16.0", attrs = writable | enumerable | configurable; napi = "0", attrs = writable | enumerable | configurable; llhttp = "0", attrs = writable | enumerable | configurable; nghttp2 = "0", attrs = writable | enumerable | configurable; undici = "0", attrs = writable | enumerable | configurable; }; } };
 
     let nb = |s: &str| -> JSValue {
         let bytes = s.as_bytes();
@@ -857,7 +874,8 @@ pub(crate) use process_streams::test_set_stdin_data_listener;
 pub use process_streams::{
     disable_process_stdin_keypress_events, enable_process_stdin_keypress_events,
     ensure_process_stdin_reader, is_process_stdin_handle, js_process_stderr, js_process_stdin,
-    js_process_stdout, mark_process_stdin_destroyed, pump_process_stdin,
+    js_process_stdout, mark_process_stdin_destroyed, note_process_stdin_listener,
+    note_process_stdin_paused, note_process_stdin_resumed, pump_process_stdin,
     reset_process_stdin_liveness_for_tests, scan_process_stream_singleton_roots_mut,
     set_process_stdin_raw_state, stdin_chunk_jsvalue, stdin_chunk_jsvalue_opt,
     stdin_encoding_flush_jsvalue, stdin_has_encoding, stdin_is_detached,
@@ -1221,7 +1239,7 @@ pub extern "C" fn js_os_cpus() -> *mut ArrayHeader {
         let mut values = [times.user, times.nice, times.sys, times.idle, times.irq];
         unsafe {
             crate::object::runtime_layouts::perry_build_runtime_record(
-                std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_F412_0),
+                crate::object::runtime_layouts::RECORD_F412_0::desc(),
                 values.as_mut_ptr(),
             )
         }
@@ -1520,5 +1538,3 @@ mod tests {
         assert!(!eol.is_null());
     }
 }
-
-crate::realm_decl!("os.realm.json#*");

@@ -186,10 +186,19 @@ pub(crate) fn declared_property_type_from_annotation(
 /// whose result has another kind. New expression variants are unproven by
 /// default until their full lowering contract is explicitly reviewed here.
 pub(crate) fn proven_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirType> {
+    if is_literal_number_selection(init) {
+        return Some(HirType::Number);
+    }
     if let Some(kind) = super::iterator_record_primitive_type(init) {
         return Some(kind);
     }
     match init {
+        // The flat-const element lowering yields a raw Number (issue #50).
+        Expr::IndexGet { object, index, .. }
+            if crate::expr::flat_const_index_get_target(ctx, object, index).is_some() =>
+        {
+            Some(HirType::Number)
+        }
         Expr::IndexGet { .. } | Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. }
             if crate::expr::ta_element_read::byte_read_is_numeric(ctx, init) =>
         {
@@ -407,6 +416,9 @@ pub(crate) fn is_imported_native_constructor_class(
 ///   nested arrays gets the right type for `__item_63 = arr[i]` patterns)
 /// - **PropertyGet on a known class field** → the field's declared type
 pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirType> {
+    if is_literal_number_selection(init) {
+        return Some(HirType::Number);
+    }
     match init {
         // #11759 (c′): `new C()` / `C.<static>` guarded on the first
         // evaluation refines as its static form; a later evaluation builds an
@@ -650,6 +662,11 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
                 .get(class_name.as_str())
                 .cloned()
                 .unwrap_or_else(|| class_name.clone());
+            // A constructor that returns a value yields an object whose layout
+            // is not the class's; the local keeps only the Object proof.
+            if crate::lower_call::ctor_chain_has_value_return(ctx.classes, &resolved) {
+                return Some(HirType::Object(Default::default()));
+            }
             Some(HirType::Named(resolved))
         }
         // Buffer / Uint8Array constructors all produce a Buffer instance.
@@ -709,6 +726,12 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
             } else {
                 None
             }
+        }
+        // The flat-const element lowering yields a raw Number (issue #50).
+        Expr::IndexGet { object, index, .. }
+            if crate::expr::flat_const_index_get_target(ctx, object, index).is_some() =>
+        {
+            Some(HirType::Number)
         }
         Expr::IndexGet { object, index , .. } => {
             // arr[i] where arr is Array<T> → element type T.

@@ -10,10 +10,22 @@ use std::cell::RefCell;
 use std::ptr;
 
 mod index;
+pub(crate) use index::key_identity;
 #[cfg(test)]
 pub(crate) use index::{
-    test_erase_key_identity, test_key_identity, test_snapshot as test_index_snapshot,
+    test_erase_key_identity, test_has_index, test_index_buckets, test_key_identity,
+    test_snapshot as test_index_snapshot,
 };
+
+#[cfg(test)]
+pub(crate) fn test_set_value(set: *mut SetHeader) -> f64 {
+    crate::value::js_nanbox_pointer(set as i64)
+}
+
+#[cfg(test)]
+pub(crate) fn test_string_value(string: *const StringHeader) -> f64 {
+    boxed_heap_string_value(string)
+}
 
 crate::perry_thread_local! {
     /// Backing Sets whose `forEach` raw-index walk is currently in flight.
@@ -244,8 +256,8 @@ pub(crate) unsafe fn finalize_set_side_allocation_for_gc(set: *mut SetHeader) {
     if !store.is_null() {
         finalize_owned_store(store.cast(), true);
     }
-    if !(*set).meta.is_null() {
-        (*(*set).meta).native_state = 0;
+    if !crate::object::cell_meta::set_cell_meta(set).is_null() {
+        (*crate::object::cell_meta::set_cell_meta(set)).native_state = 0;
     }
     // GC_STORE_AUDIT(POINTER_FREE): Set reset clears elements alias to null; no new edge.
     (*set).elements = ptr::null_mut();
@@ -378,7 +390,7 @@ pub(crate) unsafe fn gc_element_slot_range(
     // aarch64 Linux, where user space reaches bit 48).
     let elements_addr = (*set).elements as usize;
     if !crate::value::addr_class::is_plausible_heap_addr(elements_addr) {
-        if crate::gc::gc_diag_enabled() {
+        if crate::gc::diagnostic_hooks::enabled() {
             eprintln!(
                 "[gc-tripwire] Set elements is not a plausible heap address: {:#x} (fabricated Set?)",
                 elements_addr
@@ -583,23 +595,7 @@ fn jsvalue_eq(a: f64, b: f64) -> bool {
     // Installing owner-local state can reserve an array property slot and
     // grow its allocation. Such a forwarding alias still names the same JS
     // array, including when one operand has already been refreshed.
-    if a_bits & !crate::value::POINTER_MASK == crate::value::POINTER_TAG
-        && b_bits & !crate::value::POINTER_MASK == crate::value::POINTER_TAG
-    {
-        unsafe {
-            let a = (a_bits & crate::value::POINTER_MASK) as usize;
-            let b = (b_bits & crate::value::POINTER_MASK) as usize;
-            if crate::value::addr_class::try_read_gc_header(a)
-                .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_ARRAY)
-                && crate::value::addr_class::try_read_gc_header(b)
-                    .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_ARRAY)
-            {
-                return crate::array::clean_arr_ptr(a as *const crate::array::ArrayHeader)
-                    == crate::array::clean_arr_ptr(b as *const crate::array::ArrayHeader);
-            }
-        }
-    }
-    false
+    crate::array::arrays_share_identity(a_bits, b_bits)
 }
 
 /// Find the index of a value in the set, or -1 if not found.
@@ -621,7 +617,7 @@ static KEEP_SET_FIND_VALUE_INDEX: extern "C" fn(f64, f64) -> f64 = js_set_find_v
 
 /// Members of a set this small are found faster by reading them than by
 /// hashing into the side-table twice (set address, then value).
-const SMALL_SET_SCAN_MAX: u32 = 8;
+use crate::codegen_abi::SMALL_SET_SCAN_MAX;
 
 /// Live-extent accessor for iteration (`0..used` are the raw indices).
 #[inline(always)]
@@ -681,7 +677,7 @@ struct SetCompactionRecord {
 /// before it and truncates them.
 const SET_COMPACTION_LOG_MIN_BUDGET: usize = 4096;
 
-struct SetCompactionLog {
+pub(crate) struct SetCompactionLog {
     records: std::collections::VecDeque<SetCompactionRecord>,
     /// Sum of `records[..].removed.retained_len()`.
     retained: usize,
@@ -712,10 +708,10 @@ unsafe fn note_set_compaction(set: *mut SetHeader, removed: SetRemovedSlots) {
     let budget = std::cmp::max(SET_COMPACTION_LOG_MIN_BUDGET, (*set).capacity as usize);
     if (*(*set).store).compaction.is_none() {
         // Native records contain only indices/epochs, never managed pointers.
-        (*(*set).store).compaction = Some(SetCompactionLog {
+        (*(*set).store).compaction = Some(Box::new(SetCompactionLog {
             records: std::collections::VecDeque::new(),
             retained: 0,
-        });
+        }));
     }
     let entry = (*(*set).store).compaction.as_mut().unwrap();
     if matches!(removed, SetRemovedSlots::Prefix(_)) {
@@ -990,7 +986,7 @@ pub extern "C" fn js_set_alloc(capacity: u32) -> *mut SetHeader {
         (*ptr).size = 0;
         (*ptr).capacity = cap;
         (*ptr).elements = (*store).elements;
-        (*ptr).meta = ptr::null_mut();
+        *crate::object::cell_meta::set_cell_meta_slot(ptr) = ptr::null_mut();
         (*ptr).used = 0;
         (*ptr).compaction_epoch = 0;
         (*ptr).store = store;
@@ -1036,7 +1032,7 @@ fn clean_set_ptr(set: *const SetHeader) -> *const SetHeader {
     let addr = set as usize;
     match unsafe { crate::value::addr_class::try_read_gc_header(addr) } {
         Some(header) if header.obj_type == crate::gc::GC_TYPE_SET => set,
-        Some(header) if header.obj_type == crate::gc::GC_TYPE_OBJECT => {
+        Some(header) if crate::gc_type_is_object!(header.obj_type) => {
             crate::object::map_set_subclass::redirect_collection_receiver(
                 addr,
                 crate::object::map_set_subclass::CollectionKind::Set,
@@ -1276,10 +1272,16 @@ pub unsafe extern "C-unwind" fn js_readonly_set_has(receiver: f64, value: f64) -
     let receiver_value = crate::value::JSValue::from_bits(receiver.to_bits());
     if receiver_value.is_pointer() {
         let raw = receiver_value.as_pointer::<SetHeader>();
+        // Metadata carries subclass brands, custom prototypes and own
+        // properties. Only an unmodified native receiver proves the builtin.
         if matches!(
             crate::value::addr_class::try_read_gc_header(raw as usize),
             Some(header) if header.obj_type == crate::gc::GC_TYPE_SET
-        ) {
+        ) && (*raw).meta.is_null()
+            && crate::object::builtin_proto::pristine(
+                crate::object::builtin_proto::BuiltinProto::Set,
+            )
+        {
             return f64::from_bits(
                 crate::value::JSValue::bool(set_has_resolved(raw, value) != 0).bits(),
             );
@@ -1296,16 +1298,21 @@ pub unsafe extern "C-unwind" fn js_readonly_set_has(receiver: f64, value: f64) -
 /// so the genuine-`Set` arm above is a leaf: with the handle scope inlined,
 /// every `componentTypeSet.has(type)` paid the fallback's full frame.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn readonly_set_has_structural(receiver: f64, value: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver_handle = scope.root_nanbox_f64(receiver);
     let value_handle = scope.root_nanbox_f64(value);
+    let method =
+        crate::object::method_call::spec_get_value(receiver_handle.get_nanbox_f64(), b"has");
+    // Get may run an accessor that collects. Refresh both operands before
+    // calling the selected value, including a borrowed builtin method.
+    let refreshed_receiver = receiver_handle.get_nanbox_f64();
     let refreshed_value = value_handle.get_nanbox_f64();
-    crate::object::js_native_call_method(
-        receiver_handle.get_nanbox_f64(),
-        b"has".as_ptr() as *const i8,
-        3,
+    crate::object::method_call::js_method_call_value(
+        method,
+        refreshed_receiver,
         &refreshed_value,
         1,
     )

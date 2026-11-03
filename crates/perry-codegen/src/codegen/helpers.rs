@@ -391,6 +391,9 @@ pub(super) fn guarded_specialization_admits_preinline(ir_bytes: usize, statement
 #[path = "guarded_preinline_admission_tests.rs"]
 mod guarded_preinline_admission_tests;
 
+#[path = "preinline_growth.rs"]
+pub(super) mod preinline_growth;
+
 /// Maximum total (module-wide) direct call sites a function may have and still
 /// be hinted. This is the anti-bloat backstop: the raised `-inlinehint-threshold`
 /// lifts LLVM's ceiling for a hinted callee at *every* one of its call sites, so
@@ -518,6 +521,34 @@ pub(crate) fn write_barriers_enabled() -> bool {
             Ok("0") | Ok("off") | Ok("false")
         )
     })
+}
+
+thread_local! {
+    static JS_TEXT_SECTION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The output section every compiled JS function is placed in on x86_64
+/// Linux. There the runtime unwinds by DWARF and meets every runtime frame;
+/// an `Error` capture keeps the JS frames only, and a frame is JS when its
+/// pc lies between the linker's `__start_`/`__stop_` symbols of this section:
+/// a range test on the code's own placement, no table (the runtime side is
+/// `error_stack_frames.rs`). Elsewhere the frame-pointer chain skips the
+/// runtime's frames by itself, so no section is named.
+pub(crate) const JS_TEXT_SECTION_NAME: &str = "perry_js_text";
+
+/// Whether the CURRENT module places its functions in
+/// [`JS_TEXT_SECTION_NAME`] (`set_js_text_section_for_target`).
+pub(crate) fn js_text_section() -> Option<&'static str> {
+    JS_TEXT_SECTION
+        .with(|c| c.get())
+        .then_some(JS_TEXT_SECTION_NAME)
+}
+
+pub(crate) fn set_js_text_section_for_target(triple: &str) {
+    let on = triple.starts_with("x86_64")
+        && target_os_of(triple) == Some("linux")
+        && !triple.contains("android");
+    JS_TEXT_SECTION.with(|c| c.set(on));
 }
 
 thread_local! {
@@ -1176,37 +1207,29 @@ pub(super) fn is_macos_triple(triple: &str) -> bool {
     target_os_of(triple) == Some("macos")
 }
 
-pub(super) fn emit_buffer_alias_metadata(llmod: &mut LlModule, count: u32) {
-    if count == 0 {
+/// Define every buffer alias scope the module's functions committed: one
+/// shared domain, then per scope `S` its node, its single-scope list `S+1`
+/// and its noalias list `S+2` (every other scope). All ids come from the
+/// module's one metadata id counter (`LlModule::buffer_alias_scope_allocator`),
+/// so no count of scopes can make two definitions share an id.
+pub(crate) fn emit_buffer_alias_metadata(llmod: &mut LlModule) {
+    let scopes = llmod.buffer_alias_scopes().to_vec();
+    if scopes.is_empty() {
         return;
     }
-    // Shared domain.
-    llmod.add_metadata_line("!100 = distinct !{!100}".to_string());
-    // Per-buffer scope nodes.
-    for i in 0..count {
-        let sid = 101 + i;
-        llmod.add_metadata_line(format!("!{} = distinct !{{!{}, !100}}", sid, sid));
-    }
-    // Single-element alias-scope lists (one per buffer).
-    for i in 0..count {
-        let list_id = 201 + i;
-        let scope_id = 101 + i;
-        llmod.add_metadata_line(format!("!{} = !{{!{}}}", list_id, scope_id));
-    }
-    // Noalias lists: for buffer i, every *other* buffer's scope.
-    for i in 0..count {
-        let list_id = 301 + i;
-        let others: Vec<String> = (0..count)
-            .filter(|j| *j != i)
-            .map(|j| format!("!{}", 101 + j))
+    let domain = llmod.allocate_metadata_id();
+    llmod.add_metadata_line(format!("!{domain} = distinct !{{!{domain}}}"));
+    for &scope in &scopes {
+        llmod.add_metadata_line(format!("!{scope} = distinct !{{!{scope}, !{domain}}}"));
+        llmod.add_metadata_line(format!("!{} = !{{!{scope}}}", scope + 1));
+        let others: Vec<String> = scopes
+            .iter()
+            .filter(|other| **other != scope)
+            .map(|other| format!("!{other}"))
             .collect();
-        if others.is_empty() {
-            // Single buffer: empty noalias set — LLVM accepts `!{}` but
-            // it's a no-op. Still emit so `!noalias !{N}` references resolve.
-            llmod.add_metadata_line(format!("!{} = !{{}}", list_id));
-        } else {
-            llmod.add_metadata_line(format!("!{} = !{{{}}}", list_id, others.join(", ")));
-        }
+        // A single buffer still gets its (empty) noalias set so the
+        // `!noalias !{S+2}` reference resolves.
+        llmod.add_metadata_line(format!("!{} = !{{{}}}", scope + 2, others.join(", ")));
     }
 }
 
@@ -1729,7 +1752,11 @@ pub(super) fn emit_callee_binding_resolutions(
         // A statically-known callee takes the known-func_id guarded direct
         // path — a static, inlinable call — which beats the entry-resolved
         // indirect call this map would install.
-        if ctx.local_closure_func_ids.contains_key(&id) {
+        if ctx.local_closure_func_ids.contains_key(&id)
+            || (!ctx.wpfacts_off
+                && !ctx.target_triple.contains("wasm")
+                && ctx.wpfacts.local_bodies.contains_key(&id))
+        {
             continue;
         }
         // A `Function`-hinted binding is consumed by the guarded

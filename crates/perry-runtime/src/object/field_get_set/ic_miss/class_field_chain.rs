@@ -21,7 +21,7 @@ unsafe fn receiver_record(receiver: f64) -> Option<(*mut ObjectHeader, shapes::S
         | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
         | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
         | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES;
-    if gc.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(gc.obj_type)
         || gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || gc._reserved & BLOCKING != 0
     {
@@ -84,12 +84,13 @@ pub(super) unsafe fn try_define(receiver: f64, key: f64, value: f64) -> bool {
     {
         return false;
     }
+    // A1_UNPROVEN: record-first: ic_miss entry (kind-A/B question for S0f).
     // DefineField of a class body: the census never makes an instance field
     // name a constant method (`proto_census::ProtoCensus::fields`), so the
     // add names nothing a binding site relies on and needs no shadow
     // admission. A receiver already marked as a prototype keeps the full
     // publication (its member slots are what holder tests prove).
-    let meta = (*obj).meta;
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     if meta.is_null() || (*meta).flags & crate::object::OBJECT_META_FLAG_IS_PROTOTYPE == 0 {
         shapes::stamp_birth_shape_id_with_carrier_note(obj, target);
     } else {

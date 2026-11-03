@@ -1,0 +1,1 @@
+Large pointer-bearing containers (arrays, split results, array backings) get young, non-moving storage too: a minor traces them in place, frees dead ones with their children and promotes live ones at their address, so their children are no longer born old.

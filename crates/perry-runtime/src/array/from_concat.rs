@@ -53,7 +53,11 @@ fn throw_map_fn_not_callable(map_fn: f64) -> ! {
     let jv = JSValue::from_bits(map_fn.to_bits());
     let type_name = if jv.is_null() || jv.is_pointer() {
         "object"
-    } else if map_fn.to_bits() >> 48 == 0x7FFF {
+    } else if jv.is_any_string() {
+        // Both string representations, not just the heap one: a short (SSO)
+        // mapper used to report `number x is not a function`. `is_any_string`
+        // covers STRING_TAG and SHORT_STRING_TAG, so the message matches Node
+        // for every length.
         "string"
     } else {
         "number"
@@ -75,30 +79,27 @@ fn throw_map_fn_not_callable(map_fn: f64) -> ! {
 ///
 /// Takes the raw NaN-boxed f64 value (NOT a pre-unboxed pointer) so it can
 /// inspect the tag bits before stripping.
-/// #9846: is `value` a String / Set / Map whose iterator prototype has escaped
-/// to user code, so its `Array.from` element copy is no longer unobservable?
-/// See the call site in [`js_array_from_value`].
+/// #9846: is `value` a String / Set / Map whose `Array.from` element copy is
+/// observable: its iterator prototype has escaped to user code, or (a Set /
+/// Map) its `@@iterator` may not be the intrinsic one? See the call site in
+/// [`js_array_from_value`].
 fn array_from_family_not_pristine(value: f64) -> bool {
-    // Sticky-flag loads FIRST. The classification below costs two registry
-    // lookups, and `Array.from` is hot: in the overwhelmingly common program no
-    // iterator prototype has ever escaped, so this must cost three relaxed
-    // loads and nothing else.
-    let string_dirty = crate::object::iterator_prototypes::string_iteration_not_pristine();
-    let set_dirty = crate::object::iterator_prototypes::set_iteration_not_pristine();
-    let map_dirty = crate::object::iterator_prototypes::map_iteration_not_pristine();
-    if !(string_dirty || set_dirty || map_dirty) {
-        return false;
-    }
     let jsv = crate::value::JSValue::from_bits(value.to_bits());
     if jsv.is_any_string() {
-        return string_dirty;
+        return crate::object::iterator_prototypes::string_iteration_not_pristine();
     }
     let raw = crate::value::js_nanbox_get_pointer(value) as usize;
     if raw == 0 {
         return false;
     }
-    (set_dirty && crate::set::is_registered_set(raw))
-        || (map_dirty && crate::map::is_registered_map(raw))
+    let dirty = if crate::set::is_registered_set(raw) {
+        crate::object::iterator_prototypes::set_iteration_not_pristine()
+    } else if crate::map::is_registered_map(raw) {
+        crate::object::iterator_prototypes::map_iteration_not_pristine()
+    } else {
+        return false;
+    };
+    dirty || crate::object::map_set_subclass::plain_collection_default_iteration(value).is_none()
 }
 
 #[no_mangle]
@@ -271,7 +272,7 @@ pub extern "C" fn js_array_concat_variadic(
                     (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
                 (*hdr).obj_type
             };
-            if obj_type == crate::gc::GC_TYPE_OBJECT || obj_type == crate::gc::GC_TYPE_CLOSURE {
+            if crate::gc_type_is_object!(obj_type) || obj_type == crate::gc::GC_TYPE_CLOSURE {
                 let recv_value = f64::from_bits(JSValue::pointer(recv as *const u8).bits());
                 let result = crate::array::js_arraylike_concat(recv_value, args_ptr, count);
                 return crate::value::js_nanbox_get_pointer(result) as *mut ArrayHeader;
@@ -647,8 +648,18 @@ fn items_is_iterable(items: f64) -> bool {
 }
 
 fn classify_iter_source(items: f64) -> IterSourceKind {
+    // The live walk and the snapshots stand in for `%...IteratorPrototype%.next`
+    // calls; a source whose `next` or `@@iterator` may be user code drives
+    // the protocol instead.
     if jsv_is_array(items) {
+        let arr = clean_arr_ptr(crate::value::js_nanbox_get_pointer(items) as *const ArrayHeader);
+        if arr.is_null() || !unsafe { super::iterator_step::array_iteration_is_intrinsic(arr) } {
+            return IterSourceKind::Generic;
+        }
         return IterSourceKind::LiveArray;
+    }
+    if array_from_family_not_pristine(items) {
+        return IterSourceKind::Generic;
     }
     let jv = JSValue::from_bits(items.to_bits());
     if jv.is_any_string() {
@@ -1390,5 +1401,54 @@ fn append_spread_array(result: *mut ArrayHeader, src: *const ArrayHeader) -> *mu
             out = js_array_push_f64(out, v);
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod mapper_error_tests {
+    use super::*;
+
+    /// Drive the real `Array.from(array, mapFn)` rejection path and return the
+    /// TypeError message it produced.
+    fn rejection(map_fn: f64) -> String {
+        let roots = RuntimeHandleScope::new();
+        let map_fn = roots.root_nanbox_f64(map_fn);
+        let source =
+            roots.root_nanbox_f64(crate::value::js_nanbox_pointer(js_array_alloc(0) as i64));
+        let thrown = crate::exception::catch_js_throw(|| {
+            js_array_from_mapped(
+                source.get_nanbox_f64(),
+                map_fn.get_nanbox_f64(),
+                f64::from_bits(TAG_UNDEFINED),
+            ) as usize
+        })
+        .expect_err("a string mapper must throw");
+        let thrown = roots.root_nanbox_f64(thrown);
+        let err = JSValue::from_bits(thrown.get_nanbox_f64().to_bits())
+            .as_pointer::<crate::error::ErrorHeader>()
+            as *mut crate::error::ErrorHeader;
+        let message = crate::error::js_error_get_message(err);
+        unsafe { crate::object::has_own_helpers::str_from_string_header(message) }
+            .expect("error message is UTF-8")
+            .to_string()
+    }
+
+    /// `Array.from([], "x")` is `TypeError: string x is not a function` in Node.
+    /// An inline (SSO) string and its heap counterpart must report the same
+    /// type, and that type must be `string` — the tag check this asserts used to
+    /// only recognise heap strings, so every short mapper said `number`.
+    #[test]
+    fn short_string_mappers_keep_the_heap_string_error_type() {
+        for bytes in [b"".as_slice(), b"x".as_slice(), b"abcde".as_slice()] {
+            let inline = JSValue::short_string_unchecked(bytes);
+            assert!(inline.is_short_string());
+            let inline_message = rejection(f64::from_bits(inline.bits()));
+            let header = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+            let heap = JSValue::string_ptr(header);
+            assert!(heap.is_string() && !heap.is_short_string());
+            let heap_message = rejection(f64::from_bits(heap.bits()));
+            assert!(heap_message.starts_with("string "));
+            assert_eq!(inline_message, heap_message);
+        }
     }
 }

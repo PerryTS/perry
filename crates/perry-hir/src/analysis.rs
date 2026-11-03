@@ -523,7 +523,17 @@ pub fn substitute_lexical_this_in_expr(expr: &mut Expr, replacement: &Expr) {
                 // #11157: a local replacement (a per-evaluation class's
                 // self-binding) is read from the closure body now, so the
                 // closure must capture it like any other outer local.
-                if let Expr::LocalGet(id) = replacement {
+                let local = match replacement {
+                    Expr::LocalGet(id) => Some(id),
+                    // A property of a local (a derived constructor's
+                    // `this` cell, `lower_decl::super_arrow_this`).
+                    Expr::PropertyGet { object, .. } => match object.as_ref() {
+                        Expr::LocalGet(id) => Some(id),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let Some(id) = local {
                     if !captures.contains(id) {
                         captures.push(*id);
                     }
@@ -828,6 +838,8 @@ fn remap_with_propagation(
                 object: Box::new(Expr::This),
                 property,
                 value,
+                byte_offset: 0,
+                byte_end: 0,
             },
             CaptureWriteTarget::Env {
                 class_name,
@@ -1185,6 +1197,7 @@ fn replace_this_in_expr(expr: &mut Expr, this_id: LocalId) {
             object,
             index,
             value,
+            ..
         } => {
             replace_this_in_expr(object, this_id);
             replace_this_in_expr(index, this_id);
@@ -1406,6 +1419,39 @@ mod scoped_temp_tests {
         assert_eq!(id, 13);
         assert!(matches!(*value, Expr::LocalGet(14)));
         assert!(matches!(*body, Expr::LocalGet(13)));
+    }
+}
+
+#[cfg(test)]
+mod local_refs_depth_tests {
+    use super::*;
+
+    /// A conditional chain far deeper than any test-thread stack holds at
+    /// one walker frame per level: `walk_expr_children` grows the stack, so a
+    /// recursive analysis over it does not abort.
+    #[test]
+    fn a_deep_conditional_chain_is_walked_without_overflowing_a_small_stack() {
+        const DEPTH: u32 = 2_000;
+        let handle = std::thread::Builder::new()
+            .stack_size(512 * 1024)
+            .spawn(|| {
+                let mut expr = Expr::LocalGet(DEPTH);
+                for id in 0..DEPTH {
+                    expr = Expr::Conditional {
+                        condition: Box::new(Expr::LocalGet(id)),
+                        then_expr: Box::new(Expr::Undefined),
+                        else_expr: Box::new(expr),
+                    };
+                }
+                let mut refs = Vec::new();
+                collect_local_refs_expr(&expr, &mut refs, &mut Default::default());
+                // Dropping a 2,000-deep box chain recurses too; leak it so
+                // the test measures the walk only.
+                std::mem::forget(expr);
+                refs.len()
+            })
+            .expect("spawn");
+        assert_eq!(handle.join().expect("walk"), DEPTH as usize + 1);
     }
 }
 

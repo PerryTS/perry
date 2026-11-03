@@ -1470,6 +1470,8 @@ mod inline_birth;
 mod birth_color_controls;
 #[path = "cycle_state/root_remark.rs"]
 mod root_remark;
+#[path = "cycle_state/settled_step.rs"]
+mod settled_step;
 
 #[test]
 fn full_cycle_path_module_root_store_after_root_scan_preserves_new_value() {

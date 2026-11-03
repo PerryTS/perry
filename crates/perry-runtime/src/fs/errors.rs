@@ -111,9 +111,11 @@ pub(crate) unsafe fn fs_callback_write_parent_error(
     syscall: &'static str,
 ) -> Option<f64> {
     let path = decode_path_value(path_value)?;
-    let parent = std::path::Path::new(&path)
-        .parent()
-        .unwrap_or(std::path::Path::new("."));
+    // A bare file name has the empty path as its parent: that is the cwd.
+    let parent = match std::path::Path::new(&path).parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => std::path::Path::new("."),
+    };
     match fs::metadata(parent) {
         Ok(meta) if meta.is_dir() => None,
         Ok(_) => {

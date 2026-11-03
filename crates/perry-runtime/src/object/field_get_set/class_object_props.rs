@@ -33,7 +33,7 @@ pub(crate) fn class_evaluation_prototype_class_id(ptr: usize) -> Option<u32> {
     }
     unsafe {
         let header = crate::value::addr_class::try_read_gc_header(ptr)?;
-        if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        if crate::gc_type_is_not_object!(header.obj_type)
             || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return None;
@@ -168,6 +168,11 @@ pub(crate) unsafe fn finish_class_evaluation_prototype(
         }) {
             CLASS_EVALUATION_PROTOTYPES_MATERIALIZED
                 .store(true, std::sync::atomic::Ordering::Relaxed);
+            proto.with_mut_ptr::<ObjectHeader, _>(|p| {
+                crate::object::class_registry::install_evaluation_prototype_symbol_members(
+                    p, class_id,
+                )
+            });
             let proto_value = proto
                 .with_mut_ptr::<ObjectHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64));
             crate::object::install_evaluation_generator_symbols(
@@ -228,13 +233,16 @@ pub(crate) unsafe fn finish_class_evaluation_prototype(
         });
     });
 
-    for (name, is_accessor) in super::super::class_registry::class_prototype_member_names(class_id)
-    {
-        if is_accessor {
+    for member in super::super::class_registry::class_prototype_member_names(class_id) {
+        let name = member.name;
+        if member.accessor {
             // S2: an accessor is a real accessor property of this prototype.
             proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
-                super::super::class_registry::install_decl_prototype_accessor_bytes(
-                    proto, class_id, &name,
+                super::super::class_registry::install_decl_prototype_accessor_at(
+                    proto,
+                    class_id,
+                    &name,
+                    Some(member.at),
                 )
             });
             continue;
@@ -271,6 +279,9 @@ pub(crate) unsafe fn finish_class_evaluation_prototype(
         });
     }
 
+    proto.with_mut_ptr::<ObjectHeader, _>(|p| {
+        crate::object::class_registry::install_evaluation_prototype_symbol_members(p, class_id)
+    });
     crate::object::install_evaluation_generator_symbols(
         proto.with_const_ptr::<ObjectHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64)),
         class.with_const_ptr::<ObjectHeader, _>(|c| crate::value::js_nanbox_pointer(c as i64)),
@@ -634,12 +645,13 @@ pub(super) unsafe fn instance_constructor_value(
     // fell through to `undefined`.
     if class_id == crate::weakref::CLASS_ID_WEAKMAP || class_id == crate::weakref::CLASS_ID_WEAKSET
     {
-        let name: &[u8] = if class_id == crate::weakref::CLASS_ID_WEAKMAP {
-            b"WeakMap"
-        } else {
-            b"WeakSet"
-        };
-        let v = js_get_global_this_builtin_value(name.as_ptr(), name.len());
+        let v = super::super::builtin_constructor_value(
+            if class_id == crate::weakref::CLASS_ID_WEAKMAP {
+                "WeakMap"
+            } else {
+                "WeakSet"
+            },
+        );
         return Some(JSValue::from_bits(v.to_bits()));
     }
     if class_id != 0 && class_has_own_method(class_id, "constructor") {

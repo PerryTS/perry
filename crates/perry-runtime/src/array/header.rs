@@ -574,7 +574,7 @@ fn clean_arr_ptr_resolve(arr: *const ArrayHeader) -> *const ArrayHeader {
     // the sanity check below would reject them. Force-materialize
     // into a real ArrayHeader and substitute the materialized
     // pointer for every downstream accessor. O(1) on subsequent
-    // calls (idempotent via the `materialized` cache).
+    // calls (idempotent: materialization is in place, same address).
     let addr = cleaned as usize;
     let tracked_obj_type =
         tracked_header.map(|gc_header| unsafe { (*gc_header.as_ptr()).obj_type });
@@ -888,7 +888,7 @@ pub(crate) fn normalize_array_receiver(arr: *const ArrayHeader) -> *const ArrayH
             let is_typed_array =
                 crate::typedarray_hook_slots::lookup_typed_array_kind(raw_addr).is_some();
             let is_buffer = crate::buffer::is_registered_buffer(raw_addr);
-            if obj_type == crate::gc::GC_TYPE_OBJECT && !is_typed_array && !is_buffer {
+            if crate::gc_type_is_object!(obj_type) && !is_typed_array && !is_buffer {
                 // Generic array-like object receiver
                 // (`Array.prototype.<m>.call({length, 0:…}, …)`): materialize
                 // `length` + indexed keys into a real array and operate on that.
@@ -1598,7 +1598,7 @@ pub(crate) unsafe fn array_numeric_raw_f64_push_inbounds_resolved(
     // `GC_LAYOUT_SIDE_MASK` the note could only ever CLEAR this slot's bit, so
     // skipping it leaves at worst a stale set bit over a non-pointer word —
     // which costs one extra visit and nothing else, because
-    // `gc::trace::mark_field_into_worklist` re-validates every slot word and
+    // `gc::mark::mark_field_into_worklist` re-validates every slot word and
     // rejects f64 bit patterns as out-of-range addresses.
     //
     // That leaves the #7480 element-shape invariant, which is NOT part of that

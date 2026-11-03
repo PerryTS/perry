@@ -510,7 +510,15 @@ fn raw_iterator_adapters_refresh_arguments_after_wrapper_birth_relocation() {
             } else {
                 // Ordinary sources traverse allocating GetIterator probes
                 // before wrapper birth, so both stages must preserve roots.
-                source(1.0, f64::from_bits(TAG_UNDEFINED))
+                // `map` resolves through the prototype chain, as for a user
+                // iterator that extends `Iterator`.
+                let proto = crate::object::iterator_ctor::iterator_prototype_object();
+                let source = source(1.0, f64::from_bits(TAG_UNDEFINED));
+                crate::object::prototype_chain::object_set_static_prototype(
+                    crate::value::js_nanbox_get_pointer(source) as usize,
+                    crate::value::js_nanbox_pointer(proto as i64).to_bits(),
+                );
+                source
             };
             let callback = map_callback();
             js_shadow_slot_set(0, iterator.to_bits());

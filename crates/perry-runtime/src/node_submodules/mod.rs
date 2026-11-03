@@ -27,7 +27,6 @@ use crate::closure::{
     js_closure_alloc, js_closure_call0, js_closure_call1, js_closure_call2,
     js_closure_get_capture_ptr, js_closure_set_capture_ptr, ClosureHeader, JsFunctionInfo,
 };
-use crate::codegen_abi::{JsBody1, JsBody2, JsBody3};
 use crate::feature_hooks::Hook;
 use crate::object::{
     js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name, ObjectHeader,
@@ -46,7 +45,7 @@ pub(crate) use diagnostics_tail::*;
 /// info (the declared arity, or the rest parameter of a variadic export).
 struct ExportSpec {
     name: &'static str,
-    info: JsFunctionInfo,
+    info: &'static JsFunctionInfo,
 }
 
 /// One entry per submodule. `exports` lists every named export the
@@ -58,7 +57,9 @@ pub(super) struct SubmoduleSpec {
     /// Stable key — matches the prefix used in the generated FFI symbol
     /// names (`js_node_submod_<key>_export_<name>`).
     key: &'static str,
-    exports: &'static [ExportSpec],
+    /// The submodule's ordinal: its registry slot and its singleton slots.
+    bucket: SubmodBucket,
+    exports: &'static [&'static ExportSpec],
 }
 
 // ----- thunks -----
@@ -109,48 +110,23 @@ use hono_jsx::{
 };
 
 pub(crate) use consumers::{consume_array_buffer, consume_bytes, consume_json, consume_text};
-use consumers::{
-    thunk_consumers_arrayBuffer, thunk_consumers_blob, thunk_consumers_buffer,
-    thunk_consumers_bytes, thunk_consumers_json, thunk_consumers_text,
-};
 // Re-export at the `node_submodules` root so perry-stdlib's
 // `perry_runtime::node_submodules::js_register_stream_consumer_callbacks`
 // call site keeps resolving after the consumers split.
 pub use consumers::js_register_stream_consumer_callbacks;
 pub(crate) use fs_promises::js_readline_promises_readline_new;
-use fs_promises::{
-    thunk_fs_promises_access, thunk_fs_promises_appendFile, thunk_fs_promises_chmod,
-    thunk_fs_promises_chown, thunk_fs_promises_constants, thunk_fs_promises_copyFile,
-    thunk_fs_promises_cp, thunk_fs_promises_glob, thunk_fs_promises_lchmod,
-    thunk_fs_promises_lchown, thunk_fs_promises_link, thunk_fs_promises_lstat,
-    thunk_fs_promises_lutimes, thunk_fs_promises_mkdir, thunk_fs_promises_mkdtemp,
-    thunk_fs_promises_mkdtempDisposable, thunk_fs_promises_open, thunk_fs_promises_opendir,
-    thunk_fs_promises_readFile, thunk_fs_promises_readdir, thunk_fs_promises_readlink,
-    thunk_fs_promises_realpath, thunk_fs_promises_rename, thunk_fs_promises_rm,
-    thunk_fs_promises_rmdir, thunk_fs_promises_stat, thunk_fs_promises_statfs,
-    thunk_fs_promises_symlink, thunk_fs_promises_truncate, thunk_fs_promises_unlink,
-    thunk_fs_promises_utimes, thunk_fs_promises_watch, thunk_fs_promises_writeFile,
-    thunk_readline_Interface, thunk_readline_Readline, thunk_readline_createInterface,
-};
+use fs_promises::thunk_fs_promises_constants;
 use registry_backed::native_namespace_as_default;
 pub(crate) use registry_backed::{
     registry_backed_module_callable, registry_backed_module_export, stream_promises_export_callable,
 };
-use stream_promises::{thunk_streamP_finished, thunk_streamP_pipeline, value_from_ptr};
-use test::{
-    thunk_reporter_dot, thunk_reporter_junit, thunk_reporter_lcov, thunk_reporter_spec,
-    thunk_reporter_tap, thunk_test, thunk_test_after, thunk_test_after_each, thunk_test_before,
-    thunk_test_before_each, thunk_test_expect_failure, thunk_test_only, thunk_test_run,
-    thunk_test_skip, thunk_test_suite, thunk_test_todo,
-};
+use stream_promises::value_from_ptr;
+#[cfg(test)]
+use stream_promises::{thunk_streamP_finished, thunk_streamP_pipeline};
 use timers::{
-    timers_ns_clear_immediate, timers_ns_clear_interval, timers_ns_clear_timeout,
-    timers_ns_set_immediate, timers_ns_set_interval, timers_ns_set_timeout,
     timers_promises_scheduler, timers_promises_scheduler_wait, timers_promises_scheduler_yield,
-    timers_promises_set_immediate, timers_promises_set_interval, timers_promises_set_timeout,
 };
 pub(crate) use trace_events::{flush_trace_events_output, init_trace_events_runtime};
-use trace_events::{thunk_trace_events_createTracing, thunk_trace_events_getEnabledCategories};
 
 // node:sys is a deprecated alias for node:util. Known util-backed
 // exports are rebound to util's callable singletons below so identity
@@ -190,659 +166,20 @@ extern "C" fn thunk_vm_create_context(
 // ----- submodule table -----
 
 // ----- per-submodule specs (devirt) -----
-static SUBMOD_VM: SubmoduleSpec = SubmoduleSpec {
-    key: "vm",
-    exports: &[ExportSpec {
-        name: "createContext",
-        info: JsFunctionInfo::of(thunk_vm_create_context as JsBody2<ClosureHeader>)
-            .with_declared(2),
-    }],
-};
+// Imports of bodies whose owning definition sits in plain source are spelled
+// out here, in plain source too: the link name is built from the written
+// tokens, which the shared export list cannot reproduce through its macros.
+static IMPORT_THUNK_TEST: &JsFunctionInfo = crate::fn_info!(reference import crate::node_submodules::test::runner::thunk_test, 3; with_declared(3));
+static IMPORT_THUNK_TEST_ONLY: &JsFunctionInfo = crate::fn_info!(reference import crate::node_submodules::test::runner::thunk_test_only, 3; with_declared(3));
+static IMPORT_THUNK_TEST_SKIP: &JsFunctionInfo = crate::fn_info!(reference import crate::node_submodules::test::runner::thunk_test_skip, 3; with_declared(3));
+static IMPORT_THUNK_TEST_TODO: &JsFunctionInfo = crate::fn_info!(reference import crate::node_submodules::test::runner::thunk_test_todo, 3; with_declared(3));
 
-static SUBMOD_TIMERS: SubmoduleSpec = SubmoduleSpec {
-    // node:timers namespace object (`import * as timers`). Named imports
-    // bypass this (compile.rs) to keep the global fast-path. (#1213)
-    key: "timers",
-    exports: &[
-        ExportSpec {
-            name: "setTimeout",
-            info: JsFunctionInfo::of(timers_ns_set_timeout as JsBody3<ClosureHeader>).with_rest(2),
-        },
-        ExportSpec {
-            name: "setInterval",
-            info: JsFunctionInfo::of(timers_ns_set_interval as JsBody3<ClosureHeader>).with_rest(2),
-        },
-        ExportSpec {
-            name: "setImmediate",
-            info: JsFunctionInfo::of(timers_ns_set_immediate as JsBody2<ClosureHeader>)
-                .with_rest(1),
-        },
-        ExportSpec {
-            name: "clearTimeout",
-            info: JsFunctionInfo::of(timers_ns_clear_timeout as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-        ExportSpec {
-            name: "clearInterval",
-            info: JsFunctionInfo::of(timers_ns_clear_interval as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-        ExportSpec {
-            name: "clearImmediate",
-            info: JsFunctionInfo::of(timers_ns_clear_immediate as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-    ],
-};
-
-static SUBMOD_TIMERS_PROMISES: SubmoduleSpec = SubmoduleSpec {
-    key: "timers_promises",
-    exports: &[
-        ExportSpec {
-            name: "setTimeout",
-            info: JsFunctionInfo::of(timers_promises_set_timeout as JsBody3<ClosureHeader>)
-                .with_declared(3),
-        },
-        ExportSpec {
-            name: "setImmediate",
-            info: JsFunctionInfo::of(timers_promises_set_immediate as JsBody2<ClosureHeader>)
-                .with_declared(2),
-        },
-        ExportSpec {
-            name: "setInterval",
-            info: JsFunctionInfo::of(timers_promises_set_interval as JsBody3<ClosureHeader>)
-                .with_declared(3),
-        },
-        ExportSpec {
-            name: "scheduler",
-            info: JsFunctionInfo::of(timers_promises_scheduler as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-    ],
-};
-
-static SUBMOD_FS_PROMISES: SubmoduleSpec = SubmoduleSpec {
-    key: "fs_promises",
-    exports: &[
-        ExportSpec {
-            name: "readFile",
-            info: JsFunctionInfo::of(thunk_fs_promises_readFile as JsBody2<ClosureHeader>)
-                .with_declared(2),
-        },
-        ExportSpec {
-            name: "open",
-            info: JsFunctionInfo::of(thunk_fs_promises_open as JsBody3<ClosureHeader>)
-                .with_declared(3),
-        },
-        ExportSpec {
-            name: "writeFile",
-            info: JsFunctionInfo::of(thunk_fs_promises_writeFile as JsBody3<ClosureHeader>)
-                .with_declared(3),
-        },
-        ExportSpec {
-            name: "appendFile",
-            info: JsFunctionInfo::of(thunk_fs_promises_appendFile as JsBody3<ClosureHeader>)
-                .with_declared(3),
-        },
-        ExportSpec {
-            name: "chmod",
-            info: JsFunctionInfo::of(thunk_fs_promises_chmod as JsBody2<ClosureHeader>)
-                .with_declared(2),
-        },
-        ExportSpec {
-            name: "chown",
-            info: JsFunctionInfo::of(thunk_fs_promises_chown as JsBody3<ClosureHeader>)
-                .with_declared(3),
-        },
-        ExportSpec {
-            name: "lchown",
-            info: JsFunctionInfo::of(thunk_fs_promises_lchown as JsBody3<ClosureHeader>)
-                .with_declared(3),
-        },
-        ExportSpec {
-            name: "lchmod",
-            info: JsFunctionInfo::of(thunk_fs_promises_lchmod as JsBody2<ClosureHeader>)
-                .with_declared(2),
-        },
-        ExportSpec {
-            name: "mkdir",
-            info: JsFunctionInfo::of(thunk_fs_promises_mkdir as JsBody2<ClosureHeader>)
-                .with_declared(2),
-        },
-        ExportSpec {
-            name: "readdir",
-            info: JsFunctionInfo::of(thunk_fs_promises_readdir as JsBody2<ClosureHeader>)
-                .with_declared(2),
-        },
-        ExportSpec {
-            name: "stat",
-            info: JsFunctionInfo::of(thunk_fs_promises_stat as JsBody2<ClosureHeader>)
-                .with_declared(2),
-        },
-        ExportSpec {
-            name: "statfs",
-            info: JsFunctionInfo::of(thunk_fs_promises_statfs as JsBody2<ClosureHeader>)
-                .with_declared(2),
-        },
-        ExportSpec {
-            name: "lstat",
-            info: JsFunctionInfo::of(thunk_fs_promises_lstat as JsBody2<ClosureHeader>)
-                .with_declared(2),
-        },
-        ExportSpec {
-            name: "rm",
-            info: JsFunctionInfo::of(thunk_fs_promises_rm as JsBody2<ClosureHeader>)
-                .with_declared(2),
-        },
-        ExportSpec {
-            name: "rmdir",
-            info: JsFunctionInfo::of(thunk_fs_promises_rmdir as JsBody2<ClosureHeader>)
-                .with_declared(2),
-        },
-        ExportSpec {
-            name: "unlink",
-            info: JsFunctionInfo::of(thunk_fs_promises_unlink as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-        ExportSpec {
-            name: "rename",
-            info: JsFunctionInfo::of(thunk_fs_promises_rename as JsBody2<ClosureHeader>)
-                .with_declared(2),
-        },
-        ExportSpec {
-            name: "copyFile",
-            info: JsFunctionInfo::of(thunk_fs_promises_copyFile as JsBody3<ClosureHeader>)
-                .with_declared(3),
-        },
-        ExportSpec {
-            name: "cp",
-            info: JsFunctionInfo::of(thunk_fs_promises_cp as JsBody3<ClosureHeader>)
-                .with_declared(3),
-        },
-        ExportSpec {
-            name: "truncate",
-            info: JsFunctionInfo::of(thunk_fs_promises_truncate as JsBody2<ClosureHeader>)
-                .with_declared(2),
-        },
-        ExportSpec {
-            name: "utimes",
-            info: JsFunctionInfo::of(thunk_fs_promises_utimes as JsBody3<ClosureHeader>)
-                .with_declared(3),
-        },
-        ExportSpec {
-            name: "lutimes",
-            info: JsFunctionInfo::of(thunk_fs_promises_lutimes as JsBody3<ClosureHeader>)
-                .with_declared(3),
-        },
-        ExportSpec {
-            name: "link",
-            info: JsFunctionInfo::of(thunk_fs_promises_link as JsBody2<ClosureHeader>)
-                .with_declared(2),
-        },
-        ExportSpec {
-            name: "symlink",
-            info: JsFunctionInfo::of(thunk_fs_promises_symlink as JsBody3<ClosureHeader>)
-                .with_declared(3),
-        },
-        ExportSpec {
-            name: "readlink",
-            info: JsFunctionInfo::of(thunk_fs_promises_readlink as JsBody2<ClosureHeader>)
-                .with_declared(2),
-        },
-        ExportSpec {
-            name: "realpath",
-            info: JsFunctionInfo::of(thunk_fs_promises_realpath as JsBody2<ClosureHeader>)
-                .with_declared(2),
-        },
-        ExportSpec {
-            name: "mkdtemp",
-            info: JsFunctionInfo::of(thunk_fs_promises_mkdtemp as JsBody2<ClosureHeader>)
-                .with_declared(2),
-        },
-        ExportSpec {
-            name: "mkdtempDisposable",
-            info: JsFunctionInfo::of(thunk_fs_promises_mkdtempDisposable as JsBody2<ClosureHeader>)
-                .with_declared(2),
-        },
-        ExportSpec {
-            name: "opendir",
-            info: JsFunctionInfo::of(thunk_fs_promises_opendir as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-        ExportSpec {
-            name: "glob",
-            info: JsFunctionInfo::of(thunk_fs_promises_glob as JsBody2<ClosureHeader>)
-                .with_declared(2),
-        },
-        ExportSpec {
-            name: "watch",
-            info: JsFunctionInfo::of(thunk_fs_promises_watch as JsBody2<ClosureHeader>)
-                .with_declared(2),
-        },
-        ExportSpec {
-            name: "access",
-            info: JsFunctionInfo::of(thunk_fs_promises_access as JsBody2<ClosureHeader>)
-                .with_declared(2),
-        },
-        ExportSpec {
-            name: "constants",
-            info: JsFunctionInfo::of(thunk_fs_promises_constants as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-    ],
-};
-
-static SUBMOD_READLINE_PROMISES: SubmoduleSpec = SubmoduleSpec {
-    key: "readline_promises",
-    exports: &[
-        ExportSpec {
-            name: "createInterface",
-            info: JsFunctionInfo::of(thunk_readline_createInterface as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-        ExportSpec {
-            name: "Interface",
-            info: JsFunctionInfo::of(thunk_readline_Interface as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-        ExportSpec {
-            name: "Readline",
-            info: JsFunctionInfo::of(thunk_readline_Readline as JsBody2<ClosureHeader>)
-                .with_declared(2),
-        },
-    ],
-};
-
-static SUBMOD_STREAM_PROMISES: SubmoduleSpec = SubmoduleSpec {
-    key: "stream_promises",
-    exports: &[
-        ExportSpec {
-            name: "pipeline",
-            info: JsFunctionInfo::of(thunk_streamP_pipeline as JsBody3<ClosureHeader>).with_rest(2),
-        },
-        ExportSpec {
-            name: "finished",
-            info: JsFunctionInfo::of(thunk_streamP_finished as JsBody2<ClosureHeader>)
-                .with_declared(2),
-        },
-    ],
-};
-
-static SUBMOD_STREAM_CONSUMERS: SubmoduleSpec = SubmoduleSpec {
-    key: "stream_consumers",
-    exports: &[
-        ExportSpec {
-            name: "text",
-            info: JsFunctionInfo::of(thunk_consumers_text as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-        ExportSpec {
-            name: "json",
-            info: JsFunctionInfo::of(thunk_consumers_json as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-        ExportSpec {
-            name: "buffer",
-            info: JsFunctionInfo::of(thunk_consumers_buffer as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-        ExportSpec {
-            name: "arrayBuffer",
-            info: JsFunctionInfo::of(thunk_consumers_arrayBuffer as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-        ExportSpec {
-            name: "bytes",
-            info: JsFunctionInfo::of(thunk_consumers_bytes as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-        ExportSpec {
-            name: "blob",
-            info: JsFunctionInfo::of(thunk_consumers_blob as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-    ],
-};
-
-static SUBMOD_STREAM_WEB: SubmoduleSpec = SubmoduleSpec {
-    key: "stream_web",
-    exports: &[
-        ExportSpec {
-            name: "ReadableStream",
-            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-        ExportSpec {
-            name: "ReadableStreamDefaultReader",
-            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-        ExportSpec {
-            name: "ReadableStreamBYOBReader",
-            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-        ExportSpec {
-            name: "ReadableStreamDefaultController",
-            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-        ExportSpec {
-            name: "ReadableByteStreamController",
-            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-        ExportSpec {
-            name: "ReadableStreamBYOBRequest",
-            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-        ExportSpec {
-            name: "WritableStream",
-            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-        ExportSpec {
-            name: "WritableStreamDefaultWriter",
-            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-        ExportSpec {
-            name: "WritableStreamDefaultController",
-            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-        ExportSpec {
-            name: "TransformStream",
-            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-        ExportSpec {
-            name: "TransformStreamDefaultController",
-            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-        ExportSpec {
-            name: "ByteLengthQueuingStrategy",
-            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-        ExportSpec {
-            name: "CountQueuingStrategy",
-            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-        ExportSpec {
-            name: "TextEncoderStream",
-            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-        ExportSpec {
-            name: "TextDecoderStream",
-            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-        ExportSpec {
-            name: "CompressionStream",
-            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-        ExportSpec {
-            name: "DecompressionStream",
-            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-    ],
-};
-
-static SUBMOD_HONO_JSX_SERVER: SubmoduleSpec = SubmoduleSpec {
-    key: "hono_jsx_server",
-    exports: &[
-        ExportSpec {
-            name: "jsx",
-            info: JsFunctionInfo::of(thunk_hono_jsx as JsBody2<ClosureHeader>).with_declared(2),
-        },
-        ExportSpec {
-            name: "jsxs",
-            info: JsFunctionInfo::of(thunk_hono_jsxs as JsBody2<ClosureHeader>).with_declared(2),
-        },
-        ExportSpec {
-            name: "Fragment",
-            info: JsFunctionInfo::of(thunk_hono_fragment as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-        ExportSpec {
-            name: "JSXNode",
-            info: JsFunctionInfo::of(thunk_hono_jsxnode as JsBody1<ClosureHeader>).with_declared(1),
-        },
-    ],
-};
-
-static SUBMOD_HONO_JSX_STREAMING: SubmoduleSpec = SubmoduleSpec {
-    key: "hono_jsx_streaming",
-    exports: &[
-        ExportSpec {
-            name: "renderToReadableStream",
-            info: JsFunctionInfo::of(
-                thunk_hono_render_to_readable_stream as JsBody2<ClosureHeader>,
-            )
-            .with_declared(2),
-        },
-        ExportSpec {
-            name: "Suspense",
-            info: JsFunctionInfo::of(thunk_hono_suspense as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-    ],
-};
-
-static SUBMOD_SYS: SubmoduleSpec = SubmoduleSpec {
-    key: "sys",
-    exports: &[
-        ExportSpec {
-            name: "format",
-            info: JsFunctionInfo::of(thunk_sys_format as JsBody1<ClosureHeader>).with_declared(1),
-        },
-        ExportSpec {
-            name: "inspect",
-            info: JsFunctionInfo::of(thunk_sys_inspect as JsBody1<ClosureHeader>).with_declared(1),
-        },
-        ExportSpec {
-            name: "debuglog",
-            info: JsFunctionInfo::of(thunk_sys_debuglog as JsBody1<ClosureHeader>).with_declared(1),
-        },
-        ExportSpec {
-            name: "deprecate",
-            info: JsFunctionInfo::of(thunk_sys_deprecate as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-        ExportSpec {
-            name: "promisify",
-            info: JsFunctionInfo::of(thunk_sys_promisify as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-        ExportSpec {
-            name: "callbackify",
-            info: JsFunctionInfo::of(thunk_sys_callbackify as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-        ExportSpec {
-            name: "isArray",
-            info: JsFunctionInfo::of(thunk_sys_isArray as JsBody1<ClosureHeader>).with_declared(1),
-        },
-    ],
-};
-
-static SUBMOD_DIAGNOSTICS_CHANNEL: SubmoduleSpec = SubmoduleSpec {
-    key: "diagnostics_channel",
-    exports: &[
-        ExportSpec {
-            name: "tracingChannel",
-            info: JsFunctionInfo::of(thunk_diag_tracing_channel as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-        ExportSpec {
-            name: "boundedChannel",
-            info: JsFunctionInfo::of(thunk_diag_bounded_channel as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-        ExportSpec {
-            name: "channel",
-            info: JsFunctionInfo::of(thunk_diag_channel as JsBody1<ClosureHeader>).with_declared(1),
-        },
-        ExportSpec {
-            name: "subscribe",
-            info: JsFunctionInfo::of(thunk_diag_subscribe as JsBody2<ClosureHeader>)
-                .with_declared(2),
-        },
-        ExportSpec {
-            name: "unsubscribe",
-            info: JsFunctionInfo::of(thunk_diag_unsubscribe as JsBody2<ClosureHeader>)
-                .with_declared(2),
-        },
-        ExportSpec {
-            name: "hasSubscribers",
-            info: JsFunctionInfo::of(thunk_diag_has_subscribers as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-        ExportSpec {
-            name: "Channel",
-            info: JsFunctionInfo::of(thunk_diag_noop as JsBody1<ClosureHeader>).with_declared(1),
-        },
-        ExportSpec {
-            name: "BoundedChannel",
-            info: JsFunctionInfo::of(thunk_diag_bounded_channel as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-    ],
-};
-
-static SUBMOD_TRACE_EVENTS: SubmoduleSpec = SubmoduleSpec {
-    key: "trace_events",
-    exports: &[
-        ExportSpec {
-            name: "createTracing",
-            info: JsFunctionInfo::of(thunk_trace_events_createTracing as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-        ExportSpec {
-            name: "getEnabledCategories",
-            info: JsFunctionInfo::of(
-                thunk_trace_events_getEnabledCategories as JsBody1<ClosureHeader>,
-            )
-            .with_rest(0),
-        },
-    ],
-};
-
-static SUBMOD_TEST: SubmoduleSpec = SubmoduleSpec {
-    key: "test",
-    exports: &[
-        ExportSpec {
-            name: "default",
-            info: JsFunctionInfo::of(thunk_test as JsBody3<ClosureHeader>).with_declared(3),
-        },
-        ExportSpec {
-            name: "test",
-            info: JsFunctionInfo::of(thunk_test as JsBody3<ClosureHeader>).with_declared(3),
-        },
-        ExportSpec {
-            name: "skip",
-            info: JsFunctionInfo::of(thunk_test_skip as JsBody3<ClosureHeader>).with_declared(3),
-        },
-        ExportSpec {
-            name: "todo",
-            info: JsFunctionInfo::of(thunk_test_todo as JsBody3<ClosureHeader>).with_declared(3),
-        },
-        ExportSpec {
-            name: "only",
-            info: JsFunctionInfo::of(thunk_test_only as JsBody3<ClosureHeader>).with_declared(3),
-        },
-        ExportSpec {
-            name: "suite",
-            info: JsFunctionInfo::of(thunk_test_suite as JsBody3<ClosureHeader>).with_declared(3),
-        },
-        ExportSpec {
-            name: "describe",
-            info: JsFunctionInfo::of(thunk_test_suite as JsBody3<ClosureHeader>).with_declared(3),
-        },
-        ExportSpec {
-            name: "it",
-            info: JsFunctionInfo::of(thunk_test as JsBody3<ClosureHeader>).with_declared(3),
-        },
-        ExportSpec {
-            name: "before",
-            info: JsFunctionInfo::of(thunk_test_before as JsBody1<ClosureHeader>).with_declared(1),
-        },
-        ExportSpec {
-            name: "after",
-            info: JsFunctionInfo::of(thunk_test_after as JsBody1<ClosureHeader>).with_declared(1),
-        },
-        ExportSpec {
-            name: "beforeEach",
-            info: JsFunctionInfo::of(thunk_test_before_each as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-        ExportSpec {
-            name: "afterEach",
-            info: JsFunctionInfo::of(thunk_test_after_each as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-        ExportSpec {
-            name: "run",
-            info: JsFunctionInfo::of(thunk_test_run as JsBody1<ClosureHeader>).with_declared(1),
-        },
-        // #9202: `expectFailure` is a current Node `node:test` named export.
-        // It has to be listed here — `find_export` is what
-        // `js_node_submodule_export_as_function` reads, and an unlisted name
-        // falls back to the TAG_TRUE "unlisted export" sentinel, so
-        // `import { expectFailure } from "node:test"` observed `true` instead
-        // of a function.
-        ExportSpec {
-            name: "expectFailure",
-            info: JsFunctionInfo::of(thunk_test_expect_failure as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-        // Object-valued exports are handled by `special_export_value`.
-        ExportSpec {
-            name: "mock",
-            info: JsFunctionInfo::of(thunk_test_run as JsBody1<ClosureHeader>).with_declared(1),
-        },
-        ExportSpec {
-            name: "snapshot",
-            info: JsFunctionInfo::of(thunk_test_run as JsBody1<ClosureHeader>).with_declared(1),
-        },
-    ],
-};
-
-static SUBMOD_TEST_REPORTERS: SubmoduleSpec = SubmoduleSpec {
-    key: "test_reporters",
-    exports: &[
-        ExportSpec {
-            name: "spec",
-            info: JsFunctionInfo::of(thunk_reporter_spec as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-        ExportSpec {
-            name: "tap",
-            info: JsFunctionInfo::of(thunk_reporter_tap as JsBody1<ClosureHeader>).with_declared(1),
-        },
-        ExportSpec {
-            name: "dot",
-            info: JsFunctionInfo::of(thunk_reporter_dot as JsBody1<ClosureHeader>).with_declared(1),
-        },
-        ExportSpec {
-            name: "junit",
-            info: JsFunctionInfo::of(thunk_reporter_junit as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-        ExportSpec {
-            name: "lcov",
-            info: JsFunctionInfo::of(thunk_reporter_lcov as JsBody1<ClosureHeader>)
-                .with_declared(1),
-        },
-    ],
-};
+// Shared with codegen through perry-dispatch; a module here so the realm
+// manifest reads its declarations as this crate's.
+#[allow(dead_code)]
+mod native_submodule_exports;
+mod static_export_declarations;
+use static_export_declarations::*;
 
 // ----- submodule registry (devirt) -----
 use std::sync::atomic::AtomicPtr;
@@ -960,8 +297,6 @@ pub extern "C" fn js_node_submod_install_timers_promises() {
 }
 #[no_mangle]
 pub extern "C" fn js_node_submod_install_fs_promises() {
-    // `fs/promises` exposes `constants` backed by the native `fs` module.
-    crate::object::js_nm_install_fs();
     SUBMOD_REGISTRY[SubmodBucket::FsPromises as usize].store(
         &SUBMOD_FS_PROMISES as *const SubmoduleSpec as *mut SubmoduleSpec,
         Ordering::Relaxed,
@@ -969,7 +304,7 @@ pub extern "C" fn js_node_submod_install_fs_promises() {
 }
 #[no_mangle]
 pub extern "C" fn js_node_submod_install_readline_promises() {
-    crate::object::js_nm_install_readline();
+    crate::object::install_readline_constructor_metadata();
     arm_readline_promises();
 }
 /// The registry store alone, for `js_nm_install_readline`: a program that names
@@ -1086,7 +421,7 @@ pub(crate) fn run_submod_install_all_hook() {
 }
 
 fn find_export(submod: &SubmoduleSpec, name: &str) -> Option<&'static ExportSpec> {
-    submod.exports.iter().find(|e| e.name == name)
+    submod.exports.iter().copied().find(|e| e.name == name)
 }
 
 // ----- singleton storage -----
@@ -1096,23 +431,83 @@ fn find_export(submod: &SubmoduleSpec, name: &str) -> Option<&'static ExportSpec
 // singletons are allocated on first reach and live until process exit
 // (they're root-marked by `scan_node_submodule_singleton_roots` below).
 
+/// The singletons one submodule owns: its export thunks' closures by export
+/// ordinal (the export's index in `exports`), its namespace object and its
+/// CommonJS-style default object (for submodules whose `namespace.default` is
+/// not the namespace itself). Null until first use. The submodule's bucket and
+/// the export ordinal are the identity; no address of the spec or of its
+/// names enters, so lookups do the same work wherever the link put them.
+struct SubmodSlots {
+    exports: Option<Box<Vec<*mut ClosureHeader>>>,
+    namespace: *mut ObjectHeader,
+    default_object: *mut ObjectHeader,
+}
+const EMPTY_SUBMOD_SLOTS: SubmodSlots = SubmodSlots {
+    exports: None,
+    namespace: std::ptr::null_mut(),
+    default_object: std::ptr::null_mut(),
+};
+
+/// Read this thread's slots (`None` before its first submodule singleton).
+fn with_submod_slots<R>(read: impl FnOnce(Option<&[SubmodSlots; SUBMOD_COUNT]>) -> R) -> R {
+    SUBMOD_SINGLETONS.with(|m| read(m.borrow().as_deref()))
+}
+
+/// Write this thread's slots, allocating them on first use.
+fn with_submod_slots_mut<R>(write: impl FnOnce(&mut [SubmodSlots; SUBMOD_COUNT]) -> R) -> R {
+    SUBMOD_SINGLETONS.with(|m| {
+        write(
+            m.borrow_mut()
+                .get_or_insert_with(|| Box::new([EMPTY_SUBMOD_SLOTS; SUBMOD_COUNT])),
+        )
+    })
+}
+
+/// Where one export's singleton lives. A getter builds it from constants, so
+/// taking one member never names the sibling declarations.
+#[derive(Clone, Copy)]
+struct ExportSlot {
+    key: &'static str,
+    bucket: SubmodBucket,
+    count: usize,
+    ordinal: usize,
+}
+
+/// `names`' index of `name`, evaluated at compile time.
+const fn const_ordinal(names: &[&str], name: &str) -> usize {
+    let mut i = 0;
+    while i < names.len() {
+        let (a, b) = (names[i].as_bytes(), name.as_bytes());
+        if a.len() == b.len() {
+            let mut j = 0;
+            while j < a.len() && a[j] == b[j] {
+                j += 1;
+            }
+            if j == a.len() {
+                return i;
+            }
+        }
+        i += 1;
+    }
+    panic!("export is not in its submodule's list")
+}
+
+/// `export`'s ordinal in `submod.exports`.
+fn export_ordinal(submod: &SubmoduleSpec, export: &ExportSpec) -> usize {
+    submod
+        .exports
+        .iter()
+        .position(|candidate| std::ptr::eq(*candidate, export))
+        .expect("export does not belong to its submodule")
+}
+
 thread_local! {
-    /// Map from (submod_key_ptr, export_name_ptr) — both `&'static str`,
-    /// so pointer-equality is sufficient — to the cached singleton
-    /// ClosureHeader pointer for that export's thunk.
-    static EXPORT_SINGLETONS: RefCell<std::collections::HashMap<(usize, usize), *mut ClosureHeader>> =
-        RefCell::new(std::collections::HashMap::new());
-
-    /// Map from submod_key_ptr to the cached namespace ObjectHeader
-    /// pointer — populated once per submodule on first namespace use.
-    static NAMESPACE_SINGLETONS: RefCell<std::collections::HashMap<usize, *mut ObjectHeader>> =
-        RefCell::new(std::collections::HashMap::new());
-
-    /// Map from submod_key_ptr to the cached CommonJS-style default
-    /// object for submodules whose `namespace.default` is not the
-    /// namespace object itself.
-    static DEFAULT_OBJECT_SINGLETONS: RefCell<std::collections::HashMap<usize, *mut ObjectHeader>> =
-        RefCell::new(std::collections::HashMap::new());
+    /// Per-submodule singleton slots, indexed by `SubmodBucket`, allocated on
+    /// the thread's first submodule use. The thread-local itself is one
+    /// pointer, so a thread that never touches a submodule pays no per-thread
+    /// TLS for the slots (no init image to copy, nothing extra to zero).
+    static SUBMOD_SINGLETONS: RefCell<Option<Box<[SubmodSlots; SUBMOD_COUNT]>>> =
+        const { RefCell::new(None) };
 
     /// `node:timers/promises.scheduler` is a non-callable object with
     /// function-valued `wait` and `yield` properties.
@@ -1192,10 +587,10 @@ fn timers_promises_scheduler_value() -> f64 {
             return f64::from_bits(JSValue::pointer(cached as *const u8).bits());
         }
 
-        let obj = js_object_alloc(0, 2);
+        let obj = crate::realm_decl! { birth js_object_alloc(0, 2); realm { "node:timers/promises.scheduler", kind = namespace, members = { wait, attrs = writable | enumerable | configurable; yield, attrs = writable | enumerable | configurable; }; } };
 
         let wait = js_closure_alloc(
-            crate::fn_info!(timers_promises_scheduler_wait, 2; with_declared(2)),
+            crate::fn_info!(#[realm("node:timers/promises.scheduler.wait", provider = closure_alloc)] export crate::node_submodules::timers::timers_promises_scheduler_wait, 2; with_declared(2)),
             0,
         );
 
@@ -1206,7 +601,7 @@ fn timers_promises_scheduler_value() -> f64 {
         );
 
         let yield_fn = js_closure_alloc(
-            crate::fn_info!(timers_promises_scheduler_yield, 0; with_declared(0)),
+            crate::fn_info!(#[realm("node:timers/promises.scheduler.yield", provider = closure_alloc)] export crate::node_submodules::timers::timers_promises_scheduler_yield, 0; with_declared(0)),
             0,
         );
 
@@ -1258,12 +653,12 @@ fn special_export_value(submod_key: &str, name: &str) -> Option<f64> {
 /// `node:test` links none of it (see `crate::feature_hooks` for why that also
 /// unpins the JSON serializer).
 fn maybe_decorate_test_export(
-    submod: &'static SubmoduleSpec,
+    submod_key: &'static str,
     export: &'static ExportSpec,
     key_name: &'static str,
     allocated: *mut ClosureHeader,
 ) -> Option<*mut ClosureHeader> {
-    if submod.key == "test"
+    if submod_key == "test"
         && matches!(
             export.name,
             "default" | "test" | "suite" | "describe" | "it"
@@ -1312,24 +707,43 @@ fn ensure_export_singleton(
     submod: &'static SubmoduleSpec,
     export: &'static ExportSpec,
 ) -> *mut ClosureHeader {
-    let key_name = if submod.key == "test" {
+    let owner = if submod.key == "test" {
         let canonical = match export.name {
             "default" | "test" | "it" => "test",
             "suite" | "describe" => "suite",
             _ => export.name,
         };
-        find_export(submod, canonical)
-            .map(|canonical| canonical.name)
-            .unwrap_or(export.name)
+        find_export(submod, canonical).unwrap_or(export)
     } else {
-        export.name
+        export
     };
-    let key = (submod.key.as_ptr() as usize, key_name.as_ptr() as usize);
-    if let Some(cached) = EXPORT_SINGLETONS.with(|m| m.borrow().get(&key).copied()) {
+    let slot = ExportSlot {
+        key: submod.key,
+        bucket: submod.bucket,
+        count: submod.exports.len(),
+        ordinal: export_ordinal(submod, owner),
+    };
+    ensure_selected_export(slot, export, owner, attach_readline_if_installed)
+}
+
+unsafe fn attach_readline_if_installed(name: &str, value: f64, addr: usize) -> f64 {
+    crate::object::nm_attach_lookup("readline").map_or(value, |attach| attach(name, value, addr))
+}
+
+#[inline(always)]
+fn ensure_selected_export(
+    slot: ExportSlot,
+    export: &'static ExportSpec,
+    owner: &'static ExportSpec,
+    attach_readline: unsafe fn(&str, f64, usize) -> f64,
+) -> *mut ClosureHeader {
+    let (submod_key, key_name) = (slot.key, owner.name);
+    let (bucket, ordinal) = (slot.bucket as usize, slot.ordinal);
+    if let Some(cached) = export_singleton(bucket, ordinal) {
         return cached;
     }
-    let allocated = js_closure_alloc(&export.info, 0);
-    if submod.key == "timers_promises" && export.name == "scheduler" {
+    let allocated = js_closure_alloc(export.info, 0);
+    if submod_key == "timers_promises" && export.name == "scheduler" {
         let wait = js_closure_alloc(
             crate::fn_info!(timers_promises_scheduler_wait, 2; with_declared(2)),
             0,
@@ -1352,12 +766,13 @@ fn ensure_export_singleton(
             f64::from_bits(JSValue::pointer(yield_fn as *const u8).bits()),
         );
     }
-    let allocated = if submod.key == "readline_promises" && export.name == "Interface" {
+    let allocated = if submod_key == "readline_promises" && export.name == "Interface" {
         let scope = crate::gc::RuntimeHandleScope::new();
         let ctor = scope.root_raw_mut_ptr(allocated);
         // Reuse readline's imported decorator without pinning its parent
         // machinery from the always-linked submodule value resolver.
-        if let Some(attach) = crate::object::nm_attach_lookup("readline") {
+        {
+            let attach = attach_readline;
             let value = ctor
                 .with_mut_ptr(|p: *mut ClosureHeader| crate::value::js_nanbox_pointer(p as i64));
             unsafe {
@@ -1372,7 +787,7 @@ fn ensure_export_singleton(
     } else {
         allocated
     };
-    let allocated = if submod.key == "trace_events" {
+    let allocated = if submod_key == "trace_events" {
         let scope = crate::gc::RuntimeHandleScope::new();
         let allocated_handle = scope.root_raw_mut_ptr(allocated);
         crate::object::set_bound_native_closure_name(
@@ -1381,23 +796,39 @@ fn ensure_export_singleton(
         );
         crate::object::set_builtin_closure_length(
             allocated_handle.get_raw_mut_ptr::<ClosureHeader>() as usize,
-            crate::closure::info_arity(&export.info).unwrap_or(0),
+            crate::closure::info_arity(export.info).unwrap_or(0),
         );
         crate::object::set_builtin_closure_non_constructable(
             allocated_handle.get_raw_mut_ptr::<ClosureHeader>() as usize,
         );
         allocated_handle.get_raw_mut_ptr()
-    } else if let Some(decorated) = maybe_decorate_test_export(submod, export, key_name, allocated)
+    } else if let Some(decorated) =
+        maybe_decorate_test_export(submod_key, export, key_name, allocated)
     {
         decorated
     } else {
         allocated
     };
-    EXPORT_SINGLETONS.with(|m| {
-        m.borrow_mut().insert(key, allocated);
+    with_submod_slots_mut(|slots| {
+        slots[bucket]
+            .exports
+            .get_or_insert_with(|| Box::new(vec![std::ptr::null_mut(); slot.count]))[ordinal] =
+            allocated;
     });
     ANY_SINGLETON_ALLOCATED.store(1, Ordering::Release);
     allocated
+}
+
+/// The closure already minted for export `ordinal` of submodule `bucket`.
+fn export_singleton(bucket: usize, ordinal: usize) -> Option<*mut ClosureHeader> {
+    with_submod_slots(|slots| {
+        slots?[bucket]
+            .exports
+            .as_ref()?
+            .get(ordinal)
+            .copied()
+            .filter(|p| !p.is_null())
+    })
 }
 
 fn submodule_has_default_object(submod_key: &str) -> bool {
@@ -1405,6 +836,7 @@ fn submodule_has_default_object(submod_key: &str) -> bool {
         submod_key,
         "diagnostics_channel"
             | "fs_promises"
+            | "readline_promises"
             | "stream_consumers"
             | "stream_web"
             | "test_reporters"
@@ -1453,13 +885,15 @@ fn submodule_default_object_value(submod: &'static SubmoduleSpec) -> Option<f64>
     if !submodule_has_default_object(submod.key) {
         return None;
     }
-    let key = submod.key.as_ptr() as usize;
-    if let Some(cached) = DEFAULT_OBJECT_SINGLETONS.with(|m| m.borrow().get(&key).copied()) {
+    let bucket = submod.bucket as usize;
+    let cached =
+        with_submod_slots(|slots| slots.map_or(std::ptr::null_mut(), |s| s[bucket].default_object));
+    if !cached.is_null() {
         return Some(f64::from_bits(JSValue::pointer(cached as *const u8).bits()));
     }
 
     let extra_fields = u32::from(submod.key == "fs_promises");
-    let obj = js_object_alloc(0, submod.exports.len() as u32 + extra_fields);
+    let obj = crate::realm_decl! { birth js_object_alloc(0, submod.exports.len() as u32 + extra_fields); realm { "node:diagnostics_channel.default", kind = namespace, members = { tracingChannel = ref("node:diagnostics_channel.tracingChannel"), attrs = writable | enumerable | configurable; boundedChannel = ref("node:diagnostics_channel.boundedChannel"), attrs = writable | enumerable | configurable; channel = ref("node:diagnostics_channel.channel"), attrs = writable | enumerable | configurable; subscribe = ref("node:diagnostics_channel.subscribe"), attrs = writable | enumerable | configurable; unsubscribe = ref("node:diagnostics_channel.unsubscribe"), attrs = writable | enumerable | configurable; hasSubscribers = ref("node:diagnostics_channel.hasSubscribers"), attrs = writable | enumerable | configurable; Channel = ref("node:diagnostics_channel.Channel"), attrs = writable | enumerable | configurable; BoundedChannel = ref("node:diagnostics_channel.BoundedChannel"), attrs = writable | enumerable | configurable; }; "node:fs.promises", kind = namespace, members = { readFile = ref("node:fs/promises.readFile"), attrs = writable | enumerable | configurable; open = ref("node:fs/promises.open"), attrs = writable | enumerable | configurable; writeFile = ref("node:fs/promises.writeFile"), attrs = writable | enumerable | configurable; appendFile = ref("node:fs/promises.appendFile"), attrs = writable | enumerable | configurable; chmod = ref("node:fs/promises.chmod"), attrs = writable | enumerable | configurable; chown = ref("node:fs/promises.chown"), attrs = writable | enumerable | configurable; lchown = ref("node:fs/promises.lchown"), attrs = writable | enumerable | configurable; lchmod = ref("node:fs/promises.lchmod"), attrs = writable | enumerable | configurable; mkdir = ref("node:fs/promises.mkdir"), attrs = writable | enumerable | configurable; readdir = ref("node:fs/promises.readdir"), attrs = writable | enumerable | configurable; stat = ref("node:fs/promises.stat"), attrs = writable | enumerable | configurable; statfs = ref("node:fs/promises.statfs"), attrs = writable | enumerable | configurable; lstat = ref("node:fs/promises.lstat"), attrs = writable | enumerable | configurable; rm = ref("node:fs/promises.rm"), attrs = writable | enumerable | configurable; rmdir = ref("node:fs/promises.rmdir"), attrs = writable | enumerable | configurable; unlink = ref("node:fs/promises.unlink"), attrs = writable | enumerable | configurable; rename = ref("node:fs/promises.rename"), attrs = writable | enumerable | configurable; copyFile = ref("node:fs/promises.copyFile"), attrs = writable | enumerable | configurable; cp = ref("node:fs/promises.cp"), attrs = writable | enumerable | configurable; truncate = ref("node:fs/promises.truncate"), attrs = writable | enumerable | configurable; utimes = ref("node:fs/promises.utimes"), attrs = writable | enumerable | configurable; lutimes = ref("node:fs/promises.lutimes"), attrs = writable | enumerable | configurable; link = ref("node:fs/promises.link"), attrs = writable | enumerable | configurable; symlink = ref("node:fs/promises.symlink"), attrs = writable | enumerable | configurable; readlink = ref("node:fs/promises.readlink"), attrs = writable | enumerable | configurable; realpath = ref("node:fs/promises.realpath"), attrs = writable | enumerable | configurable; mkdtemp = ref("node:fs/promises.mkdtemp"), attrs = writable | enumerable | configurable; mkdtempDisposable = ref("node:fs/promises.mkdtempDisposable"), attrs = writable | enumerable | configurable; opendir = ref("node:fs/promises.opendir"), attrs = writable | enumerable | configurable; glob = ref("node:fs/promises.glob"), attrs = writable | enumerable | configurable; watch = ref("node:fs/promises.watch"), attrs = writable | enumerable | configurable; access = ref("node:fs/promises.access"), attrs = writable | enumerable | configurable; constants = ref("node:fs.constants"), attrs = writable | enumerable | configurable; }; "node:stream/consumers.default", kind = namespace, members = { text = ref("node:stream/consumers.text"), attrs = writable | enumerable | configurable; json = ref("node:stream/consumers.json"), attrs = writable | enumerable | configurable; buffer = ref("node:stream/consumers.buffer"), attrs = writable | enumerable | configurable; arrayBuffer = ref("node:stream/consumers.arrayBuffer"), attrs = writable | enumerable | configurable; bytes = ref("node:stream/consumers.bytes"), attrs = writable | enumerable | configurable; blob = ref("node:stream/consumers.blob"), attrs = writable | enumerable | configurable; }; "node:stream/web.default", kind = namespace, members = { ReadableStream = ref(ReadableStream), attrs = writable | enumerable | configurable; ReadableStreamDefaultReader = ref("node:stream/web.ReadableStreamDefaultReader"), attrs = writable | enumerable | configurable; ReadableStreamBYOBReader = ref("node:stream/web.ReadableStreamBYOBReader"), attrs = writable | enumerable | configurable; ReadableStreamDefaultController = ref("node:stream/web.ReadableStreamDefaultController"), attrs = writable | enumerable | configurable; ReadableByteStreamController = ref("node:stream/web.ReadableByteStreamController"), attrs = writable | enumerable | configurable; ReadableStreamBYOBRequest = ref("node:stream/web.ReadableStreamBYOBRequest"), attrs = writable | enumerable | configurable; WritableStream = ref(WritableStream), attrs = writable | enumerable | configurable; WritableStreamDefaultWriter = ref("node:stream/web.WritableStreamDefaultWriter"), attrs = writable | enumerable | configurable; WritableStreamDefaultController = ref("node:stream/web.WritableStreamDefaultController"), attrs = writable | enumerable | configurable; TransformStream = ref(TransformStream), attrs = writable | enumerable | configurable; TransformStreamDefaultController = ref("node:stream/web.TransformStreamDefaultController"), attrs = writable | enumerable | configurable; ByteLengthQueuingStrategy = ref("node:stream/web.ByteLengthQueuingStrategy"), attrs = writable | enumerable | configurable; CountQueuingStrategy = ref("node:stream/web.CountQueuingStrategy"), attrs = writable | enumerable | configurable; TextEncoderStream = ref(TextEncoderStream), attrs = writable | enumerable | configurable; TextDecoderStream = ref(TextDecoderStream), attrs = writable | enumerable | configurable; CompressionStream = ref(CompressionStream), attrs = writable | enumerable | configurable; DecompressionStream = ref(DecompressionStream), attrs = writable | enumerable | configurable; }; "node:test/reporters.default", kind = namespace, members = { spec, attrs = writable | enumerable | configurable; tap, attrs = writable | enumerable | configurable; dot, attrs = writable | enumerable | configurable; junit, attrs = writable | enumerable | configurable; lcov, attrs = writable | enumerable | configurable; }; "node:timers.default", kind = namespace, members = { setTimeout, attrs = writable | enumerable | configurable; setInterval, attrs = writable | enumerable | configurable; setImmediate, attrs = writable | enumerable | configurable; clearTimeout, attrs = writable | enumerable | configurable; clearInterval, attrs = writable | enumerable | configurable; clearImmediate, attrs = writable | enumerable | configurable; }; "node:timers.promises", kind = namespace, members = { setTimeout = ref("node:timers/promises.setTimeout"), attrs = writable | enumerable | configurable; setImmediate = ref("node:timers/promises.setImmediate"), attrs = writable | enumerable | configurable; setInterval = ref("node:timers/promises.setInterval"), attrs = writable | enumerable | configurable; scheduler = ref("node:timers/promises.scheduler"), attrs = writable | enumerable | configurable; }; } };
     for spec in submod.exports {
         set_named_value(obj, spec.name, submodule_export_value(submod, spec));
     }
@@ -1467,9 +901,7 @@ fn submodule_default_object_value(submod: &'static SubmoduleSpec) -> Option<f64>
         set_named_value(obj, "constants", fs_promises_constants_value());
     }
 
-    DEFAULT_OBJECT_SINGLETONS.with(|m| {
-        m.borrow_mut().insert(key, obj);
-    });
+    with_submod_slots_mut(|slots| slots[bucket].default_object = obj);
     ANY_SINGLETON_ALLOCATED.store(1, Ordering::Release);
     Some(f64::from_bits(JSValue::pointer(obj as *const u8).bits()))
 }
@@ -1510,8 +942,7 @@ pub(crate) fn is_diagnostics_channel_constructor_value(value: f64) -> bool {
     let Some(export) = find_export(submod, "Channel") else {
         return false;
     };
-    let key = (submod.key.as_ptr() as usize, export.name.as_ptr() as usize);
-    EXPORT_SINGLETONS.with(|m| m.borrow().get(&key).copied() == Some(ptr))
+    export_singleton(submod.bucket as usize, export_ordinal(submod, export)) == Some(ptr)
 }
 
 pub(crate) fn is_diagnostics_bounded_channel_constructor_value(value: f64) -> bool {
@@ -1526,13 +957,14 @@ pub(crate) fn is_diagnostics_bounded_channel_constructor_value(value: f64) -> bo
     let Some(export) = find_export(submod, "BoundedChannel") else {
         return false;
     };
-    let key = (submod.key.as_ptr() as usize, export.name.as_ptr() as usize);
-    EXPORT_SINGLETONS.with(|m| m.borrow().get(&key).copied() == Some(ptr))
+    export_singleton(submod.bucket as usize, export_ordinal(submod, export)) == Some(ptr)
 }
 
 fn ensure_namespace_singleton(submod: &'static SubmoduleSpec) -> *mut ObjectHeader {
-    let key = submod.key.as_ptr() as usize;
-    if let Some(cached) = NAMESPACE_SINGLETONS.with(|m| m.borrow().get(&key).copied()) {
+    let bucket = submod.bucket as usize;
+    let cached =
+        with_submod_slots(|slots| slots.map_or(std::ptr::null_mut(), |s| s[bucket].namespace));
+    if !cached.is_null() {
         return cached;
     }
     // Allocate a fresh object with one inline slot per known export;
@@ -1541,7 +973,7 @@ fn ensure_namespace_singleton(submod: &'static SubmoduleSpec) -> *mut ObjectHead
     let field_count = submod.exports.len() as u32
         + u32::from(submod.key == "fs_promises")
         + u32::from(submodule_has_default_object(submod.key));
-    let obj = js_object_alloc(0, field_count);
+    let obj = crate::realm_decl! { birth js_object_alloc(0, field_count); realm { "node:stream.promises", kind = namespace, members = { pipeline = ref("node:stream/promises.pipeline"), attrs = writable | enumerable | configurable; finished = ref("node:stream/promises.finished"), attrs = writable | enumerable | configurable; default = ref("node:stream.promises"), attrs = writable | enumerable | configurable; }; } };
     // Populate fields. Each export's value is the singleton closure
     // pointer NaN-boxed as POINTER. We route through
     // `js_object_set_field_by_name` so the keys array gets built up
@@ -1574,7 +1006,7 @@ fn ensure_namespace_singleton(submod: &'static SubmoduleSpec) -> *mut ObjectHead
                 PropertyAttrs::new(true, true, false),
             );
         }
-        let default_obj = js_object_alloc(0, submod.exports.len() as u32);
+        let default_obj = crate::realm_decl! { birth js_object_alloc(0, submod.exports.len() as u32); realm { "node:trace_events.default", kind = namespace, members = { createTracing, attrs = writable | enumerable | configurable; getEnabledCategories, attrs = writable | enumerable | configurable; }; } };
         for spec in submod.exports {
             let closure_ptr = ensure_export_singleton(submod, spec);
             let value = f64::from_bits(JSValue::pointer(closure_ptr as *const u8).bits());
@@ -1598,9 +1030,7 @@ fn ensure_namespace_singleton(submod: &'static SubmoduleSpec) -> *mut ObjectHead
     if let Some(default_value) = submodule_default_object_value(submod) {
         set_named_value(obj, "default", default_value);
     }
-    NAMESPACE_SINGLETONS.with(|m| {
-        m.borrow_mut().insert(key, obj);
-    });
+    with_submod_slots_mut(|slots| slots[bucket].namespace = obj);
     ANY_SINGLETON_ALLOCATED.store(1, Ordering::Release);
     obj
 }
@@ -1626,19 +1056,19 @@ pub fn scan_node_submodule_singleton_roots_mut(visitor: &mut crate::gc::RuntimeR
     if ANY_SINGLETON_ALLOCATED.load(Ordering::Acquire) == 0 {
         return;
     }
-    EXPORT_SINGLETONS.with(|m| {
-        for closure_ptr in m.borrow_mut().values_mut() {
-            visitor.visit_raw_mut_ptr_slot(closure_ptr);
-        }
-    });
-    NAMESPACE_SINGLETONS.with(|m| {
-        for obj_ptr in m.borrow_mut().values_mut() {
-            visitor.visit_raw_mut_ptr_slot(obj_ptr);
-        }
-    });
-    DEFAULT_OBJECT_SINGLETONS.with(|m| {
-        for obj_ptr in m.borrow_mut().values_mut() {
-            visitor.visit_raw_mut_ptr_slot(obj_ptr);
+    SUBMOD_SINGLETONS.with(|m| {
+        for slots in m.borrow_mut().iter_mut().flat_map(|all| all.iter_mut()) {
+            for closure_ptr in slots.exports.iter_mut().flat_map(|e| e.iter_mut()) {
+                if closure_ptr.is_null() {
+                    continue;
+                }
+                visitor.visit_raw_mut_ptr_slot(closure_ptr);
+            }
+            for obj_ptr in [&mut slots.namespace, &mut slots.default_object] {
+                if !obj_ptr.is_null() {
+                    visitor.visit_raw_mut_ptr_slot(obj_ptr);
+                }
+            }
         }
     });
     TIMERS_PROMISES_SCHEDULER_OBJECT.with(|slot| {
@@ -1689,15 +1119,10 @@ pub(crate) fn test_seed_node_submodule_roots(
     namespace: *mut ObjectHeader,
     diag_noop: *mut ClosureHeader,
 ) {
-    EXPORT_SINGLETONS.with(|m| {
-        let mut m = m.borrow_mut();
-        m.clear();
-        m.insert((1, 2), closure);
-    });
-    NAMESPACE_SINGLETONS.with(|m| {
-        let mut m = m.borrow_mut();
-        m.clear();
-        m.insert(3, namespace);
+    SUBMOD_SINGLETONS.with(|m| *m.borrow_mut() = None);
+    with_submod_slots_mut(|slots| {
+        slots[0].exports = Some(Box::new(vec![closure]));
+        slots[0].namespace = namespace;
     });
     DIAG_NOOP_CLOSURE.with(|slot| {
         *slot.borrow_mut() = Some(diag_noop);
@@ -1715,14 +1140,8 @@ pub(crate) fn test_seed_node_submodule_roots(
 
 #[cfg(test)]
 pub(crate) fn test_node_submodule_roots() -> (usize, usize, usize, u64) {
-    let closure = EXPORT_SINGLETONS.with(|m| {
-        m.borrow()
-            .get(&(1, 2))
-            .map(|ptr| *ptr as usize)
-            .unwrap_or(0)
-    });
-    let namespace =
-        NAMESPACE_SINGLETONS.with(|m| m.borrow().get(&3).map(|ptr| *ptr as usize).unwrap_or(0));
+    let closure = export_singleton(0, 0).map_or(0, |ptr| ptr as usize);
+    let namespace = with_submod_slots(|slots| slots.map_or(0, |s| s[0].namespace as usize));
     let diag =
         DIAG_NOOP_CLOSURE.with(|slot| slot.borrow().as_ref().map(|ptr| *ptr as usize).unwrap_or(0));
     let pending = DIAG_PENDING_UNCAUGHT.with(|pending| {
@@ -1909,7 +1328,7 @@ pub unsafe extern "C" fn js_node_submodule_namespace_member(
     f64::from_bits(JSValue::pointer(closure_ptr as *const u8).bits())
 }
 
-/// Returns a NaN-boxed namespace stub object for the given submodule.
+crate::realm_decl! { module_provider /// Returns a NaN-boxed namespace stub object for the given submodule.
 /// Each known named export of that submodule is exposed as an own
 /// property on the object whose value is the export singleton
 /// produced by `js_node_submodule_export_as_function`. Falls back to
@@ -1941,7 +1360,7 @@ pub unsafe extern "C" fn js_node_submodule_namespace(
     }
     let obj = ensure_namespace_singleton(submod);
     f64::from_bits(JSValue::pointer(obj as *const u8).bits())
-}
+} realm { "node:diagnostics_channel", members = { BoundedChannel; Channel; boundedChannel; channel; default; hasSubscribers; subscribe; tracingChannel; unsubscribe; }, births = [Array, Error, Function, Object]; "node:fs/promises", members = { access; appendFile; chmod; chown; constants = ref("node:fs.constants"); copyFile; cp; default = ref("node:fs.promises"); glob; lchmod; lchown; link; lstat; lutimes; mkdir; mkdtemp; mkdtempDisposable; open; opendir; readFile; readdir; readlink; realpath; rename; rm; rmdir; stat; statfs; symlink; truncate; unlink; utimes; watch; writeFile; }, births = [Array, ArrayBuffer, Buffer, Error, Function, Object, Promise, ReadableStream]; "node:readline/promises", members = { Interface; Readline; createInterface; default = ref("node:readline.promises"); }, births = [Array, Error, Function, Object, Promise]; "node:stream/consumers", members = { arrayBuffer; blob; buffer; bytes; default; json; text; }, births = [Array, ArrayBuffer, Blob, Buffer, Error, Function, Object, Promise, ReadableStream]; "node:stream/promises", members = { default = ref("node:stream.promises"); finished; pipeline; }, births = [Array, ArrayBuffer, Buffer, Error, Function, Object, Promise, ReadableStream, WritableStream]; "node:stream/web", members = { ByteLengthQueuingStrategy; CompressionStream = ref(CompressionStream); CountQueuingStrategy; DecompressionStream = ref(DecompressionStream); ReadableByteStreamController; ReadableStream = ref(ReadableStream); ReadableStreamBYOBReader; ReadableStreamBYOBRequest; ReadableStreamDefaultController; ReadableStreamDefaultReader; TextDecoderStream = ref(TextDecoderStream); TextEncoderStream = ref(TextEncoderStream); TransformStream = ref(TransformStream); TransformStreamDefaultController; WritableStream = ref(WritableStream); WritableStreamDefaultController; WritableStreamDefaultWriter; default; }, births = [Array, ArrayBuffer, Buffer, Error, Function, Object, Promise]; "node:sys", members = { MIMEParams; MIMEType; TextDecoder = ref(TextDecoder); TextEncoder = ref(TextEncoder); _errnoException; _exceptionWithHostPort; _extend; aborted; callbackify; convertProcessSignalToExitCode; debug; debuglog = ref("node:sys.debug"); default; deprecate; diff; format; formatWithOptions; getCallSites; getSystemErrorMap; getSystemErrorMessage; getSystemErrorName; inherits; inspect; isArray; isDeepStrictEqual; parseArgs; parseEnv; promisify; setTraceSigInt; stripVTControlCharacters; styleText; toUSVString; transferableAbortController; transferableAbortSignal; types; }, births = [Array, Error, Function, Object]; "node:test", members = { after; afterEach; assert; before; beforeEach; default; describe; expectFailure; it = ref("node:test.default"); mock; only; run; skip; snapshot; suite = ref("node:test.describe"); test = ref("node:test.default"); todo; }, births = [Array, Error, Function, Object]; "node:test/reporters", members = { default; dot = undefined; junit = undefined; lcov = undefined; spec = undefined; tap = undefined; }, births = [Array, Error, Function, Object]; "node:timers", members = { clearImmediate; clearInterval; clearTimeout; default; promises; setImmediate; setInterval; setTimeout; }, births = [AbortSignal, Array, Error, Function, Object, Promise]; "node:timers/promises", members = { default = ref("node:timers.promises"); scheduler; setImmediate; setInterval; setTimeout; }, births = [AbortSignal, Array, Error, Function, Object, Promise]; "node:trace_events", members = { default; }, births = [Array, Error, Function, Object]; } }
 
 #[cfg(test)]
 mod tests;
@@ -1977,5 +1396,3 @@ pub unsafe extern "C" fn js_install_readable_stream_from(info: *const JsFunction
         crate::object::PropertyAttrs::new(true, true, true),
     );
 }
-
-crate::realm_decl!("mod.realm.json#*");

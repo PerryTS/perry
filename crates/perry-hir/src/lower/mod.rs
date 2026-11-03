@@ -42,6 +42,7 @@ pub(crate) use context::perry_ui_factory_returns_handle;
 pub(crate) mod class_capture_scope;
 pub(crate) mod expr_assign;
 mod expr_call;
+pub(crate) use expr_call::intrinsics::as_builtin_proto_method_ref;
 pub(crate) mod expr_function;
 pub(crate) mod native_factory;
 pub(crate) use expr_function::capture_function_source;
@@ -128,11 +129,11 @@ pub use lower_module_fn::{
     lower_module_with_class_id, lower_module_with_class_id_and_types,
     lower_module_with_class_id_types_and_seed, lower_module_with_class_id_types_seed_and_entry,
 };
-pub(crate) use module_strict::module_has_strict_mode;
+pub(crate) use module_strict::{module_has_module_goal, module_has_strict_mode};
 
 mod lower_expr;
 pub(crate) use lower_expr::{
-    lower_expr, lower_expr_assignment, strict_global_assign_existing_or_throw,
+    class_binding_read, lower_expr, lower_expr_assignment, strict_global_assign_existing_or_throw,
     throw_reference_error_expr, try_desugar_reactive_text, unresolved_global_get_expr,
     with_implicit_unset_let, with_set_fallback_for_ident,
 };
@@ -145,6 +146,8 @@ pub(crate) use crate::lower_decl::*;
 pub(crate) use crate::lower_patterns::*;
 pub(crate) use crate::lower_types::*;
 
+#[cfg(test)]
+mod builtin_proto_alias_tests;
 #[cfg(test)]
 mod bun_sql_tests;
 #[cfg(test)]
@@ -162,5 +165,8 @@ mod tests;
 
 #[cfg(test)]
 mod iterator_step_tests;
+
+#[cfg(test)]
+mod wtf8_key_tests;
 
 pub(crate) mod dynamic_eval;

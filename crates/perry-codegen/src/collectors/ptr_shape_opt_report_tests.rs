@@ -88,6 +88,8 @@ fn store_x(id: u32) -> Stmt {
         object: Box::new(Expr::LocalGet(id)),
         property: "x".to_string(),
         value: Box::new(Expr::Number(1.0)),
+        byte_offset: 0,
+        byte_end: 0,
     })
 }
 

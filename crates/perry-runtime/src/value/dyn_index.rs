@@ -531,11 +531,11 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
                 return f64::from_bits(TAG_UNDEFINED);
             }
         }
-        if obj_type == crate::gc::GC_TYPE_OBJECT || obj_type == crate::gc::GC_TYPE_CLOSURE {
+        if crate::gc_type_is_object!(obj_type) || obj_type == crate::gc::GC_TYPE_CLOSURE {
             // An ordinary object's integral key (`record[id]`) is read by its
             // atom from the layouts first: no key string is allocated.
             let mut raw_ptr = raw_ptr;
-            if obj_type == crate::gc::GC_TYPE_OBJECT && index == (idx_i32 as f64) {
+            if crate::gc_type_is_object!(obj_type) && index == (idx_i32 as f64) {
                 match unsafe {
                     crate::object::field_get_set::runtime_read_site::probe_integer_key(
                         raw_ptr as *mut crate::object::ObjectHeader,
@@ -650,7 +650,7 @@ pub extern "C" fn js_dyn_index_set_strict(obj: f64, index: f64, value: f64, stri
     // receiver writes here, so the runtime owns the symbol triage.
     if unsafe { crate::symbol::js_is_symbol(index) } != 0 {
         unsafe {
-            crate::symbol::js_object_set_symbol_property(obj, index, value);
+            crate::symbol::set_symbol_property_with_strictness(obj, index, value, strict);
         }
         return value;
     }

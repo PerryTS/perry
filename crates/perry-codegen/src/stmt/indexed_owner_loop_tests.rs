@@ -31,6 +31,14 @@ fn ir(kind: &str, body: Vec<Stmt>) -> String {
     ir_with_facts(kind, body, Default::default())
 }
 fn ir_with_facts(kind: &str, body: Vec<Stmt>, facts: crate::codegen::ElisionFacts) -> String {
+    ir_with_param_type(Type::Named(kind.into()), body, facts)
+}
+fn ir_with_param_type(
+    receiver: Type,
+    body: Vec<Stmt>,
+    facts: crate::codegen::ElisionFacts,
+) -> String {
+    let kind = receiver;
     let mut m = Module::new("indexed_owner_contract");
     let param = |id, name: &str, ty| Param {
         id,
@@ -46,9 +54,9 @@ fn ir_with_facts(kind: &str, body: Vec<Stmt>, facts: crate::codegen::ElisionFact
         name: "operate".into(),
         type_params: vec![],
         params: vec![
-            param(1, "a", Type::Named(kind.into())),
+            param(1, "a", kind.clone()),
             param(2, "scale", Type::Any),
-            param(7, "b", Type::Named(kind.into())),
+            param(7, "b", kind.clone()),
         ],
         return_type: Type::Any,
         body: vec![
@@ -113,6 +121,8 @@ fn rmw() -> Vec<Stmt> {
             object: Box::new(get(4)),
             index: Box::new(get(5)),
             value: Box::new(bin(BinaryOp::Add, index(4, get(5)), get(2))),
+            byte_offset: 0,
+            byte_end: 0,
         }),
     ]
 }
@@ -214,6 +224,8 @@ fn fractional_and_unbounded_indices_do_not_receive_an_interval_proof() {
         object: Box::new(get(1)),
         index: Box::new(bin(BinaryOp::Div, get(3), Expr::Integer(2))),
         value: Box::new(Expr::Integer(7)),
+        byte_offset: 0,
+        byte_end: 0,
     })];
     assert!(!ir("Float64Array", body).contains("indexed.owner.fast"));
 }
@@ -236,6 +248,23 @@ fn disjoint_owner_scopes_have_dynamic_single_scope_declarations_and_verify() {
         .create_module_from_ir(buffer)
         .expect("owner-region LLVM parses");
     module.verify().expect("dynamic owner-region scopes verify");
+    // Split modules build bodies through the native reader: the same
+    // emission must construct there with every scope declaration and
+    // attachment LLVM's parse keeps.
+    let llvm = module.print_to_string().to_string();
+    let reader = crate::dialect::tests::reader_module_print(&ir);
+    for form in [
+        "call void @llvm.experimental.noalias.scope.decl(metadata",
+        "!alias.scope !",
+        "!noalias !",
+    ] {
+        assert!(llvm.contains(form), "LLVM parse lost `{form}`");
+        assert_eq!(
+            llvm.matches(form).count(),
+            reader.matches(form).count(),
+            "reader and LLVM disagree on `{form}`"
+        );
+    }
 }
 
 #[test]
@@ -290,6 +319,8 @@ fn nested_numeric_loops_keep_scalar_recurrences_in_native_slots() {
                 object: Box::new(get(7)),
                 index: Box::new(get(3)),
                 value: Box::new(get(9)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
         ],
     );
@@ -333,6 +364,8 @@ fn certified_numeric_leaf_calls_are_emitted_without_a_call_in_the_region() {
                 type_args: vec![],
                 byte_offset: 0,
             }),
+            byte_offset: 0,
+            byte_end: 0,
         })],
         facts,
     );
@@ -370,10 +403,12 @@ fn string_code(index: Expr) -> Expr {
             object: Box::new(get(1)),
             property: "charCodeAt".into(),
             byte_offset: 0,
+            byte_end: 0,
         }),
         args: vec![index],
         type_args: vec![],
         byte_offset: 0,
+        byte_end: 0,
     }
 }
 
@@ -457,6 +492,7 @@ fn string_region_rejects_rebinding_and_calls_before_any_body_effect() {
                 args: vec![],
                 type_args: vec![],
                 byte_offset: 0,
+                byte_end: 0,
             }),
         ],
         vec![Stmt::If {
@@ -470,5 +506,86 @@ fn string_region_rejects_rebinding_and_calls_before_any_body_effect() {
         }],
     ] {
         assert!(!ir("string", body).contains("indexed.string.storage"));
+    }
+}
+
+fn string_array_length(index: Expr) -> Expr {
+    Expr::PropertyGet {
+        object: Box::new(index_get_of(1, index)),
+        property: "length".into(),
+        byte_offset: 0,
+        byte_end: 0,
+    }
+}
+fn index_get_of(a: u32, i: Expr) -> Expr {
+    index(a, i)
+}
+fn string_array() -> Type {
+    Type::Array(Box::new(Type::String))
+}
+
+// JST slice 4 (F): `lenSum += pieces[i].length` over a declared `string[]`.
+#[test]
+fn string_array_length_region_scans_the_slots_once_and_stays_call_free() {
+    let body = vec![Stmt::Expr(Expr::LocalSet(
+        2,
+        Box::new(bin(BinaryOp::Add, get(2), string_array_length(get(3)))),
+    ))];
+    let ir = ir_with_param_type(string_array(), body, Default::default());
+    assert!(ir.contains("indexed.sarray.scan"), "{ir}");
+    assert!(ir.contains("indexed.owner.slow"), "{ir}");
+    let admission = ir.find("indexed.sarray.scan").unwrap();
+    let first_poll = ir
+        .find("call void @js_gc_loop_safepoint()")
+        .expect("pending GC work must be serviced before the array is read");
+    assert!(
+        first_poll < admission,
+        "the entry poll must precede the slot scan: {ir}"
+    );
+    let fast = ir
+        .split("\nindexed.owner.fast.")
+        .nth(1)
+        .unwrap()
+        .split("\nindexed.owner.exit.")
+        .next()
+        .unwrap();
+    assert!(
+        !fast.contains("call "),
+        "the string-array region stays call-free: {fast}"
+    );
+    // The per-element read is one slot load and one header load.
+    assert!(fast.contains("lshr i64"), "slot tag test: {fast}");
+}
+
+#[test]
+fn string_array_length_region_rejects_stores_and_calls_before_any_body_effect() {
+    for body in [
+        // The array is rebound in the body.
+        vec![
+            Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::Integer(4)))),
+            Stmt::Expr(string_array_length(get(3))),
+        ],
+        // A call can run user code between two element reads.
+        vec![
+            Stmt::Expr(string_array_length(get(3))),
+            Stmt::Expr(Expr::Call {
+                byte_end: 0,
+                callee: Box::new(get(2)),
+                args: vec![],
+                type_args: vec![],
+                byte_offset: 0,
+            }),
+        ],
+        // An element store.
+        vec![Stmt::Expr(Expr::IndexSet {
+            object: Box::new(get(1)),
+            index: Box::new(get(3)),
+            value: Box::new(Expr::String("x".into())),
+            byte_offset: 0,
+            byte_end: 0,
+        })],
+    ] {
+        let ir = ir_with_param_type(string_array(), body, Default::default());
+        assert!(!ir.contains("indexed.sarray.scan"), "{ir}");
     }
 }

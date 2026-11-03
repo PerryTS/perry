@@ -742,7 +742,7 @@ pub fn transform_expr(
         }
 
         // Property set - may be on JS objects
-        Expr::PropertySet { object, property, value } => {
+        Expr::PropertySet { object, property, value, .. } => {
             transform_expr(object, js_imports, extern_func_to_js, local_name_to_js, tracker);
             transform_expr(value, js_imports, extern_func_to_js, local_name_to_js, tracker);
 
@@ -833,7 +833,7 @@ pub fn transform_expr(
             transform_expr(object, js_imports, extern_func_to_js, local_name_to_js, tracker);
             transform_expr(index, js_imports, extern_func_to_js, local_name_to_js, tracker);
         }
-        Expr::IndexSet { object, index, value } => {
+        Expr::IndexSet { object, index, value, .. } => {
             transform_expr(object, js_imports, extern_func_to_js, local_name_to_js, tracker);
             transform_expr(index, js_imports, extern_func_to_js, local_name_to_js, tracker);
             transform_expr(value, js_imports, extern_func_to_js, local_name_to_js, tracker);

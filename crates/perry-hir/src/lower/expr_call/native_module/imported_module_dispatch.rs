@@ -176,6 +176,11 @@ pub(super) fn try_imported_module_dispatch(
                         args,
                     }));
                 }
+                // Function helpers operate on the selected import value.
+                // They are not exports of the containing native module.
+                if imported_method.is_some() && matches!(method_name.as_str(), "apply" | "bind") {
+                    return Ok(Err(args));
+                }
                 if method_name == "call" {
                     // A named native-module function is a real callable value.
                     // Keep `.call(receiver, ...)` on the ordinary

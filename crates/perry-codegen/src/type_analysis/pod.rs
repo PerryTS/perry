@@ -133,6 +133,7 @@ fn collect_pod_numeric_field_read_locals(ctx: &FnCtx<'_>, expr: &Expr, out: &mut
             object,
             index,
             value,
+            ..
         } => {
             collect_pod_numeric_field_read_locals(ctx, object, out);
             collect_pod_numeric_field_read_locals(ctx, index, out);
@@ -212,6 +213,7 @@ fn expr_may_materialize_pod_local(ctx: &FnCtx<'_>, expr: &Expr, target_id: u32) 
             object,
             property,
             value,
+            ..
         } => {
             let pod_field_set = matches!(object.as_ref(), Expr::LocalGet(id) if *id == target_id)
                 && ctx.pod_records.get(&target_id).is_some_and(|local| {
@@ -247,6 +249,7 @@ fn expr_may_materialize_pod_local(ctx: &FnCtx<'_>, expr: &Expr, target_id: u32) 
             object,
             index,
             value,
+            ..
         } => {
             expr_may_materialize_pod_local(ctx, object, target_id)
                 || expr_may_materialize_pod_local(ctx, index, target_id)
@@ -477,6 +480,13 @@ pub(crate) fn expr_may_return_boxed_value_from_raw_f64_fallback(
             if crate::stmt::stable_packed_loop::has_numeric_index_fact(ctx, expr) {
                 return false;
             }
+            // A flat-const table element is a native `[N x i32]` load
+            // (issue #50): no boxed fallback edge exists.
+            if let Expr::IndexGet { index, .. } = expr {
+                if crate::expr::flat_const_index_get_target(ctx, object, index).is_some() {
+                    return false;
+                }
+            }
             receiver_class_name(ctx, object)
                 .as_deref()
                 .is_some_and(crate::type_analysis::is_numeric_typed_array_class)
@@ -540,6 +550,14 @@ pub(crate) fn numeric_proof_is_declared_only(ctx: &FnCtx<'_>, expr: &Expr) -> bo
             object, property, ..
         } => {
             if crate::expr::contained_number_get(ctx, object, property) {
+                return false;
+            }
+
+            // The whole-program field contract already licenses a canonical
+            // raw-f64 load. Carry that same proof through arithmetic instead
+            // of reclassifying the value from its erased field annotation.
+            // Guarded/absent/non-F64 fields are refused by proves_raw_f64.
+            if crate::expr::wpfacts_access::proves_raw_f64(ctx, expr) {
                 return false;
             }
 

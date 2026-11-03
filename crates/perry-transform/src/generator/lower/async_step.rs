@@ -50,6 +50,8 @@ pub fn build_async_step_driver_direct(
     let is_error_param_id = alloc_local(next_local_id);
     let catch_e_id = alloc_local(next_local_id);
     let step_self_id = alloc_local(next_local_id);
+    let awaited_id = alloc_local(next_local_id);
+    let resumed_id = alloc_local(next_local_id);
 
     let step_func_id = {
         let id = *next_func_id;
@@ -214,14 +216,55 @@ pub fn build_async_step_driver_direct(
         stmts
     };
 
-    let step_body: Vec<Stmt> = vec![
+    // Settled self-next continuation: when the await that suspends this resume
+    // is already determined and the runtime proves the FIFO round trip is
+    // unobservable (`AsyncStepResumeNow`), the step re-runs its dispatch in
+    // place with the awaited result as the next resume value. A decline falls
+    // through to the ordinary `AsyncStepChain` publication, unchanged.
+    // The admitted branch falls off the end of the loop body, so the loop's
+    // ordinary back-edge safepoint poll (emitted at a non-terminated body end)
+    // covers every in-place resume; the decline branch returns.
+    // The awaited value is read from the iter-result cell once and handed on
+    // by value: to the probe, to the decline publication, and (as the probe's
+    // result) to the next resume. The probe returns the TDZ sentinel on a
+    // decline, which `AsyncStepDeclined` tests.
+    let continue_in_place = vec![
         Stmt::Let {
-            id: step_self_id,
-            name: "__step_self".to_string(),
+            id: awaited_id,
+            name: "__step_awaited".to_string(),
             ty: any_ty.clone(),
             mutable: false,
-            init: Some(Expr::CurrentStepClosure),
+            init: Some(Expr::IterResultGetValue),
         },
+        Stmt::Let {
+            id: resumed_id,
+            name: "__step_resumed".to_string(),
+            ty: any_ty.clone(),
+            mutable: false,
+            init: Some(Expr::AsyncStepResumeNow {
+                value: Box::new(Expr::LocalGet(awaited_id)),
+                step_closure: Box::new(Expr::LocalGet(step_self_id)),
+            }),
+        },
+        Stmt::If {
+            condition: Expr::AsyncStepDeclined(Box::new(Expr::LocalGet(resumed_id))),
+            then_branch: vec![Stmt::Return(Some(Expr::AsyncStepChain {
+                value: Box::new(Expr::LocalGet(awaited_id)),
+                step_closure: Box::new(Expr::LocalGet(step_self_id)),
+            }))],
+            else_branch: Some(vec![
+                Stmt::Expr(Expr::LocalSet(
+                    value_param_id,
+                    Box::new(Expr::LocalGet(resumed_id)),
+                )),
+                Stmt::Expr(Expr::LocalSet(
+                    is_error_param_id,
+                    Box::new(Expr::Bool(false)),
+                )),
+            ]),
+        },
+    ];
+    let mut resume_body = vec![
         Stmt::Try {
             body: vec![labeled_loop],
             catch: Some(CatchClause {
@@ -251,10 +294,21 @@ pub fn build_async_step_driver_direct(
             then_branch: resolve_arm,
             else_branch: None,
         },
-        Stmt::Return(Some(Expr::AsyncStepChain {
-            value: Box::new(Expr::IterResultGetValue),
-            step_closure: Box::new(Expr::LocalGet(step_self_id)),
-        })),
+    ];
+    resume_body.extend(continue_in_place);
+    let resume_loop = Stmt::While {
+        condition: Expr::Bool(true),
+        body: resume_body,
+    };
+    let step_body: Vec<Stmt> = vec![
+        Stmt::Let {
+            id: step_self_id,
+            name: "__step_self".to_string(),
+            ty: any_ty.clone(),
+            mutable: false,
+            init: Some(Expr::CurrentStepClosure),
+        },
+        resume_loop,
     ];
 
     // #691 Phase 2: step_id is NOT captured — the body reads its own

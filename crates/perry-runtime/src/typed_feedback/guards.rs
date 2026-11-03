@@ -20,7 +20,7 @@ fn object_has_own_key_bytes(obj: *const ObjectHeader, key_bytes: &[u8]) -> bool 
     }
     let object_addr = normalize_raw_object_addr(obj as u64);
     let (shape_id, _, heap_type) = object_shape(object_addr);
-    if heap_type != crate::gc::GC_TYPE_OBJECT as u16 || shape_id == LayoutWord(0) {
+    if crate::gc_type_is_not_object!(heap_type as u8) || shape_id == LayoutWord(0) {
         return false;
     }
     unsafe {
@@ -112,7 +112,7 @@ fn method_direct_call_contract(
         return (shape_id, class_id, gc_type, name_hash, false);
     };
     unsafe {
-        if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT
+        if crate::gc_type_is_not_object!((*gc_header).obj_type)
             || (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
             || (*gc_header)._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES != 0
         {
@@ -188,7 +188,7 @@ fn class_field_get_contract(
     };
     unsafe {
         let gc_type = (*gc_header).obj_type as u16;
-        if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
+        if crate::gc_type_is_not_object!((*gc_header).obj_type) {
             return (LayoutWord(0), 0, gc_type, false);
         }
         if (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
@@ -246,7 +246,7 @@ fn class_field_fast_contract(
         return false;
     };
     unsafe {
-        if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT
+        if crate::gc_type_is_not_object!((*gc_header).obj_type)
             || (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
             || (*gc_header)._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES != 0
         {
@@ -597,7 +597,7 @@ pub unsafe extern "C" fn js_method_direct_shape_class(
     let Some(gc_header) = gc_header_for_user_addr(object_addr) else {
         return 0;
     };
-    if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!((*gc_header).obj_type)
         || (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || (*gc_header)._reserved
             & (crate::gc::OBJ_FLAG_HAS_DESCRIPTORS | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES)

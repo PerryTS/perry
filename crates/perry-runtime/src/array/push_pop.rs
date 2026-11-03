@@ -103,10 +103,13 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         // stub pointing at recycled bytes.
         //
         // For a young source, use the nursery only when the already-open block
-        // can satisfy the grow without collecting. If that allocation would
-        // collect, the source may be promoted while its handle is reloaded;
-        // birth the target old instead so the post-collection source cannot
-        // acquire the same old->young forwarding edge.
+        // can satisfy the grow without collecting, and a large target only
+        // when its young dedicated backing needs no collection either (it is
+        // non-moving, so a young stub may forward into it like into Eden).
+        // If that allocation would collect, the source may be promoted while
+        // its handle is reloaded; birth the target old instead so the
+        // post-collection source cannot acquire the same old->young
+        // forwarding edge.
         let old_header = (arr as *mut u8).sub(gc::GC_HEADER_SIZE) as *mut gc::GcHeader;
         let source_generation = crate::arena::classify_heap_generation(arr as usize);
         let source_requires_old_target = (*old_header).gc_flags & gc::GC_FLAG_TENURED != 0
@@ -114,7 +117,12 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         let young = if source_requires_old_target {
             ptr::null_mut()
         } else {
-            crate::arena::arena_alloc_gc_no_collect(new_size, 8, gc::GC_TYPE_ARRAY)
+            let small = crate::arena::arena_alloc_gc_no_collect(new_size, 8, gc::GC_TYPE_ARRAY);
+            if small.is_null() {
+                crate::arena::arena_alloc_gc_large_young_no_collect(new_size, 8, gc::GC_TYPE_ARRAY)
+            } else {
+                small
+            }
         };
         let (new_ptr, arr) = if !young.is_null() {
             // No collection, so the source address remains valid without a
@@ -793,7 +801,7 @@ pub unsafe extern "C" fn js_array_fill_values(
 /// caller has already demoted a uniquely-owned heap string in `value`.
 #[inline]
 fn object_backed_push_fast(arr: *mut ArrayHeader, value: f64) -> bool {
-    if crate::array::array_receiver_gc_tag(arr).0 != gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!(crate::array::array_receiver_gc_tag(arr).0) {
         return false;
     }
     crate::array::subclass::array_subclass_fast_push_one_raw(arr, value).is_some()
@@ -998,7 +1006,7 @@ pub(crate) fn push_spec_declined(arr: *mut ArrayHeader, value: f64) -> *mut Arra
     // resolver nor the exotic probe (both are classification misses for an
     // OBJECT header); the string demote precedes the store as in
     // `js_array_push_f64`.
-    if crate::array::array_receiver_gc_tag(arr).0 == gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_object!(crate::array::array_receiver_gc_tag(arr).0) {
         string::js_string_addref_if_heap_string(value);
         if crate::array::subclass::array_subclass_fast_push_one_raw(arr, value).is_some() {
             return arr;

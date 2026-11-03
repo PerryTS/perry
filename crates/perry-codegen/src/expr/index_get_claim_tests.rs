@@ -247,7 +247,7 @@ const DYNAMIC_INDEX_SITE_BLOCKS: &[&str] = &[
     "tav.w2",
     "tav.w1",
     "arrlike.elem.kind",
-    "arrlike.elem.meta",
+    "arrlike.elem_meta",
     "arrlike.elem.store",
     "arrlike.elem.bounds",
     "arrlike.elem.load",

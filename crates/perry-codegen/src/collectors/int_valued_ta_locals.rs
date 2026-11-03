@@ -1558,6 +1558,7 @@ fn observe(
             object,
             index,
             value,
+            ..
         } => {
             observe(object, false, cands, types, additive, exact_i32, disq);
             observe(index, false, cands, types, additive, exact_i32, disq);

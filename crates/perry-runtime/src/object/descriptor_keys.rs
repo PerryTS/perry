@@ -72,7 +72,7 @@ impl OwnProperty {
                 let obj = crate::value::js_nanbox_get_pointer(descriptor) as *const ObjectHeader;
                 let keys = super::object_keys(obj);
                 let field = |name: &[u8]| {
-                    super::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), name)
+                    super::keys_find_property_slot_by_bytes(keys, keys.count(), name)
                         .map(|slot| super::field_get_set::js_object_get_key_field(obj, slot).bits())
                 };
                 let flags = if field(b"enumerable") == Some(crate::value::TAG_TRUE) {
@@ -109,7 +109,7 @@ pub(crate) unsafe fn ordinary_data_shape(
     }
     let object = value.as_pointer::<ObjectHeader>();
     let header = crate::value::addr_class::try_read_gc_header(object as usize)?;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         return None;

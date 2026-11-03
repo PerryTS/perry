@@ -139,6 +139,9 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
         "# interp_guard {}\n",
         pf.interp_guard.clone().unwrap_or_else(|| "none".into())
     ));
+    if let Some(a) = &pf.activation {
+        out.push_str(&format!("# activation {a}\n"));
+    }
     out.push_str(&format!("# top_calls {}\n", s.top_calls));
     for (k, n, ms) in &s.profile {
         out.push_str(&format!("# profile {k} {n} {ms:.1}\n"));
@@ -170,7 +173,8 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
     }
     for st in &pf.sites {
         let v = match &st.verdict {
-            Verdict::StringLength => "native:string-length".to_string(),
+            Verdict::OwnLength => "native:own-length".to_string(),
+            Verdict::NativeMember => "native:member".to_string(),
             Verdict::T0Mono => "T0".to_string(),
             Verdict::T0Set => "T0set".to_string(),
             Verdict::E0 => "E0".to_string(),
@@ -197,11 +201,39 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
     }
     for (unit, lines) in &pf.diagnostics {
         for site in verdicts.get(unit.as_str()).into_iter().flatten() {
+            let bodies: Vec<String> = site
+                .bodies
+                .iter()
+                .map(|(id, name)| format!("[{id},{}]", crate::diagnostics::quote(name)))
+                .collect();
             out.push_str(&format!(
-                "D {{\"record\":\"verdict\",\"unit\":{},\"file\":{},\"start\":{},\"key\":{},\"call\":{},\"verdict\":{}}}\n",
+                "D {{\"record\":\"verdict\",\"unit\":{},\"file\":{},\"start\":{},\"key\":{},\"call\":{},\"verdict\":{},\"cause\":{},\"bodies\":[{}]}}\n",
                 crate::diagnostics::quote(unit), crate::diagnostics::quote(&pf.module_paths[site.module as usize]),
                 site.byte_offset, crate::diagnostics::quote(&site.key), site.is_call,
-                crate::diagnostics::quote(&format!("{:?}", site.verdict))));
+                crate::diagnostics::quote(&format!("{:?}", site.verdict)),
+                match crate::ledger::verdict_cause(&site.verdict) {
+                    None => "null".to_string(),
+                    Some(Ok(c)) => crate::diagnostics::quote(c.name()),
+                    Some(Err(_)) => crate::diagnostics::quote("unclassified"),
+                },
+                bodies.join(",")));
+            for (copy, v) in &site.diagnostic_copies {
+                out.push_str(&format!(
+                    "D {{\"record\":\"copy-verdict\",\"unit\":{},\"file\":{},\"start\":{},\"key\":{},\"call\":{},\"copy\":{},\"verdict\":{}}}\n",
+                    crate::diagnostics::quote(unit), crate::diagnostics::quote(&pf.module_paths[site.module as usize]),
+                    site.byte_offset, crate::diagnostics::quote(&site.key), site.is_call,
+                    crate::diagnostics::quote(copy), crate::diagnostics::quote(&format!("{v:?}"))));
+            }
+        }
+        // DECISIONS 225: the bodies the whole program can run, the
+        // exemption of the per-unit <= whole residual (`dead_site`).
+        for (file, id, name) in pf.active_bodies.iter().flatten() {
+            out.push_str(&format!(
+                "D {{\"record\":\"active\",\"unit\":{},\"file\":{},\"fn\":{id},\"name\":{}}}\n",
+                crate::diagnostics::quote(unit),
+                crate::diagnostics::quote(file),
+                crate::diagnostics::quote(name)
+            ));
         }
         for line in lines {
             out.push_str("D {");
@@ -211,6 +243,28 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
         }
     }
     out
+}
+
+/// Dump only: appends the diagnostic records that were streamed to the sidecar
+/// (`FactsConfig::diag_sidecar`) in unit order, then removes the sidecar.
+pub fn append_streamed(pf: &ProgramFacts, out: &mut impl std::io::Write) -> std::io::Result<()> {
+    use std::io::{Read, Seek, SeekFrom};
+    let Some((path, spans)) = &pf.diag_stream else {
+        return Ok(());
+    };
+    let mut f = std::fs::File::open(path)?;
+    let mut buf = Vec::new();
+    for &(at, n) in spans {
+        if n == 0 {
+            continue;
+        }
+        buf.resize(n as usize, 0);
+        f.seek(SeekFrom::Start(at))?;
+        f.read_exact(&mut buf)?;
+        out.write_all(&buf)?;
+    }
+    drop(f);
+    std::fs::remove_file(path)
 }
 
 pub fn relations_text(pf: &ProgramFacts) -> Option<String> {

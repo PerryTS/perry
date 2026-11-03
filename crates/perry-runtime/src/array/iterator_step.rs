@@ -14,7 +14,7 @@ pub unsafe extern "C-unwind" fn js_iterator_step(iter: f64, next: f64, out: *mut
     if let Some(header) = crate::value::addr_class::pointer_value_header(iter.to_bits()) {
         let raw = (iter.to_bits() & crate::value::POINTER_MASK) as usize;
         {
-            if header.obj_type == crate::gc::GC_TYPE_OBJECT {
+            if crate::gc_type_is_object!(header.obj_type) {
                 let obj = raw as *mut ObjectHeader;
                 // Only these layouts can use the builtin collection step. A
                 // generator's branded frame goes directly to resume below;
@@ -136,7 +136,7 @@ pub unsafe extern "C-unwind" fn js_iterator_next_method(iter: f64) -> f64 {
 pub(super) unsafe fn iterator_next_method_rooted(iter: &crate::gc::RuntimeHandle<'_>) -> f64 {
     let raw = js_nanbox_get_pointer(iter.get_nanbox_f64()) as usize;
     if crate::value::addr_class::pointer_value_header(iter.get_nanbox_u64())
-        .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_OBJECT)
+        .is_some_and(|h| crate::gc_type_is_object!(h.obj_type))
     {
         let obj = raw as *const ObjectHeader;
         // An actual own next slot needs only its descriptor. In particular,
@@ -334,10 +334,32 @@ unsafe fn array_record_enter(
     let Some(header) = crate::value::addr_class::try_read_gc_header(raw) else {
         return array_record_refused(value, record, None);
     };
-    if header.obj_type != crate::gc::GC_TYPE_ARRAY {
+    let array = match header.obj_type {
+        crate::gc::GC_TYPE_ARRAY => {
+            let raw = raw as *const crate::array::ArrayHeader;
+            // Admission above already proved this header belongs to the receiver.
+            // Reuse it for arena arrays without repeating the raw-pointer ownership
+            // lookup. The headed cleaner still resolves forwarded and sparse heads.
+            // Non-arena arrays retain the raw cleaner's stricter length validation.
+            // No allocation or safepoint separates the header probe from this use.
+            if header.gc_flags & crate::gc::GC_FLAG_ARENA != 0 {
+                crate::array::clean_headed_arr_ptr(raw, header)
+            } else {
+                crate::array::clean_arr_ptr(raw)
+            }
+        }
+        crate::gc::GC_TYPE_LAZY_ARRAY => {
+            return if lazy_record_admits(raw, iterator_writable) {
+                0
+            } else {
+                array_record_refused(value, record, None)
+            };
+        }
+        _ => return array_record_refused(value, record, None),
+    };
+    if array.is_null() {
         return array_record_refused(value, record, None);
     }
-    let array = crate::array::clean_arr_ptr(raw as *const crate::array::ArrayHeader);
     let value = crate::value::js_nanbox_pointer(array as i64);
     if !out.is_null() {
         *out = value;
@@ -362,6 +384,69 @@ unsafe fn array_record_enter(
         return 2;
     }
     0
+}
+
+/// A lazy array is an Array: its header length word is the array's length
+/// and every element read runs its own materialization policy (`lazy_get`:
+/// per-element subtrees, a sequential scan flips to one batch reparse). The
+/// record therefore admits it without forcing it. Materialization turns the
+/// payload into the ordinary array in place, so after the flip the record's
+/// inline guards accept the same payload. An early `break` keeps the laziness
+/// that `JSON.parse` paid the tape for.
+///
+/// An unmaterialized lazy array owns no named property: every own-property
+/// write reaches the array funnel, which materializes. A re-parenting does
+/// not, and the flipped array does not carry the owner's bit, so under a
+/// writable iteration member any recorded array re-parenting refuses.
+#[inline(never)]
+unsafe fn lazy_record_admits(raw: usize, iterator_writable: u32) -> bool {
+    let lazy = raw as *mut crate::json_tape::LazyArrayHeader;
+    if (*lazy).magic != crate::json_tape::LAZY_ARRAY_MAGIC {
+        return false;
+    }
+    if iterator_writable & super::ITERATION_MEMBER_WRITABLE != 0
+        && crate::object::prototype_chain::array_static_proto_recorded()
+    {
+        return false;
+    }
+    if iterator_writable & super::ITERATION_MEMBER_WRITABLE != 0
+        && !matches!(
+            super::iterator_method::prototype_iterator_method(
+                crate::array::array_prototype_addr_if_resolved()
+            ),
+            super::iterator_method::IteratorMethod::Intrinsic
+        )
+    {
+        return false;
+    }
+    if iterator_writable & super::ITERATION_NEXT_REACHABLE != 0
+        && !crate::object::iterator_prototypes::array_iterator_next_is_canonical()
+    {
+        return false;
+    }
+    true
+}
+
+/// The head a counted record continues from after a cold element step: an
+/// ordinary array's live head (`resolve_ordinary`), else the payload. A lazy
+/// payload stays as it is: it materializes in place when its own read policy
+/// decides, and resolving it here would force it.
+pub(super) unsafe fn record_current_head(payload: f64, resolve_ordinary: bool) -> f64 {
+    if !JSValue::from_bits(payload.to_bits()).is_pointer() {
+        return payload;
+    }
+    let raw = js_nanbox_get_pointer(payload) as usize;
+    let Some(header) = crate::value::addr_class::try_read_gc_header(raw) else {
+        return payload;
+    };
+    if header.obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
+        return payload;
+    }
+    if !resolve_ordinary {
+        return payload;
+    }
+    let current = crate::array::clean_arr_ptr(raw as *const crate::array::ArrayHeader);
+    crate::value::js_nanbox_pointer(current as i64)
 }
 
 /// The iterator property is the sole semantic dispatch for array iteration.

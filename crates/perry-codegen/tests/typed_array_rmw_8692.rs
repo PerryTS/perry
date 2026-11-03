@@ -61,6 +61,8 @@ fn rmw_function(rhs: Expr) -> Function {
                     left: Box::new(read),
                     right: Box::new(rhs),
                 }),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(Expr::Integer(0))),
         ],

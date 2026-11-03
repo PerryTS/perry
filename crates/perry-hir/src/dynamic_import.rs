@@ -41,7 +41,7 @@ pub use visitors::{
     for_each_worker_new, for_each_worker_new_mut,
 };
 pub use worker_entries::{module_uses_worker_threads, worker_url_literals, WorkerUrl};
-pub use worker_paths::resolve_worker_path;
+pub use worker_paths::{resolve_worker_eval_source, resolve_worker_path};
 
 /// The result of const-folding a dynamic `import()` path argument.
 #[derive(Debug, Clone)]

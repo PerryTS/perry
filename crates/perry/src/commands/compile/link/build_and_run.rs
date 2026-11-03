@@ -158,6 +158,7 @@ pub(crate) fn build_and_run_link(
     for obj_path in obj_paths {
         cmd.arg(obj_path);
     }
+    cmd.args(super::link_pad_args());
 
     // HarmonyOS: pick up native C objects that build.rs scripts emitted
     // alongside the Rust artifacts. Rust's staticlib normally bundles these
@@ -198,6 +199,14 @@ pub(crate) fn build_and_run_link(
     if !is_windows {
         if is_android || is_linux || is_harmonyos {
             cmd.arg("-Wl,--gc-sections");
+            // The runtime reads `__start_`/`__stop_perry_js_text` (the JS
+            // text section's bounds, `error_stack_frames.rs`). By default a
+            // reference to them retains every input section of that name,
+            // which would keep every compiled JS function alive; with
+            // start-stop-gc they retain nothing and unreferenced functions
+            // are collected as before. GNU ld >= 2.37 and lld >= 13 accept
+            // it; older linkers warn and ignore it.
+            cmd.arg("-Wl,-z,start-stop-gc");
             // Native glibc Linux executables link at a fixed base (ET_EXEC),
             // as bun does. Every pointer in perry's static data (class method
             // slots, shape/key tables, string and closure headers, stack-map
@@ -257,6 +266,12 @@ pub(crate) fn build_and_run_link(
             is_cross_ios || is_cross_visionos || is_cross_macos || is_cross_tvos,
             is_watchos || is_visionos,
         )?;
+        super::runtime_layouts::add_link_args(
+            &mut cmd,
+            !(is_linux || is_android || is_harmonyos),
+            is_cross_ios || is_cross_visionos || is_cross_macos || is_cross_tvos,
+            is_watchos || is_visionos,
+        );
         // PERRY_LINK_MAP=<path> — emit a linker map (which archive each symbol
         // resolves from) for diagnosing dup-symbol / shadowing bugs. Honor it on
         // every non-Windows linker, not just native macOS. GNU ld (ELF) spells
@@ -928,14 +943,9 @@ pub(crate) fn build_and_run_link(
             .arg("-lm")
             .arg("-lpthread")
             .arg("-ldl");
-
-        // -lssl/-lcrypto are vestigial — Perry's stdlib is rustls-only (no
-        // system OpenSSL). On glibc they happen to be present so the link
-        // tolerates them, but a static musl sysroot has no libssl.a/libcrypto.a
-        // and the link would fail. Skip them for musl (#4826).
-        if ctx.needs_stdlib && !is_musl {
-            cmd.arg("-lssl").arg("-lcrypto");
-        }
+        // No -lssl/-lcrypto: perry-stdlib bundles its own OpenSSL
+        // (openssl-sys `vendored`) and TLS is rustls, so nothing links the
+        // system libraries and users need no OpenSSL dev package.
     } else if is_windows {
         windows_link::add_system_libs(&mut cmd, target);
         windows_link::embed_app_manifest(&mut cmd, ctx.needs_ui);
@@ -985,11 +995,7 @@ pub(crate) fn build_and_run_link(
 
         // On Linux (native, not cross-compiling to macOS), link against system libraries
         if cfg!(target_os = "linux") && !is_cross_macos {
-            cmd.arg("-lm").arg("-lpthread").arg("-ldl");
-
-            if ctx.needs_stdlib {
-                cmd.arg("-lssl").arg("-lcrypto");
-            }
+            cmd.args(super::linux_dylib_libs::LINUX_DYLIB_SYSTEM_LIBS);
         }
     }
 
@@ -1904,15 +1910,7 @@ pub(crate) fn build_and_run_link(
     // take the same path once the arguments are large: macOS caps them at
     // 1 MiB (`link_args_need_response_file`).
     // `PERRY_FORCE_LINK_RESPONSE_FILE=1` forces the path for testing.
-    // PERRY_EXTRA_LINK_ARGS — space-separated args appended verbatim to the
-    // final link invocation. Diagnostic escape hatch (e.g.
-    // `-Wl,-why_live,_js_fs_open` to ask ld64 why a symbol survived
-    // dead-strip); not part of any documented stable surface.
-    if let Ok(extra) = std::env::var("PERRY_EXTRA_LINK_ARGS") {
-        for a in extra.split_whitespace() {
-            cmd.arg(a);
-        }
-    }
+    cmd.args(super::extra_link_args());
 
     let mut response_file_to_clean: Option<PathBuf> = None;
     if cfg!(target_os = "windows")

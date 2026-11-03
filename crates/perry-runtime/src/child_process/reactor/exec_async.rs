@@ -333,7 +333,7 @@ pub(in crate::child_process) fn cp_defer_exec_callback(
     js_closure_set_capture_ptr(deferred, 1, err.to_bits() as i64);
     js_closure_set_capture_ptr(deferred, 2, stdout.to_bits() as i64);
     js_closure_set_capture_ptr(deferred, 3, stderr.to_bits() as i64);
-    crate::timer::js_set_immediate_callback(deferred as i64);
+    crate::timer::schedule_native_immediate(deferred as i64, &[], "PIPEWRAP");
 }
 
 /// The deferred-callback thunk: slots 0..4 capture `cb`, `err`, `stdout`,

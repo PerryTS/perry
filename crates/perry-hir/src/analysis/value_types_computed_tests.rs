@@ -7,12 +7,16 @@ fn assignment_keys_evaluate_to_the_assigned_value() {
         object: Box::new(Expr::LocalGet(1)),
         index: Box::new(Expr::String("a".into())),
         value: Box::new(Expr::Integer(0)),
+        byte_offset: 0,
+        byte_end: 0,
     };
     assert_eq!(infer_expr_type(&inner, &env), Type::Number);
     let outer = Expr::IndexSet {
         object: Box::new(Expr::LocalGet(1)),
         index: Box::new(inner),
         value: Box::new(Expr::String("a".into())),
+        byte_offset: 0,
+        byte_end: 0,
     };
     assert_eq!(infer_expr_type(&outer, &env), Type::String);
 }

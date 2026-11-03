@@ -108,6 +108,8 @@ fn store(object: perry_hir::Expr, key: &str, value: perry_hir::Expr) -> perry_hi
         object: Box::new(object),
         property: key.into(),
         value: Box::new(value),
+        byte_offset: 0,
+        byte_end: 0,
     })
 }
 

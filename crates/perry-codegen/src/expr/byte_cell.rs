@@ -301,11 +301,7 @@ pub(crate) fn resolve(ctx: &mut FnCtx<'_>, boxed: &str, brands: &[u8], miss: &st
     // or join is added, so the resolution keeps main's CFG and the owner arm
     // is untouched by views.
     let linked_type = ctx.block().and(I64, &linked_word, "255");
-    let bagged = ctx.block().icmp_eq(
-        I64,
-        &linked_type,
-        &crate::runtime_abi::GC_TYPE_OBJECT.to_string(),
-    );
+    let bagged = crate::target_layout::emit_object_has_meta_word(ctx.block(), I64, &linked_type);
     let bag_slot = ctx.block().add(
         I64,
         &linked,

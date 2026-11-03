@@ -68,6 +68,10 @@ pub(crate) fn emit_pad_enter(blk: &mut crate::block::LlBlock, handle_height: &st
 /// scope's value is not reused: an inlined constructor body can open a
 /// bracket between the two entries.
 fn scope_handle_height(ctx: &mut FnCtx<'_>) -> String {
+    // A private resume reads it once at entry (expr/resume_locals.rs).
+    if let Some(height) = crate::expr::resume_locals::cached_eh_height(ctx) {
+        return height;
+    }
     ctx.block().call(I64, "js_eh_handle_height", &[])
 }
 

@@ -159,6 +159,26 @@ pub extern "C" fn js_object_delete_field(
         if (obj as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
             let gc_header =
                 (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            if (*gc_header).obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
+                // A delete on a lazy JSON array is an own-property write, so it
+                // takes the array funnel, which materializes the value in place
+                // (the same object, now an Array) and the Array arm below runs.
+                // Before, the lazy header fell through to the ordinary-object
+                // path and panicked reading a shape it does not have. The
+                // materialization allocates, so the key is rooted across it.
+                let scope = crate::gc::RuntimeHandleScope::new();
+                let key_h = scope.root_string_ptr(key);
+                let arr = crate::array::clean_arr_ptr_mut(obj as *mut crate::array::ArrayHeader);
+                let key = key_h.get_raw_const_ptr::<crate::StringHeader>();
+                if arr.is_null()
+                    || crate::json_tape::is_lazy_array(
+                        arr as *const crate::json_tape::LazyArrayHeader,
+                    )
+                {
+                    return 1;
+                }
+                return js_object_delete_field(arr as *mut ObjectHeader, key);
+            }
             if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
                 let obj = super::array_object_ops::array_header(obj) as *mut ObjectHeader;
                 if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
@@ -255,7 +275,7 @@ pub extern "C" fn js_object_delete_field(
         // semantic checks below before the property can be deleted.
         let stable_plain_data = crate::value::addr_class::try_read_gc_header(obj as usize)
             .is_some_and(|header| {
-                header.obj_type == crate::gc::GC_TYPE_OBJECT
+                crate::gc_type_is_object!(header.obj_type)
                     && header._reserved
                         & (crate::gc::OBJ_FLAG_STABLE_TOMBSTONES
                             | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS)
@@ -363,7 +383,7 @@ pub extern "C" fn js_object_delete_field(
         // dominant residue (16.0 M of 90.8 M accessor calls) after the
         // [[Set]]/[[Get]] walks were fixed.
         let found_idx: Option<usize> =
-            crate::object::keys_find_property_slot_by_key_ptr(keys, key_count as u32, key)
+            crate::object::keys_find_property_slot_by_key_ptr(keys_view, key_count as u32, key)
                 .map(|i| i as usize);
 
         let i = match found_idx {
@@ -951,7 +971,7 @@ unsafe fn try_delete_stable_sso(obj: *mut ObjectHeader, key: JSValue) -> Option<
     // The flag is admitted by the complete delete path only for class-less or
     // registered anonymous-shape ordinary objects, so class declaration
     // prototypes cannot enter this lane.
-    if gc.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(gc.obj_type)
         || gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || gc._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES == 0
         || gc._reserved & BLOCKING_FLAGS != 0
@@ -995,9 +1015,11 @@ unsafe fn try_delete_stable_sso(obj: *mut ObjectHeader, key: JSValue) -> Option<
         && (*elements.add(tail as usize)).to_bits() == key.bits()
     {
         tail
-    } else if let Some(slot) =
-        super::keys_find_property_slot_by_bytes(keys, shape.logical_key_count, key_bytes)
-    {
+    } else if let Some(slot) = super::keys_find_property_slot_by_bytes(
+        shape.keys_view(),
+        shape.logical_key_count,
+        key_bytes,
+    ) {
         slot
     } else {
         return Some(1);

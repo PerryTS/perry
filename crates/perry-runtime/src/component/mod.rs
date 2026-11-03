@@ -48,7 +48,7 @@ fn object_pointer(value: f64) -> Option<*mut crate::object::ObjectHeader> {
     }
     let pointer = value.as_pointer::<u8>() as usize;
     let header = unsafe { crate::value::addr_class::try_read_tracked_gc_header(pointer)? };
-    (unsafe { header.as_ref().obj_type } == crate::gc::GC_TYPE_OBJECT).then_some(pointer as *mut _)
+    (crate::gc_type_is_object!(unsafe { header.as_ref().obj_type })).then_some(pointer as *mut _)
 }
 fn array_pointer(value: f64) -> Option<*mut crate::array::ArrayHeader> {
     let value = JSValue::from_bits(value.to_bits());

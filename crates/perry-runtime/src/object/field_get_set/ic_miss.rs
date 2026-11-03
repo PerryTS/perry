@@ -581,7 +581,8 @@ pub(crate) unsafe fn stamp_private_evaluation_brand(obj: *mut ObjectHeader, clas
     if obj.is_null() || !super::super::class_registry::is_class_object_value(class_value) {
         return;
     }
-    let meta = (*obj).meta;
+    // A1_UNPROVEN: record-first: ic_miss entry (kind-A/B question for S0f).
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     if (meta.is_null() || (*meta).private_evaluation_brand == 0)
         && crate::object::shapes::object_evaluation_brand(obj) == class_value.to_bits()
     {
@@ -591,7 +592,8 @@ pub(crate) unsafe fn stamp_private_evaluation_brand(obj: *mut ObjectHeader, clas
     let obj_handle = scope.root_raw_mut_ptr(obj);
     let class_handle = scope.root_nanbox_f64(class_value);
     let (meta, _) =
-        obj_handle.across_mut::<ObjectHeader, _>(|| crate::object::object_meta_ensure(obj));
+        // A1_UNPROVEN: instance from a JS value, no type test (kind-A/B question for S0b-S0e).
+        obj_handle.across_mut::<ObjectHeader, _>(|| crate::object::object_meta_ensure(crate::meta_obj_runtime_born!(obj), crate::object::MetaReason::EvalBrand));
     let brand = class_handle.get_nanbox_f64().to_bits();
     (*meta).private_evaluation_brand = brand;
     crate::gc::runtime_write_barrier_slot(
@@ -657,7 +659,8 @@ fn private_evaluation_brand(value: f64, declaring_class_id: u32) -> Option<u64> 
 /// ordinary instances carry their evaluation on the shape.
 #[inline]
 unsafe fn private_receiver_evaluation_bits(object: *const ObjectHeader) -> u64 {
-    let meta = (*object).meta;
+    // A1_UNPROVEN: record-first: ic_miss entry (kind-A/B question for S0f).
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(object as *mut _));
     if !meta.is_null() && (*meta).private_evaluation_brand != 0 {
         return (*meta).private_evaluation_brand;
     }
@@ -944,6 +947,106 @@ pub extern "C" fn js_private_field_add(
     value.get_nanbox_f64()
 }
 
+/// Runtime-internal state the runtime keeps on an ordinary object it does not
+/// own as a property (a `class X extends Response` instance's native Fetch
+/// handle): an own `ENTRY_PRIVATE` element spelled `spelling`, exactly like a
+/// class's `#field` (`js_private_field_add`). The shape says it is not a
+/// property, so no `[[Get]]`, `in`, `hasOwnProperty`, descriptor, `delete`,
+/// key listing or JSON walk sees it, whatever the receiver's class; a program
+/// key of the same spelling is a distinct public property.
+pub(crate) struct RuntimePrivateElement(PrivateStorageKey);
+
+impl RuntimePrivateElement {
+    pub(crate) fn new(spelling: &str) -> Self {
+        Self(PrivateStorageKey {
+            spelling: spelling.to_owned(),
+            slot: std::cell::Cell::new(None),
+        })
+    }
+
+    /// The element's value on `receiver`, `None` when it has none.
+    pub(crate) fn get(&self, receiver: f64) -> Option<f64> {
+        if let Some(value) = self.0.get_cached(receiver) {
+            return Some(value);
+        }
+        self.0.is_present(receiver).then(|| self.0.get(receiver))
+    }
+
+    /// Define (or overwrite) the element on `receiver`. `false` when
+    /// `receiver` can hold no private element (a primitive or a Proxy).
+    pub(crate) fn set(&self, receiver: f64, value: f64) -> bool {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let obj = scope.root_nanbox_f64(receiver);
+        let value = scope.root_nanbox_f64(value);
+        let present = self.0.is_present(obj.get_nanbox_f64());
+        let holder = if present {
+            unsafe { private_element_holder(obj.get_nanbox_f64()) }
+        } else {
+            unsafe { private_element_holder_for_definition(obj.get_nanbox_f64()) }
+        };
+        let Some(holder) = holder else {
+            return false;
+        };
+        let pred_rep = crate::object::shapes::shape_rep_of_receiver(unsafe {
+            (crate::object::shapes::object_shape_stamp(holder)).0
+        });
+        let holder = scope.root_raw_mut_ptr(holder);
+        if !present {
+            holder.with_mut_ptr::<ObjectHeader, _>(|holder| unsafe {
+                crate::object::key_attrs::apply_edits(
+                    holder,
+                    &[crate::object::key_attrs::AttrsEdit::Private(
+                        self.0.as_bytes(),
+                    )],
+                )
+            });
+        }
+        if !self
+            .0
+            .set_cached(obj.get_nanbox_f64(), value.get_nanbox_f64())
+        {
+            // A dictionary holder: its private list carries the entry, and the
+            // generic store overwrites the claimed key in place.
+            let key = scope.root_string_ptr(crate::string::intern_ascii_literal(self.0.as_bytes()));
+            holder.with_mut_ptr::<ObjectHeader, _>(|holder| {
+                key.with_const_ptr::<crate::StringHeader, _>(|key| {
+                    js_object_set_field_by_name(holder, key, value.get_nanbox_f64())
+                })
+            });
+            return true;
+        }
+        if !present {
+            let slot = holder.with_mut_ptr::<ObjectHeader, _>(|holder| unsafe {
+                let keys = crate::object::object_keys(holder);
+                if keys.is_null() {
+                    None
+                } else {
+                    crate::object::keys_find_private_slot_by_bytes(
+                        keys.arr(),
+                        keys.count(),
+                        self.0.as_bytes(),
+                    )
+                }
+            });
+            if let Some(slot) = slot {
+                let lanes = holder.with_mut_ptr::<ObjectHeader, _>(|holder| unsafe {
+                    crate::object::field_rep_store::private_field_lanes_target(
+                        holder, slot, pred_rep,
+                    )
+                });
+                if let Some(lanes) = lanes {
+                    holder.with_mut_ptr::<ObjectHeader, _>(|holder| unsafe {
+                        crate::object::field_rep_store::install_private_field_lanes(
+                            holder, slot, lanes,
+                        )
+                    });
+                }
+            }
+        }
+        true
+    }
+}
+
 /// Define one public class field with DefineField/CreateDataProperty
 /// semantics. In particular, inherited setters are bypassed and Proxy
 /// receivers observe `defineProperty`, not `set`.
@@ -1146,7 +1249,7 @@ fn private_guard_checked(
     let has_brand = if is_static {
         // Static elements require the exact constructor evaluation.
         private_evaluation_brand_matches(obj, brand_owner, declaring_class_id)
-            .unwrap_or_else(|| super::super::class_ref_id(obj) == Some(declaring_class_id))
+            .unwrap_or_else(|| static_template_brand(obj, declaring_class_id))
     } else {
         // An existing receiver can acquire elements from several evaluations
         // via constructor return overrides. Its installed shape entries decide

@@ -81,3 +81,34 @@ fn generator_intrinsic_keys_share_images_and_inline_shapes() {
         .join()
         .unwrap();
 }
+
+#[test]
+fn generator_prototype_inherits_from_iterator_prototype() {
+    std::thread::Builder::new()
+        .stack_size(16 << 20)
+        .spawn(|| {
+            crate::gc::ensure_gc_initialized();
+            ensure_generator_intrinsics();
+            let parent_of = |slot: &crate::object::RealmAtomicI64| {
+                let proto = slot.load(Ordering::Acquire);
+                crate::object::js_object_get_prototype_of(crate::value::js_nanbox_pointer(proto))
+                    .to_bits()
+            };
+            let iterator_proto = crate::value::js_nanbox_pointer(
+                crate::object::iterator_ctor::iterator_prototype_object() as i64,
+            )
+            .to_bits();
+            assert_eq!(
+                parent_of(&crate::object::GENERATOR_PROTOTYPE_PTR),
+                iterator_proto
+            );
+            assert_ne!(
+                parent_of(&crate::object::ASYNC_GENERATOR_PROTOTYPE_PTR),
+                iterator_proto,
+                "async generators keep %AsyncIteratorPrototype%"
+            );
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}

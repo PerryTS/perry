@@ -117,11 +117,15 @@ fn split_module() -> Module {
                 object: Box::new(Expr::LocalGet(100)),
                 property: "bar".to_string(),
                 value: Box::new(Expr::LocalGet(22)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Expr(Expr::PropertySet {
                 object: Box::new(Expr::LocalGet(103)),
                 property: "x".to_string(),
                 value: Box::new(Expr::Number(7.0)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             let_stmt(
                 23,
@@ -298,15 +302,13 @@ fn read_site_memos_preserve_leaf_and_collecting_root_contracts() {
             let probe = probe_body_symbol(&ir, "ic_fast_split.ts");
             let body = function_slice(&ir, &probe);
             let points = statepoints_of(&ir, target, &probe);
-            // A fixed-name leaf checks its memo after an own miss; the keyed
-            // leaf stays stateless. Both collecting exits take the memo.
+            // A fixed-name leaf owns no site storage: the receiver's shape
+            // answers (accessors included) and a decline takes the memo-free
+            // collecting exit. The keyed site keeps its keyed memo.
             let fixed = if outlined {
-                (
-                    "perry_probe_get_value_memo",
-                    "js_object_get_field_value_site",
-                )
+                ("perry_probe_get_value", "js_object_get_field_value")
             } else {
-                ("perry_probe_get_memo", "js_object_get_field_value_site")
+                ("perry_probe_get", "js_object_get_field_value")
             };
             for (fast, slow) in [
                 fixed,

@@ -168,5 +168,3 @@ pub(super) extern "C" fn supported_values_of_thunk(
         )),
     }
 }
-
-crate::realm_decl!("locales.realm.json#*");

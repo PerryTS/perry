@@ -45,7 +45,8 @@ pub(crate) use linearize::{
     linearize_body, CatchRoute, DelegationRoute, FinallyRoute, State, StateExit,
 };
 pub(crate) use lower::{
-    transform_generator_function, transform_generator_function_with_extra_captures,
+    restore_in_class_closures, transform_generator_function,
+    transform_generator_function_with_extra_captures,
 };
 pub(crate) use per_iteration::{
     collect_per_iteration_ids, collect_written_suspended_loop_captures,
@@ -127,6 +128,10 @@ pub fn transform_generators(module: &mut Module) {
     // Compute the next available local and func IDs by scanning the module
     let mut next_local_id = compute_max_local_id(module) + 1;
     let mut next_func_id = compute_max_func_id(module) + 1;
+
+    // Plain functions in class bodies keep their class evaluation's private
+    // environment (before generator lowering, which handles its own bodies).
+    restore_in_class_closures(module, &mut next_local_id);
 
     for func in &mut module.functions {
         if func.is_generator {

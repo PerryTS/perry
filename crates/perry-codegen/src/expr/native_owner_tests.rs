@@ -166,6 +166,8 @@ fn native_packed_columns_resolve_each_owner_data_word() {
         object: Box::new(Expr::LocalGet(dst)),
         index: Box::new(key()),
         value: Box::new(value),
+        byte_offset: 0,
+        byte_end: 0,
     };
     let output = compile(
         "native_packed_columns",
@@ -213,6 +215,8 @@ fn native_rmw_resolves_data_before_read_and_after_rhs() {
                 object: Box::new(Expr::LocalGet(3)),
                 index: Box::new(Expr::LocalGet(4)),
                 value: Box::new(add(get(3, Expr::LocalGet(4)), Expr::Integer(1))),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(Expr::Integer(0))),
         ],

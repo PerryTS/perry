@@ -777,7 +777,7 @@ fn utf8_schedule_drain(id: usize) {
                 crate::fn_info!(utf8_drain_tick_impl, 0; with_declared(0)),
                 1,
             );
-            js_closure_set_capture_ptr(closure, 0, id as i64);
+            crate::closure::closure_set_capture_word(closure, 0, id as i64);
             crate::builtins::js_queue_next_tick(closure as i64);
         }
         Some(false) => utf8_deliver_drain(id),
@@ -1032,8 +1032,8 @@ fn utf8_schedule_close_events(id: usize, emit_finish: bool) {
         crate::fn_info!(utf8_close_events_impl, 0; with_declared(0)),
         2,
     );
-    js_closure_set_capture_ptr(closure, 0, id as i64);
-    js_closure_set_capture_ptr(closure, 1, if emit_finish { 1 } else { 0 });
+    crate::closure::closure_set_capture_word(closure, 0, id as i64);
+    crate::closure::closure_set_capture_word(closure, 1, if emit_finish { 1 } else { 0 });
     crate::builtins::js_queue_microtask(closure as i64);
 }
 
@@ -1565,7 +1565,7 @@ fn utf8_custom_open(id: usize) -> bool {
         crate::fn_info!(utf8_async_open_done_impl, 2; with_declared(2)),
         1,
     );
-    js_closure_set_capture_ptr(cb, 0, id as i64);
+    crate::closure::closure_set_capture_word(cb, 0, id as i64);
     let cb_value = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(cb as i64));
     let flags_value = scope.root_nanbox_f64(string_value_str(if append { "a" } else { "w" }));
     let path_value = scope.root_nanbox_f64(string_value_str(&file));
@@ -1636,7 +1636,7 @@ fn utf8_custom_mkdir_then_open(id: usize) -> bool {
         crate::fn_info!(utf8_async_mkdir_done_impl, 1; with_declared(1)),
         1,
     );
-    js_closure_set_capture_ptr(cb, 0, id as i64);
+    crate::closure::closure_set_capture_word(cb, 0, id as i64);
     let cb_value = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(cb as i64));
     let parent_value = scope.root_nanbox_f64(string_value_str(parent_str));
     let _ = utf8_call_custom_method(
@@ -1672,7 +1672,7 @@ fn utf8_schedule_native_mkdir_then_custom_open(id: usize) {
         crate::fn_info!(utf8_async_native_mkdir_then_custom_open_impl, 0),
         1,
     );
-    js_closure_set_capture_ptr(closure, 0, id as i64);
+    crate::closure::closure_set_capture_word(closure, 0, id as i64);
     crate::builtins::js_queue_microtask(closure as i64);
 }
 
@@ -1681,7 +1681,7 @@ fn utf8_schedule_native_open(id: usize) {
         crate::fn_info!(utf8_async_open_impl, 0; with_declared(0)),
         1,
     );
-    js_closure_set_capture_ptr(closure, 0, id as i64);
+    crate::closure::closure_set_capture_word(closure, 0, id as i64);
     crate::builtins::js_queue_microtask(closure as i64);
 }
 

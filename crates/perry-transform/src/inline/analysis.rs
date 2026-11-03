@@ -410,6 +410,7 @@ pub fn body_calls_func(stmts: &[Stmt], target_id: FuncId) -> bool {
                 object,
                 index,
                 value,
+                ..
             } => {
                 check_expr(object, target_id)
                     || check_expr(index, target_id)
@@ -694,6 +695,7 @@ pub fn construction_expr_can_affect_method_lookup(
             object,
             property,
             value,
+            ..
         } if matches!(object.as_ref(), Expr::This) => {
             property == method_name
                 || setter_names.contains(property)

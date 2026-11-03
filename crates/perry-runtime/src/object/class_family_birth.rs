@@ -56,7 +56,7 @@ mod tests {
     static mut LAYOUT: PerryLayoutDesc = PerryLayoutDesc {
         image_keys: std::ptr::null_mut(),
         shape_id: 0,
-        _layout_pad: 0,
+        gc_plan: 0,
         family: 0x41574201,
         variant: 0,
         kind: 0,
@@ -72,8 +72,9 @@ mod tests {
         class_id: CHILD,
         parent_class_id: PARENT,
         methods: std::ptr::null(),
+        gc_header_word: crate::object::layout_desc::layout_gc_header_word(0),
+        _tail_pad: [0; 32],
     };
-    wasm_layout!(LAYOUT);
 
     static DECLARATION: ClassDeclaration = ClassDeclaration {
         instance_layout: std::ptr::addr_of!(LAYOUT),
@@ -131,13 +132,13 @@ mod evaluation_layout_tests {
     static mut LAYOUT: PerryLayoutDesc = PerryLayoutDesc {
         image_keys: std::ptr::null_mut(),
         shape_id: 0,
-        _layout_pad: 0,
+        gc_plan: 0,
         family: 0x41574202,
         variant: 0,
         kind: 0,
         integrity: 0,
         slot_count: 0,
-        layout_id: 0x80000084,
+        layout_id: 0x8000008a,
         rep: 0,
         proto: std::ptr::null(),
         keys: EMPTY_KEYS.as_ptr(),
@@ -147,6 +148,8 @@ mod evaluation_layout_tests {
         class_id: CLASS,
         parent_class_id: 0,
         methods: std::ptr::null(),
+        gc_header_word: crate::object::layout_desc::layout_gc_header_word(0),
+        _tail_pad: [0; 32],
     };
 
     static DECLARATION: ClassDeclaration = ClassDeclaration {
@@ -194,7 +197,7 @@ mod evaluation_layout_tests {
                     shapes::class_proto_id(CLASS),
                 ));
                 assert!(
-                    (*obj).meta.is_null(),
+                    crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)).is_null(),
                     "the link is a shape fact, not a meta one"
                 );
                 assert_eq!(shapes::object_prototype_word(obj), bits);
@@ -250,7 +253,10 @@ mod evaluation_layout_tests {
             );
             shapes::stamp_evaluation_holder(obj, class_bits);
             let copy = shapes::object_shape_stamp(obj);
-            assert!((*obj).meta.is_null(), "the brand is a shape fact");
+            assert!(
+                crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)).is_null(),
+                "the brand is a shape fact"
+            );
             assert_eq!(shapes::object_evaluation_brand(obj), class_bits);
             assert_eq!(shapes::object_prototype_word(obj), proto_bits);
             assert_eq!(
@@ -276,7 +282,7 @@ mod evaluation_layout_tests {
             );
             let born = crate::object::layout_desc::alloc_family_layout_copy(desc, copy);
             assert_eq!((*born).parent_class_id, (*obj).parent_class_id);
-            assert!((*born).meta.is_null());
+            assert!(crate::meta_read!(crate::meta_obj_runtime_born!(born as *mut _)).is_null());
             assert_eq!(shapes::object_evaluation_brand(born), class_bits);
             assert_eq!(shapes::object_prototype_word(born), proto_bits);
             assert_eq!(
@@ -306,7 +312,10 @@ mod evaluation_layout_tests {
                 Some(class_bits)
             );
             heritage::pin_instance_constructing_class(born, f64::from_bits(class_bits));
-            assert!((*born).meta.is_null(), "the pin is the shape brand");
+            assert!(
+                crate::meta_read!(crate::meta_obj_runtime_born!(born as *mut _)).is_null(),
+                "the pin is the shape brand"
+            );
             assert_eq!(
                 heritage::instance_pinned_constructing_class(born).map(f64::to_bits),
                 Some(class_bits)

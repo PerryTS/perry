@@ -198,7 +198,8 @@ fn a_string_literal_operand_keeps_the_fused_concat() {
         add(Expr::String("item_".to_string()), Expr::LocalGet(1)),
     );
     assert!(
-        ir.contains("call double @js_string_concat_value_box("),
+        ir.contains("call double @js_string_concat_value_box(")
+            || ir.contains("call double @js_string_concat_lit_value_box("),
         "a proven string must keep the fused concat (the `_box` twin, which \
          returns SSO for short results) — the guard is for claims, not for \
          proofs:\n{ir}"
@@ -290,6 +291,13 @@ fn a_string_method_name_on_an_unproven_receiver_is_guarded() {
 
 // -------------------------------------------------------------- chain fold
 
+/// The N-way fold's runtime entry: the generic chain, or the literal-operand
+/// entry that carries literals as constant data (JST slice 3).
+fn has_nway_fold(ir: &str) -> bool {
+    ir.contains("call i64 @js_string_concat_chain(")
+        || ir.contains("call i64 @js_string_concat_parts")
+}
+
 #[test]
 fn a_chain_whose_head_pair_is_all_declared_does_not_fold() {
     // `s + t + "x"`. `js_string_concat_chain` formats EVERY part as a string,
@@ -304,7 +312,8 @@ fn a_chain_whose_head_pair_is_all_declared_does_not_fold() {
         ),
     );
     assert!(
-        !ir.contains("call i64 @js_string_concat_chain("),
+        !ir.contains("call i64 @js_string_concat_chain(")
+            && !ir.contains("call i64 @js_string_concat_parts"),
         "the head pair carries no proof, so the N-way fold is unsound \
          here:\n{ir}"
     );
@@ -323,7 +332,7 @@ fn a_chain_led_by_a_literal_still_folds() {
         ),
     );
     assert!(
-        ir.contains("call i64 @js_string_concat_chain("),
+        has_nway_fold(&ir),
         "a proven string in the head pair keeps the N-way fold:\n{ir}"
     );
 }
@@ -339,7 +348,7 @@ fn a_chain_whose_second_part_is_proven_still_folds() {
         ),
     );
     assert!(
-        ir.contains("call i64 @js_string_concat_chain("),
+        has_nway_fold(&ir),
         "`s + \",\" + t` concatenates at every node whatever `s` holds:\n{ir}"
     );
 }
@@ -375,7 +384,8 @@ fn a_self_append_chain_fuses_the_accumulator_and_suffix() {
         "the growing prefix must reach the amortized append path:\n{ir}"
     );
     assert_eq!(
-        ir.matches("call i64 @js_string_concat_chain(").count(),
+        ir.matches("call i64 @js_string_concat_chain(").count()
+            + ir.matches("call i64 @js_string_concat_parts").count(),
         0,
         "the suffix must not be allocated before it is appended:\n{ir}"
     );
@@ -758,4 +768,149 @@ fn annotation_only_numeric_assignment_keeps_string_alias_guard() {
         ir.contains("call void @js_string_addref_if_heap_string("),
         "{ir}"
     );
+}
+
+// -------------------------------------- JST slice 3: operand checks on live bits
+
+/// Text of every block whose label starts with `prefix`.
+fn blocks_named(ir: &str, prefix: &str) -> Vec<String> {
+    let mut blocks = Vec::new();
+    let mut current: Option<Vec<&str>> = None;
+    for line in ir.lines() {
+        if let Some(label) = line.strip_suffix(':') {
+            if !label.starts_with(char::is_whitespace) {
+                if let Some(done) = current.take() {
+                    blocks.push(done.join("\n"));
+                }
+                if label.starts_with(prefix) {
+                    current = Some(Vec::new());
+                }
+                continue;
+            }
+        }
+        if let Some(body) = current.as_mut() {
+            body.push(line);
+        }
+    }
+    if let Some(done) = current.take() {
+        blocks.push(done.join("\n"));
+    }
+    blocks
+}
+
+fn literal_chain(middle: Expr, params: Vec<Param>) -> String {
+    ir(
+        params,
+        add(
+            add(Expr::String("item-".to_string()), middle),
+            Expr::String(";".to_string()),
+        ),
+    )
+}
+
+#[test]
+fn literal_parts_get_no_symbol_check_and_the_value_part_is_tested_inline() {
+    // `"item-" + n + ";"` with a declared-only `n`: ToPrimitive and the Symbol
+    // check each have exactly one site, for the one value part, and each sits
+    // in a block reached only through the inline test of the live bits.
+    let ir = literal_chain(Expr::LocalGet(1), vec![param(1, "n", Type::Number)]);
+    assert!(ir.contains("call i64 @js_string_concat_parts"), "{ir}");
+    assert_eq!(
+        ir.matches("call void @js_add_throw_if_symbol(").count(),
+        1,
+        "only the value part can be a Symbol:\n{ir}"
+    );
+    assert_eq!(
+        ir.matches("call double @js_to_primitive_default_for_add(")
+            .count(),
+        1,
+        "{ir}"
+    );
+    let prim = blocks_named(&ir, "cat.prim.call");
+    let sym = blocks_named(&ir, "cat.sym.call");
+    assert_eq!(prim.len(), 1, "{ir}");
+    assert_eq!(sym.len(), 1, "{ir}");
+    assert!(
+        prim[0].contains("@js_to_primitive_default_for_add("),
+        "{}",
+        prim[0]
+    );
+    assert!(sym[0].contains("@js_add_throw_if_symbol("), "{}", sym[0]);
+    // The test is on the value's own bits: plain number, STRING_TAG, SSO tag.
+    assert!(
+        ir.contains("9223372036854775807"),
+        "plain-number mask missing:\n{ir}"
+    );
+    assert!(
+        ir.contains(", 32767") && ir.contains(", 32761"),
+        "string/SSO tag tests missing:\n{ir}"
+    );
+    // Literals travel as the address of their image-resident text + lengths.
+    assert_eq!(
+        ir.matches(
+            "ptrtoint (ptr getelementptr (i8, ptr getelementptr (i8, ptr @perry_image_literal_"
+        )
+        .count(),
+        2,
+        "both literals are passed as constant data:\n{ir}"
+    );
+    // The literals are still lowered in source position (pool interning order
+    // is unchanged), but nothing consumes their handle loads.
+    for handle in ir.lines().filter(|l| l.contains(".handle")) {
+        let reg = handle.trim().split(" = ").next().unwrap();
+        assert_eq!(
+            ir.matches(reg).count(),
+            1,
+            "a literal's handle load must be unused ({reg}):\n{ir}"
+        );
+    }
+}
+
+#[test]
+fn an_operand_that_cannot_be_a_symbol_carries_no_check_at_all() {
+    // `"a" + n + 5 + "z"`: the integer is non-pointer by construction.
+    let ir = ir(
+        vec![param(1, "n", Type::Number)],
+        add(
+            add(
+                add(Expr::String("a".to_string()), Expr::LocalGet(1)),
+                Expr::Integer(5),
+            ),
+            Expr::String("z".to_string()),
+        ),
+    );
+    assert!(ir.contains("call i64 @js_string_concat_parts"), "{ir}");
+    assert_eq!(
+        ir.matches("call void @js_add_throw_if_symbol(").count(),
+        1,
+        "only `n` needs the check:\n{ir}"
+    );
+}
+
+#[test]
+fn the_symbol_and_conversion_calls_are_never_on_the_straight_line() {
+    // Sabotage guard: an unconditional call (the inline test dropped) puts the
+    // call outside every `cat.*.call` block.
+    let ir = literal_chain(Expr::LocalGet(1), vec![param(1, "n", Type::Any)]);
+    let mut in_call_block = false;
+    for line in ir.lines() {
+        if let Some(label) = line.strip_suffix(':') {
+            if !label.starts_with(char::is_whitespace) {
+                in_call_block =
+                    label.starts_with("cat.prim.call") || label.starts_with("cat.sym.call");
+                continue;
+            }
+        }
+        if line.contains("@js_add_throw_if_symbol(")
+            || line.contains("@js_to_primitive_default_for_add(")
+        {
+            if line.trim_start().starts_with("declare") {
+                continue;
+            }
+            assert!(
+                in_call_block,
+                "call outside its inline-test arm: {line}\n{ir}"
+            );
+        }
+    }
 }

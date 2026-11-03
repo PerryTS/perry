@@ -169,7 +169,7 @@ impl NamedStateKey {
                     Some(None) => return false,
                     None => {
                         let Some(position) = crate::object::keys_find_property_slot_by_bytes(
-                            keys,
+                            shape.keys_view(),
                             shape.logical_key_count,
                             self.bytes,
                         ) else {
@@ -259,7 +259,7 @@ impl NamedStateKey {
                     Some(found) => found?,
                     None => {
                         let position = crate::object::keys_find_property_slot_by_bytes(
-                            keys,
+                            shape.keys_view(),
                             shape.logical_key_count,
                             self.bytes,
                         )?;

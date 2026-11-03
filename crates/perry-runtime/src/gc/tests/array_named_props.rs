@@ -369,7 +369,7 @@ fn test_array_named_holder_is_described_as_a_pointer_width_slot() {
 
     let mut seen = Vec::new();
     unsafe {
-        visit_gc_layout_slot_descriptors(header, &mut |descriptor| {
+        visit_gc_layout_slot_descriptors::<{ cfg!(test) }>(header, &mut |descriptor| {
             descriptor.visit_slots(&mut |slot| {
                 if slot.slot == holder {
                     seen.push(slot.is_pointer_width());

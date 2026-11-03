@@ -6,10 +6,9 @@ extern "C" {
 }
 
 fn marked_error(value: f64) -> worker_error::WorkerErrorMessage {
-    UNCLONEABLE_OBJECTS.with(|set| set.borrow_mut().insert(value.to_bits()));
+    js_worker_threads_mark_as_uncloneable(value);
     assert!(clone::try_clone_message(value, js_undefined()).is_err());
     let result = worker_error_message(value);
-    UNCLONEABLE_OBJECTS.with(|set| set.borrow_mut().remove(&value.to_bits()));
     result
 }
 
@@ -157,6 +156,7 @@ fn worker_error_code_survives_clone_and_diagnostic_fallback() {
             "code",
             string_value("ERR_WORKER_PATH"),
         );
+        let ordinary = clone::try_clone_message(error.get_nanbox_f64(), js_undefined()).unwrap();
         let message = if fallback {
             marked_error(error.get_nanbox_f64())
         } else {
@@ -174,7 +174,6 @@ fn worker_error_code_survives_clone_and_diagnostic_fallback() {
                 Some(expected)
             );
         }
-        let ordinary = clone::try_clone_message(error.get_nanbox_f64(), js_undefined()).unwrap();
         let ordinary = f64::from_bits(unsafe { deserialize_nanbox_on_current_thread(&ordinary) });
         assert!(is_undefined(get_object_field_from_value(ordinary, "code")));
     }

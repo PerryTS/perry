@@ -11,6 +11,7 @@ use super::*;
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_punycode(
     ctx: &NmCtx,
     module_name: &str,
@@ -65,6 +66,7 @@ pub(crate) unsafe fn nm_dispatch_punycode(
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_querystring(
     ctx: &NmCtx,
     module_name: &str,
@@ -122,6 +124,7 @@ pub(crate) unsafe fn nm_dispatch_querystring(
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_readline(
     ctx: &NmCtx,
     module_name: &str,
@@ -182,6 +185,7 @@ pub(crate) unsafe fn nm_dispatch_readline(
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_repl(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -228,6 +232,7 @@ pub(crate) unsafe fn nm_dispatch_repl(ctx: &NmCtx, module_name: &str, method_nam
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_sea(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -277,6 +282,7 @@ pub(crate) unsafe fn nm_dispatch_sea(ctx: &NmCtx, module_name: &str, method_name
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_sqlite(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -332,6 +338,7 @@ pub(crate) unsafe fn nm_dispatch_sqlite(ctx: &NmCtx, module_name: &str, method_n
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_stream(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -373,6 +380,7 @@ pub(crate) unsafe fn nm_dispatch_stream(ctx: &NmCtx, module_name: &str, method_n
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_timers(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -505,6 +513,7 @@ pub(crate) unsafe fn nm_dispatch_timers(ctx: &NmCtx, module_name: &str, method_n
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_tls(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -580,6 +589,7 @@ pub(crate) unsafe fn nm_dispatch_tls(ctx: &NmCtx, module_name: &str, method_name
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_tty(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -624,6 +634,7 @@ pub(crate) unsafe fn nm_dispatch_tty(ctx: &NmCtx, module_name: &str, method_name
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_url(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,

@@ -288,7 +288,7 @@ fn should_compact(now: u64) -> bool {
     // pages, so wait for one instead of re-walking the metadata every park.
     STATE.with(|s| s.borrow_mut().fulls_since_compact = 0);
     PREDICTION_DECLINED.fetch_add(1, Ordering::Relaxed);
-    if gc_diag_enabled() {
+    if diagnostic_hooks::enabled() {
         eprintln!(
             "[gc-idle-compact] declined predicted={predicted} bar={IDLE_COMPACT_PRODUCTIVE_MIN_BYTES} reusable={}",
             inputs.residue
@@ -340,7 +340,7 @@ pub(super) fn maybe_compact(now: u64) -> bool {
 
     let before_occupancy = crate::arena::old_gen_in_use_bytes();
     let before_residue = residue_bytes();
-    if gc_diag_enabled() {
+    if diagnostic_hooks::enabled() {
         eprintln!(
             "[gc-idle-compact] start attempt={} old_in_use={before_occupancy} reusable={before_residue} backoff_shift={}",
             STATE.with(|s| s.borrow().attempts) + 1,
@@ -357,7 +357,7 @@ pub(super) fn maybe_compact(now: u64) -> bool {
         .map(|trace| trace.evacuation.old_page_moved_objects);
     let freed = outcome.emit_after_current();
     let pause_us = start.elapsed().as_micros() as u64;
-    if gc_diag_enabled() {
+    if diagnostic_hooks::enabled() {
         if let Some(moved) = moved_objects {
             eprintln!("[gc-idle-compact] moved_objects={moved}");
         }
@@ -390,7 +390,7 @@ pub(super) fn maybe_compact(now: u64) -> bool {
         st.last_compact_ms = now;
         st.fulls_since_compact = 0;
         st.backoff_shift = next_backoff_shift(st.backoff_shift, productive, kept_promise);
-        if gc_diag_enabled() {
+        if diagnostic_hooks::enabled() {
             eprintln!(
                 "[gc-idle-compact] done old_in_use={before_occupancy}->{after_occupancy} released={released} \
                  predicted={predicted} kept_promise={kept_promise} \

@@ -15,6 +15,8 @@ fn store(object: Expr, name: &str, value: Expr) -> Stmt {
         object: Box::new(object),
         property: name.into(),
         value: Box::new(value),
+        byte_offset: 0,
+        byte_end: 0,
     })
 }
 

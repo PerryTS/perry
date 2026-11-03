@@ -561,6 +561,7 @@ impl WasmModuleEmitter {
                 object,
                 index,
                 value,
+                ..
             } => {
                 self.collect_strings_in_expr(object);
                 self.collect_strings_in_expr(index);

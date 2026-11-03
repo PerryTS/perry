@@ -315,6 +315,8 @@ mod allocation_tests {
             op: BinaryOp::Add,
             prefix: false,
             strict: true,
+            byte_offset: 0,
+            byte_end: 0,
         };
         assert!(may_allocate(&[Stmt::Expr(update)], &[]));
     }

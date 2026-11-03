@@ -329,10 +329,28 @@ pub(super) fn named_import_call_needs_esm_binding(
     {
         return false;
     }
-    ctx.native_modules.iter().any(|(_, module, method)| {
-        module.strip_prefix("node:").unwrap_or(module) == "module"
-            && method.as_deref() == Some("syncBuiltinESMExports")
-    })
+    builtin_sync_reachable(ctx)
+}
+
+pub(super) fn builtin_sync_reachable(ctx: &LoweringContext) -> bool {
+    crate::patched_builtins::namespace_member_patched("node:module", "syncBuiltinESMExports")
+        || ctx.native_modules.iter().any(|(_, module, method)| {
+            module.strip_prefix("node:").unwrap_or(module) == "module"
+                && (method.is_none() || method.as_deref() == Some("syncBuiltinESMExports"))
+        })
+}
+
+pub(super) fn namespace_call_needs_esm_binding(ctx: &LoweringContext, callee: &ast::Expr) -> bool {
+    let ast::Expr::Member(member) = unwrap_ts_wrappers(callee) else {
+        return false;
+    };
+    let ast::Expr::Ident(local) = unwrap_ts_wrappers(&member.obj) else {
+        return false;
+    };
+    let Some((module, None)) = ctx.lookup_native_module(local.sym.as_ref()) else {
+        return false;
+    };
+    is_node_core(module) && module != "module" && builtin_sync_reachable(ctx)
 }
 
 pub(super) fn try_native_module_methods(

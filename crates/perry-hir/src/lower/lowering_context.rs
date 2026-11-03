@@ -291,6 +291,9 @@ pub struct LoweringContext {
     /// For namespace imports (import * as x), method_name is None
     /// For named imports (import { v4 as uuid }), method_name is Some("v4")
     pub(crate) native_modules: Vec<(String, String, Option<String>)>,
+    /// Source binding of object-valued named imports; call dispatch can use a
+    /// submodule alias while value reads must preserve the original export.
+    pub(crate) native_import_value_origins: std::collections::HashMap<String, (String, String)>,
     /// #10623: `const { Key } = require("<resolvable native module>")`
     /// destructured bindings, keyed by the LOCAL binding name -> the
     /// destructured export KEY (identity for the common unaliased case).
@@ -904,11 +907,17 @@ pub struct LoweringContext {
     /// was silent — a plain `const a = { v: 42 }; a.v` read `undefined` merely
     /// because some never-called function elsewhere also named a proxy `a`.
     pub(crate) proxy_local_ids: HashSet<LocalId>,
-    /// #3144: local name -> builtin prototype method name, for bindings like
+    /// #3144: local binding -> builtin prototype method name, for bindings like
     /// `const m = [].map` / `const s = "".slice`. Lets the `.call`/`.apply`
     /// rewrite recognize `m.call(arr, ...)` (the receiver of `.call` is a plain
     /// identifier, not a member/literal) and synthesize `arr.map(...)`.
-    pub(crate) builtin_proto_method_locals: HashMap<String, String>,
+    ///
+    /// Keyed by the resolved `LocalId` (registered by the declarator lowering
+    /// in `track_decl_aliases`, and for module-level bindings at
+    /// pre-registration so earlier-lowered function bodies resolve it too).
+    /// The former name-keyed map was scope-blind and folded unrelated
+    /// same-named parameters' `.call(...)` into a builtin method call.
+    pub(crate) builtin_proto_method_local_ids: HashMap<LocalId, String>,
     /// #809: locals whose initializer is an object literal or
     /// `Object.create(...)` — i.e. provably a plain object, never a Date.
     /// Consulted by `static_receiver_class` so `obj.toJSON()` /
@@ -1235,6 +1244,13 @@ pub struct LoweringContext {
     /// ECMAScript module syntax. Function lowering consults this before
     /// deciding whether its `arguments` object should be mapped.
     pub(crate) module_strict: bool,
+    /// #13558: this module's source has the ES-module goal (ESM format or
+    /// `import`/`export` syntax — `module_strict::module_has_module_goal`).
+    /// Module top-level `this` is `undefined` when this holds, and the CommonJS
+    /// `module.exports` stand-in (`Expr::ModuleTopThis`) otherwise. Kept
+    /// separate from `module_strict` because a `"use strict"` CommonJS file is
+    /// strict yet still has CommonJS top-level `this`.
+    pub(crate) module_goal_is_module: bool,
     /// Stack of strict-mode state for currently lowered function/arrow bodies.
     /// Nested ordinary functions inherit strictness from strict parents, while
     /// a body-level `"use strict"` directive pushes strictness for children.

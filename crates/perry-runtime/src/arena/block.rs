@@ -238,7 +238,10 @@ pub(crate) fn block_pool_put(data: *mut u8, size: usize) -> bool {
     true
 }
 
-fn block_pool_take(size: usize) -> Option<*mut u8> {
+// Inlined into each caller, as when it had a single caller: the dedicated
+// leaf allocator must not take the ordinary refill's inlining from it.
+#[inline(always)]
+pub(super) fn block_pool_take(size: usize) -> Option<*mut u8> {
     let taken = BLOCK_POOL.with(|p| {
         let mut pool = p.borrow_mut();
         let idx = pool.blocks.iter().rposition(|block| block.size == size)?;
@@ -512,6 +515,15 @@ impl ArenaBlock {
         self.object_starts.as_ptr() as *mut u64
     }
 
+    /// May the bump allocator use this block? Never a tombstone, and never a
+    /// dedicated large extent: its one cell owns the block, and a reset or a
+    /// switch that treated it as an ordinary block would rewind its offset or
+    /// pack small cells into its tail.
+    #[inline]
+    pub(crate) fn bump_target(&self) -> bool {
+        !self.data.is_null() && self.extent_kind != super::region::Kind::LargeObject
+    }
+
     /// Reactivate released pages before the block is handed out. Idle discard
     /// never touches the current block, and every block becomes current
     /// before any of its bytes are written, so this is off the bump path.
@@ -611,6 +623,11 @@ pub(crate) struct Arena {
     pub(crate) space: HeapSpace,
     pub(crate) allocated_bytes: usize,
     pub(crate) large_allocated_bytes: usize,
+    /// Bytes in use across this arena's dedicated young leaf extents (exact:
+    /// leaf birth adds, retire/promotion subtracts). Lives in the arena the
+    /// trigger probes already hold, so a program with no leaf pays no extra
+    /// thread-local resolution to learn that.
+    pub(crate) young_large_bytes: usize,
 }
 
 /// The GC kinds whose payload owns native memory released at thread exit.
@@ -735,6 +752,7 @@ impl ArenaCell {
             space,
             allocated_bytes: 0,
             large_allocated_bytes: 0,
+            young_large_bytes: 0,
         }))
     }
 
@@ -1012,7 +1030,10 @@ impl Arena {
         // we'd push a fresh block on the very first overflow even
         // though blocks `current+1..n_blocks` are all empty.
         for i in 0..self.blocks.len() {
-            if i == self.current {
+            // Dedicated large owners are never ordinary bump targets. The
+            // current block is always installed by the ordinary allocator;
+            // only this cold search can encounter a leaf-space block.
+            if i == self.current || self.blocks[i].extent_kind == super::region::Kind::LargeObject {
                 continue;
             }
             if let Some(ptr) = self.try_block_alloc(i, size, align) {
@@ -1051,7 +1072,10 @@ impl Arena {
             return ptr;
         }
         for i in 0..self.blocks.len() {
-            if i == self.current {
+            // Dedicated large owners are never ordinary bump targets. The
+            // current block is always installed by the ordinary allocator;
+            // only this cold search can encounter a leaf-space block.
+            if i == self.current || self.blocks[i].extent_kind == super::region::Kind::LargeObject {
                 continue;
             }
             if let Some(ptr) = self.try_block_alloc_excluding_pages(i, size, align, excluded_pages)

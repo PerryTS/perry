@@ -1,0 +1,10 @@
+import { types, TextEncoder } from "node:util";
+import * as util from "node:util";
+import { isUint8Array } from "node:util/types";
+const t = types;
+const key = "isUint8Array";
+console.log("object", t === util.types, typeof t);
+console.log(t[key](new Uint8Array(2)), t[key]([1, 2]));
+console.log("member", t[key] === isUint8Array);
+console.log("global", TextEncoder === globalThis.TextEncoder);
+console.log(new TextEncoder().encode("abc").length);

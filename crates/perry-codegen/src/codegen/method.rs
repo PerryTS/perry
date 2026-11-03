@@ -43,7 +43,7 @@ struct LoweredFnArtifacts {
     ic_end: u32,
     pending_helpers: Vec<crate::function::LlFunction>,
     pending_declares: Vec<(String, LlvmType, Vec<LlvmType>)>,
-    buffer_alias_used: u32,
+    buffer_alias_scopes: crate::module::BufferAliasScopes,
     native_rep_records: Vec<crate::native_value::NativeRepRecord>,
 }
 
@@ -56,7 +56,7 @@ fn take_lowered_fn_artifacts(ctx: &mut FnCtx<'_>) -> LoweredFnArtifacts {
         ic_end: ctx.ic_site_counter,
         pending_helpers: std::mem::take(&mut ctx.pending_helpers),
         pending_declares: std::mem::take(&mut ctx.pending_declares),
-        buffer_alias_used: ctx.buffer_data_slots.len() as u32,
+        buffer_alias_scopes: std::mem::take(&mut ctx.buffer_alias_scopes),
         native_rep_records: std::mem::take(&mut ctx.native_rep_records),
     }
 }
@@ -66,7 +66,7 @@ fn take_lowered_fn_artifacts(ctx: &mut FnCtx<'_>) -> LoweredFnArtifacts {
 /// already references these names even when constructor setup bails out early.
 fn publish_lowered_fn_artifacts(llmod: &mut LlModule, artifacts: LoweredFnArtifacts) {
     llmod.ic_counter = artifacts.ic_end;
-    llmod.buffer_alias_counter += artifacts.buffer_alias_used;
+    llmod.commit_buffer_alias_scopes(artifacts.buffer_alias_scopes);
     llmod
         .native_rep_records
         .extend(artifacts.native_rep_records);
@@ -300,7 +300,7 @@ pub(super) fn compile_method(
     }
 
     let ic_base = llmod.ic_counter;
-    let buffer_alias_base = llmod.buffer_alias_counter;
+    let buffer_alias_scopes = llmod.buffer_alias_scope_allocator();
     let lowered_function_index = llmod.function_count();
     let lf = llmod.define_function(&llvm_name, DOUBLE, params);
     // Plain `$pshape` clones are producer-published capabilities and need
@@ -578,7 +578,6 @@ pub(super) fn compile_method(
         numeric_order_ready: Default::default(),
         program_has_worker: cross_module.program_has_worker,
         program_has_thread_agents: cross_module.program_has_thread_agents,
-        program_class_accessor_names: cross_module.program_class_accessor_names.clone(),
         func: lf,
         module_slug: crate::expr::native_region_slug(strings.module_prefix()),
         source_function: format!("{}.{}", class.name, method.name),
@@ -587,6 +586,7 @@ pub(super) fn compile_method(
             class.name, method.name
         )),
         active_region_id: None,
+        byte_view_fallback_loop: false,
         native_facts: &native_facts,
         locals,
         local_types,
@@ -616,6 +616,7 @@ pub(super) fn compile_method(
         loop_targets: Vec::new(),
         label_targets: HashMap::new(),
         pending_labels: Vec::new(),
+        region_only_label: None,
         classes,
         class_hierarchy: &cross_module.class_hierarchy,
         wpfacts: cross_module.wpfacts.clone(),
@@ -683,6 +684,7 @@ pub(super) fn compile_method(
         fixed_generator_state: false,
         private_resume_frame: false,
         private_async_resume_frame: false,
+        resume_locals: None,
         versioned_loop_deopt_context: None,
         trusted_box_capture_ptrs: HashMap::new(),
         ready_cell_roots: crate::stmt::binding_cell::ReadyCellRoots::with_entry_cells(
@@ -776,6 +778,7 @@ pub(super) fn compile_method(
         typed_element_locals: std::collections::HashSet::new(),
         create_families: Default::default(),
         class_guard_window: None,
+        map_entry_fusion: Default::default(),
         i1_local_slots: HashMap::new(),
         index_used_locals: native_facts.index_used_locals(),
         strictly_i32_bounded_locals: native_facts.strictly_i32_bounded_locals(),
@@ -884,7 +887,7 @@ pub(super) fn compile_method(
         known_noalias_buffer_locals: native_facts.known_noalias_buffer_locals(),
         sealed_buffer_locals: native_facts.sealed_buffer_locals(),
         late_exposed_buffer_locals: native_facts.late_exposed_buffer_locals(),
-        buffer_alias_base,
+        buffer_alias_scopes,
     };
 
     // Resolve each immutable callback parameter/arity once, before the method
@@ -1700,7 +1703,31 @@ pub(super) fn compile_method(
             method.body.len(),
         ) {
             lowered.pre_statepoint_inline = true;
+            lowered.guarded_preinline = true;
         }
+    }
+    // The primary body of an ordinary method joins the early inliner when the
+    // facts close a call site over it (`closed_targets`) and it fits the same
+    // budget. Clones and wrappers are excluded; async and generator bodies
+    // are state machines.
+    if !is_pshape_clone
+        && !is_index_clone
+        && !arguments_length_clone
+        && !ptr_array_cache_clone
+        && !guarded_undefined_clone
+        && !pshape_arg_clone
+        && !generator_owner
+        && !method.is_async
+        && !method.is_generator
+        && !method.was_plain_async
+    {
+        let lowered = llmod
+            .function_mut(lowered_function_index)
+            .expect("just-lowered method function");
+        lowered.closed_target_preinline = super::helpers::guarded_specialization_admits_preinline(
+            lowered.estimated_ir_bytes(),
+            method.body.len(),
+        );
     }
     publish_lowered_fn_artifacts(llmod, artifacts);
     // The Phase 5a and nonnegative-index clones are purely additive: the
@@ -1763,7 +1790,10 @@ mod tests {
     fn lowered_function_artifacts_are_published_as_one_unit() {
         let mut llmod = LlModule::new(crate::codegen::default_target_triple());
         llmod.ic_counter = 3;
-        llmod.buffer_alias_counter = 7;
+        let mut scopes = llmod.buffer_alias_scope_allocator();
+        let first = scopes.allocate();
+        let second = scopes.allocate();
+        assert_eq!(second, first + 3, "a scope owns three metadata ids");
 
         publish_lowered_fn_artifacts(
             &mut llmod,
@@ -1775,13 +1805,14 @@ mod tests {
                 ic_end: 11,
                 pending_helpers: vec![],
                 pending_declares: vec![("js_issue_9890".to_string(), DOUBLE, vec![I64])],
-                buffer_alias_used: 2,
+                buffer_alias_scopes: scopes,
                 native_rep_records: Vec::new(),
             },
         );
 
         assert_eq!(llmod.ic_counter, 11);
-        assert_eq!(llmod.buffer_alias_counter, 9);
+        assert_eq!(llmod.buffer_alias_scopes(), &[first, second]);
+        assert_eq!(llmod.allocate_metadata_id(), second + 3);
         let ir = llmod.to_ir();
         assert!(ir.contains("@perry_ic_9890 ="), "{ir}");
         assert!(

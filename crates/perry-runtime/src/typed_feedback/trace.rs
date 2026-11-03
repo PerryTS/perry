@@ -18,7 +18,7 @@ fn heap_type_name(heap_type: u16) -> &'static str {
     match heap_type as u8 {
         0 => "unknown",
         crate::gc::GC_TYPE_ARRAY => "array",
-        crate::gc::GC_TYPE_OBJECT => "object",
+        crate::gc_object_type_pat!() => "object",
         crate::gc::GC_TYPE_STRING => "string",
         crate::gc::GC_TYPE_CLOSURE => "closure",
         crate::gc::GC_TYPE_PROMISE => "promise",
@@ -162,7 +162,7 @@ fn observed_kinds_snapshot(observations: &[Observation]) -> Vec<serde_json::Valu
         .iter()
         .map(observed_kind_json)
         .collect::<Vec<serde_json::Value>>();
-    rows.sort_by(|a, b| {
+    crate::cold_sort::sort_by(&mut rows, |a, b| {
         let a = serde_json::to_string(a).unwrap_or_default();
         let b = serde_json::to_string(b).unwrap_or_default();
         a.cmp(&b)
@@ -223,7 +223,7 @@ pub fn typed_feedback_snapshot() -> TypedFeedbackSnapshot {
             })
             .add_site(site);
     }
-    rows.sort_by_key(|row| row.site_id);
+    crate::cold_sort::sort_by_u64_key(&mut rows, |row| row.site_id);
     snapshot.sites = rows;
     snapshot
 }

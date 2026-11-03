@@ -169,6 +169,7 @@ pub(crate) unsafe fn async_generator_record_of_object(
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(super) unsafe fn transitioned_record_bits(obj: *const ObjectHeader) -> Option<u64> {
     if !crate::object::shapes::object_has_brand(obj, ASYNC_GENERATOR_STATE_BRAND) {
@@ -190,7 +191,7 @@ pub(crate) fn async_generator_record(value: f64) -> Option<*const ClosureHeader>
     let addr = value.as_pointer::<u8>() as usize;
     unsafe {
         let header = crate::value::addr_class::try_read_gc_header(addr)?;
-        if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+        if crate::gc_type_is_not_object!(header.obj_type) {
             return None;
         }
         async_generator_record_of_object(addr as *const ObjectHeader)

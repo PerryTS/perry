@@ -33,6 +33,7 @@ pub mod native_profile;
 mod number;
 pub use number::js_number_to_string;
 pub mod patched_builtins;
+pub mod private_names;
 pub mod solid_jsx;
 pub mod source_remap;
 pub mod stable_hash;
@@ -55,8 +56,9 @@ pub use dynamic_import::{
     flatten_exports, for_each_dynamic_import, for_each_dynamic_import_mut, for_each_module_expr,
     for_each_worker_new, for_each_worker_new_mut, module_uses_worker_threads, resolve_import_path,
     resolve_import_path_with_consts, resolve_import_path_with_consts_and_params,
-    resolve_import_path_with_context, resolve_worker_path, worker_url_literals, ExportBindings,
-    FlatExport, Resolution, WorkerUrl, DYNAMIC_IMPORT_PATH_CAP,
+    resolve_import_path_with_context, resolve_worker_eval_source, resolve_worker_path,
+    worker_url_literals, ExportBindings, FlatExport, Resolution, WorkerUrl,
+    DYNAMIC_IMPORT_PATH_CAP,
 };
 pub use egress::{audit_module_egress, EgressRefusalReason, EgressViolation};
 pub use enums::fix_imported_enums;

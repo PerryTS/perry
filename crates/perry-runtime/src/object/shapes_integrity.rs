@@ -151,7 +151,8 @@ unsafe fn transition_owned_integrity(
     {
         return false;
     }
-    let meta = (*obj).meta;
+    // A1_UNPROVEN: record-first: owner layout word (kind-A/B question for S0f).
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     if meta.is_null()
         || (*meta).elements != 0
         || (*meta).flags
@@ -190,7 +191,7 @@ unsafe fn transition_owned_integrity(
         shape_id_exhausted_abort();
     }
     let target = publish_shape_result(shape_descriptor_intern_with_special(
-        from.keys as usize as *const ArrayHeader,
+        from.keys_view(),
         from.logical_key_count,
         from.live_inline_slot_count,
         generation,

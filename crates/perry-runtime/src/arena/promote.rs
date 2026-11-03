@@ -261,7 +261,10 @@ pub(crate) fn young_in_use_bytes_after_retag() -> usize {
     let mut total = 0usize;
     let mut count = |blocks: &[ArenaBlock]| {
         for block in blocks {
-            if block.data.is_null() || block.offset == 0 {
+            if block.data.is_null()
+                || block.offset == 0
+                || block.extent_kind == super::region::Kind::LargeObject
+            {
                 continue;
             }
             if matches!(
@@ -281,7 +284,10 @@ pub(crate) fn young_in_use_bytes_after_retag() -> usize {
 
 fn collect_blocks(blocks: &[ArenaBlock], source: PromotionSource, out: &mut InPlacePromotion) {
     for (index, block) in blocks.iter().enumerate() {
-        if block.data.is_null() || block.offset == 0 {
+        if block.data.is_null()
+            || block.offset == 0
+            || block.extent_kind == super::region::Kind::LargeObject
+        {
             continue;
         }
         out.blocks.push(PromotedBlock {
@@ -479,13 +485,18 @@ fn stamp_and_index_block(block: &ArenaBlock, liveness: PromotionLiveness) -> (us
     let mut run_count = 0usize;
     let mut run_bytes = 0usize;
     let mut run_headers: Vec<usize> = Vec::new();
-    // #10182: record the census facts of an untraced promotion's blocks for the
-    // promoted-cohort full that may follow at this safepoint (`adopt_census`).
-    let mut census = if describe {
-        crate::gc::AdoptableBlockBuilder::begin(block.data as usize, block.offset, block.size)
-    } else {
-        crate::gc::AdoptableBlockBuilder::begin(block.data as usize, 0, block.size)
-    };
+    // Both promotion modes parse every header after its final birth/tenuring
+    // writes. A same-safepoint full may adopt these exact start/type/size facts.
+    // Traced marks are cleared below; adoption refreshes header-dependent
+    // facts at recorded starts, verified independently in tests. Recording
+    // remains armed only for an imminent cohort full, after rollback can occur.
+    let mut census = crate::gc::AdoptableBlockBuilder::begin(
+        block.data as usize,
+        block.offset,
+        block.size,
+        liveness,
+    );
+    let repair = describe && super::young_large::young_large_in_use_bytes() != 0;
     let mut stopped_early = false;
 
     let mut offset = 0usize;
@@ -513,6 +524,9 @@ fn stamp_and_index_block(block: &ArenaBlock, liveness: PromotionLiveness) -> (us
         unsafe {
             crate::gc::stamp_header_promoted_in_place(header);
             census.note(header, aligned);
+            if repair {
+                crate::gc::repair_promoted_leaf_edges(header);
+            }
         }
         objects += 1;
 
@@ -606,20 +620,25 @@ fn reset_young_after_promotion() {
         // from-space reset ages them, so a promoting minor leaves the same
         // Eden as a recycling one. The count it sets must survive the loop.
         super::reset::release_idle_eden_blocks(arena);
+        // An untraced promotion leaves the young large extents young: each
+        // keeps its one cell, offset and start bits for the next traced cycle.
         for block in arena.blocks.iter_mut() {
+            if block.extent_kind == super::region::Kind::LargeObject {
+                continue;
+            }
             block.clear_object_starts();
             block.offset = 0;
         }
         // `install_fresh_block` allocates through the NO-GC path
         // (`alloc_block_no_gc`) — the collecting `reserve_arena_block` would
         // start a second collection from inside this one.
-        if arena.blocks.iter().all(|block| block.data.is_null()) {
+        if !arena.blocks.iter().any(ArenaBlock::bump_target) {
             arena.install_fresh_block(BLOCK_SIZE);
         }
         let first_live = arena
             .blocks
             .iter()
-            .position(|block| !block.data.is_null())
+            .position(ArenaBlock::bump_target)
             .unwrap_or(0);
         arena.set_current(first_live);
         INLINE_STATE.with(|s| {

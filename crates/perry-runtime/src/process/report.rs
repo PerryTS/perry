@@ -113,7 +113,7 @@ pub(crate) fn process_report_value() -> f64 {
 }
 
 fn process_report_controller_object() -> f64 {
-    crate::object::runtime_layouts::runtime_record!(obj, RECORD_Q459_0);
+    crate::realm_decl! { record obj, RECORD_Q459_0; realm { process.report, kind = namespace, members = { compact = false, attrs = writable | enumerable | configurable; directory = "", attrs = writable | enumerable | configurable; excludeEnv = false, attrs = writable | enumerable | configurable; excludeNetwork = false, attrs = writable | enumerable | configurable; filename = "", attrs = writable | enumerable | configurable; getReport, attrs = writable | enumerable | configurable; reportOnFatalError = false, attrs = writable | enumerable | configurable; reportOnSignal = false, attrs = writable | enumerable | configurable; reportOnUncaughtException = false, attrs = writable | enumerable | configurable; signal = "SIGUSR2", attrs = writable | enumerable | configurable; writeReport, attrs = writable | enumerable | configurable; }; } };
     obj.set(0, JSValue::from_bits((bool_value(false)).to_bits()));
     obj.set(1, JSValue::from_bits((module_string_value("")).to_bits()));
     obj.set(2, JSValue::from_bits((bool_value(false)).to_bits()));
@@ -121,7 +121,7 @@ fn process_report_controller_object() -> f64 {
     obj.set(4, JSValue::from_bits((module_string_value("")).to_bits()));
     obj.set( 5, JSValue::from_bits((module_function1(
             "getReport",
-            crate::fn_info!(process_report_function_get_report, 1; with_declared(1), with_length(1)),
+            crate::fn_info!(#[realm(process.report.getReport, constructible = true)] export crate::process::report::process_report_function_get_report, 1; with_declared(1), with_length(1)),
             1,
         )).to_bits()));
     obj.set(6, JSValue::from_bits((bool_value(false)).to_bits()));
@@ -133,7 +133,7 @@ fn process_report_controller_object() -> f64 {
     );
     obj.set( 10, JSValue::from_bits((module_function2(
             "writeReport",
-            crate::fn_info!(process_report_function_write_report, 2; with_declared(2), with_length(2)),
+            crate::fn_info!(#[realm(process.report.writeReport, constructible = true)] export crate::process::report::process_report_function_write_report, 2; with_declared(2), with_length(2)),
             2,
         )).to_bits()));
     module_object_value(obj.finish())
@@ -169,7 +169,7 @@ fn process_report_object(trigger: &str, filename: Option<&str>) -> f64 {
         JSValue::from_bits(
             (module_object_value(unsafe {
                 crate::object::runtime_layouts::perry_build_runtime_record(
-                    std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_PCHECKED031),
+                    crate::object::runtime_layouts::RECORD_PCHECKED031::desc(),
                     std::ptr::NonNull::<f64>::dangling().as_ptr(),
                 )
             }))
@@ -272,7 +272,7 @@ fn process_report_javascript_stack_object() -> f64 {
         JSValue::from_bits(
             (module_object_value(unsafe {
                 crate::object::runtime_layouts::perry_build_runtime_record(
-                    std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_PCHECKED031),
+                    crate::object::runtime_layouts::RECORD_PCHECKED031::desc(),
                     std::ptr::NonNull::<f64>::dangling().as_ptr(),
                 )
             }))
@@ -303,7 +303,7 @@ fn process_report_javascript_heap_object() -> f64 {
         JSValue::from_bits(
             (module_object_value(unsafe {
                 crate::object::runtime_layouts::perry_build_runtime_record(
-                    std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_PCHECKED031),
+                    crate::object::runtime_layouts::RECORD_PCHECKED031::desc(),
                     std::ptr::NonNull::<f64>::dangling().as_ptr(),
                 )
             }))
@@ -326,7 +326,7 @@ fn process_report_resource_usage_object() -> f64 {
         JSValue::from_bits(
             (module_object_value(unsafe {
                 crate::object::runtime_layouts::perry_build_runtime_record(
-                    std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_PCHECKED031),
+                    crate::object::runtime_layouts::RECORD_PCHECKED031::desc(),
                     std::ptr::NonNull::<f64>::dangling().as_ptr(),
                 )
             }))
@@ -508,5 +508,3 @@ pub(crate) use super::metadata_values::{
     process_allowed_flags_value, process_config_value, process_features_value,
     process_release_value,
 };
-
-crate::realm_decl!("report.realm.json#*");

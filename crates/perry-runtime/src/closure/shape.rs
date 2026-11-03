@@ -27,88 +27,25 @@ use crate::codegen_abi::LayoutWord;
 use crate::codegen_abi::ShapeId;
 use crate::object::shapes::{self, ShapeObjectKind};
 
-/// Intrinsic-prototype serials (`ObjectMeta.proto_serial`) assigned at
-/// creation, so a base shape can name its prototype before the prototype
-/// object exists. Dynamic serials start above
-/// [`crate::object::proto_validity::FIRST_DYNAMIC_PROTOTYPE_SERIAL`].
-pub(crate) const INTRINSIC_SERIAL_FUNCTION: u64 = 1;
-pub(crate) const INTRINSIC_SERIAL_ASYNC_FUNCTION: u64 = 2;
-pub(crate) const INTRINSIC_SERIAL_GENERATOR_FUNCTION: u64 = 3;
-pub(crate) const INTRINSIC_SERIAL_ASYNC_GENERATOR_FUNCTION: u64 = 4;
-/// Not a prototype: the marker `proto_id` of the class-constructor ShapeId
-/// ([`function_class_shape`]). Shapes are canonical per facts, so without a
-/// fact of its own the class shape would BE the FunctionDictionary id. No
-/// object is ever assigned this serial; a class constructor's real
-/// [[Prototype]] lives on the object (dictionary kind: "ask the object").
-pub(crate) const INTRINSIC_SERIAL_CLASS_CONSTRUCTOR_MARKER: u64 = 5;
-/// Runtime prototypes that runtime layout descriptors name
-/// (`runtime_layouts::*_PROTO_FAMILY`).
-pub(crate) const INTRINSIC_SERIAL_URL: u64 = 6;
-pub(crate) const INTRINSIC_SERIAL_READABLE_STATE: u64 = 7;
-pub(crate) const INTRINSIC_SERIAL_WRITABLE_STATE: u64 = 8;
-pub(crate) const INTRINSIC_SERIAL_TIMEOUT: u64 = 9;
-pub(crate) const INTRINSIC_SERIAL_IMMEDIATE: u64 = 10;
-/// `%Array.prototype%`'s named-property holder (`ArrayHeader.named`, born on
-/// `runtime_layouts::ARRAY_PROTOTYPE_NAMED`): its identity word is how an
-/// array read reaches it.
-pub(crate) const INTRINSIC_SERIAL_ARRAY_PROTOTYPE: u64 = 11;
-/// `%URLSearchParams.prototype%`, which `runtime_layouts::URL_SEARCH_PARAMS`
-/// names through its prototype family.
-pub(crate) const INTRINSIC_SERIAL_URL_SEARCH_PARAMS: u64 = 12;
-/// The prototypes of node:events, node:stream and node:http, born on their
-/// static layouts (`runtime_layouts::node_prototypes`): each layout names its
-/// [[Prototype]] through the parent's identity word.
-pub(crate) const INTRINSIC_SERIAL_EVENT_EMITTER_PROTOTYPE: u64 = 13;
-pub(crate) const INTRINSIC_SERIAL_STREAM_PROTOTYPE: u64 = 14;
-pub(crate) const INTRINSIC_SERIAL_READABLE_PROTOTYPE: u64 = 15;
-pub(crate) const INTRINSIC_SERIAL_WRITABLE_PROTOTYPE: u64 = 16;
-pub(crate) const INTRINSIC_SERIAL_DUPLEX_PROTOTYPE: u64 = 17;
-pub(crate) const INTRINSIC_SERIAL_TRANSFORM_PROTOTYPE: u64 = 18;
-pub(crate) const INTRINSIC_SERIAL_OUTGOING_MESSAGE_PROTOTYPE: u64 = 19;
-pub(crate) const INTRINSIC_SERIAL_SERVER_RESPONSE_PROTOTYPE: u64 = 20;
-pub(crate) const INTRINSIC_SERIAL_INCOMING_MESSAGE_PROTOTYPE: u64 = 21;
-pub(crate) const INTRINSIC_SERIAL_PASSTHROUGH_PROTOTYPE: u64 = 22;
-/// The sealed own-property bags of native constructors (not the closures).
-pub(crate) const INTRINSIC_SERIAL_NATIVE_CTOR_EVENT_EMITTER: u64 = 23;
-pub(crate) const INTRINSIC_SERIAL_NATIVE_CTOR_STREAM: u64 = 24;
-pub(crate) const INTRINSIC_SERIAL_NATIVE_CTOR_READABLE: u64 = 25;
-pub(crate) const INTRINSIC_SERIAL_NATIVE_CTOR_WRITABLE: u64 = 26;
-pub(crate) const INTRINSIC_SERIAL_NATIVE_CTOR_DUPLEX: u64 = 27;
-pub(crate) const INTRINSIC_SERIAL_NATIVE_CTOR_TRANSFORM: u64 = 28;
-pub(crate) const INTRINSIC_SERIAL_NATIVE_CTOR_PASSTHROUGH: u64 = 29;
-pub(crate) const INTRINSIC_SERIAL_NATIVE_CTOR_OUTGOING_MESSAGE: u64 = 30;
-pub(crate) const INTRINSIC_SERIAL_NATIVE_CTOR_SERVER_RESPONSE: u64 = 31;
-pub(crate) const INTRINSIC_SERIAL_NATIVE_CTOR_INCOMING_MESSAGE: u64 = 32;
-const _: () = assert!(
-    INTRINSIC_SERIAL_NATIVE_CTOR_INCOMING_MESSAGE
-        < crate::object::proto_validity::FIRST_DYNAMIC_PROTOTYPE_SERIAL
-);
+pub(crate) use perry_abi::intrinsic_serials::{
+    INTRINSIC_SERIAL_ARRAY_PROTOTYPE, INTRINSIC_SERIAL_ASYNC_FUNCTION,
+    INTRINSIC_SERIAL_ASYNC_GENERATOR_FUNCTION, INTRINSIC_SERIAL_CLASS_CONSTRUCTOR_MARKER,
+    INTRINSIC_SERIAL_DUPLEX_PROTOTYPE, INTRINSIC_SERIAL_EVENT_EMITTER_PROTOTYPE,
+    INTRINSIC_SERIAL_FUNCTION, INTRINSIC_SERIAL_GENERATOR_FUNCTION, INTRINSIC_SERIAL_IMMEDIATE,
+    INTRINSIC_SERIAL_INCOMING_MESSAGE_PROTOTYPE, INTRINSIC_SERIAL_NATIVE_CTOR_DUPLEX,
+    INTRINSIC_SERIAL_NATIVE_CTOR_EVENT_EMITTER, INTRINSIC_SERIAL_NATIVE_CTOR_INCOMING_MESSAGE,
+    INTRINSIC_SERIAL_NATIVE_CTOR_OUTGOING_MESSAGE, INTRINSIC_SERIAL_NATIVE_CTOR_PASSTHROUGH,
+    INTRINSIC_SERIAL_NATIVE_CTOR_READABLE, INTRINSIC_SERIAL_NATIVE_CTOR_SERVER_RESPONSE,
+    INTRINSIC_SERIAL_NATIVE_CTOR_STREAM, INTRINSIC_SERIAL_NATIVE_CTOR_TRANSFORM,
+    INTRINSIC_SERIAL_NATIVE_CTOR_WRITABLE, INTRINSIC_SERIAL_OUTGOING_MESSAGE_PROTOTYPE,
+    INTRINSIC_SERIAL_PASSTHROUGH_PROTOTYPE, INTRINSIC_SERIAL_READABLE_PROTOTYPE,
+    INTRINSIC_SERIAL_READABLE_STATE, INTRINSIC_SERIAL_SERVER_RESPONSE_PROTOTYPE,
+    INTRINSIC_SERIAL_STREAM_PROTOTYPE, INTRINSIC_SERIAL_TIMEOUT,
+    INTRINSIC_SERIAL_TRANSFORM_PROTOTYPE, INTRINSIC_SERIAL_URL, INTRINSIC_SERIAL_URL_SEARCH_PARAMS,
+    INTRINSIC_SERIAL_WRITABLE_PROTOTYPE, INTRINSIC_SERIAL_WRITABLE_STATE,
+};
 
-/// Which intrinsic prototype a function BODY's closures inherit from.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(u8)]
-pub(crate) enum FunctionProtoKind {
-    Function = 0,
-    AsyncFunction = 1,
-    Generator = 2,
-    AsyncGenerator = 3,
-}
-
-impl FunctionProtoKind {
-    /// The body kind `info` records — the same bits
-    /// `generator_function_proto_of` answers [[GetPrototypeOf]] from.
-    pub(crate) fn of_body(info: &super::JsFunctionInfo) -> FunctionProtoKind {
-        if info.flags & super::FN_ASYNC_GENERATOR != 0 {
-            FunctionProtoKind::AsyncGenerator
-        } else if info.flags & super::FN_GENERATOR != 0 {
-            FunctionProtoKind::Generator
-        } else if info.flags & super::FN_ASYNC != 0 {
-            FunctionProtoKind::AsyncFunction
-        } else {
-            FunctionProtoKind::Function
-        }
-    }
-}
+pub(crate) use perry_abi::FunctionProtoKind;
 
 crate::perry_thread_local! {
     static FUNCTION_PROTOTYPE_SLOT: std::sync::atomic::AtomicI64 =
@@ -155,7 +92,7 @@ pub(crate) fn scan_function_prototype_roots_mut(visitor: &mut crate::gc::Runtime
 /// a default (writable, enumerable, configurable) data property, and a
 /// FunctionDictionary shape may describe accessors too. Reporting them keeps
 /// every summary-first reader from treating a function as all-default.
-fn function_shape_summary(kind: ShapeObjectKind) -> u8 {
+pub(crate) fn function_shape_summary(kind: ShapeObjectKind) -> u8 {
     use crate::object::key_attrs::{
         SUMMARY_ACCESSOR, SUMMARY_NON_CONFIGURABLE, SUMMARY_NON_ENUMERABLE, SUMMARY_NON_WRITABLE,
     };
@@ -255,7 +192,7 @@ pub(crate) fn birth_shape_for_body(info: *const super::JsFunctionInfo) -> Layout
     }
     // SAFETY: a non-null info is a static one (the allocation entries' contract).
     let kind = match unsafe { info.as_ref() } {
-        Some(info) => FunctionProtoKind::of_body(info),
+        Some(info) => FunctionProtoKind::of_flags(info.flags),
         // A function object with no body: every call through it is refused
         // (`get_valid_info` answers null), and it has the plain Function shape.
         None => FunctionProtoKind::Function,
@@ -265,7 +202,8 @@ pub(crate) fn birth_shape_for_body(info: *const super::JsFunctionInfo) -> Layout
 
 /// Is `closure` on a DESCRIBED Function shape (base or keyed, any body
 /// kind) — i.e. not FunctionDictionary? Such a closure has no accessor, no
-/// symbol key, no delete marker and no recorded prototype.
+/// symbol key and no delete marker, and its shape names its [[Prototype]]
+/// (its body kind's intrinsic, or a link: [`closure_on_base_identity`]).
 ///
 /// # Safety
 /// `closure` is a proven, live closure cell.
@@ -287,11 +225,23 @@ pub(crate) unsafe fn closure_on_base_shape(closure: *const ClosureHeader) -> boo
     id != function_dictionary_shape() && !is_class_info((*closure).info)
 }
 
+/// Is `closure` on a described Function shape that names its body kind's
+/// intrinsic [[Prototype]] (no link moved it)?
+///
+/// # Safety
+/// `closure` is a proven, live closure cell.
+#[inline]
+pub(crate) unsafe fn closure_on_base_identity(closure: *const ClosureHeader) -> bool {
+    closure_on_base_shape(closure)
+        && shapes::shape_proto_id((*closure).shape_id) == Some(base_identity(closure))
+}
+
 /// Is `closure` on a described Function shape of a plain function body: its
 /// own properties are its bag plus the synthesized intrinsic ones, and its
-/// [[Prototype]] is `%Function.prototype%`? Not FunctionDictionary, a class
-/// constructor, a bound function or method (whose reads have their own
-/// dispatch), or an async or generator body (another intrinsic prototype).
+/// [[Prototype]] is its shape's identity (`%Function.prototype%` until a
+/// link)? Not FunctionDictionary, a class constructor, a bound function or
+/// method (whose reads have their own dispatch), or an async or generator
+/// body (another intrinsic prototype).
 ///
 /// # Safety
 /// `closure` is a proven, live closure cell.
@@ -324,6 +274,13 @@ pub(crate) unsafe fn closure_become_dictionary(closure: *mut ClosureHeader) {
     let id = (*closure).shape_id;
     // A class function object keeps its (sticky, dictionary-kind) class shape.
     if id != dict && !is_class_info((*closure).info) {
+        // FunctionDictionary answers nothing about the function's
+        // [[Prototype]] ("ask the object"): a link its described shape named
+        // moves into the function's own record, as an ordinary dictionary
+        // receiver's lives in its own record.
+        if let Some(bits) = described_link_bits(closure) {
+            super::props::state_set_prototype(closure as usize, bits);
+        }
         // GC_STORE_AUDIT(POINTER_FREE): a ShapeId, never a heap reference.
         (*closure).shape_id = dict;
     }
@@ -344,74 +301,214 @@ pub(crate) unsafe fn closure_become_dictionary(closure: *mut ClosureHeader) {
 pub(crate) fn refresh_closure_shape(ptr: usize) {
     unsafe {
         let closure = ptr as *mut ClosureHeader;
-        let dict = function_dictionary_shape();
-        if (*closure).shape_id == dict || is_class_info((*closure).info) {
+        if (*closure).shape_id == function_dictionary_shape() || is_class_info((*closure).info) {
             return;
         }
-        if super::props::has_state(ptr) {
-            closure_become_dictionary(closure);
-            return;
-        }
-        let base = birth_shape_for_body((*closure).info);
-        let bag = super::props::bag_of(ptr);
-        let next = if bag.is_null() {
-            base
-        } else {
-            match shapes::object_shape_descriptor(bag) {
-                Some(d)
-                    if d.object_kind.is_ordinary_layout()
-                        && d.hole_count == 0
-                        && d.semantic_generation == 0 =>
-                {
-                    if d.logical_key_count == 0 {
-                        base
-                    } else {
-                        let proto_id =
-                            shapes::shape_proto_id(base).unwrap_or(INTRINSIC_SERIAL_FUNCTION);
-                        let base_kind = shapes::shape_object_kind_for_word(base).unwrap();
-                        // The keyed id is canonical in exactly these inputs:
-                        // when the closure already carries the id they name
-                        // (a value store, an attribute edit that changed
-                        // nothing), there is nothing to mint.
-                        let current = (*closure).shape_id;
-                        if current != base
-                            && shapes::shape_descriptor_of_receiver((current).0).is_some_and(|f| {
-                                f.object_kind == base_kind
-                                    && f.keys == d.keys
-                                    && f.logical_key_count == d.logical_key_count
-                                    && f.live_inline_slot_count == d.live_inline_slot_count
-                                    && f.semantic_generation == 0
-                                    && f.proto_id == proto_id
-                                    && f.brands() == d.brands()
-                            })
-                        {
-                            return;
-                        }
-                        let id = shapes::publish_shape_result(
-                            shapes::shape_descriptor_ensure_with_generation(
-                                d.keys as usize as *const crate::array::ArrayHeader,
-                                d.logical_key_count,
-                                d.live_inline_slot_count,
-                                0,
-                                base_kind,
-                                proto_id,
-                                // The bag's brands are the closure's (#11791).
-                                shapes::ReceiverFacts::of_descriptor(
-                                    &d,
-                                    function_shape_summary(ShapeObjectKind::Function),
-                                ),
-                            ),
-                        );
-                        shapes::note_external_carrier_of_word((id).0);
-                        id
-                    }
-                }
-                _ => dict,
-            }
-        };
-        // GC_STORE_AUDIT(POINTER_FREE): a ShapeId, never a heap reference.
-        (*closure).shape_id = next;
+        // The link is carried: a described shape names the function's
+        // [[Prototype]] identity (its body kind's intrinsic until a link).
+        refresh_closure_shape_as(ptr, None);
     }
+}
+
+/// The [[Prototype]] identity of the base shape `closure` is born on: its
+/// body kind's intrinsic (`%Function.prototype%`, ...), by reserved serial.
+///
+/// # Safety
+/// `closure` is a proven, live closure cell.
+#[inline]
+pub(crate) unsafe fn base_identity(closure: *const ClosureHeader) -> u64 {
+    base_identity_of(birth_shape_for_body((*closure).info))
+}
+
+/// [`base_identity`] of the base shape `base`: the four body-kind words
+/// (`function_base_shape`) name the reserved serials in kind order, with no
+/// record read; a bound body's word answers from its record.
+#[inline]
+fn base_identity_of(base: LayoutWord) -> u64 {
+    let kind = base
+        .0
+        .wrapping_sub(function_base_shape(FunctionProtoKind::Function).0);
+    let id = if kind <= FunctionProtoKind::AsyncGenerator as u32 {
+        INTRINSIC_SERIAL_FUNCTION + kind as u64
+    } else {
+        shapes::shape_proto_id(base).unwrap_or(INTRINSIC_SERIAL_FUNCTION)
+    };
+    debug_assert_eq!(Some(id), shapes::shape_proto_id(base).or(Some(id)));
+    id
+}
+
+/// The linked [[Prototype]] bits a DESCRIBED (non-dictionary, non-class)
+/// function's shape names, when a link moved it off its base identity:
+/// `TAG_NULL`, or the identity's prototype word. `None` on its base identity
+/// (nothing linked), for a dictionary or class shape, or an identity with no
+/// word.
+///
+/// # Safety
+/// `closure` is a proven, live closure cell.
+pub(crate) unsafe fn described_link_bits(closure: *const ClosureHeader) -> Option<u64> {
+    let id = (*closure).shape_id;
+    if id == function_dictionary_shape() || is_class_info((*closure).info) {
+        return None;
+    }
+    // The base shape names the base identity: one compare, no record read.
+    let base = birth_shape_for_body((*closure).info);
+    if id == base {
+        return None;
+    }
+    let pid = shapes::shape_proto_id(id)?;
+    if pid == base_identity_of(base) {
+        return None;
+    }
+    if pid == shapes::PROTO_ID_NULL {
+        return Some(crate::value::TAG_NULL);
+    }
+    let word = shapes::identity_prototype_word(pid);
+    (word != 0).then_some(word)
+}
+
+/// Link a DESCRIBED function to `proto_bits` (`Object.setPrototypeOf(fn, p)`,
+/// a pointer or null) on its shape: the prototype gets its stable serial, as
+/// the ordinary link funnel gives it, and the function moves to the Function
+/// shape of its own keys with that identity. False, with nothing done, when
+/// the function must keep the link in its own record instead: a dictionary
+/// or class shape, internal state, or a prototype with no stable identity.
+///
+/// # Safety
+/// `ptr` is a proven, live closure cell; `proto_bits` is a pointer or
+/// `TAG_NULL`.
+pub(crate) unsafe fn closure_link_on_shape(ptr: usize, proto_bits: u64) -> bool {
+    let closure = ptr as *mut ClosureHeader;
+    if (*closure).shape_id == function_dictionary_shape()
+        || is_class_info((*closure).info)
+        || super::props::has_state(ptr)
+    {
+        return false;
+    }
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let value = crate::value::JSValue::from_bits(proto_bits);
+    if value.is_pointer() {
+        let addr = value.as_pointer::<u8>() as usize;
+        if crate::object::proto_validity::mark_object_as_prototype(addr).is_none() {
+            return false;
+        }
+    } else if proto_bits != crate::value::TAG_NULL {
+        return false;
+    }
+    let Some(proto_id) = shapes::stable_function_link_identity(proto_bits) else {
+        return false;
+    };
+    shapes::write_identity_word(proto_id, proto_bits);
+    crate::object::builtin_proto::note_write((*closure).props, "function own state");
+    refresh_closure_shape_as(ptr, Some(proto_id));
+    true
+}
+
+/// [`refresh_closure_shape`] naming `link` as the function's [[Prototype]]
+/// identity, or (`None`) carrying the identity its current shape names: its
+/// body kind's intrinsic on the base shape, else the current descriptor's,
+/// read once with the canonical check below.
+///
+/// # Safety
+/// `ptr` is a proven, live, described closure cell.
+unsafe fn refresh_closure_shape_as(ptr: usize, link: Option<u64>) {
+    let closure = ptr as *mut ClosureHeader;
+    if super::props::has_state(ptr) {
+        closure_become_dictionary(closure);
+        return;
+    }
+    let base = birth_shape_for_body((*closure).info);
+    let current = (*closure).shape_id;
+    let current_desc = if current != base {
+        shapes::shape_descriptor_of_receiver(current.0)
+    } else {
+        None
+    };
+    let proto_id = link.unwrap_or_else(|| {
+        current_desc
+            .as_ref()
+            .map_or_else(|| base_identity_of(base), |f| f.proto_id)
+    });
+    let base_kind = || shapes::shape_object_kind_for_word(base).unwrap();
+    let mint =
+        |keys: crate::object::ObjectKeys, logical: u32, live: u32, facts: shapes::ReceiverFacts| {
+            let id = shapes::publish_shape_result(shapes::shape_descriptor_ensure_with_generation(
+                keys,
+                logical,
+                live,
+                0,
+                base_kind(),
+                proto_id,
+                facts,
+            ));
+            shapes::note_external_carrier_of_word(id.0);
+            id
+        };
+    // No own key beyond the intrinsic ones: the base shape on the base
+    // identity, else the keyless shape naming the link.
+    let keyless = || -> LayoutWord {
+        if base_identity_of(base) == proto_id {
+            return base;
+        }
+        if current_desc.as_ref().is_some_and(|f| {
+            f.keys == 0
+                && f.semantic_generation == 0
+                && f.proto_id == proto_id
+                && f.object_kind == base_kind()
+        }) {
+            return current;
+        }
+        mint(
+            crate::object::ObjectKeys::NONE,
+            0,
+            0,
+            shapes::ReceiverFacts::summary(function_shape_summary(ShapeObjectKind::Function)),
+        )
+    };
+    let bag = super::props::bag_of(ptr);
+    let next = if bag.is_null() {
+        keyless()
+    } else {
+        match shapes::object_shape_descriptor(bag) {
+            Some(d)
+                if d.object_kind.is_ordinary_layout()
+                    && d.hole_count == 0
+                    && d.semantic_generation == 0 =>
+            {
+                if d.logical_key_count == 0 {
+                    keyless()
+                } else {
+                    // The keyed id is canonical in exactly these inputs:
+                    // when the closure already carries the id they name
+                    // (a value store, an attribute edit that changed
+                    // nothing), there is nothing to mint.
+                    if current_desc.as_ref().is_some_and(|f| {
+                        f.keys == d.keys
+                            && f.logical_key_count == d.logical_key_count
+                            && f.live_inline_slot_count == d.live_inline_slot_count
+                            && f.semantic_generation == 0
+                            && f.proto_id == proto_id
+                            && f.brands() == d.brands()
+                            && f.object_kind == base_kind()
+                    }) {
+                        return;
+                    }
+                    mint(
+                        d.keys_view(),
+                        d.logical_key_count,
+                        d.live_inline_slot_count,
+                        // The bag's brands are the closure's (#11791).
+                        shapes::ReceiverFacts::of_descriptor(
+                            &d,
+                            function_shape_summary(ShapeObjectKind::Function),
+                        ),
+                    )
+                }
+            }
+            _ => function_dictionary_shape(),
+        }
+    };
+    // GC_STORE_AUDIT(POINTER_FREE): a ShapeId, never a heap reference.
+    (*closure).shape_id = next;
 }
 
 /// Does the Function ShapeId `id` describe a receiver that inherits `key`
@@ -556,7 +653,7 @@ fn keyed_shape_key_list_lacks(id: LayoutWord, key: &[u8]) -> bool {
     // SAFETY: a live slab record's keys array.
     unsafe {
         crate::object::keys_find_slot_by_bytes_resolved(
-            descriptor.keys as usize as *const crate::array::ArrayHeader,
+            descriptor.keys_view(),
             descriptor.logical_key_count,
             key,
         )
@@ -606,8 +703,8 @@ pub(crate) unsafe fn closure_own_prototype_by_shape(
         index => {
             let bag = (*closure).props;
             debug_assert!(!bag.is_null(), "a keyed Function shape has a bag");
-            let fields = (bag as *const u8).add(std::mem::size_of::<crate::object::ObjectHeader>())
-                as *const u64;
+            let fields =
+                crate::meta_slots_of!(crate::meta_obj_runtime_born!(bag as *mut _)) as *const u64;
             Some(Some(f64::from_bits(*fields.add(index as usize))))
         }
     }
@@ -643,7 +740,7 @@ unsafe fn prototype_slot_of_shape(closure: *const ClosureHeader, id: LayoutWord)
     }
     let keys = descriptor.keys as usize as *const crate::array::ArrayHeader;
     match crate::object::keys_find_slot_by_bytes_resolved(
-        keys,
+        descriptor.keys_view(),
         descriptor.logical_key_count,
         b"prototype",
     ) {
@@ -882,16 +979,21 @@ mod tests {
     }
 
     #[test]
-    fn a_recorded_prototype_a_delete_and_an_accessor_each_leave_the_base_shape() {
+    fn a_link_names_its_identity_and_a_delete_and_an_accessor_leave_the_base_shape() {
         let _lock = crate::gc::global_side_table_test_lock();
         let _t = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
         let a = fresh(&PLAIN_BODY);
         let proto = crate::object::js_object_alloc(0, 0);
-        closure_set_static_prototype(
-            a as usize,
-            crate::value::js_nanbox_pointer(proto as i64).to_bits(),
+        let bits = crate::value::js_nanbox_pointer(proto as i64).to_bits();
+        closure_set_static_prototype(a as usize, bits);
+        // The link stays a shape fact: a described Function shape whose
+        // identity names it, off the base identity.
+        assert_eq!(kind_of(a), Some(ShapeObjectKind::Function));
+        assert!(!unsafe { closure_on_base_identity(a) });
+        assert_eq!(
+            crate::closure::closure_static_prototype(a as usize),
+            Some(bits)
         );
-        assert_eq!(kind_of(a), Some(ShapeObjectKind::FunctionDictionary));
 
         let b = fresh(&PLAIN_BODY);
         crate::closure::closure_mark_key_deleted(b as usize, "length");

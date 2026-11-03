@@ -28,11 +28,11 @@ impl Kind {
     pub(crate) fn layout(self) -> *const crate::object::layout_desc::PerryLayoutDesc {
         use crate::object::runtime_layouts as rl;
         match self {
-            Self::Readable => &raw const rl::READABLE,
-            Self::Writable => &raw const rl::WRITABLE,
-            Self::Duplex => &raw const rl::DUPLEX,
-            Self::Transform => &raw const rl::TRANSFORM,
-            Self::PassThrough => &raw const rl::PASSTHROUGH,
+            Self::Readable => rl::READABLE::desc(),
+            Self::Writable => rl::WRITABLE::desc(),
+            Self::Duplex => rl::DUPLEX::desc(),
+            Self::Transform => rl::TRANSFORM::desc(),
+            Self::PassThrough => rl::PASSTHROUGH::desc(),
         }
     }
 }
@@ -145,9 +145,8 @@ impl BirthWriteSite {
             (proof, crate::object::shapes::shape_record_for_word(to))
         {
             if let Some(slot) = unsafe {
-                let keys = record.keys() as *mut crate::array::ArrayHeader;
                 crate::object::keys_find_property_slot_by_bytes(
-                    keys,
+                    record.keys_view(),
                     record.logical_key_count(),
                     key.bytes,
                 )
@@ -199,9 +198,9 @@ pub(super) fn walk_shapes(mut bits: u64, key: Option<&[u8]>) -> Option<([LayoutW
         depth += 1;
         let keys = record.keys_view();
         if let Some(key) = key {
-            if let Some(slot) = unsafe {
-                crate::object::keys_find_slot_by_bytes_resolved(keys.arr(), keys.count(), key)
-            } {
+            if let Some(slot) =
+                unsafe { crate::object::keys_find_slot_by_bytes_resolved(keys, keys.count(), key) }
+            {
                 let entry = unsafe { crate::object::key_attrs::keys_entry(keys.arr(), slot) };
                 if !crate::object::key_attrs::entry_is_plain_writable_data(entry) {
                     return None;

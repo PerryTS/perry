@@ -373,6 +373,9 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     // Promise (INLINE_TRAP_NEXT) when called from inside the microtask
     // runner dispatching this same step closure.
     module.declare_function("js_async_step_done", I64, &[DOUBLE, I64]);
+    // Settled self-next continuation probe: NaN-boxed bool, true = the await
+    // result is in the iter-result cell and the step continues in place.
+    module.declare_function("js_async_step_resume_now", DOUBLE, &[DOUBLE, I64]);
     // #691 Phase 2: returns the live step closure pointer from
     // INLINE_TRAP.current_step TLS. Codegen NaN-boxes the result.
     module.declare_function("js_get_current_step_closure", I64, &[]);

@@ -257,6 +257,8 @@ pub(super) fn lower_update(ctx: &mut LoweringContext, update: &ast::UpdateExpr) 
                         op: binary_op,
                         prefix: update.prefix,
                         strict: ctx.current_strict,
+                        byte_offset: 0,
+                        byte_end: 0,
                     })
                 }
                 ast::MemberProp::PrivateName(priv_name) => {
@@ -281,6 +283,8 @@ pub(super) fn lower_update(ctx: &mut LoweringContext, update: &ast::UpdateExpr) 
                         op: binary_op,
                         prefix: update.prefix,
                         strict: ctx.current_strict,
+                        byte_offset: 0,
+                        byte_end: 0,
                     })
                 }
                 ast::MemberProp::Computed(comp) => {
@@ -292,6 +296,8 @@ pub(super) fn lower_update(ctx: &mut LoweringContext, update: &ast::UpdateExpr) 
                         op: binary_op,
                         prefix: update.prefix,
                         strict: ctx.current_strict,
+                        byte_offset: 0,
+                        byte_end: 0,
                     })
                 }
             }

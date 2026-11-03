@@ -43,8 +43,7 @@ pub(super) unsafe fn object_literal_key_to_string(key_value: f64) -> *mut crate:
         live_obj(&key_handle),
         value_of_key.get_raw_const_ptr::<crate::StringHeader>(),
     );
-    let gc = gc_header_for(live_obj(&key_handle));
-    if ((*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO) != 0
+    if crate::object::shapes::object_prototype_is_null(live_obj(&key_handle))
         && to_string.is_undefined()
         && value_of.is_undefined()
     {

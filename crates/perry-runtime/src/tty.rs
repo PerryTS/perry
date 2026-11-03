@@ -213,7 +213,7 @@ fn heap_object_ptr(value: f64) -> Option<*mut ObjectHeader> {
     }
     unsafe {
         let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*gc_header).obj_type == crate::gc::GC_TYPE_OBJECT {
+        if crate::gc_type_is_object!((*gc_header).obj_type) {
             Some(ptr as *mut ObjectHeader)
         } else {
             None
@@ -327,7 +327,8 @@ fn set_fd_raw_mode(fd: i32, enabled: bool) -> bool {
                 | libc::IGNCR
                 | libc::ICRNL
                 | libc::IXON);
-            raw.c_oflag &= !libc::OPOST;
+            // Preserve output processing (including OPOST/ONLCR): raw input
+            // must not break newline rendering on a shared terminal (#13644).
             raw.c_lflag &= !(libc::ECHO | libc::ECHONL | libc::ICANON | libc::ISIG | libc::IEXTEN);
             raw.c_cflag &= !(libc::CSIZE | libc::PARENB);
             raw.c_cflag |= libc::CS8;
@@ -687,18 +688,18 @@ fn ensure_tty_prototypes() {
     }
 
     let read_keys = b"constructor\0setRawMode\0";
-    let read_proto = crate::object::js_object_alloc_with_shape(
+    let read_proto = crate::realm_decl! { birth crate::object::js_object_alloc_with_shape(
         0x7FFF_FF31,
         2,
         read_keys.as_ptr(),
         read_keys.len() as u32,
-    );
+    ); realm { "node:tty.ReadStream.prototype", extends = "node:net.Socket.prototype", members = { constructor; setRawMode, attrs = writable | enumerable | configurable; }; } };
     crate::object::js_object_set_field(
         read_proto,
         1,
         JSValue::from_bits(
             closure_value(
-                crate::fn_info!(js_tty_read_stream_set_raw_mode, 1; with_declared(1)),
+                crate::fn_info!(#[realm("node:tty.ReadStream.prototype.setRawMode", constructible = true)] export crate::tty::js_tty_read_stream_set_raw_mode, 1; with_declared(1)),
                 "setRawMode",
                 1,
             )
@@ -708,19 +709,19 @@ fn ensure_tty_prototypes() {
     crate::object::class_prototype_object_root_store(CLASS_ID_TTY_READ_STREAM, read_proto);
 
     let write_keys = b"constructor\0isTTY\0getColorDepth\0hasColors\0_refreshSize\0cursorTo\0moveCursor\0clearLine\0clearScreenDown\0getWindowSize\0";
-    let write_proto = crate::object::js_object_alloc_with_shape(
+    let write_proto = crate::realm_decl! { birth crate::object::js_object_alloc_with_shape(
         0x7FFF_FF32,
         10,
         write_keys.as_ptr(),
         write_keys.len() as u32,
-    );
+    ); realm { "node:tty.WriteStream.prototype", extends = "node:net.Socket.prototype", members = { constructor; isTTY = true, attrs = writable | enumerable | configurable; getColorDepth, attrs = writable | enumerable | configurable; hasColors, attrs = writable | enumerable | configurable; _refreshSize, attrs = writable | enumerable | configurable; cursorTo, attrs = writable | enumerable | configurable; moveCursor, attrs = writable | enumerable | configurable; clearLine, attrs = writable | enumerable | configurable; clearScreenDown, attrs = writable | enumerable | configurable; getWindowSize, attrs = writable | enumerable | configurable; }; } };
     crate::object::js_object_set_field(write_proto, 1, JSValue::from_bits(TAG_TRUE));
     crate::object::js_object_set_field(
         write_proto,
         2,
         JSValue::from_bits(
             closure_value(
-                crate::fn_info!(js_tty_write_stream_get_color_depth, 1; with_declared(1)),
+                crate::fn_info!(#[realm("node:tty.WriteStream.prototype.getColorDepth", constructible = true)] export crate::tty::js_tty_write_stream_get_color_depth, 1; with_declared(1)),
                 "getColorDepth",
                 1,
             )
@@ -732,7 +733,7 @@ fn ensure_tty_prototypes() {
         3,
         JSValue::from_bits(
             closure_value(
-                crate::fn_info!(js_tty_write_stream_has_colors, 2; with_declared(2)),
+                crate::fn_info!(#[realm("node:tty.WriteStream.prototype.hasColors", constructible = true)] export crate::tty::js_tty_write_stream_has_colors, 2; with_declared(2)),
                 "hasColors",
                 2,
             )
@@ -744,7 +745,7 @@ fn ensure_tty_prototypes() {
         4,
         JSValue::from_bits(
             closure_value(
-                crate::fn_info!(js_tty_write_stream_refresh_size, 0; with_declared(0)),
+                crate::fn_info!(#[realm("node:tty.WriteStream.prototype._refreshSize", constructible = true)] export crate::tty::js_tty_write_stream_refresh_size, 0; with_declared(0)),
                 "_refreshSize",
                 0,
             )
@@ -756,7 +757,7 @@ fn ensure_tty_prototypes() {
         5,
         JSValue::from_bits(
             closure_value(
-                crate::fn_info!(js_tty_write_stream_cursor_to, 3; with_declared(3)),
+                crate::fn_info!(#[realm("node:tty.WriteStream.prototype.cursorTo", constructible = true)] export crate::tty::js_tty_write_stream_cursor_to, 3; with_declared(3)),
                 "cursorTo",
                 3,
             )
@@ -768,7 +769,7 @@ fn ensure_tty_prototypes() {
         6,
         JSValue::from_bits(
             closure_value(
-                crate::fn_info!(js_tty_write_stream_move_cursor, 3; with_declared(3)),
+                crate::fn_info!(#[realm("node:tty.WriteStream.prototype.moveCursor", constructible = true)] export crate::tty::js_tty_write_stream_move_cursor, 3; with_declared(3)),
                 "moveCursor",
                 3,
             )
@@ -780,7 +781,7 @@ fn ensure_tty_prototypes() {
         7,
         JSValue::from_bits(
             closure_value(
-                crate::fn_info!(js_tty_write_stream_clear_line, 2; with_declared(2)),
+                crate::fn_info!(#[realm("node:tty.WriteStream.prototype.clearLine", constructible = true)] export crate::tty::js_tty_write_stream_clear_line, 2; with_declared(2)),
                 "clearLine",
                 2,
             )
@@ -792,7 +793,7 @@ fn ensure_tty_prototypes() {
         8,
         JSValue::from_bits(
             closure_value(
-                crate::fn_info!(js_tty_write_stream_clear_screen_down, 1; with_declared(1)),
+                crate::fn_info!(#[realm("node:tty.WriteStream.prototype.clearScreenDown", constructible = true)] export crate::tty::js_tty_write_stream_clear_screen_down, 1; with_declared(1)),
                 "clearScreenDown",
                 1,
             )
@@ -804,7 +805,7 @@ fn ensure_tty_prototypes() {
         9,
         JSValue::from_bits(
             closure_value(
-                crate::fn_info!(js_tty_write_stream_get_window_size, 0; with_declared(0)),
+                crate::fn_info!(#[realm("node:tty.WriteStream.prototype.getWindowSize", constructible = true)] export crate::tty::js_tty_write_stream_get_window_size, 0; with_declared(0)),
                 "getWindowSize",
                 0,
             )
@@ -1310,6 +1311,10 @@ pub extern "C" fn js_tty_resize_drain() -> i32 {
 // Tests
 // ---------------------------------------------------------------------------
 
+#[cfg(all(test, unix))]
+#[path = "tty/raw_mode_tests.rs"]
+mod raw_mode_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1344,6 +1349,32 @@ mod tests {
         // Both should be TAG_UNDEFINED bits (0x7FFC_0000_0000_0001).
         assert_eq!(cols.to_bits(), 0x7FFC_0000_0000_0001);
         assert_eq!(rows.to_bits(), 0x7FFC_0000_0000_0001);
+    }
+
+    /// #13686: a TTY write stream sized by its own `columns`/`rows` keys keeps
+    /// `tty.WriteStream.prototype` as its [[Prototype]]: `Object.getPrototypeOf`
+    /// and inherited reads of `isTTY` and the stream methods all see it.
+    #[test]
+    fn sized_write_stream_keeps_write_stream_prototype() {
+        ensure_tty_prototypes();
+        let _no_move = crate::gc::GcSuppressScope::new();
+        let proto = crate::object::class_prototype_object(CLASS_ID_TTY_WRITE_STREAM);
+        assert!(!proto.is_null());
+        let obj = crate::object::js_object_alloc_class_with_keys(
+            CLASS_ID_TTY_WRITE_STREAM,
+            0,
+            0,
+            std::ptr::null(),
+            0,
+        );
+        crate::object::js_object_set_field_by_name(obj, named_key(b"columns"), 80.0);
+        crate::object::js_object_set_field_by_name(obj, named_key(b"rows"), 25.0);
+        let got = crate::object::js_object_get_prototype_of(ptr_value(obj));
+        assert_eq!(got.to_bits(), ptr_value(proto).to_bits());
+        let is_tty = crate::object::js_object_get_field_by_name(obj, named_key(b"isTTY"));
+        assert_eq!(is_tty.bits(), TAG_TRUE);
+        let cursor_to = crate::object::js_object_get_field_by_name(obj, named_key(b"cursorTo"));
+        assert!(cursor_to.is_pointer());
     }
 
     #[test]
@@ -1527,5 +1558,3 @@ mod tests {
         assert!(!has_colors_for_depth(16_777_217.0, 24));
     }
 }
-
-crate::realm_decl!("tty.realm.json#*");

@@ -99,9 +99,13 @@ pub(crate) unsafe fn receiver_ordinary_kind(obj: *const ObjectHeader) -> ShapeOb
     if (*gc_header(obj))._reserved & crate::gc::GC_OBJECT_CALLABLE != 0 {
         ShapeObjectKind::CallableOrdinary
     } else if (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID {
+        // A1_UNPROVEN: record-first: receiver shape (kind-A/B question for S0f).
+        // A1_UNPROVEN: record-first: receiver shape (kind-A/B question for S0f).
         ShapeObjectKind::NativeNamespace
-    } else if !(*obj).meta.is_null()
-        && (*(*obj).meta).flags & crate::object::OBJECT_META_FLAG_NATIVE_ALIAS != 0
+    } else if !crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)).is_null()
+        && (*crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _))).flags
+            & crate::object::OBJECT_META_FLAG_NATIVE_ALIAS
+            != 0
     {
         // Read forwarding is independent of plain-store admission. Runtime
         // births need a distinct kind too: an unmarked shape can otherwise
@@ -191,6 +195,7 @@ pub(crate) unsafe fn audit_store_facts_for_test(obj: *const ObjectHeader) {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn audit_check(obj: *const ObjectHeader) {
     if obj.is_null() || !crate::object::object_is_shaped(obj) {
@@ -203,6 +208,7 @@ unsafe fn audit_check(obj: *const ObjectHeader) {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 unsafe fn report_disagreement(obj: *const ObjectHeader) -> ! {
     let id = object_shape_stamp(obj);
@@ -319,21 +325,7 @@ pub(crate) fn shape_proves_ordinary_null_proto(shape_id: LayoutWord) -> bool {
     })
 }
 
-/// The born-null gate of the shape-keyed store lanes and plans: a receiver
-/// whose header `reserved` word carries no born-null bit passes (its shape
-/// already keys the plan), and a born-null one passes only when its shape
-/// proves it ordinary with the null identity
-/// ([`shape_proves_ordinary_null_proto`]).
-///
-/// # Safety
-/// `obj` is a live `GC_TYPE_OBJECT` `ObjectHeader` and `reserved` is its
-/// header's `_reserved` word.
-#[inline(always)]
-pub(crate) unsafe fn born_null_admits_lane(obj: *const ObjectHeader, reserved: u16) -> bool {
-    reserved & crate::gc::OBJ_FLAG_NULL_PROTO == 0 || born_null_shape_proven(obj, reserved)
-}
-
-/// A born-null receiver's shape proves it ordinary with the null identity
+/// A receiver's shape proves it ordinary with the null identity
 /// ([`shape_proves_ordinary_null_proto`]). A class-less receiver reaches the
 /// `Ordinary` kind only through its plain-ordinary mark (R1, R6), so an
 /// unmarked runtime record (a scope, namespace or resource) is answered from
@@ -343,7 +335,7 @@ pub(crate) unsafe fn born_null_admits_lane(obj: *const ObjectHeader, reserved: u
 /// `obj` is a live `GC_TYPE_OBJECT` `ObjectHeader` and `reserved` is its
 /// header's `_reserved` word.
 #[inline(always)]
-pub(crate) unsafe fn born_null_shape_proven(obj: *const ObjectHeader, reserved: u16) -> bool {
+pub(crate) unsafe fn null_shape_proven(obj: *const ObjectHeader, reserved: u16) -> bool {
     reserved & crate::gc::OBJ_FLAG_PLAIN_ORDINARY != 0
         && shape_proves_ordinary_null_proto(object_shape_stamp(obj))
 }
@@ -415,7 +407,7 @@ pub(crate) unsafe fn restore_unproven_twin(obj: *mut ObjectHeader, unproven: Lay
 /// `obj` is a live `ObjectHeader`.
 #[inline]
 pub(crate) unsafe fn retire_proof_before_stamp(obj: *mut ObjectHeader, new_id: LayoutWord) {
-    if (*gc_header(obj)).obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!((*gc_header(obj)).obj_type)
         || !receiver_carries_numeric_proof(obj)
     {
         return;
@@ -426,7 +418,7 @@ pub(crate) unsafe fn retire_proof_before_stamp(obj: *mut ObjectHeader, new_id: L
 #[cold]
 #[inline(never)]
 unsafe fn retire_proof_before_stamp_slow(obj: *mut ObjectHeader, new_id: LayoutWord) {
-    if (*gc_header(obj)).obj_type != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!((*gc_header(obj)).obj_type) {
         return;
     }
     if super::shape_object_kind_of_receiver((new_id).0)

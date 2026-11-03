@@ -1470,3 +1470,11 @@ mod layout_comparison_tests;
 
 #[cfg(test)]
 mod layout_string_length_tests;
+
+impl Receiver {
+    /// The header form predicted for this receiver's layouts: the base of its
+    /// slot accesses.
+    pub(crate) fn form(&self) -> crate::target_layout::HeaderForm {
+        crate::target_layout::HeaderForm::Meta
+    }
+}

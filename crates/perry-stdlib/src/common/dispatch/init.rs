@@ -57,8 +57,9 @@ pub unsafe extern "C" fn js_handle_property_set_dispatch(
     // Native HANDLE values are ordinary, extensible objects in Node; this gives
     // them the same string-keyed own-property storage closures get from
     // `CLOSURE_PROPS`. The read half (`js_handle_property_dispatch`) consults
-    // every typed property FIRST and only falls back to this expando table, so a
-    // typed property name can never be shadowed by an expando copy. This is what
+    // this bag FIRST: an own property shadows the typed prototype members
+    // (`res.writeHead = hook` reads back `hook`), while names a typed setter
+    // claimed above never reach the bag. This is what
     // makes `debug`'s `createDebug.colors = [...]` persist and read back (the
     // wall: a Blob/Response-tagged `_` whose `.colors` write was silently
     // dropped, so `selectColor` read `undefined`).
@@ -111,6 +112,10 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
             thread_name: extern "C" fn() -> f64,
             resource_limits: extern "C" fn() -> f64,
             thread_id: extern "C" fn() -> f64,
+        );
+        fn js_register_worker_threads_environment_data(
+            get: extern "C" fn(f64) -> f64,
+            set: extern "C" fn(f64, f64) -> f64,
         );
         fn js_register_worker_threads_worker_constructor(construct: extern "C" fn(f64, f64) -> f64);
         fn js_register_worker_threads_messaging_constructors(
@@ -195,12 +200,19 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
         crate::worker_threads::js_worker_threads_resource_limits,
         crate::worker_threads::js_worker_threads_thread_id,
     );
+    js_register_worker_threads_environment_data(
+        crate::worker_threads::js_worker_threads_get_environment_data,
+        crate::worker_threads::js_worker_threads_set_environment_data,
+    );
     js_register_worker_threads_worker_constructor(
         crate::worker_threads::js_worker_threads_worker_new_by_spec,
     );
     js_register_worker_threads_messaging_constructors(
         crate::worker_threads::js_worker_threads_message_channel_new,
         crate::worker_threads::js_worker_threads_broadcast_channel_new,
+    );
+    perry_runtime::messaging::js_register_worker_threads_message_port_dispatch(
+        crate::worker_threads::dispatch_message_port_core_operation,
     );
     perry_runtime::js_set_native_querystring_dispatch(
         crate::querystring::js_querystring_native_dispatch,
@@ -361,9 +373,55 @@ pub(super) unsafe fn install_crypto_registrations() {
     PROTOTYPE_CRYPTO.set(prototype_crypto);
 }
 
+/// `super(...args)` into a bound native module constructor reached at run
+/// time (perry-runtime's `js_fetch_or_value_super`): run the constructor's
+/// in-place form on the subclass receiver. One router for every module whose
+/// instances carry native state; an export without an in-place form answers
+/// undefined and the runtime keeps its other paths.
+#[cfg(any(feature = "compression-gzip", feature = "external-zlib-pump"))]
+unsafe extern "C" fn native_subclass_init(
+    module: *const u8,
+    module_len: usize,
+    name: *const u8,
+    name_len: usize,
+    owner: f64,
+    args: *const f64,
+    args_len: usize,
+) -> f64 {
+    let module = std::slice::from_raw_parts(module, module_len);
+    let options = if args_len != 0 && !args.is_null() {
+        *args
+    } else {
+        TAG_UNDEFINED_F64
+    };
+    match module {
+        b"zlib" => zlib_subclass_init(name, name_len, owner, options),
+        _ => TAG_UNDEFINED_F64,
+    }
+}
+
+#[cfg(feature = "compression-gzip")]
+unsafe fn zlib_subclass_init(name: *const u8, name_len: usize, owner: f64, options: f64) -> f64 {
+    perry_ext_zlib::js_ext_zlib_subclass_init(name, name_len, owner, options)
+}
+
+#[cfg(all(feature = "external-zlib-pump", not(feature = "compression-gzip")))]
+unsafe fn zlib_subclass_init(name: *const u8, name_len: usize, owner: f64, options: f64) -> f64 {
+    extern "C" {
+        fn js_ext_zlib_subclass_init(
+            name: *const u8,
+            name_len: usize,
+            owner: f64,
+            opts: f64,
+        ) -> f64;
+    }
+    js_ext_zlib_subclass_init(name, name_len, owner, options)
+}
+
 #[cfg(feature = "compression-gzip")]
 pub(super) unsafe fn install_zlib_registrations() {
     perry_runtime::js_set_native_zlib_dispatch(perry_ext_zlib::js_ext_zlib_native_dispatch);
+    perry_runtime::js_set_native_subclass_init(native_subclass_init);
 }
 
 #[cfg(feature = "external-zlib-pump")]
@@ -382,6 +440,7 @@ pub(super) unsafe fn install_external_zlib_registrations() {
         }
         perry_runtime::js_set_native_zlib_dispatch(js_ext_zlib_native_dispatch);
     }
+    perry_runtime::js_set_native_subclass_init(native_subclass_init);
 }
 
 #[cfg(all(

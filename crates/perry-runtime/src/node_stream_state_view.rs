@@ -98,7 +98,8 @@ fn bool_bits(value: bool) -> f64 {
 fn view_owner(this: crate::closure::JsThis) -> Option<f64> {
     let this = this.as_f64();
     let obj = object_ptr_from_value(this)?;
-    let meta = unsafe { (*obj).meta };
+    // A1_UNPROVEN: record-first: stream object layout word (kind-A/B question for S0f).
+    let meta = unsafe { crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)) };
     if meta.is_null() {
         return None;
     }
@@ -262,9 +263,9 @@ fn state_proto(kind: usize) -> f64 {
         WRITABLE_FIELDS
     };
     let proto_desc = if kind == READABLE_KIND {
-        std::ptr::addr_of!(crate::object::runtime_layouts::READABLE_STATE_PROTO)
+        crate::object::runtime_layouts::READABLE_STATE_PROTO::desc()
     } else {
-        std::ptr::addr_of!(crate::object::runtime_layouts::WRITABLE_STATE_PROTO)
+        crate::object::runtime_layouts::WRITABLE_STATE_PROTO::desc()
     };
     let proto_obj = unsafe { crate::object::layout_desc::perry_alloc_layout(proto_desc) };
     let proto_bits = crate::value::js_nanbox_pointer(proto_obj as i64).to_bits();
@@ -340,19 +341,22 @@ pub(super) fn read_birth_data(obj: *const ObjectHeader, data: StateData) -> Opti
         StateData::WritableCorked => 2,
         StateData::WritableWriteLen => 4,
     };
-    let desc = if data.readable() {
-        std::ptr::addr_of!(crate::object::runtime_layouts::READABLE_STATE)
+    // Identity is the layout's fixed word: a program that reaches no stream
+    // defines neither state descriptor, and naming one is a birth.
+    let word = if data.readable() {
+        crate::object::runtime_layouts::READABLE_STATE::WORD
     } else {
-        std::ptr::addr_of!(crate::object::runtime_layouts::WRITABLE_STATE)
+        crate::object::runtime_layouts::WRITABLE_STATE::WORD
     };
-    let shape = unsafe { crate::object::runtime_layouts::layout_id(desc) };
     // SAFETY: the caller validated this live ordinary state receiver.
-    if shape == 0 || unsafe { (*obj).parent_class_id } != shape {
+    if unsafe { (*obj).parent_class_id } != word {
         return None;
     }
     // This declared family has all its public data slots inline.
     let bits = unsafe {
-        let fields = (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
+        // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+        let fields =
+            crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)) as *const u64;
         *fields.add(index)
     };
     Some(f64::from_bits(bits))
@@ -366,17 +370,23 @@ fn install_state_view(stream: f64, kind: usize, property: crate::runtime_state_k
     // Materialize the shared prototype identity before the newborn escapes.
     let _proto = scope.root_nanbox_f64(state_proto(kind));
     let desc = if kind == READABLE_KIND {
-        std::ptr::addr_of!(crate::object::runtime_layouts::READABLE_STATE)
+        crate::object::runtime_layouts::READABLE_STATE::desc()
     } else {
-        std::ptr::addr_of!(crate::object::runtime_layouts::WRITABLE_STATE)
+        crate::object::runtime_layouts::WRITABLE_STATE::desc()
     };
     let view = scope.root_nanbox_f64(box_pointer(unsafe {
         crate::object::layout_desc::perry_alloc_layout(desc).cast()
     }));
     let obj = object_ptr_from_value(view.get_nanbox_f64()).unwrap();
-    unsafe { crate::object::object_meta_ensure(obj) };
+    unsafe {
+        crate::object::object_meta_ensure(
+            crate::meta_obj_runtime_born!(obj),
+            crate::object::MetaReason::RuntimeHandle,
+        )
+    };
     let obj = object_ptr_from_value(view.get_nanbox_f64()).unwrap();
-    let meta = unsafe { (*obj).meta };
+    // A1_UNPROVEN: record-first: stream object layout word (kind-A/B question for S0f).
+    let meta = unsafe { crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)) };
     let owner = stream.get_nanbox_u64();
     // The existing MetaOnly visitor traces every pointer-tagged native_state.
     unsafe {
@@ -485,12 +495,12 @@ mod layout_tests {
         for (kind, desc, fields) in [
             (
                 READABLE_KIND,
-                std::ptr::addr_of!(crate::object::runtime_layouts::READABLE_STATE_PROTO),
+                crate::object::runtime_layouts::READABLE_STATE_PROTO::desc(),
                 READABLE_FIELDS,
             ),
             (
                 WRITABLE_KIND,
-                std::ptr::addr_of!(crate::object::runtime_layouts::WRITABLE_STATE_PROTO),
+                crate::object::runtime_layouts::WRITABLE_STATE_PROTO::desc(),
                 WRITABLE_FIELDS,
             ),
         ] {

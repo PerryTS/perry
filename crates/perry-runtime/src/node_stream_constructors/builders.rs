@@ -144,7 +144,10 @@ pub extern "C" fn js_event_emitter_subclass_init(this: f64, options: f64) -> f64
     if raw == 0 {
         return this;
     }
-    if unsafe { gc_type_for_ptr(raw) } != Some(crate::gc::GC_TYPE_OBJECT) {
+    if !matches!(
+        unsafe { gc_type_for_ptr(raw) },
+        Some(crate::gc_object_type_pat!())
+    ) {
         return this;
     }
     // node's `EventEmitter.init`: own `_events`/`_eventsCount`/`_maxListeners`
@@ -183,12 +186,18 @@ pub extern "C" fn js_node_stream_legacy_subclass_init(this: f64) -> f64 {
     if raw == 0 {
         return this;
     }
-    if unsafe { gc_type_for_ptr(raw) } != Some(crate::gc::GC_TYPE_OBJECT) {
+    if !matches!(
+        unsafe { gc_type_for_ptr(raw) },
+        Some(crate::gc_object_type_pat!())
+    ) {
         return this;
     }
     let obj = raw as *mut ObjectHeader;
     let mut methods: Vec<(&str, StubFn)> = emitter_methods().to_vec();
-    methods.push(("pipe", crate::fn_info!(ns_pipe2, 2; with_declared(2))));
+    methods.push((
+        "pipe",
+        crate::fn_info!(export crate::node_stream::ns_pipe2, 2; with_declared(2)),
+    ));
     install_methods_on_existing_object(obj, this, &methods, &[]);
     this
 }
@@ -214,7 +223,12 @@ pub extern "C" fn js_event_emitter_async_resource_subclass_init(this: f64, optio
 
     let this = this_handle.get_nanbox_f64();
     let raw = raw_ptr_from_value(this);
-    if raw == 0 || unsafe { gc_type_for_ptr(raw) } != Some(crate::gc::GC_TYPE_OBJECT) {
+    if raw == 0
+        || !matches!(
+            unsafe { gc_type_for_ptr(raw) },
+            Some(crate::gc_object_type_pat!())
+        )
+    {
         return this;
     }
     let options = options_handle.get_nanbox_f64();

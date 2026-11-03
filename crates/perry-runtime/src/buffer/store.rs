@@ -27,9 +27,12 @@ pub(crate) const PROTOTYPE_KEY: &str = "#<perry:prototype>";
 
 const _: () = assert!(std::mem::size_of::<BufferHeader>() == crate::codegen_abi::BYTES_STORE);
 const _: () = assert!(std::mem::offset_of!(BufferHeader, link) == crate::codegen_abi::BYTES_LINK);
-const _: () =
-    assert!(std::mem::size_of::<ObjectHeader>() == crate::codegen_abi::BYTES_VIEW_BAG_OWNER);
-const _: () = assert!(crate::gc::GC_TYPE_OBJECT == crate::codegen_abi::GC_TYPE_OBJECT);
+const _: () = assert!(
+    crate::object::header::meta_form_alloc_bytes(0) == crate::codegen_abi::BYTES_VIEW_BAG_OWNER
+);
+const _: () = assert!(crate::gc_type_is_object!(
+    crate::codegen_abi::GC_TYPE_OBJECT
+));
 
 #[inline(always)]
 pub(crate) unsafe fn header(addr: usize) -> *mut crate::gc::GcHeader {
@@ -44,7 +47,7 @@ pub(crate) fn is_view(addr: usize) -> bool {
 #[inline]
 pub(crate) unsafe fn bag(addr: usize) -> *mut ObjectHeader {
     let link = (*(addr as *const BufferHeader)).link;
-    if link != 0 && (*header(link)).obj_type == crate::gc::GC_TYPE_OBJECT {
+    if link != 0 && crate::gc_type_is_object!((*header(link)).obj_type) {
         link as *mut ObjectHeader
     } else {
         std::ptr::null_mut()
@@ -56,7 +59,7 @@ pub(crate) unsafe fn own_slot(obj: *const ObjectHeader, key: &[u8]) -> Option<u3
         return None;
     }
     let keys = crate::object::object_keys(obj);
-    crate::object::keys_find_slot_by_bytes_resolved(keys.arr(), keys.count(), key)
+    crate::object::keys_find_slot_by_bytes_resolved(keys, keys.count(), key)
 }
 
 /// Whether `bag` (non-null) holds a live own value under `key`.
@@ -169,7 +172,7 @@ pub(crate) unsafe fn owner(addr: usize) -> usize {
         return addr;
     }
     let link = (*(addr as *const BufferHeader)).link;
-    if (*header(link)).obj_type == crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_object!((*header(link)).obj_type) {
         view_bag_owner(link)
     } else {
         link

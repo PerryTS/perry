@@ -140,8 +140,14 @@ pub(crate) fn closure(
 /// prototype, and key attributes either default or OPTIONAL. Their birth
 /// record is exactly PLAIN_ORDINARY; slots (including optional keys) are holes.
 /// The descriptor, registered before generated code runs, supplies the ShapeId.
-pub(crate) fn layout(ctx: &mut FnCtx<'_>, desc: &str, slots: u32, class: u32) -> String {
-    layout_with(ctx, desc, slots, class, None).0
+pub(crate) fn layout(
+    ctx: &mut FnCtx<'_>,
+    form: crate::target_layout::HeaderForm,
+    desc: &str,
+    slots: u32,
+    class: u32,
+) -> String {
+    layout_with(ctx, form, desc, slots, class, None).0
 }
 
 /// [`layout`], with a complete constructor prologue's values (`(slot, bits)`)
@@ -151,13 +157,14 @@ pub(crate) fn layout(ctx: &mut FnCtx<'_>, desc: &str, slots: u32, class: u32) ->
 /// runtime arm's object holds holes and runs the constructor.
 pub(crate) fn layout_with(
     ctx: &mut FnCtx<'_>,
+    form: crate::target_layout::HeaderForm,
     desc: &str,
     slots: u32,
     class: u32,
     fields: Option<&[(u32, String)]>,
 ) -> (String, Option<String>) {
     let size = 8
-        + crate::target_layout::object_header_size_bytes(ctx.target_triple)
+        + crate::target_layout::object_slot_base_bytes(ctx.target_triple, form)
         + u64::from(slots) * 8;
     let slow = |ctx: &mut FnCtx<'_>| {
         let raw = ctx.block().call(PTR, "perry_alloc_layout", &[(PTR, desc)]);

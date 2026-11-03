@@ -140,30 +140,66 @@ fn os_page() -> usize {
     #[allow(unreachable_code)]
     4096
 }
-/// A Region smaller than the fixed dynamic base plus a few chunks cannot hold
-/// the process-wide chunk space.
+/// The smallest Region that can work: the static prefix (every image's
+/// static rows lie below [`super::DYNAMIC_BASE_ROWS`]) plus room for the
+/// process-wide chunk space that starts there.
+///
+/// Only LayoutWord ROWS index the Region; a ShapeId indexes the slab's lazily
+/// grown directory and never needs address space here. The native birth
+/// layouts agent creation seeds (`WEAKMAP_BIRTH_LAYOUT`,
+/// `WEAKSET_BIRTH_LAYOUT`) are published at the rows of their declared words,
+/// which lie in the static prefix, so the floor holds them by construction
+/// (checked below), whatever their ShapeIds are.
 pub(super) const MIN_CAPACITY: usize = 2 * super::DYNAMIC_BASE_ROWS as usize;
+
+const _: () = {
+    use crate::codegen_abi::{LayoutWord, WEAKMAP_BIRTH_LAYOUT_WORD, WEAKSET_BIRTH_LAYOUT_WORD};
+    let words = [WEAKMAP_BIRTH_LAYOUT_WORD, WEAKSET_BIRTH_LAYOUT_WORD];
+    let mut i = 0;
+    while i < words.len() {
+        assert!(LayoutWord(words[i]).row().0 < super::DYNAMIC_BASE_ROWS);
+        i += 1;
+    }
+    assert!((super::DYNAMIC_BASE_ROWS as usize) < MIN_CAPACITY);
+};
+
+/// Reserve the largest share of `want` rows that the address space accepts,
+/// halving until a reservation fits. The floor [`MIN_CAPACITY`] is REQUIRED:
+/// halving a power of two can step straight past it, so the floor is tried
+/// exactly once before giving up.
+fn reserve_with(
+    want: usize,
+    mut try_reserve: impl FnMut(usize) -> *mut u8,
+) -> (*mut ShapeRecord, usize) {
+    let mut rows = want;
+    loop {
+        let base = try_reserve(rows * RECORD);
+        if !base.is_null() {
+            return (base.cast(), rows);
+        }
+        assert!(
+            rows > MIN_CAPACITY,
+            "cannot reserve shape Region: no address space left for the static prefix and chunk space"
+        );
+        rows = (rows / 2).max(MIN_CAPACITY);
+    }
+}
+
 impl Region {
     pub(super) fn new() -> Self {
-        let mut capacity = if cfg!(target_pointer_width = "64") {
+        let capacity = if cfg!(target_pointer_width = "64") {
             LAYOUT_ROW_LIMIT as usize
         } else {
             1 << 16
         };
-        loop {
-            let base = unsafe { reserve(capacity * RECORD) };
-            if !base.is_null() {
-                return Self {
-                    base: base.cast(),
-                    capacity,
-                    page: os_page(),
-                    shift: os_page().trailing_zeros(),
-                    live: Vec::new(),
-                    static_pages: 0,
-                };
-            }
-            assert!(capacity > MIN_CAPACITY, "cannot reserve shape Region");
-            capacity /= 2;
+        let (base, capacity) = reserve_with(capacity, |bytes| unsafe { reserve(bytes) });
+        Self {
+            base,
+            capacity,
+            page: os_page(),
+            shift: os_page().trailing_zeros(),
+            live: Vec::new(),
+            static_pages: 0,
         }
     }
     pub(super) fn base(&self) -> *mut ShapeRecord {
@@ -312,5 +348,52 @@ pub(super) unsafe fn committed_in(tops: *const (), len: usize, shift: u32, row: 
     match &*(tops as *const Option<Box<Leaf>>).add(leaf) {
         Some(l) => l.counts[page % LEAF_PAGES] != 0,
         None => false,
+    }
+}
+
+#[cfg(test)]
+mod reservation_floor_tests {
+    use super::*;
+
+    /// Under an address-space limit the Region halves its reservation down to
+    /// the floor: the static prefix plus the chunk space, never more. The
+    /// rows the native birth layouts are seeded at lie inside it.
+    #[test]
+    fn limited_address_space_settles_on_the_chunk_space_floor() {
+        let available = MIN_CAPACITY * RECORD;
+        let mut attempts = Vec::new();
+        let (_, capacity) = reserve_with(LAYOUT_ROW_LIMIT as usize, |bytes| {
+            attempts.push(bytes);
+            if bytes <= available {
+                // No Region is constructed and this token is never dereferenced.
+                std::ptr::NonNull::<ShapeRecord>::dangling().as_ptr().cast()
+            } else {
+                std::ptr::null_mut()
+            }
+        });
+        assert_eq!(capacity, MIN_CAPACITY);
+        assert_eq!(attempts.last(), Some(&available));
+        assert!(
+            attempts[..attempts.len() - 1]
+                .iter()
+                .all(|bytes| *bytes > available),
+            "every rejected attempt must have been larger than the floor"
+        );
+        for word in [
+            crate::codegen_abi::WEAKMAP_BIRTH_LAYOUT_WORD,
+            crate::codegen_abi::WEAKSET_BIRTH_LAYOUT_WORD,
+        ] {
+            let row = crate::codegen_abi::LayoutWord(word).row().0 as usize;
+            assert!(row < capacity, "native birth row {row} outside the floor");
+        }
+    }
+
+    /// The floor is REQUIRED: a world where no reservation that small
+    /// succeeds must fail loudly rather than run with a Region that cannot
+    /// hold the static prefix and the chunk space.
+    #[test]
+    #[should_panic(expected = "no address space left for the static prefix and chunk space")]
+    fn an_unusable_smaller_reservation_is_never_accepted() {
+        reserve_with(LAYOUT_ROW_LIMIT as usize, |_| std::ptr::null_mut());
     }
 }

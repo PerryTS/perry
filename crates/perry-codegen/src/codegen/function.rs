@@ -730,7 +730,7 @@ pub(super) fn compile_function(
     }
 
     let ic_base = llmod.ic_counter;
-    let buffer_alias_base = llmod.buffer_alias_counter;
+    let buffer_alias_scopes = llmod.buffer_alias_scope_allocator();
     let lf = llmod.define_function(&llvm_name, DOUBLE, params);
     let entry_outline_chunk = super::entry_outline::is_entry_chunk(f);
     // #8595: these functions exist specifically to bound backend work. Letting
@@ -1027,6 +1027,20 @@ pub(super) fn compile_function(
                 .collect()
         })
         .unwrap_or_default();
+    // #13740: every TaPtr param, whatever its `const_len`. The #8619 Number-
+    // or-`undefined` read proof rests on the binding proof behind `TaPtr`
+    // (numeric kind, non-view, never reassigned, sealed), not on the length.
+    let spec_ta_params: HashSet<u32> = spec_entry
+        .map(|plan| {
+            f.params
+                .iter()
+                .zip(plan.reps.iter())
+                .filter_map(|(p, rep)| {
+                    matches!(rep, crate::collectors::SpecParamRep::TaPtr { .. }).then_some(p.id)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let spec_i32_params: HashSet<u32> = spec_entry
         .map(|plan| {
             f.params
@@ -1132,6 +1146,7 @@ pub(super) fn compile_function(
         &cross_module.compile_time_constants,
         &cross_module.module_dispatch,
         &spec_ta_lens,
+        &spec_ta_params,
         &spec_i32_params,
         &spec_numeric_params,
         &spec_number_array_params,
@@ -1294,12 +1309,12 @@ pub(super) fn compile_function(
         numeric_order_ready: Default::default(),
         program_has_worker: cross_module.program_has_worker,
         program_has_thread_agents: cross_module.program_has_thread_agents,
-        program_class_accessor_names: cross_module.program_class_accessor_names.clone(),
         func: lf,
         module_slug: crate::expr::native_region_slug(strings.module_prefix()),
         source_function: f.name.clone(),
         source_function_slug: crate::expr::native_region_slug(&f.name),
         active_region_id: None,
+        byte_view_fallback_loop: false,
         native_facts: &native_facts,
         locals,
         local_types,
@@ -1328,6 +1343,7 @@ pub(super) fn compile_function(
         loop_targets: Vec::new(),
         label_targets: HashMap::new(),
         pending_labels: Vec::new(),
+        region_only_label: None,
         classes,
         class_hierarchy: &cross_module.class_hierarchy,
         wpfacts: cross_module.wpfacts.clone(),
@@ -1398,6 +1414,7 @@ pub(super) fn compile_function(
         fixed_generator_state: false,
         private_resume_frame: false,
         private_async_resume_frame: false,
+        resume_locals: None,
         versioned_loop_deopt_context: None,
         trusted_box_capture_ptrs: HashMap::new(),
         ready_cell_roots: crate::stmt::binding_cell::ReadyCellRoots::with_entry_cells(
@@ -1494,6 +1511,7 @@ pub(super) fn compile_function(
         typed_element_locals: HashSet::new(),
         create_families: Default::default(),
         class_guard_window: None,
+        map_entry_fusion: Default::default(),
         i1_local_slots: HashMap::new(),
         index_used_locals: native_facts.index_used_locals(),
         strictly_i32_bounded_locals: native_facts.strictly_i32_bounded_locals(),
@@ -1591,7 +1609,7 @@ pub(super) fn compile_function(
         known_noalias_buffer_locals: native_facts.known_noalias_buffer_locals(),
         sealed_buffer_locals: native_facts.sealed_buffer_locals(),
         late_exposed_buffer_locals: native_facts.late_exposed_buffer_locals(),
-        buffer_alias_base,
+        buffer_alias_scopes,
     };
 
     let wrapper_name = format!("__perry_wrap_{}", public_llvm_name);
@@ -1692,7 +1710,7 @@ pub(super) fn compile_function(
                 data_slot.trim_start_matches('%'),
                 length_slot.trim_start_matches('%')
             ));
-            let scope_idx = ctx.buffer_alias_base + ctx.buffer_data_slots.len() as u32;
+            let scope_idx = ctx.buffer_alias_scopes.allocate();
             ctx.buffer_data_slots
                 .insert(p.id, (data_slot.clone(), scope_idx));
             ctx.receiver_descriptors.materialize_buffer_view(
@@ -1816,11 +1834,11 @@ pub(super) fn compile_function(
     let ic_end = ctx.ic_site_counter;
     let pending = std::mem::take(&mut ctx.pending_declares);
     let helpers = std::mem::take(&mut ctx.pending_helpers);
-    let buffer_alias_used = ctx.buffer_data_slots.len() as u32;
+    let buffer_alias_scopes = std::mem::take(&mut ctx.buffer_alias_scopes);
     let native_rep_records = std::mem::take(&mut ctx.native_rep_records);
     drop(ctx); // releases &mut LlFunction borrow on llmod
     llmod.ic_counter = ic_end;
-    llmod.buffer_alias_counter += buffer_alias_used;
+    llmod.commit_buffer_alias_scopes(buffer_alias_scopes);
     llmod.native_rep_records.extend(native_rep_records);
     for helper in helpers {
         llmod.add_outlined_helper(helper);

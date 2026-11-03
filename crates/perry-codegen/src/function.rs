@@ -45,6 +45,14 @@ pub struct LlFunction {
     /// general small-function policy gives the early pass an explicit code-size
     /// budget instead of activating every historical hint at once.
     pub pre_statepoint_inline: bool,
+    /// This admission belongs to the receiver/closed-target/ConstFn cost
+    /// policy. Numeric/index ABI adapters have their own admission contracts;
+    /// the final guarded-growth gate may revoke only this policy's decisions.
+    pub guarded_preinline: bool,
+    /// This lowered method body fits the guarded-specialization inline budget.
+    /// It joins the early inliner only when the facts prove a call site closed
+    /// over it (`codegen/closed_targets.rs`).
+    pub closed_target_preinline: bool,
     /// When true, keep a small routing wrapper as an optimization boundary.
     /// Used when inlining would duplicate guarded fast/fallback call graphs.
     pub no_inline: bool,
@@ -82,6 +90,9 @@ pub struct LlFunction {
     /// proofs. Let LLVM optimize its counted loops for execution rather than
     /// applying the default application-size policy to the containing body.
     pub has_indexed_owner_region: bool,
+    /// The private resumption ABI denotes a protocol continuation. Optimize
+    /// its dispatch/loops for execution, while honoring explicit minsize.
+    pub private_resume_entry: bool,
     /// #7871: `collectors::collect_alloc_hot_functions` admitted this function
     /// — it has an in-loop direct call site (uncapped) or calls itself. Read
     /// ONLY by `lower_call/new_alloc.rs::new_site_is_in_loop`; it must not be
@@ -94,6 +105,11 @@ pub struct LlFunction {
     /// since #7354 — windows-msvc used to name `__C_specific_handler` here,
     /// which forced funclet EH and locked Windows out of statepoints.
     pub personality: Option<&'static str>,
+    /// The module publishes a named `JsFunctionInfo` for this body (its
+    /// function-metadata owner lists it): on x86_64 Linux it is placed in the
+    /// JS text section, the range the `Error` capture keeps frames of
+    /// (`helpers::js_text_section`). Set by `emit_fn_infos`.
+    pub js_text: bool,
     blocks: Vec<LlBlock>,
     block_counter: u32,
     reg_counter: Rc<RegCounter>,
@@ -303,14 +319,18 @@ impl LlFunction {
             linkage: String::new(),
             force_inline: false,
             pre_statepoint_inline: false,
+            guarded_preinline: false,
+            closed_target_preinline: false,
             no_inline: false,
             disable_tail_calls: false,
             nanbox_operands: false,
             inline_hint: false,
             hot_loop_callee: false,
             has_indexed_owner_region: false,
+            private_resume_entry: false,
             alloc_hot: false,
             personality: None,
+            js_text: false,
             blocks: Vec::new(),
             block_counter: 0,
             reg_counter: Rc::new(RegCounter::new()),
@@ -1038,7 +1058,9 @@ impl LlFunction {
     /// `render_fn_external`).
     pub fn define_header(&self, force_external: bool) -> String {
         let attrs = crate::linker::application_size_function_attrs();
-        let attrs = if self.has_indexed_owner_region && attrs == " optsize" {
+        let attrs = if (self.has_indexed_owner_region || self.private_resume_entry)
+            && attrs == " optsize"
+        {
             ""
         } else {
             attrs
@@ -1154,8 +1176,16 @@ impl LlFunction {
         } else {
             ""
         };
+        // On x86_64 Linux every named JS body lives in the JS text section
+        // (`helpers::js_text_section`): the `Error` capture tells a JS frame
+        // from a runtime one by that range. LLVM's grammar puts the
+        // section after the fn attributes and before the GC strategy.
+        let section = match crate::codegen::helpers::js_text_section() {
+            Some(s) if self.js_text => format!(" section \"{s}\""),
+            _ => String::new(),
+        };
         format!(
-            "define {}{}{} @{}({}){}{}{}{}{}{}{} {{",
+            "define {}{}{} @{}({}){}{}{}{}{}{}{}{} {{",
             linkage,
             cconv,
             self.return_type,
@@ -1166,6 +1196,7 @@ impl LlFunction {
             frame_pointer,
             tail_calls,
             nanbox_operands,
+            section,
             gc_strategy,
             personality
         )
@@ -1497,6 +1528,41 @@ mod define_header_tests {
     /// A natively-constructed module without that strategy gets no RS4GC pass
     /// and therefore no precise roots, and it looks entirely correct until a
     /// collection frees something live.
+    /// x86_64 Linux places a named JS body in the JS text section, the
+    /// range the runtime's `Error` capture keeps frames of; a body without a
+    /// published name, and every body on other targets, names no section.
+    /// The native reader takes the clause off the define line and keeps the
+    /// attributes it follows.
+    #[test]
+    fn a_named_js_body_lives_in_the_js_text_section_on_x86_64_linux() {
+        let cases = [
+            ("x86_64-unknown-linux-gnu", true, true),
+            ("x86_64-unknown-linux-gnu", false, false),
+            ("aarch64-unknown-linux-gnu", true, false),
+            ("arm64-apple-macosx15.0.0", true, false),
+            ("x86_64-pc-windows-msvc", true, false),
+        ];
+        for (triple, named, placed) in cases {
+            crate::codegen::helpers::set_js_text_section_for_target(triple);
+            let mut f = probe();
+            f.js_text = named;
+            let header = f.define_header(false);
+            assert_eq!(
+                header.contains("section \"perry_js_text\""),
+                placed,
+                "{triple} named={named}: {header}"
+            );
+            let parsed = crate::dialect::parse_header_for_tests(&header).expect("parses");
+            assert_eq!(
+                parsed.0.as_deref(),
+                placed.then_some("perry_js_text"),
+                "{header}"
+            );
+            assert!(!parsed.1.contains("section"), "{}", parsed.1);
+        }
+        crate::codegen::helpers::set_js_text_section_for_target("arm64-apple-macosx15.0.0");
+    }
+
     #[test]
     fn to_ir_opens_with_exactly_the_shared_define_header() {
         for force_inline in [false, true] {

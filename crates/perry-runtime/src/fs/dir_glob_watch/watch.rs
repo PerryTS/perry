@@ -1675,6 +1675,7 @@ fn normalized_watch_args(arg1: f64, arg2: f64) -> (f64, Option<f64>) {
 /// see `watch_backend`.
 #[no_mangle]
 pub extern "C" fn js_fs_watch(path_value: f64, arg1: f64, arg2: f64) -> f64 {
+    crate::fs::install_watcher_roots();
     validate::validate_path("filename", path_value);
     let (options_value, listener) = normalized_watch_args(arg1, arg2);
     let path = unsafe {
@@ -1734,6 +1735,7 @@ pub extern "C" fn js_fs_watch(path_value: f64, arg1: f64, arg2: f64) -> f64 {
 /// `fs.watchFile(path[, options], listener)` — stat-polling watcher.
 #[no_mangle]
 pub extern "C" fn js_fs_watch_file(path_value: f64, arg1: f64, arg2: f64) -> f64 {
+    crate::fs::install_watcher_roots();
     validate::validate_path("filename", path_value);
     let (options_value, listener) = if is_callable(arg1) {
         (undefined_value(), arg1)
@@ -1827,6 +1829,7 @@ pub extern "C" fn js_fs_unwatch_file(path_value: f64, listener: f64) -> f64 {
 }
 
 pub extern "C" fn js_fs_promises_watch(path_value: f64, options_value: f64) -> f64 {
+    crate::fs::install_watcher_roots();
     let scope = crate::gc::RuntimeHandleScope::new();
     let path_value = scope.root_nanbox_f64(path_value);
     let options_value = scope.root_nanbox_f64(options_value);

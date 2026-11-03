@@ -54,6 +54,7 @@ fn match_indexed_store_shape(
             object,
             index,
             value,
+            ..
         } => Some((object.as_ref(), index.as_ref(), value.as_ref())),
         Expr::PutValueSet {
             target,
@@ -261,6 +262,7 @@ fn match_numeric_bulk_fill_loop(
             object,
             index,
             value,
+            ..
         })] => (object, index, value),
         [Stmt::Expr(perry_hir::Expr::PutValueSet {
             target,
@@ -708,6 +710,7 @@ fn match_strided_tagged_fill_loop(
             object,
             index,
             value,
+            ..
         } => (object.as_ref(), index.as_ref(), value.as_ref()),
         Expr::PutValueSet {
             target,
@@ -2569,6 +2572,7 @@ pub(super) fn packed_f64_range_loop_body_collect(
             object,
             index,
             value,
+            ..
         } => packed_f64_range_loop_store_collect(object, index, value, counter_id, accesses),
         Expr::PutValueSet {
             target,
@@ -5456,7 +5460,8 @@ fn lower_object_array_write_versioned_for(
         }
         plans
     };
-    let object_header_size = crate::target_layout::object_header_size_bytes(ctx.target_triple);
+    let object_header_size =
+        crate::target_layout::object_slot_base_bytes(ctx.target_triple, matched.form());
     // Address inline slots in bytes. #8047 makes both layouts 16 bytes, while
     // retaining this target-derived form prevents future silent truncation.
     let header_bytes = object_header_size.to_string();
@@ -6961,6 +6966,22 @@ pub(crate) fn lower_for(
     if crate::array_record_stack::fused_condition(ctx, condition) {
         return lower_for_after_init(ctx, init, condition, update, body, "for");
     }
+    lower_for_tiers(ctx, init, condition, update, body)
+}
+
+/// `lower_for` after its init: every counted-loop tier, then the plain loop.
+pub(super) fn lower_for_tiers(
+    ctx: &mut FnCtx<'_>,
+    init: Option<&Stmt>,
+    condition: Option<&perry_hir::Expr>,
+    update: Option<&perry_hir::Expr>,
+    body: &[Stmt],
+) -> Result<()> {
+    // A byte loop over a Buffer/Uint8Array parameter whose body cannot run
+    // JS: one receiver admission proves the whole loop (`byte_view_loop`).
+    if super::byte_view_loop::lower(ctx, init, condition, update, body)? {
+        return Ok(());
+    }
 
     // #9160: `sum += strings[maskedIndex].length`. A one-time receiver,
     // window, element-tag, and accumulator check admits a clone whose array
@@ -7185,6 +7206,7 @@ fn lower_for_after_init_impl(
     try_dynamic_bound: bool,
 ) -> Result<()> {
     let loop_proof_scope_id = ctx.next_loop_proof_scope_id();
+    let byte_view_fallback = std::mem::take(&mut ctx.byte_view_fallback_loop);
 
     // Loop-invariant length hoisting peephole. Detect the very common
     // shape `for (...; i < arr.length; ...)` where `arr` is a local
@@ -7672,7 +7694,7 @@ fn lower_for_after_init_impl(
 
     // If this for-loop has a pending label (from an enclosing Stmt::Labeled),
     // register it so `break label;` / `continue label;` resolve here.
-    let consumed_labels = std::mem::take(&mut ctx.pending_labels);
+    let consumed_labels = super::take_loop_labels(ctx, body);
     let previous_region_id = ctx.active_region_id.clone();
     for lbl in &consumed_labels {
         ctx.label_targets.insert(
@@ -7683,6 +7705,12 @@ fn lower_for_after_init_impl(
     if let Some(lbl) = consumed_labels.last() {
         ctx.active_region_id = Some(ctx.region_id_for_label(lbl));
     }
+    let latch_tag = crate::inst::LoopTag::for_loop(
+        consumed_labels
+            .last()
+            .map(|lbl| ctx.region_id_for_label(lbl)),
+        byte_view_fallback,
+    );
 
     // Body block.
     ctx.current_block = body_idx;
@@ -7739,7 +7767,7 @@ fn lower_for_after_init_impl(
         }
     }
     if !ctx.block().is_terminated() {
-        ctx.block().br(&cond_label);
+        ctx.block().br_latch(&cond_label, latch_tag);
     }
     ctx.active_region_id = previous_region_id;
 
@@ -9155,6 +9183,7 @@ fn expr_array_length_effect(
             object,
             index,
             value,
+            ..
         } => {
             if let Expr::LocalGet(id) = object.as_ref() {
                 if local_may_alias_guarded_array(ctx, arr_id, *id, aliases) {
@@ -9605,6 +9634,7 @@ pub(crate) fn expr_preserves_array_length(
             object,
             index,
             value,
+            ..
         } => {
             // `arr[bounded_i] = expr` is the only IndexSet on `arr`
             // we accept, and only under a strict `i < arr.length`
@@ -9856,7 +9886,7 @@ fn lower_while_impl(ctx: &mut FnCtx<'_>, condition: &perry_hir::Expr, body: &[St
     let loop_proof_scope_id = ctx.next_loop_proof_scope_id();
 
     // Consume pending label (from enclosing Stmt::Labeled).
-    let consumed_labels = std::mem::take(&mut ctx.pending_labels);
+    let consumed_labels = super::take_loop_labels(ctx, body);
     let previous_region_id = ctx.active_region_id.clone();
     for lbl in &consumed_labels {
         ctx.label_targets.insert(
@@ -9886,7 +9916,13 @@ fn lower_while_impl(ctx: &mut FnCtx<'_>, condition: &perry_hir::Expr, body: &[St
     }
     if !ctx.block().is_terminated() {
         emit_gc_loop_safepoint(ctx, body, &[]);
-        ctx.block().br(&cond_label);
+        let latch_tag = crate::inst::LoopTag::for_loop(
+            consumed_labels
+                .last()
+                .map(|lbl| ctx.region_id_for_label(lbl)),
+            false,
+        );
+        ctx.block().br_latch(&cond_label, latch_tag);
     }
     ctx.active_region_id = previous_region_id;
 
@@ -9936,7 +9972,7 @@ fn lower_do_while_impl(
         .push((cond_label.clone(), exit_label.clone(), ctx.try_depth));
 
     // Consume pending label (from enclosing Stmt::Labeled).
-    let consumed_labels = std::mem::take(&mut ctx.pending_labels);
+    let consumed_labels = super::take_loop_labels(ctx, body);
     let previous_region_id = ctx.active_region_id.clone();
     for lbl in &consumed_labels {
         ctx.label_targets.insert(
@@ -9963,11 +9999,27 @@ fn lower_do_while_impl(
     ctx.current_block = cond_idx;
     let i1 = lower_test(ctx, condition)?;
     emit_gc_loop_safepoint(ctx, &[], &[condition]);
-    ctx.block().cond_br(&i1, &body_label, &exit_label);
+    let latch_tag = crate::inst::LoopTag::for_loop(
+        consumed_labels
+            .last()
+            .map(|lbl| ctx.region_id_for_label(lbl)),
+        false,
+    );
+    ctx.block()
+        .cond_br_latch(&i1, &body_label, &exit_label, latch_tag);
     ctx.active_region_id = previous_region_id;
 
     ctx.loop_targets.pop();
 
     ctx.current_block = exit_idx;
     Ok(())
+}
+
+impl ObjectArrayWriteLoop {
+    /// The header form predicted for the objects this record describes (`HeaderForm`:
+    /// every ordinary object has the meta word today). Sites take their slot base
+    /// from here, never from the type byte.
+    pub(crate) fn form(&self) -> crate::target_layout::HeaderForm {
+        crate::target_layout::HeaderForm::Meta
+    }
 }

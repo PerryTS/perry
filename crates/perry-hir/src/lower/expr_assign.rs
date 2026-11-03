@@ -532,6 +532,8 @@ pub(crate) fn lower_ident_assignment(
             object: Box::new(target),
             property: name,
             value,
+            byte_offset: 0,
+            byte_end: 0,
         });
     }
     if let Some(env_id) = with_envs.into_iter().next() {
@@ -594,6 +596,8 @@ pub(crate) fn lower_ident_assignment(
                     value: Box::new(Expr::LocalGet(id)),
                     receiver: global_this,
                     strict: ctx.current_strict,
+                    byte_offset: 0,
+                    byte_end: 0,
                 },
             ]))
         } else {
@@ -661,6 +665,8 @@ pub(crate) fn lower_ident_assignment(
             }),
             property: name,
             value,
+            byte_offset: 0,
+            byte_end: 0,
         })
     }
 }
@@ -709,6 +715,8 @@ fn lower_assignment_target(
                             value,
                             receiver: proxy,
                             strict: ctx.current_strict,
+                            byte_offset: 0,
+                            byte_end: 0,
                         });
                     }
                 }
@@ -1016,6 +1024,8 @@ fn lower_assignment_target(
                             value,
                             receiver: object,
                             strict: ctx.current_strict,
+                            byte_offset: 0,
+                            byte_end: 0,
                         },
                     ))
                 }
@@ -1073,6 +1083,8 @@ fn lower_assignment_target(
                                     value,
                                     receiver: object,
                                     strict: ctx.current_strict,
+                                    byte_offset: 0,
+                                    byte_end: 0,
                                 },
                             ));
                         }
@@ -1085,6 +1097,8 @@ fn lower_assignment_target(
                             value,
                             receiver: object,
                             strict: ctx.current_strict,
+                            byte_offset: 0,
+                            byte_end: 0,
                         },
                     ))
                 }
@@ -1106,6 +1120,8 @@ fn lower_assignment_target(
                             object,
                             property,
                             value,
+                            byte_offset: 0,
+                            byte_end: 0,
                         },
                     ))
                 }
@@ -1283,11 +1299,15 @@ fn compound_member_assign_once(
                 object: Box::new(Expr::LocalGet(base_id)),
                 property: p.clone(),
                 value: Box::new(value),
+                byte_offset: 0,
+                byte_end: 0,
             },
             (None, Some(k)) => Expr::IndexSet {
                 object: Box::new(Expr::LocalGet(base_id)),
                 index: Box::new(Expr::LocalGet(k)),
                 value: Box::new(value),
+                byte_offset: 0,
+                byte_end: 0,
             },
             _ => unreachable!(),
         }
@@ -1489,11 +1509,15 @@ pub(crate) fn hoist_compound_member_assign(
                 object: Box::new(Expr::LocalGet(base_id)),
                 property: p.clone(),
                 value: Box::new(value),
+                byte_offset: 0,
+                byte_end: 0,
             },
             (None, Some(k)) => Expr::IndexSet {
                 object: Box::new(Expr::LocalGet(base_id)),
                 index: Box::new(Expr::LocalGet(k)),
                 value: Box::new(value),
+                byte_offset: 0,
+                byte_end: 0,
             },
             _ => unreachable!(),
         }

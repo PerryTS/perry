@@ -219,6 +219,23 @@ pub(crate) fn class_own_accessor_ptrs_bytes(class_id: u32, name: &[u8]) -> Optio
     (decl.get != 0 || decl.set != 0).then_some((decl.get, decl.set))
 }
 
+/// [`class_own_accessor_ptrs_bytes`] for the accessor whose halves sit at `at`.
+pub(crate) fn class_own_accessor_ptrs_at(
+    class_id: u32,
+    at: super::declarations::DeclAt,
+) -> Option<(usize, usize)> {
+    let decl = super::declarations::class_accessor_decl_at(class_id, at)?;
+    (decl.get != 0 || decl.set != 0).then_some((decl.get, decl.set))
+}
+
+/// The spec `.length` of the setter half at `at`.
+pub(crate) fn class_own_setter_length_at(
+    class_id: u32,
+    at: super::declarations::DeclAt,
+) -> Option<u32> {
+    super::declarations::class_accessor_decl_at(class_id, at)?.set_length
+}
+
 /// The compiled entries of the ClassBody static accessor `name` of `class_id`
 /// as REGISTERED (`CLASS_STATIC_ACCESSORS`): the input the class function
 /// object's accessor property is built from, not the property itself — a
@@ -420,9 +437,7 @@ pub(crate) fn class_accessor_function_value_bytes(
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let closure = scope.root_raw_mut_ptr(closure);
-    closure.with_mut_ptr(|closure| {
-        crate::closure::js_closure_set_capture_ptr(closure, 0, raw_ptr as i64)
-    });
+    closure.with_mut_ptr(|closure| crate::closure::closure_set_code_word(closure, 0, raw_ptr));
     // Spec `.length`: params before the first default/rest. A getter takes no
     // params (0); a setter takes exactly one formal param — but `set m(x = 42)`
     // has `.length === 0` (defaults don't count). Codegen records the setter's

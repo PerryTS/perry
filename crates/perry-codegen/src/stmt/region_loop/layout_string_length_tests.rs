@@ -40,6 +40,8 @@ fn sum_lengths_ir_with(tree: Expr) -> String {
             value: Box::new(Expr::LocalGet(5)),
             receiver: Box::new(Expr::LocalGet(3)),
             strict: false,
+            byte_offset: 0,
+            byte_end: 0,
         }),
         Stmt::Expr(Expr::LocalSet(4, Box::new(bin(Expr::LocalGet(4), tree)))),
     ];

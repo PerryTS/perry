@@ -28,6 +28,7 @@ mod tests;
 
 #[cfg(test)]
 pub(crate) use alloc::closure_allocs_on_this_thread;
+pub use alloc::closure_set_capture_word;
 pub use alloc::{
     closure_alloc_storage, closure_capture_slots_mut, closure_payload_size, js_closure_alloc,
     js_closure_alloc_empty, js_closure_alloc_fixed, js_closure_alloc_init,
@@ -40,7 +41,8 @@ pub use alloc::{
     CLOSURE_CAP_SINGLETON_HIT, CLOSURE_CAP_SINGLETON_MISS, CLOSURE_SHAPE_OFFSET,
 };
 pub(crate) use alloc::{
-    closure_install_boxed_captures, gc_capture_slot_range, singleton_closure_if_cached,
+    closure_install_boxed_captures, closure_set_code_word, gc_capture_slot_range,
+    returned_capture_bits, singleton_closure_if_cached,
 };
 pub use body_call::{call_value, plain_call_receiver, JsThis};
 pub use shape::closure_kind_probe;
@@ -89,8 +91,8 @@ pub use unbox::{js_closure_unbox_callee_checked, js_closure_unbox_callee_checked
 
 pub(crate) use dynamic_props::{
     clone_closure_rebind_this, closure_get_dynamic_prop_keyed, closure_reads_this_from_capture,
-    closure_set_via_function_prototype_descriptor, function_prototype_fallback_target,
-    function_prototype_inherited_get,
+    closure_set_via_function_prototype_descriptor, closure_static_prototype_proven,
+    function_prototype_fallback_target, function_prototype_inherited_get,
 };
 pub(crate) use dynamic_props::{
     closure_define_data_with_attrs, closure_define_data_with_attrs_bytes,

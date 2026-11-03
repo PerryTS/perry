@@ -32,6 +32,7 @@ pub const ITER_ELEM: &str = "#iter";
 pub const IDX_PROTO_VALUE: u8 = 32;
 pub const IDX_PLAIN_LOAD: u8 = 33;
 pub const IDX_PLAIN_CALL: u8 = 34;
+pub const IDX_NUM_OWN: u8 = 35;
 pub const IDX_CALL_ANY: u8 = 36;
 pub const IDX_CALL_NAMED: u8 = 64;
 
@@ -43,6 +44,44 @@ pub const TOP: Tok = 0;
 pub const NO_CTX: CallId = u32::MAX;
 
 /// Primitive kind bits carried next to the object tokens of a node.
+/// What a test value must be able to hold for a [`Cons::Guard`] to let its
+/// branch through. ⊤ and parameter or argument markers (another unit's or
+/// an unseen caller's value) can hold anything; every other token is an
+/// object or a function: truthy, neither `undefined` nor `null`, and no
+/// String (its ToPrimitive may return one or a number).
+pub mod guard {
+    pub const UNDEF: u8 = 0;
+    pub const NOT_UNDEF: u8 = 1;
+    pub const NULLISH: u8 = 2;
+    pub const NOT_NULLISH: u8 = 3;
+    pub const TRUTHY: u8 = 4;
+    pub const FALSY: u8 = 5;
+    /// A value that is no String after ToPrimitive: an operand of `+` that
+    /// lets the other operand's numeric kinds reach the result.
+    pub const NOT_STR: u8 = 6;
+
+    /// The primitive kinds (`prim` bits) a test admits.
+    pub fn prims(test: u8) -> u16 {
+        use super::prim as p;
+        match test {
+            UNDEF => p::UNDEF,
+            NOT_UNDEF => p::ALL & !p::UNDEF,
+            NULLISH => p::UNDEF | p::NULL,
+            NOT_NULLISH => p::ALL & !(p::UNDEF | p::NULL),
+            // Every primitive kind but `undefined`/`null` has a truthy value.
+            TRUTHY => p::NUM | p::STR | p::BOOL | p::BIGINT | p::SYMBOL,
+            NOT_STR => p::ALL & !p::STR,
+            // `0`, `""`, `false`, `0n`, `null`, `undefined`.
+            _ => p::NUM | p::STR | p::BOOL | p::BIGINT | p::NULL | p::UNDEF,
+        }
+    }
+
+    /// An object or function token admits the test.
+    pub fn objects(test: u8) -> bool {
+        matches!(test, NOT_UNDEF | NOT_NULLISH | TRUTHY | NOT_STR)
+    }
+}
+
 pub mod prim {
     pub const NUM: u16 = 1 << 0;
     pub const STR: u16 = 1 << 1;
@@ -87,15 +126,24 @@ pub enum BuiltinNs {
     GlobalThis,
     Process,
     Error,
+    AggregateError,
+    Date,
+    RegExp,
+    TypedArray,
+    ArrayBuffer,
     Symbol,
     Number,
     String,
     Boolean,
     Function,
-    /// `Map` / `WeakMap`: `new` builds a collection of the entries' contents.
+    /// `Map`: `new` builds a collection of the entries' contents.
     Map,
-    /// `Set` / `WeakSet`: `new` builds a collection of the values.
+    /// `Set`: `new` builds a collection of the values.
     Set,
+    /// `WeakMap`: as `Map`, with the members of `%WeakMap.prototype%`.
+    WeakMap,
+    /// `WeakSet`: as `Set`, with the members of `%WeakSet.prototype%`.
+    WeakSet,
     /// The program's `require` from `module.createRequire` (one per
     /// program: every CommonJS wrapper shares it). A call resolves its
     /// constant specifier ([`Model::call_lit`]): a compiled module's path
@@ -106,7 +154,40 @@ pub enum BuiltinNs {
     /// `hasOwnProperty`, `valueOf`, `__defineGetter__` ... A call runs each
     /// one's effect on its receiver (`proto_method`); none is a constructor.
     ObjectProtoMethod,
+    /// `Object.prototype`'s own method under its own key, read as a value
+    /// (`Object.prototype.hasOwnProperty`): one no builtin prototype
+    /// overrides ([`ProtoOwn`]), so every builtin prototype
+    /// reads it there. A call is that method's call on its receiver
+    /// (`object_proto_own_call`); `call`/`apply`/`bind` are
+    /// `Function.prototype`'s. Not a constructor.
+    ///
+    /// The method is named by [`ProtoOwn`], not by an atom: builtin tokens
+    /// are shared between the units' models, whose atom tables differ.
+    ObjectProtoOwn(ProtoOwn),
     Other,
+}
+
+/// The `Object.prototype` methods no builtin prototype overrides
+/// (`BuiltinNs::ObjectProtoOwn`): under their key every builtin prototype
+/// chain reads `Object.prototype`'s own. Each only reads: `hasOwnProperty` /
+/// `propertyIsEnumerable` convert their key (ToPropertyKey) and test an own
+/// property of ToObject(this); `isPrototypeOf` walks its argument's chain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ProtoOwn {
+    HasOwnProperty,
+    PropertyIsEnumerable,
+    IsPrototypeOf,
+}
+
+impl ProtoOwn {
+    pub fn of_name(name: &str) -> Option<ProtoOwn> {
+        Some(match name {
+            "hasOwnProperty" => ProtoOwn::HasOwnProperty,
+            "propertyIsEnumerable" => ProtoOwn::PropertyIsEnumerable,
+            "isPrototypeOf" => ProtoOwn::IsPrototypeOf,
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -201,6 +282,9 @@ impl SharedReads {
             SharedWrite::Unmodeled(s) => self.objects.contains_key(s) || !self.keys.is_empty(),
             // Every chain reaches Object.prototype.
             SharedWrite::Hard(Shared::ObjectProto, _) => true,
+            // DECISIONS 234: a key may be gone from any escaped object.
+            SharedWrite::Hard(Shared::Top, Hard::E5DefineProperty) => true,
+            SharedWrite::Removed(_) => true,
             SharedWrite::Hard(s, _) => self.objects.contains_key(s),
         }
     }
@@ -227,6 +311,11 @@ pub enum SharedWrite {
     /// `setPrototypeOf` ...) on the object: on `Object.prototype` every
     /// chain through it is HARD, as the whole program derives it.
     Hard(Shared, Hard),
+    /// DECISIONS 234: a delete, defineProperty or `with` under a key
+    /// (`None`: computed) on an object ⊤ denotes: it may remove or redefine
+    /// that key of any escaped object (`top_reshape`). A delete or define on
+    /// a parameter marker travels as `Hard` (the callers pass the objects).
+    Removed(Option<String>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -254,6 +343,12 @@ pub enum TmplKind {
     ObjCreate { module: u32, site: SiteId },
     /// An array literal / array-producing site (flow only).
     Arr { module: u32, site: SiteId },
+    /// A function's `arguments` object (ECMA-262 10.4.4, flow only). It is
+    /// no Array: its prototype is `%Object.prototype%`, and `length` and
+    /// `callee` are ordinary own data properties (writable, configurable:
+    /// a store or `defineProperty` gives them any value). Its indices are
+    /// elements, as an array's are, and it iterates them.
+    Args { module: u32, site: SiteId },
     /// A builtin object created at a site (Map, Set, Promise, Date, Error,
     /// RegExp, typed array, ArrayBuffer, iterator …). Flow only.
     BObj {
@@ -285,6 +380,12 @@ pub struct Template {
     /// slots, absent until stored (each read pairs its load with the hole
     /// compare).
     pub declared: Vec<Atom>,
+    /// Birth keys reserved for a constructor store
+    /// (`ClassFieldOrigin::ConstructorStore`) that are not `definite`: code
+    /// can observe the instance before the constructor stores them (a method
+    /// call on `this`, ...). Known slots, holding the hole (absent) until
+    /// stored; each read pairs its load with the hole compare.
+    pub reserved: Vec<Atom>,
     /// Parent template (class `extends`), when statically known.
     pub parent: Option<TmplId>,
     /// The constructor function of a class template (None: implicit ctor).
@@ -314,6 +415,22 @@ pub struct Template {
     /// stand-in has no members and no prototype, so a lookup through it ends
     /// there and never reaches `Object.prototype`.
     pub null_proto: bool,
+    /// DECISIONS 242: a lookup on an object of this template may pass its
+    /// own keys and reach the prototype chain: a [[Get]] or call of a key
+    /// that is not a definite own data key (a computed key included), or a
+    /// [[Set]] of one (which may add it). Set by the solve
+    /// (`Model::note_chain_miss`). Without one, an accessor under any key on
+    /// `Object.prototype` reaches the template only if its keys are made by
+    /// [[Set]] (a constructor's `this.k =`), never a literal's birth keys.
+    pub chain_miss: bool,
+    /// An array a builtin made with ArraySpeciesCreate (ECMA-262 10.4.2.3:
+    /// `slice`, `splice`, `concat`, `map`, `filter`, `flat`, `flatMap`): the
+    /// node of the constructors the algorithm may take, each receiver's
+    /// `constructor` and that value's `@@species`
+    /// (`builtins::array_species`). It is an Array exotic only while no
+    /// object but `%Array%` is among them (`derive::exact_array`). `None`:
+    /// born by ArrayCreate, or no array.
+    pub species: Option<NodeId>,
 }
 
 #[derive(Clone, Debug)]
@@ -343,6 +460,11 @@ pub struct FuncInfo {
     /// (`LinkGeneratorPrototype`); `next`/`return`/`throw` and the
     /// iteration protocol on it run the closure.
     pub gen_step: bool,
+    /// An async generator's step closure (its `next` settles a Promise).
+    pub gen_async: bool,
+    /// A sync step closure with a `yield*`: a step may hand back its
+    /// delegate's inner result object as-is (step kind 2).
+    pub gen_reyields: bool,
     /// A class constructor of the shape `constructor(...a) { super(...a) }`
     /// (the spec default a derived class gets): the `new` call's own
     /// arguments construct the parent, position by position, not through
@@ -527,6 +649,32 @@ impl Protocol {
         }
     }
 
+    /// The use bit of a touch by this protocol (`MARK_TOUCH*`).
+    pub fn touch_bit(self) -> u8 {
+        match self {
+            Protocol::ToPrimitive => MARK_TOUCH_PRIMITIVE,
+            Protocol::Iterate => MARK_TOUCH_ITERATE,
+            Protocol::IterNext => MARK_TOUCH_ITER_NEXT,
+            Protocol::IterResult => MARK_TOUCH_ITER_RESULT,
+            Protocol::HasInstance => MARK_TOUCH_HAS_INSTANCE,
+            Protocol::Json | Protocol::OwnKeys | Protocol::Any => MARK_TOUCH,
+        }
+    }
+
+    /// The protocols the touch bits of `uses` name, each once.
+    pub fn of_touches(uses: u8) -> impl Iterator<Item = Protocol> {
+        [
+            Protocol::Any,
+            Protocol::ToPrimitive,
+            Protocol::Iterate,
+            Protocol::IterNext,
+            Protocol::IterResult,
+            Protocol::HasInstance,
+        ]
+        .into_iter()
+        .filter(move |p| uses & p.touch_bit() != 0)
+    }
+
     /// The protocol run on what the called methods return.
     pub fn of_result(self) -> Option<Protocol> {
         match self {
@@ -560,408 +708,8 @@ impl Protocol {
 pub const WK_TO_PRIMITIVE: &str = "@@__perry_wk_toPrimitive";
 pub const WK_HAS_INSTANCE: &str = "@@__perry_wk_hasInstance";
 
-/// Complex constraints, attached to the node whose new tokens trigger them.
-#[derive(Clone, Copy, Debug)]
-pub enum Cons {
-    /// The node is the value a contract function `f` stores under `key`
-    /// into its parameter `dst`'s argument (`reach`: into what it reaches)
-    /// (DECISIONS 118; `dst` `u32::MAX`: into what its receiver reaches,
-    /// and `Key::Any` a computed key, DECISIONS 149): a marker of one of
-    /// `f`'s parameters is that argument, which the reader stores; any
-    /// other value escapes.
-    StoreOut {
-        f: FnIdx,
-        dst: u32,
-        reach: bool,
-        /// A keyed reach (design §18.4): what the argument holds under it.
-        via: Option<Atom>,
-        key: Key,
-        reason: u32,
-        /// The receiver's reach marker stored into (`dst` `u32::MAX`).
-        at: Tok,
-        /// What the store met: `at`, or (a receiver-rooted store, DECISIONS
-        /// 149b) another function's marker or ⊤.
-        to: Tok,
-    },
-    /// dst ⊇ read(t, key) for every t in the node.
-    Load { key: Key, dst: NodeId },
-    /// Values of own properties only (enumerability over-approximated).
-    OwnValues { dst: NodeId },
-    /// `registerPathModule`: dst ⊇ a CommonJS record's live `exports` (the
-    /// wrapper's record literal carries `__perry_cjs_record` at birth), or
-    /// the published value itself for a raw publication.
-    CjsPublish { dst: NodeId },
-    /// write(t, key) ⊇ src for every t in the node.
-    Store { key: Key, src: NodeId, site: SiteId },
-    /// The node is a callee.
-    Call { call: CallId },
-    /// The node is a callee whose `this` is fixed to one receiver token
-    /// (a method found on that receiver or its chain).
-    CallThis { call: CallId, this: Tok },
-    /// The node is a `new` callee.
-    New { call: CallId },
-    /// `new Name(...)` of a builtin constructor named in the source: runs
-    /// once per call (the holder holds one marker token), so an instance
-    /// that renames the call constructs its own object.
-    NewNamed { name: Atom, call: CallId },
-    /// The node is a method-call receiver (`recv.key(...)`).
-    MCall { key: Key, call: CallId },
-    /// The node is `ProtoNode(cur)`: continue a lookup for `origin`.
-    Chain {
-        origin: Tok,
-        key: Key,
-        act: ChainAct,
-    },
-    /// Every token escapes (goes to ⊤), with the reason.
-    TopSink { reason: u32 },
-    /// A parameter of a closed class's stand-in constructor (design §18.13,
-    /// DECISIONS 109): an instance of another unit's contract (a stand-in)
-    /// goes to the defining unit's constructor through the argument
-    /// contract, which describes it there as the same stand-in, so that
-    /// unit's census covers what the constructor does with it; an array
-    /// leaves by its element cell (DECISIONS 94, 149e: the parameter is
-    /// checked as a published value, `Gen::check_value`, and the argument
-    /// contract names it); any other token escapes, with the reason.
-    /// DECISIONS 152: a parameter marker of this unit's function (its
-    /// callers' value) is handed over by that function's contract
-    /// (`FnContract::param_handovers`): the callers' units pass what they
-    /// hold to argument `arg` of the constructor `ctor` themselves.
-    HandOver { reason: u32, ctor: Tok, arg: u32 },
-    /// DECISIONS 149d: what a receiver-rooted store of function `f` puts
-    /// into an object of this unit: every value but `f`'s parameter and
-    /// argument markers, which are `f`'s receiver flow (`Cons::StoreOut`).
-    OwnOnly { f: FnIdx, dst: NodeId },
-    /// The `this` of a contract stand-in of another unit's class `tmpl`
-    /// (design §11.2): its instances are inside the contract; any other
-    /// receiver escapes (that unit runs the method on it unseen).
-    /// `this` of another unit's method: only that class's instances (and,
-    /// for a static method, its class object); any other receiver escapes.
-    /// `this` (`Model::this_contracts`, `u32::MAX`: none) is the method's
-    /// receiver contract (DECISIONS 57): a token of a subclass of `tmpl` is
-    /// admitted with the published effects on it.
-    ContractThis {
-        tmpl: TmplId,
-        reason: u32,
-        statics: bool,
-        this: u32,
-    },
-    /// `this` of the override token of (`tmpl`, `key`) (DECISIONS 97): a
-    /// method's receiver marker records the call (`Model::this_calls`);
-    /// `tmpl`'s receiver token passes (it stands for the class's own
-    /// instances, which no subclass key reaches); any other receiver
-    /// escapes with `reason`, as for an unknown callee.
-    OverrideThis {
-        tmpl: TmplId,
-        key: Atom,
-        reason: u32,
-    },
-    /// Once anything (a token or a primitive) reaches the node, `dst` holds
-    /// ⊤ and everything `from` holds: the result of a call that exists only
-    /// when an argument reaches it.
-    /// (`reason` `None`: only `from`, no ⊤.)
-    TopIfAny {
-        dst: NodeId,
-        from: NodeId,
-        reason: Option<u32>,
-    },
-    /// Every object token reaches a HARD operation.
-    Hard { kind: Hard, reason: u32 },
-    /// `delete o.key`: E7 HARD on every object token; on ⊤ (which may be a
-    /// builtin prototype) a write of `key` only.
-    DeleteKey { key: Atom, reason: u32 },
-    /// `Object.defineProperty(o, key, desc)` with a constant key (FVA 4.3a).
-    /// An accessor descriptor (`data` false) on a literal layout that does
-    /// not hold `key` as data: the key becomes an accessor key (the getter
-    /// and setter are installed by `Accessor`) and the layout gains it. On a
-    /// prototype that has no method `key`, either descriptor: `key` is a key
-    /// of the prototype that is no plain data slot (an accessor, or a value
-    /// whose attributes are the descriptor's), as a class getter is; the
-    /// value is stored by the caller. Any other token (a key it holds as
-    /// data, a class instance, ⊤, a data descriptor on a literal): E5 HARD.
-    DefineKey { key: Atom, data: bool, reason: u32 },
-    /// `Object.defineProperties(o, map)`: the node holds the maps. A literal
-    /// with exactly its birth keys defines each of them by the descriptor
-    /// under it (`DefineDesc`); any other map defines its own values
-    /// (`descs`) under a computed key: E5 HARD on `o`, the descriptors'
-    /// values (`value`, a load of `descs`) stored under any key at `site`.
-    DefineAll {
-        o: NodeId,
-        descs: NodeId,
-        value: NodeId,
-        site: SiteId,
-        reason: u32,
-    },
-    /// Internal: the node holds the descriptors `defineProperties` defines
-    /// `key` of `o` by. An accessor descriptor literal is a `DefineKey`
-    /// accessor; any other descriptor is a data definition (its `value`
-    /// stored under `key` at `site`); either installs its get/set.
-    DefineDesc {
-        o: NodeId,
-        key: Atom,
-        site: SiteId,
-        reason: u32,
-    },
-    /// Every token gains keys after birth (computed store …).
-    AddsKeys,
-    /// Builtin protocol touch: what `proto` reads on every token.
-    Implicit { reason: u32, proto: Protocol },
-    /// The node holds `Object.create` prototype arguments (E10).
-    CreateProto { reason: u32 },
-    /// The node is `ProtoNode(of)`: dst ⊇ the values of `key` on each
-    /// prototype (and further up), shared by every receiver of `of`.
-    ChainUnion { key: Key, dst: NodeId, of: Tok },
-    /// The node holds a value given as the prototype of an object (its
-    /// `ProtoNode` is `protos`): a builtin prototype there may be any of
-    /// them (`ObjectProto` collapses them), whose members the chain cannot
-    /// name: the chain also holds an unknown prototype.
-    ProtoGiven { protos: NodeId },
-    /// The node is `ProtoNode(t)`: dst ⊇ every prototype, transitively.
-    ProtoClosure { dst: NodeId },
-    /// The node is the prototype closure of receiver `origin`: builtin
-    /// prototype methods (Object.prototype, native parents) run for it.
-    ProtoMethods { origin: Tok, key: Key, call: CallId },
-    /// The node is the prototype closure of `origin`: accessors of every
-    /// holder on it run for a computed-key lookup with `origin` as `this`.
-    AnyAccessors { origin: Tok, act: ChainAct },
-    /// The node is the prototype closure of `origin`: an unknown (⊤)
-    /// prototype may hold a setter, so the stored value and `origin` escape.
-    StoreTopProto { origin: Tok, src: NodeId },
-    /// The node is `this`: continue a `super.key` lookup at `start` with
-    /// each `this` token as the receiver.
-    Super { start: Tok, key: Key, act: ChainAct },
-    /// The node is `this` of a constructor of `class`: run the parent
-    /// constructor chain for each instance (`super(...)`).
-    SuperCtor { class: TmplId, call: CallId },
-    /// A live constructor-prototype candidate runs on the same derived receiver.
-    SuperCtorParent {
-        class: TmplId,
-        call: CallId,
-        origin: Tok,
-    },
-    /// The node holds method closures installed on `recv` (literal methods):
-    /// their `this` is `recv`.
-    ThisFrom { recv: NodeId },
-    /// A literal's own content: every token here gets `src` in field `key`
-    /// (no store: a birth, as generation's direct field edges are). A
-    /// summary's form of a literal born in its body.
-    BirthField { key: Key, src: NodeId },
-    /// The node holds getter/setter functions installed on the objects of
-    /// `holder` under `key`.
-    Accessor {
-        holder: NodeId,
-        key: Atom,
-        setter: bool,
-    },
-    /// Internal: install accessor `f` on every token of the node.
-    /// `f`: the accessor's function token (its closure context included).
-    AccessorInstall { key: Atom, f: Tok, setter: bool },
-    /// The node holds objects whose prototype set includes `src`'s values.
-    ProtoFrom { src: NodeId },
-    /// dst ⊇ prototypes of the node's objects (`Object.getPrototypeOf`), as
-    /// values (`Model::proto_value`).
-    ProtoOf { dst: NodeId },
-    /// The node is `ProtoNode(t)`: dst ⊇ its prototypes as the runtime has
-    /// them (DECISIONS 217): a literal's class prototype is its layout, no
-    /// object; that layout's own prototypes stand in its place.
-    ProtoValues { dst: NodeId },
-    /// The node is the prototype closure of receiver `origin`, read or
-    /// called under a key that names no intrinsic member and not
-    /// `__proto__` (a number; DECISIONS 217): every program prototype's
-    /// fields under any key, what a store into ⊤ wrote on an intrinsic one.
-    PlainKey { origin: Tok, act: ChainAct },
-    /// dst ⊇ the `next` method of each iterator in the node.
-    IterNext { dst: NodeId },
-    /// The node holds `Reflect.construct` new-targets (E11).
-    NewTargetHard { reason: u32 },
-    /// The node is the object of `o[idx]` with a computed key: dst ⊇ its
-    /// elements/fields; the full keyed lookup (prototype chain, builtin
-    /// members) runs only if `idx` can hold a non-number key (`IdxKey`).
-    IdxLoad { idx: NodeId, dst: NodeId },
-    /// The node is the key of `o[k]` for object token `obj`: a string,
-    /// symbol or object key runs the full lookup. It is never taken to be
-    /// `"__proto__"` (DECISIONS 217: no program reaches a prototype through
-    /// an unknown string key; only the named forms read it).
-    IdxKey { obj: Tok, dst: NodeId },
-    /// The node is the receiver of `o[idx](...)` with a computed key: its
-    /// objects' own and program members under a number key; the full
-    /// method lookup only if `idx` can hold another key (`IdxKeyCall`).
-    IdxMCall { idx: NodeId, call: CallId },
-    /// The node is the key of `o[k](...)` for receiver token `obj`: a
-    /// string, symbol or object key calls `Key::Any`'s methods.
-    /// `obj` ⊤ with `prim`: the receiver's primitives of those kinds.
-    IdxKeyCall { obj: Tok, prim: u16, call: CallId },
-    /// The node is the value of a for-in body (FVA 4.3b, `gen/for_in.rs`):
-    /// each body token runs per value of `obj` (`ForInKeys`), its runs bound
-    /// through the template call `call` (one argument: the key).
-    ForInBody { obj: NodeId, call: CallId },
-    /// The node is the object for-in body `ft` iterates: a literal whose keys
-    /// are exactly its birth keys runs the body once per key, that run's key
-    /// parameter holding the one key (`Model::key_nodes`); any other value
-    /// runs it once through `call`, with every key.
-    ForInKeys { ft: Tok, call: CallId },
-    /// The node is the key of `defineProperty(o, k, desc)` in a for-in body:
-    /// a run's one key defines it as a constant key does (`DefineKey`);
-    /// any other key is E5 HARD.
-    DefineKeyed {
-        o: NodeId,
-        reason: u32,
-        accessor: bool,
-    },
-    /// The node is the key of a store into `o` in a for-in body: a run's one
-    /// key stores under that key, any other under `Key::Any`.
-    StoreKeyed {
-        o: NodeId,
-        src: NodeId,
-        site: SiteId,
-    },
-    /// The node is the key of a definition whose descriptor's get (set) is
-    /// `f`, on the objects of `holder`: a run's one key installs it under
-    /// that key, any other under the computed-key star.
-    AccessorKeyed {
-        holder: NodeId,
-        f: NodeId,
-        setter: bool,
-    },
-    /// The node is an arithmetic operand: dst ⊇ the kinds its values turn
-    /// into (`+` when `add`: strings concatenate).
-    Arith { dst: NodeId, add: bool },
-    /// The node is the only argument of `Array(x)` / `new Array(x)`: a Number
-    /// is the length (the array has holes, no element), any other value is
-    /// the one element (ECMA-262 Array). `dst` ⊇ its tokens and its
-    /// non-number primitives.
-    ArrayLenArg { dst: NodeId },
-    /// The node holds the source of a typed array `ta`: a buffer or view
-    /// there means `ta` shares (and so exposes) that buffer (B1).
-    ShareBuffer { ta: Tok },
-    /// The node holds the methods a lookup found on receiver `origin`:
-    /// each runs with `origin` as `this` (the `this` half of `CallThis`,
-    /// shared by every call site that looks the same key up on `origin`).
-    ThisTo { origin: Tok },
-    /// The node is call `call`'s callee relay (the union of the method
-    /// nodes its receivers found): arguments and result bind once per
-    /// (call, function) (the argument half of `CallThis`).
-    CallArgs { call: CallId },
-    /// The node is the result of run `run` (`Node::frame`), bound to
-    /// `call`: the call's result takes each value, except that the family
-    /// of the run's argument marker for a parameter is the caller's own
-    /// argument there (DECISIONS 44 (b), `Model::ret_into`).
-    RetInto { call: CallId, run: u32 },
-    /// The node is argument `i` of `call`, bound to run `run`: each marker
-    /// it gains is what the run's result returns of that parameter's marker
-    /// family (DECISIONS 44 (b), `Model::arg_into`).
-    ArgInto { call: CallId, run: u32, i: u32 },
-    /// The node is the source of an object spread / `Object.assign` into
-    /// the values of `into`: each source object copies its own keys, key
-    /// by key, into each target (`Model::spread_into`), never through one
-    /// any-key bucket.
-    Spread { into: NodeId, site: SiteId },
-    /// The node holds the targets of a spread from source token `src`.
-    SpreadFrom { src: Tok, site: SiteId },
-    /// The node is a receiver of summarized function token `ft` at `call`
-    /// (or of no call: `NO_NODE`): each value binds the instance of its
-    /// layout (`Model::bind_layout`).
-    ThisInst { call: CallId, ft: Tok },
-    /// The node is a method node some call sites bound through: a builtin
-    /// namespace value in it runs per (call, receiver) (`callee_sites`).
-    BuiltinCallee,
-    /// The node holds prototypes on a named-key accessor lookup's chain:
-    /// `pass` ⊇ the holders the lookup passes through (and continues
-    /// above), `stop` ⊇ the prototypes where a declared member ends it.
-    /// Built once per (start, key), shared by every receiver below it.
-    HolderStep {
-        key: Key,
-        pass: NodeId,
-        stop: NodeId,
-    },
-    /// The node is a lookup's pass-holder set: accessors there run for
-    /// `origin` (and later ones replay through `visits`); ⊤ there is an
-    /// unknown prototype.
-    VisitHolders {
-        origin: Tok,
-        key: Key,
-        act: ChainAct,
-    },
-    /// The node is a lookup's stop-holder set: accessors there run.
-    VisitStop {
-        origin: Tok,
-        key: Key,
-        act: ChainAct,
-    },
-}
-
-impl Cons {
-    pub fn kind_name(&self) -> &'static str {
-        match self {
-            Cons::Load { .. } => "load",
-            Cons::OwnValues { .. } => "ownvalues",
-            Cons::CjsPublish { .. } => "cjspublish",
-            Cons::Store { .. } => "store",
-            Cons::Call { .. } => "call",
-            Cons::CallThis { .. } => "callthis",
-            Cons::New { .. } => "new",
-            Cons::NewNamed { .. } => "newnamed",
-            Cons::MCall { .. } => "mcall",
-            Cons::Chain { .. } => "chain",
-            Cons::TopSink { .. } => "top",
-            Cons::HandOver { .. } => "handover",
-            Cons::OwnOnly { .. } => "ownonly",
-            Cons::StoreOut { .. } => "storeout",
-            Cons::ContractThis { .. } => "contractthis",
-            Cons::OverrideThis { .. } => "overridethis",
-            Cons::TopIfAny { .. } => "topifany",
-            Cons::Hard { .. } => "hard",
-            Cons::DeleteKey { .. } => "deletekey",
-            Cons::AddsKeys => "addskeys",
-            Cons::DefineKey { .. } => "definekey",
-            Cons::DefineAll { .. } => "defineall",
-            Cons::DefineDesc { .. } => "definedesc",
-            Cons::Implicit { .. } => "implicit",
-            Cons::CreateProto { .. } => "createproto",
-            Cons::ChainUnion { .. } => "chainunion",
-            Cons::ProtoGiven { .. } => "protogiven",
-            Cons::ProtoClosure { .. } => "protoclosure",
-            Cons::ProtoMethods { .. } => "protomethods",
-            Cons::AnyAccessors { .. } => "anyaccessors",
-            Cons::StoreTopProto { .. } => "storetopproto",
-            Cons::Super { .. } => "super",
-            Cons::SuperCtor { .. } => "superctor",
-            Cons::SuperCtorParent { .. } => "superctorparent",
-            Cons::ThisFrom { .. } => "thisfrom",
-            Cons::BirthField { .. } => "birthfield",
-            Cons::Accessor { .. } => "accessor",
-            Cons::AccessorInstall { .. } => "accinstall",
-            Cons::ProtoFrom { .. } => "protofrom",
-            Cons::ProtoOf { .. } => "protoof",
-            Cons::ProtoValues { .. } => "protovalues",
-            Cons::PlainKey { .. } => "plainkey",
-            Cons::IterNext { .. } => "iternext",
-            Cons::NewTargetHard { .. } => "newtargethard",
-            Cons::Arith { .. } => "arith",
-            Cons::ArrayLenArg { .. } => "arraylenarg",
-            Cons::IdxLoad { .. } => "idxload",
-            Cons::IdxKey { .. } => "idxkey",
-            Cons::IdxMCall { .. } => "idxmcall",
-            Cons::IdxKeyCall { .. } => "idxkeycall",
-            Cons::ForInBody { .. } => "forinbody",
-            Cons::ForInKeys { .. } => "forinkeys",
-            Cons::DefineKeyed { .. } => "definekeyed",
-            Cons::StoreKeyed { .. } => "storekeyed",
-            Cons::AccessorKeyed { .. } => "accessorkeyed",
-            Cons::ShareBuffer { .. } => "sharebuffer",
-            Cons::ThisTo { .. } => "thisto",
-            Cons::CallArgs { .. } => "callargs",
-            Cons::RetInto { .. } => "retinto",
-            Cons::ArgInto { .. } => "arginto",
-            Cons::Spread { .. } => "spread",
-            Cons::SpreadFrom { .. } => "spreadfrom",
-            Cons::ThisInst { .. } => "thisinst",
-            Cons::BuiltinCallee => "builtincallee",
-            Cons::HolderStep { .. } => "holderstep",
-            Cons::VisitHolders { .. } => "visitholders",
-            Cons::VisitStop { .. } => "visitstop",
-        }
-    }
-}
+mod cons;
+pub use cons::*;
 
 /// DECISIONS 118: (function, parameter, into its reach, via, key).
 pub type StoreFlowKey = (FnIdx, u32, bool, Option<Atom>, Key);
@@ -1052,6 +800,12 @@ pub struct StoreSite {
     /// The evaluated key of an indexed source store. Its solved scalar kind
     /// distinguishes element effects from arbitrary named-property writes.
     pub key_value: Option<NodeId>,
+    /// RPG1b: where the store runs in its function, when the walk made it
+    /// at a statement of a function body: `Some(true)` inside a loop
+    /// (body, condition or update), `Some(false)` not. `None`: a site no
+    /// body walk ordered (a birth definition, a replay, a parameter
+    /// default, a synthetic store); it is never an ordered writer.
+    pub in_loop: Option<bool>,
 }
 
 #[derive(Default, Clone, Debug)]
@@ -1082,6 +836,24 @@ impl WorkProfile {
     pub const STEP: u64 = 5_000_000;
 }
 
+/// An object literal with spreads: the keys it defines itself, and per
+/// spread site the keys every source so far surely holds (`None`: no source
+/// yet). A key is sure when the literal defines it or one spread copies it
+/// from every source.
+#[derive(Default, Clone, Debug)]
+pub struct LitSpread {
+    pub named: Vec<Atom>,
+    pub sites: Vec<(SiteId, Option<Vec<Atom>>)>,
+}
+
+/// DECISIONS 241: the join's values of one function's own properties
+/// (`Model::fn_joined`).
+#[derive(Default, Clone, Debug)]
+pub struct FnJoined {
+    pub keys: Vec<(Atom, NodeId)>,
+    pub any: Option<NodeId>,
+}
+
 #[derive(Default)]
 pub struct Model {
     pub(crate) diagnostic: Option<crate::diagnostics::Trace>,
@@ -1103,6 +875,9 @@ pub struct Model {
     pub max_nodes: usize,
     pub atoms: Vec<String>,
     pub atom_index: FxHashMap<String, Atom>,
+    /// The atoms of class private names (`Model::private_atom`), by their
+    /// storage key: a key apart from every public key of that spelling.
+    pub private_atoms: FxHashMap<String, Atom>,
     pub calls: Vec<CallSite>,
     pub stores: Vec<StoreSite>,
     /// (target fns node, bound this, bound args)
@@ -1119,6 +894,9 @@ pub struct Model {
     pub star_from: FxHashMap<Tok, Vec<Tok>>,
     pub ns_own: crate::pts::FxHashSet<(Tok, Atom)>,
     pub all_fields: FxHashMap<Tok, NodeId>,
+    /// `Model::private_field`: what a class private field holds on any
+    /// object the class's code finds it on.
+    pub private_fields: FxHashMap<Atom, NodeId>,
     /// `Model::num_fields`: the fields a number key may name.
     pub num_fields: FxHashMap<Tok, NodeId>,
     pub proto_node: FxHashMap<Tok, NodeId>,
@@ -1133,7 +911,28 @@ pub struct Model {
     pub class_writers: FxHashMap<(TmplId, Atom), FieldWriters>,
     pub proto_writers: FxHashMap<(TmplId, Atom), FieldWriters>,
     pub any_writers: FxHashMap<TmplId, FieldWriters>,
+    /// RPG1b: the functions whose body runs at most once per evaluation of
+    /// module `.0`, and only while it evaluates (`gen/once.rs`); `.1`: once
+    /// with reload (the runtime's path registry may evaluate the module
+    /// again after its `require.cache` entry was deleted).
+    pub once_fns: FxHashMap<FnIdx, (u32, bool)>,
+    /// RPG1b: each module's static evaluation dependencies (imports that
+    /// are not dynamic, type-only, erased or a deferred require): their
+    /// evaluation completes before the module's starts, unless they reach
+    /// it back (`derive::evaluated_before`).
+    pub eval_deps: Vec<Vec<u32>>,
+    /// The modules each module reaches through `eval_deps`, as a bit set,
+    /// computed when an ordered-writer check first asks (`derive`).
+    pub eval_reach: FxHashMap<u32, Vec<u64>>,
     pub adds_keys: FxHashMap<TmplId, u32>,
+    /// The part of `adds_keys` that came from a named store of a key the
+    /// template did not list as a birth key when the store was seen
+    /// (`(template, key) -> stores`). A class whose parent is the value of
+    /// another unit has only its own keys in `birth_keys` until the parent
+    /// settles (`settle_parent_layouts`); the layout facts count these stores
+    /// against the settled birth keys (`derive`), where an inherited birth key
+    /// is no add.
+    pub adds_named: FxHashMap<(TmplId, Atom), u32>,
     pub hard: FxHashMap<Tok, (Hard, u32)>,
     pub escaped: FxHashMap<Tok, u32>,
     /// `escaped` as a bitset by token (the hot membership test).
@@ -1196,19 +995,69 @@ pub struct Model {
     /// reached that holder (the receiver itself or a prototype in its
     /// closure), so installing an accessor replays only those.
     pub any_walk_holders: FxHashMap<Tok, Vec<(Tok, ChainAct)>>,
+    /// Published literals whose own accessors leave to other units
+    /// (`leave_walk`): the node what they return loads into.
+    pub leave_loads: FxHashMap<Tok, NodeId>,
+    /// This unit's literals whose own getters became contract functions
+    /// (`Gen::note_own_getters`): only theirs are contract getters.
+    pub getter_owners: crate::pts::FxHashSet<Tok>,
     /// Source token of a spread -> its targets (and the spread site): a key
     /// the source gains later is copied too (`Model::field`).
     pub spread_to: FxHashMap<Tok, Vec<(Tok, SiteId)>>,
     pub spread_done: crate::pts::FxHashSet<(Tok, Tok)>,
+    /// Object literals with spreads (`{ a, ...s }`): which keys they surely
+    /// hold (`LitSpread`), by template, and their spread sites.
+    pub lit_spread: FxHashMap<TmplId, LitSpread>,
+    pub lit_spread_site: FxHashMap<SiteId, TmplId>,
+    /// Reads of a key a fact unit surely holds (they read no `undefined`),
+    /// by template: when the key stops being sure (a spread source that
+    /// lacks it, a `delete`), each gets `undefined` after all.
+    pub present_reads: FxHashMap<TmplId, Vec<(Atom, NodeId)>>,
+    pub present_seen: crate::pts::FxHashSet<(TmplId, Atom, NodeId)>,
+    /// The `Cons::Defined` node a present read's chain flows through, by
+    /// the read's destination.
+    pub defined_via: FxHashMap<NodeId, NodeId>,
+    /// (chain node, read destination) pairs with their `Cons::Defined`.
+    pub defined_done: crate::pts::FxHashSet<(NodeId, NodeId)>,
+    /// Fact units whose keys can disappear (delete, defineProperty, with):
+    /// no key of theirs is sure.
+    pub keys_unsure: crate::pts::FxHashSet<TmplId>,
+    /// DECISIONS 234: keys a `delete`, a `defineProperty` or an accessor
+    /// through ⊤ or on a builtin prototype may have removed or redefined
+    /// (`reshaped_any`: every key). A builtin prototype redefined under a
+    /// key may intercept the store that makes an object's own key (a
+    /// setter, a read-only value), so the own key no longer shadows it.
+    pub reshaped_keys: crate::pts::FxHashSet<Atom>,
+    pub reshaped_any: bool,
+    /// DECISIONS 234: lookups of an own definite data key that skipped the
+    /// builtin members of the chain (`Model::shadows`), by receiver: (key,
+    /// the read (`ChainAct::Load`, its destination) or the method call
+    /// (`ChainAct::Call`) that looked it up, whether the receiver's own
+    /// builtin members were skipped too). Once the key no longer shadows,
+    /// the lookup takes them.
+    pub shadowed: FxHashMap<Tok, Vec<(Atom, ChainAct, bool)>>,
+    /// DECISIONS 234: keys a delete or defineProperty through ⊤ may have
+    /// removed or redefined (`top_reshaped_any`: every key), in any unit
+    /// (`SharedWrite::Hard(Shared::Top, ..)`). ⊤ denotes escaped objects
+    /// only (DECISIONS 150): it revokes no other object's key.
+    pub top_reshaped_keys: crate::pts::FxHashSet<Atom>,
+    pub top_reshaped_any: bool,
+    /// Templates and classes some instance of which escaped (`inst_escaped`)
+    /// or met a delete, defineProperty or `with` (`inst_lose`): for a
+    /// class, an instance of it or of a subclass, or a receiver of it.
+    pub inst_escaped: crate::pts::FxHashSet<TmplId>,
+    pub inst_lose: crate::pts::FxHashSet<TmplId>,
     /// Calls the runtime makes for a protocol (ToPrimitive, iteration …).
     pub protocol_calls: crate::pts::FxHashSet<CallId>,
     /// Shared prototype-chain value nodes: (token, key) → node.
-    pub cv_nodes: FxHashMap<(Tok, Key), NodeId>,
+    /// `true`: with the builtin prototypes' members; `false`: the program
+    /// prototypes only (an own key shadows the builtin ones, DECISIONS 234).
+    pub cv_nodes: FxHashMap<(Tok, Key, bool), NodeId>,
     /// Prototype closure nodes: token → node.
     pub cp_nodes: FxHashMap<Tok, NodeId>,
     /// Shared chain unions that stopped at a declared member: resumed when
     /// that prototype is mutated.
-    pub stopped_shared: FxHashMap<Tok, Vec<(Key, NodeId)>>,
+    pub stopped_shared: FxHashMap<Tok, Vec<(Key, NodeId, bool)>>,
     /// Keys some accessor may be defined under (known at generation): only
     /// lookups of these keys walk the chain per receiver.
     pub accessor_atoms: crate::pts::FxHashSet<Atom>,
@@ -1249,6 +1098,13 @@ pub struct Model {
     pub thrown: NodeId,
     /// E14: interpreted code can run (and patch `Object.prototype`).
     pub dyn_eval: Option<String>,
+    /// The dyn-eval interpreter is linked (the driver's link decision): a
+    /// solved call or construct that may be the Function constructor then
+    /// runs interpreted code (DECISIONS 235).
+    pub interp_linked: bool,
+    /// Interpreted code may run: its global writes and its catch of thrown
+    /// values are in the solve (`builtins::interpreted_code_runs`).
+    pub interp_runs: bool,
     /// No interpreted code can run in the program (no dynamic code, no
     /// dynamic code reach, no direct eval scope): what this unit publishes
     /// reaches compiled units only, which use another unit's stand-in
@@ -1278,6 +1134,8 @@ pub struct Model {
     /// The boundary's store standing in for other units' stores into what
     /// this unit gives them (`Gen::unit_boundary`): not this unit's write.
     pub other_units_store: Option<NodeId>,
+    /// This run is one unit of a per-unit solve (`Config::unit`).
+    pub unit_mode: bool,
     /// Prototype nodes of escaped values (`Model::escape_inner`): what
     /// escapes there is reached along a chain, not handed over as a value.
     pub chain_sinks: crate::pts::FxHashSet<NodeId>,
@@ -1291,6 +1149,20 @@ pub struct Model {
     /// them. `None` after the solve: compiled code never writes them
     /// ([`Model::note_fnproto_write`]).
     pub fnproto_write: Option<u32>,
+    /// #13645: why iterating an array may not read the builtin
+    /// `%Array.prototype%[@@iterator]`: the first write under
+    /// `Symbol.iterator`, `__proto__` or a computed key, definition or
+    /// prototype change on a value that may be an array (or a prototype on
+    /// an Array subclass's chain), or a `Reflect.construct` with a new
+    /// target ([`Model::note_array_member_write`]). Writes that may reach a
+    /// builtin prototype are in [`Model::native_writes`]
+    /// ([`Model::array_iteration_writes`]).
+    pub array_member_write: Option<u32>,
+    /// #13645: computed-key stores (site, reason) on a value that may be an
+    /// array: a write of `@@iterator` or `__proto__` only if the site's key
+    /// can hold a string, a symbol or an object once the solve is done
+    /// ([`Model::array_iteration_writes`]); a number key is an element.
+    pub array_keyed_stores: Vec<(SiteId, u32)>,
     /// Native parent prototypes (`EventEmitter.prototype`, `Error.prototype`
     /// …) are runtime-owned, like `Object.prototype`: sealed static layouts
     /// whose keys the analysis knows ([`crate::builtins::native_proto_keys`]),
@@ -1328,6 +1200,10 @@ pub struct Model {
     /// (key node, operand, kind) a keyed rule (`DefineKeyed`, `StoreKeyed`,
     /// `AccessorKeyed`) has applied once.
     pub keyed_done: crate::pts::FxHashSet<(NodeId, NodeId, u8)>,
+    /// (key node, store site, index) a `StoreIndexed` store has been added
+    /// for: `true` the index store, `false` the computed-key one. A shared
+    /// body's replay has its own key node.
+    pub index_store_done: crate::pts::FxHashSet<(NodeId, SiteId, bool)>,
     /// For-in bodies that define a property under their key.
     pub for_in_defines: crate::pts::FxHashSet<FnIdx>,
     /// The key variable of every for-in body: a run's copy of it holds the
@@ -1340,6 +1216,10 @@ pub struct Model {
     /// site, reason) of the `DefineAll`, checked again once the worklist is
     /// empty (`settle_define`).
     pub define_runs: Vec<(Tok, NodeId, NodeId, NodeId, SiteId, u32)>,
+    /// (runtime object or ⊤, prototype node) of each `setPrototypeOf` that
+    /// may give a runtime object a new prototype: its lookups may now reach
+    /// the keys of that prototype's chain (`settle_native_given`).
+    pub native_given: Vec<(Tok, NodeId)>,
     /// (descs, map) defined under any key; descs whose E5 and store under
     /// any key are attached.
     pub define_any: crate::pts::FxHashSet<(NodeId, Tok)>,
@@ -1349,7 +1229,8 @@ pub struct Model {
     pub desc_runs: Vec<(Tok, NodeId, Atom, SiteId, u32)>,
     /// (o, key, descriptor) defined as data.
     pub desc_data: crate::pts::FxHashSet<(NodeId, Atom, Tok)>,
-    /// (o, key, data) whose `DefineKey` is attached.
+    /// (o, key, data): a key defined on `o` (`STAR_KEY`: under a computed
+    /// key); a named key has its `DefineKey` attached.
     pub define_on: crate::pts::FxHashSet<(NodeId, Atom, bool)>,
     /// The node a `Cons::Store` runs on, while it runs.
     pub store_at: Option<NodeId>,
@@ -1411,6 +1292,10 @@ pub struct Model {
     pub arr_named_srcs: FxHashMap<Tok, Vec<NodeId>>,
     /// Targets of a possible [[Prototype]] write (TOP included).
     pub super_relink: crate::pts::FxHashSet<Tok>,
+    /// Another unit's classes this unit gives as a class object's parent:
+    /// their constructor runs on a receiver their unit does not see. The
+    /// census reports each (`Gen::reports`, `extends <class>`).
+    pub relinked_parents: crate::pts::FxHashSet<TmplId>,
     /// Source constructor of a type-specialized instance layout (compiler data).
     pub constructor_origins: FxHashMap<TmplId, TmplId>,
     pub constructor_this_done: crate::pts::FxHashSet<(CallId, TmplId, Tok)>,
@@ -1455,6 +1340,24 @@ pub struct Model {
     /// computed store, a hard operation, an escape).
     pub virt_revoked: crate::pts::FxHashSet<(TmplId, Atom)>,
     pub virt_open: crate::pts::FxHashSet<TmplId>,
+    /// DECISIONS 231(c): keys the code of this unit stores, with known
+    /// values, into an instance or receiver of each published class or a
+    /// subclass (`virt_store`), and the node holding those values: the own
+    /// field a receiver of the class reads.
+    pub virt_stored: FxHashMap<(TmplId, Atom), NodeId>,
+    /// Published classes an instance or receiver of which escaped: a store
+    /// into ⊤ under a key (any unit's, `top_stored`) may be a store into it.
+    pub virt_escaped: crate::pts::FxHashSet<TmplId>,
+    /// The keys stored into ⊤ (this unit's stores and the replayed ones);
+    /// `None`: under a computed key.
+    pub top_stored: crate::pts::FxHashSet<Option<Atom>>,
+    /// DECISIONS 231(b): argument markers that stood for receiver markers
+    /// only and now stand for another value too: every key may be an own
+    /// key of what they denote, as for an opened class (`virt_own`).
+    pub virt_tok_open: crate::pts::FxHashSet<Tok>,
+    /// The argument markers (no reach) each marker is a member of, for the
+    /// receiver classes an argument marker stands for (`virt_member`).
+    pub virt_member_of: FxHashMap<Tok, Vec<Tok>>,
     /// Census: keys a subclass of another unit defines, per published
     /// class (`override <k> of <display>`; `*`: any key).
     pub override_keys: FxHashMap<TmplId, Vec<Atom>>,
@@ -1513,6 +1416,9 @@ pub struct Model {
     /// DECISIONS 149d: per (stored node, function) the node of its values
     /// that are not the function's markers (`Cons::OwnOnly`).
     pub rooted_own: FxHashMap<(NodeId, FnIdx), NodeId>,
+    /// Per stored node, its value as this unit's own instances hold it
+    /// (`Cons::CallerValue`).
+    pub caller_value: FxHashMap<NodeId, NodeId>,
     /// DECISIONS 118, argument markers: the named-key stores into one (each
     /// replayed on every marker that links in later), the `StoreOut`s it is
     /// the source of (function, parameter, reason: a member other than that
@@ -1545,6 +1451,9 @@ pub struct Model {
     pub marker_links: Vec<(Tok, Tok)>,
     /// Published classes whose constructor is a contract (DECISIONS 57).
     pub ctor_published: crate::pts::FxHashSet<TmplId>,
+    /// Foreign classes whose constructor chain may return an object other
+    /// than `this` (`ClassContract::ctor_returns`): their `new` is unknown.
+    pub foreign_ctor_returns: crate::pts::FxHashSet<TmplId>,
     /// Another unit's templates this unit sees through a contract, with the
     /// facts their defining unit published (design §11.2).
     pub foreign: FxHashMap<TmplId, crate::TemplateFacts>,
@@ -1558,6 +1467,12 @@ pub struct Model {
     /// Published functions with a contract (design §11.2): their results
     /// are checked after the solve instead of escaping.
     pub contract_fns: crate::pts::FxHashSet<FnIdx>,
+    /// DECISIONS 224: contract functions of this unit published to a known
+    /// closed callee (DECISIONS 223, `Gen::closed_arg_functions`). Their
+    /// contract asks every unit that runs them to publish what it passes
+    /// (`FnContract::callable`), as a published method's does (DECISIONS
+    /// 148/165): their parameter markers stand beside that join.
+    pub callable_pub: crate::pts::FxHashSet<FnIdx>,
     /// Closed functions (decision 13): per parameter the node holding what
     /// the other units' calls pass (`Gen::closed_params`), instead of ⊤.
     pub closed_params: FxHashMap<FnIdx, Vec<NodeId>>,
@@ -1578,6 +1493,10 @@ pub struct Model {
     /// Per beside argument marker: the arithmetic results that took no
     /// object kinds for it (DECISIONS 75); they take them if it leaves.
     pub beside_arith: FxHashMap<Tok, Vec<(NodeId, u16)>>,
+    /// Per beside argument marker: the guards (`from`, `dst`) it did not
+    /// admit (a marker beside its values is no value, DECISIONS 74); their
+    /// edges follow if it leaves (75).
+    pub beside_guard: FxHashMap<Tok, Vec<(NodeId, NodeId)>>,
     /// Decision 19: the reason a closed function is published to the
     /// module's other units (`Gen::unit_boundary`). Published that way its
     /// token does not escape: its parameters hold the closed contract's
@@ -1639,6 +1558,22 @@ pub struct Model {
     /// left with the function (unknown code reads and writes them); the
     /// reason it left.
     pub props_escaped: FxHashMap<Tok, u32>,
+    /// DECISIONS 241: what this unit's code stored on a function token's
+    /// own property (`store_into`), apart from what its fields hold from
+    /// the join (`fn_joined`): the unit publishes these
+    /// (`ProgramFacts::fn_stores_out`). Not `prototype` (DECISIONS 210(1)).
+    pub fn_stored: FxHashMap<(Tok, Atom), NodeId>,
+    pub fn_stored_any: FxHashMap<Tok, NodeId>,
+    /// DECISIONS 241: per function (this unit's or a stand-in), the values
+    /// every unit stored on its own properties (`Published::fn_stores`),
+    /// each a node holding their stand-ins: each token of the function
+    /// reads them under its key (`field`), its computed key (`field_any`)
+    /// and every key (`all_fields`).
+    pub fn_joined: FxHashMap<FnIdx, FnJoined>,
+    /// DECISIONS 241: function tokens that reached unknown code (not a
+    /// publication to another unit, `UNDESCRIBED`): any key of theirs may
+    /// hold anything, published as an unknown computed-key store.
+    pub fn_props_top: crate::pts::FxHashSet<Tok>,
     /// DECISIONS 210/211: the functions unknown code constructs
     /// (`Model::construct_unknown`), once each.
     pub unknown_new: crate::pts::FxHashSet<FnIdx>,
@@ -1656,8 +1591,11 @@ pub struct Model {
     /// The calls through a contract function's parameter marker
     /// (function, parameter, method key, call): `p(..)` (no key, DECISIONS
     /// 140) or `p.k(..)` (DECISIONS 144). Their arguments go to the
-    /// caller's unit, described as the result is.
-    pub marker_calls: Vec<(FnIdx, u32, Option<Atom>, CallId)>,
+    /// caller's unit, described as the result is. DECISIONS 236: with a
+    /// path (parameter `u32::MAX`, path `Some(f)`), `this.f.k(..)` through
+    /// the receiver marker's keyed reach: each unit holding a receiver runs
+    /// it on what its object holds under `f`.
+    pub marker_calls: Vec<(FnIdx, u32, Option<Atom>, Option<Atom>, CallId)>,
     /// A contract function's parameter markers: one object token per
     /// parameter standing for everything the caller passes (anything read
     /// from it is the marker again), and what the callee did with it
@@ -1693,6 +1631,18 @@ pub struct Model {
     /// argument markers, settled after the solve (`settle_keyed_uses`):
     /// the contract publishes them.
     pub keyed_uses: FxHashMap<Tok, Vec<(Atom, u8)>>,
+    /// DECISIONS 242 (contract half): the miss sites (`note_chain_miss`)
+    /// met on a marker token during the solve, and, settled after it over
+    /// `marker_members` (`settle_marker_ops`), per parameter marker: the
+    /// contract publishes them (`reach_keys`), the caller runs them on its
+    /// argument (`Cons::Miss`).
+    pub marker_reads: FxHashMap<Tok, Vec<Key>>,
+    pub param_reads: FxHashMap<Tok, Vec<Key>>,
+    /// DECISIONS 242 (contract half): the defineProperty calls (key, `None`
+    /// computed; data) met on a marker token, and per parameter marker
+    /// after the solve (`settle_marker_ops`): `FnContract::param_defines`.
+    pub marker_defines: FxHashMap<Tok, Vec<(Option<Atom>, bool)>>,
+    pub param_defines: FxHashMap<Tok, Vec<(Option<Atom>, bool)>>,
     /// An argument marker: the uses some named key of it had, its own
     /// (its keyed reach markers') and its containers' (`keyed_use`). During
     /// the solve a keyed use matters to the markers it stands for only as
@@ -1755,6 +1705,31 @@ pub struct Model {
     /// owns (a local, a parameter, or the enclosing `this` of an arrow).
     pub captures: crate::pts::FxHashSet<(NodeId, FnIdx)>,
     pub sum: crate::summary::SumState,
+    /// DECISIONS 225: the function bodies that can run, when the analysis
+    /// gates bodies on it (`None`: every body runs).
+    pub act: Option<Act>,
+}
+
+/// DECISIONS 225: which function bodies can run. A body is active once its
+/// module runs it, a transfer of an active body solves to it, or it escapes
+/// (unknown code may call anything escaped, DECISIONS 150). The set only
+/// grows; generation walks a body once it is active (`Gen::walk_activated`).
+#[derive(Default, Clone, Debug)]
+pub struct Act {
+    /// The active functions, by their stable identity (`Model::act_key`).
+    pub on: crate::pts::FxHashSet<(u32, u32, String)>,
+    /// Activated since generation last walked.
+    pub queue: Vec<FnIdx>,
+    /// The set is final (the analysis after the activation pass): nothing
+    /// activates, a body outside it is never walked.
+    pub fixed: bool,
+    /// The bodies the analysis after the activation pass walked (by
+    /// `Model::act_key`): what can run, module bodies and static
+    /// initializers included (`ProgramFacts::active_bodies`).
+    pub walked: crate::pts::FxHashSet<(u32, u32, String)>,
+    /// The negative control (`PERRY_FACTS_SABOTAGE=activation:<path>`):
+    /// one activation path left out, so its refusal fixture proves wrongly.
+    pub sabotage: Option<String>,
 }
 
 /// The accessors of one holder under one key (or every key, `Key::Any`),
@@ -1828,3 +1803,18 @@ pub(crate) fn marker_top_bit(bits: &[u64], t: Tok) -> bool {
 }
 pub const MARK_TOUCH: u8 = 2;
 pub const MARK_ESCAPE: u8 = 4;
+/// A touch by a protocol whose keys ECMA-262 fixes (`Protocol::keys`):
+/// the reader runs that protocol on its value, not `Protocol::Any`
+/// (`MARK_TOUCH`: a touch whose keys are any, `Any` and JSON).
+pub const MARK_TOUCH_PRIMITIVE: u8 = 8;
+pub const MARK_TOUCH_ITERATE: u8 = 16;
+pub const MARK_TOUCH_ITER_NEXT: u8 = 32;
+pub const MARK_TOUCH_ITER_RESULT: u8 = 64;
+pub const MARK_TOUCH_HAS_INSTANCE: u8 = 128;
+/// Every touch bit.
+pub const MARK_TOUCHES: u8 = MARK_TOUCH
+    | MARK_TOUCH_PRIMITIVE
+    | MARK_TOUCH_ITERATE
+    | MARK_TOUCH_ITER_NEXT
+    | MARK_TOUCH_ITER_RESULT
+    | MARK_TOUCH_HAS_INSTANCE;

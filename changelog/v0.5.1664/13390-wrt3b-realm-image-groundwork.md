@@ -1,0 +1,1 @@
+Prepare reachable realm cell emission and source-derived function-info exports, including Array's owning static and manifest link. Production realm emission and startup population removal remain pending.

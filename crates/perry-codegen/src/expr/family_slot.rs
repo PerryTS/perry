@@ -155,7 +155,8 @@ pub(crate) fn lower_set(
             // The object carries the birth state or this one: the store is
             // the slot and the state word, nothing to compare.
             let state = state_id(ctx, add);
-            let header = crate::target_layout::object_header_size_bytes(ctx.target_triple);
+            let header =
+                crate::target_layout::object_slot_base_bytes(ctx.target_triple, add.form());
             let offset = (header + 8 * u64::from(add.slot)).to_string();
             let (slot_ptr, slot_addr) = {
                 let blk = ctx.block();
@@ -192,7 +193,7 @@ pub(crate) fn lower_set(
         ctx.block().cond_br(&ok, &fast_label, &slow_label);
 
         ctx.current_block = fast_idx;
-        let header = crate::target_layout::object_header_size_bytes(ctx.target_triple);
+        let header = crate::target_layout::object_slot_base_bytes(ctx.target_triple, add.form());
         let offset = (header + 8 * u64::from(add.slot)).to_string();
         let (slot_ptr, slot_addr) = {
             let blk = ctx.block();
@@ -264,7 +265,7 @@ pub(crate) fn lower_get(
     if present(site, expr) {
         // A store of the key dominates this read on an exact family
         // object: the key is present, one load.
-        let header = crate::target_layout::object_header_size_bytes(ctx.target_triple);
+        let header = crate::target_layout::object_slot_base_bytes(ctx.target_triple, add.form());
         let offset = (header + 8 * u64::from(add.slot)).to_string();
         let blk = ctx.block();
         let slot_ptr = blk.gep(I8, &obj_ptr, &[(I64, &offset)]);
@@ -282,7 +283,7 @@ pub(crate) fn lower_get(
     ctx.block().cond_br(&present, &fast_label, &slow_label);
 
     ctx.current_block = fast_idx;
-    let header = crate::target_layout::object_header_size_bytes(ctx.target_triple);
+    let header = crate::target_layout::object_slot_base_bytes(ctx.target_triple, add.form());
     let offset = (header + 8 * u64::from(add.slot)).to_string();
     let fast_val = {
         let blk = ctx.block();

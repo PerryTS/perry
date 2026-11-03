@@ -114,6 +114,7 @@ mod compare_value_eq;
 pub(crate) use compare::test_key_byte_reads;
 pub(crate) mod concat;
 mod concat_boundary;
+pub(crate) mod concat_parts;
 pub(crate) mod concat_site;
 mod format;
 mod html;
@@ -202,6 +203,10 @@ pub use concat::{
     js_string_add_value, js_string_append_chain, js_string_concat, js_string_concat_box,
     js_string_concat_chain, js_string_concat_value, js_value_add_string, js_value_concat_string,
     scan_concat_memo_roots, scan_concat_memo_roots_mut,
+};
+pub use concat_parts::{
+    js_string_concat_lit_value_box, js_string_concat_parts, js_string_concat_parts_2,
+    js_string_concat_parts_3, js_string_concat_parts_4, js_string_concat_parts_5,
 };
 pub use concat_site::{js_string_concat_site_value, CONCAT_SITE_SLOTS};
 pub(crate) use format::ascii_char_string;
@@ -558,13 +563,16 @@ pub struct StringHeader {
 /// cannot share a constant. This assertion is the link: reordering, resizing,
 /// or padding this struct fails the runtime BUILD here, at the definition,
 /// rather than silently miscompiling every `.length` and `charCodeAt` in
-/// every user program. The literals are duplicated in
+/// every user program.  (12) is read by the inline pointer-push
+/// arm in . The literals are duplicated in
 /// `lower_string_method.rs`'s `STRING_HEADER_*` constants, which name this
 /// item.
 const STRING_HEADER_ABI_MATCHES_CODEGEN: () = {
     assert!(std::mem::size_of::<StringHeader>() == 20);
     assert!(std::mem::offset_of!(StringHeader, utf16_len) == 0);
     assert!(std::mem::offset_of!(StringHeader, byte_len) == 4);
+    assert!(std::mem::offset_of!(StringHeader, refcount) == 12);
+    assert!(std::mem::offset_of!(StringHeader, refcount) == 12);
     assert!(std::mem::offset_of!(StringHeader, flags) == 16);
 };
 const _: () = STRING_HEADER_ABI_MATCHES_CODEGEN;
@@ -737,8 +745,9 @@ pub(crate) fn byte_offset_to_utf16_index(s: &str, byte_off: usize) -> usize {
 ///   strings that do not require a real `StringHeader*`.
 /// - Normal heap strings, including native input, use GC-managed arenas.
 ///   Large JSON result leaves may use GC-tracked malloc storage instead.
-/// - `arena_alloc_gc` routes small and medium payloads to nursery pages and
-///   large payloads to old-gen pages using `LARGE_OBJECT_THRESHOLD_BYTES`.
+/// - `arena_alloc_gc` routes small and medium payloads to moving nursery pages
+///   and large pointer-free leaves to individually owned young non-moving
+///   storage using the existing `LARGE_OBJECT_THRESHOLD_BYTES`.
 ///
 /// Keep this helper as the single normal heap-string storage entry point. Other
 /// `GC_TYPE_STRING` users, notably `SymbolHeader` and JSON tape scratch buffers,
@@ -752,32 +761,6 @@ pub(crate) fn string_storage_alloc(capacity: u32) -> (*mut StringHeader, *mut u8
     let data = string_data(ptr).cast_mut();
     zero_alignment_padding_tail(raw, payload_size);
     (ptr, data)
-}
-
-/// [`string_storage_alloc`] for a child of a producer's fresh container, born
-/// where [`crate::gc::ProducerChildBirth`] says. `Old` takes the old-generation
-/// birth a large string takes: old pages, `GC_FLAG_TENURED`, and the live
-/// allocate-black color.
-#[inline]
-pub(crate) fn string_storage_alloc_for(
-    birth: crate::gc::ProducerChildBirth,
-    capacity: u32,
-) -> (*mut StringHeader, *mut u8) {
-    match birth {
-        crate::gc::ProducerChildBirth::Young => string_storage_alloc(capacity),
-        crate::gc::ProducerChildBirth::Old => {
-            let payload_size = std::mem::size_of::<StringHeader>() + capacity as usize;
-            let raw = crate::arena::arena_alloc_gc_old_born_tenured(
-                payload_size,
-                8,
-                crate::gc::GC_TYPE_STRING,
-            );
-            let ptr = raw as *mut StringHeader;
-            let data = string_data(ptr).cast_mut();
-            zero_alignment_padding_tail(raw, payload_size);
-            (ptr, data)
-        }
-    }
 }
 
 /// JSON results at or above this size use individually tracked storage.
@@ -814,7 +797,11 @@ pub(crate) fn json_output_storage_alloc(capacity: u32) -> (*mut StringHeader, *m
         return (ptr, data, false);
     }
     if json_leaf_prefers_arena(capacity) {
-        let (ptr, data) = string_storage_alloc(capacity);
+        let payload_size = std::mem::size_of::<StringHeader>() + capacity as usize;
+        let raw = crate::arena::arena_alloc_gc_old(payload_size, 8, crate::gc::GC_TYPE_STRING);
+        let ptr = raw as *mut StringHeader;
+        let data = string_data(ptr).cast_mut();
+        zero_alignment_padding_tail(raw, payload_size);
         crate::gc::note_young_leaf_born_old();
         return (ptr, data, false);
     }
@@ -836,8 +823,8 @@ pub(crate) fn json_output_storage_alloc(capacity: u32) -> (*mut StringHeader, *m
 #[inline]
 pub(crate) fn json_leaf_prefers_arena(capacity: u32) -> bool {
     crate::gc::gen_gc_enabled()
-        && crate::arena::copying_from_space_in_use_bytes() >= capacity as usize
-        && crate::gc::young_generation_holds_a_nursery()
+        && crate::arena::moving_from_space_in_use_bytes() >= capacity as usize
+        && crate::gc::allocation_pacing::moving_young_generation_holds_a_nursery()
         && !crate::gc::young_generation_measured_dying()
 }
 
@@ -1179,6 +1166,7 @@ pub(crate) fn string_copy_range(
 
 /// Only block exhaustion needs the source handle and post-allocation reload.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn string_copy_range_collecting(
     s: *const StringHeader,

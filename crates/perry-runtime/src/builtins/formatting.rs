@@ -289,7 +289,7 @@ fn format_function_for_console(closure_ptr: *const crate::closure::ClosureHeader
         if func_ptr.is_null() {
             None
         } else {
-            registered_name_string(func_ptr as usize).filter(|n| !n.is_empty())
+            registered_name_string(&*(*closure_ptr).info).filter(|n| !n.is_empty())
         }
     };
     let label = match registry_name
@@ -788,7 +788,7 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                         value_repr::render_array_body(&parts, inspect_compact_enabled())
                     };
                     inspect_finish_circular(ptr as usize, body_str)
-                } else if gc_type == crate::gc::GC_TYPE_OBJECT {
+                } else if crate::gc_type_is_object!(gc_type) {
                     // Object — check for keys_array. Cycle check FIRST so the
                     // self-referencing case wins over the depth-2 collapse to
                     // `[Object]` (#1204). The depth cap is overridable via
@@ -1144,12 +1144,8 @@ unsafe fn format_object_as_json(
     };
     // Node prefixes a null-prototype object with `[Object: null prototype]`
     // (e.g. `Object.create(null)`), since it has no constructor to name.
-    // The flag is set at allocation by `js_object_alloc_null_proto`.
-    let is_null_proto = {
-        let gc =
-            (obj_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        (*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0
-    };
+    // The object's shape (or recorded prototype) says whether it has one.
+    let is_null_proto = crate::object::shapes::cell_prototype_is_null(obj_ptr as usize);
     // The display prefix before the `{ … }` body: a real class/constructor
     // name when present, otherwise `[Object: null prototype]` for a
     // null-proto plain object, otherwise nothing. (Distinct from
@@ -1300,7 +1296,7 @@ unsafe fn format_object_as_json(
     }
 
     if inspect_sorted_enabled() {
-        string_parts.sort_by(|(left, _), (right, _)| left.cmp(right));
+        crate::cold_sort::sort_by(&mut string_parts, |(left, _), (right, _)| left.cmp(right));
     }
 
     let mut parts: Vec<String> = string_parts
@@ -1568,7 +1564,7 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                             format!("[ {} ]", texts.join(", "))
                         };
                         inspect_finish_circular(ptr as usize, body_str)
-                    } else if gc_type == crate::gc::GC_TYPE_OBJECT {
+                    } else if crate::gc_type_is_object!(gc_type) {
                         // Cycle check FIRST so back-edges win over the
                         // depth-limit collapse to `[Object]` (#1204). The
                         // depth cap is overridable via INSPECT_DEPTH_LIMIT

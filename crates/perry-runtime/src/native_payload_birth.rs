@@ -137,17 +137,14 @@ pub(super) fn alloc_born<T: 'static>(
 /// The prototype identity a family instance's shape names: its class-default
 /// link to the family prototype (`born_instance`'s birth record).
 unsafe fn family_proto_id(proto: *mut ObjectHeader) -> Option<u64> {
-    let meta = (*proto).meta;
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(proto as *mut _));
     (!meta.is_null()).then(|| (*meta).proto_serial)
 }
 
-/// An unpublished null-prototype object, as `js_object_alloc_null_proto`
-/// initializes one before publishing its birth shape.
+/// An unpublished state record. Its null [[Prototype]] is the identity of
+/// the filled birth shape its caller stamps (`PROTO_ID_NULL`).
 unsafe fn unpublished_state(count: u32) -> *mut ObjectHeader {
-    let obj = crate::object::object_alloc_unpublished(0, count);
-    let gc = crate::gc::header_from_trusted_user_ptr(obj.cast()).cast_mut();
-    (*gc)._reserved |= crate::gc::OBJ_FLAG_NULL_PROTO;
-    obj
+    crate::object::object_alloc_unpublished(0, count)
 }
 
 /// Stamp a fresh, unobserved object with `id`.
@@ -261,7 +258,7 @@ fn any_lanes(id: LayoutWord, count: usize) -> bool {
 /// shape: the canonical store's string alias and barrier work; the shape's
 /// rep is what traces the slot.
 unsafe fn init_slot(obj: *mut ObjectHeader, i: usize, bits: u64) {
-    let fields = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
+    let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)) as *mut u64;
     crate::gc::runtime_store_jsvalue_slot_layout_deferred(
         obj as usize,
         fields.add(i) as usize,

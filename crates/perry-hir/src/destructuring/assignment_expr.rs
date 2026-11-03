@@ -64,6 +64,8 @@ pub(crate) fn lower_destructuring_assignment(
                                                 object,
                                                 property,
                                                 value: Box::new(index_expr),
+                                                byte_offset: 0,
+                                                byte_end: 0,
                                             });
                                         }
                                         ast::MemberProp::Computed(computed) => {
@@ -72,6 +74,8 @@ pub(crate) fn lower_destructuring_assignment(
                                                 object,
                                                 index,
                                                 value: Box::new(index_expr),
+                                                byte_offset: 0,
+                                                byte_end: 0,
                                             });
                                         }
                                         // `[this.#field] = arr` — brand-guard the
@@ -92,6 +96,8 @@ pub(crate) fn lower_destructuring_assignment(
                                                 object,
                                                 property,
                                                 value: Box::new(index_expr),
+                                                byte_offset: 0,
+                                                byte_end: 0,
                                             });
                                         }
                                     }

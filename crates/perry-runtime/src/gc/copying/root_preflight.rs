@@ -16,7 +16,7 @@ impl CopiedMinorEligibility {
         (reason, stats)
     }
 
-    pub(super) fn mutable_root_preflight_reason(
+    pub(super) fn mutable_root_preflight_reason<const DIAGNOSTICS: bool>(
         ptrs: &CopyingPointerSet,
     ) -> Option<CopiedMinorFallbackReason> {
         let mut checker =
@@ -32,27 +32,38 @@ impl CopiedMinorEligibility {
         {
             let mut visitor = RuntimeRootVisitor::for_copying_check(&mut checker);
             for entry in scanners {
-                let (_, nanos) = super::scanner_profile::record_scanner(|| {
-                    (entry.scanner)(&mut visitor);
-                });
-                super::scanner_profile::note_scanner(entry.name, nanos, 0, 0, 0);
+                let (_, nanos) = if DIAGNOSTICS {
+                    super::scanner_profile::record_scanner(|| {
+                        (entry.scanner)(&mut visitor);
+                    })
+                } else {
+                    (
+                        (|| {
+                            (entry.scanner)(&mut visitor);
+                        })(),
+                        0,
+                    )
+                };
+                if DIAGNOSTICS {
+                    super::scanner_profile::note_scanner(entry.name, nanos, 0, 0, 0)
+                };
             }
             visit_ffi_mutable_registered_roots(&mut visitor);
         }
-        checker.check_dirty_roots();
+        checker.check_dirty_roots::<DIAGNOSTICS>();
         unsafe {
-            checker.drain();
+            checker.drain::<DIAGNOSTICS>();
         }
         checker.fallback_reason
     }
 
-    pub(super) fn dirty_slot_preflight_reason(
+    pub(super) fn dirty_slot_preflight_reason<const DIAGNOSTICS: bool>(
         ptrs: &CopyingPointerSet,
     ) -> Option<CopiedMinorFallbackReason> {
-        let snapshot = remembered_dirty_snapshot();
+        let snapshot = remembered_dirty_snapshot::<DIAGNOSTICS>();
         let mut dirty_checker =
             CopyingNurseryPreflight::new(ptrs, CopiedMinorFallbackReason::PinnedYoungDirtySlot);
-        scan_remembered_dirty_slots_copying(
+        scan_remembered_dirty_slots_copying::<DIAGNOSTICS>(
             &snapshot,
             None,
             |slot, _header, _external, _stats| unsafe {
@@ -61,7 +72,7 @@ impl CopiedMinorEligibility {
         );
         unsafe {
             super::image_cells::preflight_image_roots(&mut dirty_checker);
-            dirty_checker.drain();
+            dirty_checker.drain::<DIAGNOSTICS>();
         }
         dirty_checker.fallback_reason
     }

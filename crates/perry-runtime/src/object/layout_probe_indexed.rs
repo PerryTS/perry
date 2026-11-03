@@ -30,6 +30,14 @@ pub(super) unsafe fn get<const ABSENT: bool, const SITE: bool, const LAZY_HASH: 
     // The complete text path performs the hash/content comparison and
     // continues collisions. No text hash need stay live on an atom hit.
     if pos & TEXT_ENTRY != 0 {
+        // Only a key of the text's hash can be its text: another key's
+        // lookup continues this index, as `continued` does.
+        if KeyIndex::word(table, pos & POS_BITS) != site_key_hash::<LAZY_HASH>(key_bits, hash) {
+            if SITE {
+                return site_memo::collision::<ABSENT, LAZY_HASH>(dir, obj, key_bits, hash, memo);
+            }
+            return continued::<ABSENT, SITE, LAZY_HASH>(dir, obj, key_bits, hash, memo);
+        }
         return unloaded::underived::<ABSENT, LAZY_HASH>(dir, obj, key_bits, hash);
     }
     // Select the key storage before retaining its slot index. This keeps
@@ -50,11 +58,13 @@ pub(super) unsafe fn get<const ABSENT: bool, const SITE: bool, const LAZY_HASH: 
         }
         return continued::<ABSENT, SITE, LAZY_HASH>(dir, obj, key_bits, hash, memo);
     }
-    // This existing shape fact proves a public accessor. The leaf must
-    // decline it; the collecting entrance reloads the live getter pair.
+    // This existing shape fact proves a public accessor at an inline slot:
+    // the pair is one load, and the shape answers what needs no user code.
+    // The arm passes only values the data path holds anyway (the receiver
+    // and the slot word), so a data hit pays nothing for it.
     let load = entry_load(table, pos, i);
     if load == NO_LOAD && pos & ACCESSOR_ENTRY != 0 {
-        return hole();
+        return accessor_answer_slot(obj, KeyIndex::word(table, i) as u32);
     }
     unloaded::finish::<ABSENT, SITE, LAZY_HASH>(dir, obj, key_bits, hash, i, load, memo)
 }
@@ -106,7 +116,7 @@ pub(super) unsafe fn continued<const ABSENT: bool, const SITE: bool, const LAZY_
         if w == key_bits {
             let load = entry_load(table, pos, i);
             if load == NO_LOAD && pos & ACCESSOR_ENTRY != 0 {
-                return hole();
+                return accessor_answer_slot(obj, KeyIndex::word(table, i) as u32);
             }
             break (i, load);
         }
@@ -114,3 +124,7 @@ pub(super) unsafe fn continued<const ABSENT: bool, const SITE: bool, const LAZY_
     };
     unloaded::finish::<ABSENT, SITE, LAZY_HASH>(dir, obj, key_bits, hash, pos, load, memo)
 }
+
+#[cfg(test)]
+#[path = "layout_probe_indexed_tests.rs"]
+mod tests;

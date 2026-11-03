@@ -152,7 +152,9 @@ unsafe fn allocate_layout(
     }
     let prototype_bits = prototype.get_nanbox_u64();
     let p = (prototype_bits & crate::value::POINTER_MASK) as *const ObjectHeader;
-    let proto_id = (*p).meta.as_ref()?.proto_serial;
+    let proto_id = crate::meta_read!(crate::meta_obj_runtime_born!(p as *mut _))
+        .as_ref()?
+        .proto_serial;
     if proto_id == 0 {
         return None;
     }
@@ -174,7 +176,7 @@ unsafe fn allocate_layout(
     // descriptor cell: same layout, the record still present, it names this
     // prototype identity and serial, and its bound symbol keys are the
     // current bindings. Otherwise intern by facts and rewrite the holder.
-    let meta = (*p).meta;
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(p as *mut _));
     let held = (*meta).function_layout_birth;
     let holds = tag.is_some_and(|tag| held >> 32 == u64::from(tag))
         && super::shapes::shape_record_for_word(LayoutWord(held as u32)).is_some_and(|record| {
@@ -235,7 +237,7 @@ unsafe fn try_symbol_store(
     let Some(gc) = crate::value::addr_class::try_read_gc_header(address) else {
         return false;
     };
-    if gc.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(gc.obj_type)
         || gc._reserved
             & (crate::gc::OBJ_FLAG_FROZEN
                 | crate::gc::OBJ_FLAG_SEALED
@@ -262,15 +264,12 @@ unsafe fn try_symbol_store(
     if !function_layout_admits_store(obj, d, position, key) {
         return false;
     }
-    let slots = obj
-        .cast::<u8>()
-        .add(std::mem::size_of::<ObjectHeader>())
-        .cast::<u64>();
     let _no_gc = crate::gc::GcSuppressScope::new();
-    if *slots.add(k.slot as usize) == TAG_HOLE {
-        if (position + 1..d.key_count)
-            .any(|i| *slots.add((*d.keys.add(i as usize)).slot as usize) != TAG_HOLE)
-        {
+    if *super::header::object_slot_at(obj as *mut _, u32::from(k.off)) == TAG_HOLE {
+        if (position + 1..d.key_count).any(|i| {
+            *super::header::object_slot_at(obj as *mut _, u32::from((*d.keys.add(i as usize)).off))
+                != TAG_HOLE
+        }) {
             return false;
         }
         if !symbol_chain_allows_add(target, key) {
@@ -313,7 +312,8 @@ unsafe fn function_layout_admits_store(
     {
         return false;
     }
-    let meta = (*obj).meta;
+    // A1_UNPROVEN: record-first: d layout kind (kind-A/B question for S0f).
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     if !meta.is_null() && (*meta).flags & super::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0 {
         return false;
     }
@@ -332,12 +332,15 @@ unsafe fn function_layout_admits_store(
     // only an ordinary object carries the holder metadata.
     let address = (prototype_bits & crate::value::POINTER_MASK) as usize;
     if crate::value::addr_class::try_read_gc_header(address)
-        .is_none_or(|gc| gc.obj_type != crate::gc::GC_TYPE_OBJECT)
+        .is_none_or(|gc| crate::object_lacks_meta_word!(gc.obj_type))
     {
         return false;
     }
     let prototype = address as *const ObjectHeader;
-    let Some(holder) = (*prototype).meta.as_ref() else {
+    // A1_UNPROVEN: record-first: d layout kind (kind-A/B question for S0f).
+    let Some(holder) =
+        crate::meta_read!(crate::meta_obj_runtime_born!(prototype as *mut _)).as_ref()
+    else {
         return false;
     };
     if holder.function_layout_birth != (u64::from(tag) << 32) | u64::from(word) {
@@ -371,13 +374,17 @@ unsafe fn symbol_chain_allows_add(receiver: f64, key: f64) -> bool {
         let Some(gc) = crate::value::addr_class::try_read_gc_header(address) else {
             return false;
         };
-        if gc.obj_type != crate::gc::GC_TYPE_OBJECT {
+        if crate::object_lacks_meta_word!(gc.obj_type) {
             return false;
         }
         let obj = address as *const ObjectHeader;
         if (*obj).class_id != 0
-            || (!(*obj).meta.is_null()
-                && (*(*obj).meta).flags & super::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0)
+            || (!crate::meta_read!(crate::meta_obj_from_type!(obj as *mut _, gc.obj_type))
+                .is_null()
+                && (*crate::meta_read!(crate::meta_obj_from_type!(obj as *mut _, gc.obj_type)))
+                    .flags
+                    & super::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER
+                    != 0)
         {
             return false;
         }

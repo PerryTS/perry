@@ -142,6 +142,7 @@ pub(crate) fn class_final(
                         object,
                         property,
                         value,
+                        ..
                     }) => {
                         matches!(object.as_ref(), Expr::This)
                             && names.contains(property.as_str())

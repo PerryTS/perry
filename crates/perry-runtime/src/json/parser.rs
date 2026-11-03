@@ -38,7 +38,7 @@ impl<'a> ParsedStr<'a> {
 /// is never accepted by itself; exact bytes decide identity, and genuine hash
 /// collisions retain their additional indices in `collisions`.
 struct ParsedObjectIndex {
-    hash_state: ahash::RandomState,
+    hash_state: crate::fast_hash::AHashState,
     primary: crate::fast_hash::PtrHashMap<u64, usize>,
     collisions: Vec<(u64, usize)>,
 }
@@ -46,7 +46,7 @@ struct ParsedObjectIndex {
 impl ParsedObjectIndex {
     unsafe fn from_keys(keys: &[*const StringHeader]) -> Self {
         let mut index = Self {
-            hash_state: ahash::RandomState::new(),
+            hash_state: crate::fast_hash::AHashState::default(),
             primary: crate::fast_hash::PtrHashMap::with_capacity_and_hasher(
                 keys.len(),
                 crate::fast_hash::PtrHasher,
@@ -66,7 +66,7 @@ impl ParsedObjectIndex {
 
     #[inline]
     fn hash_bytes(&self, bytes: &[u8]) -> u64 {
-        self.hash_state.hash_one(bytes)
+        std::hash::BuildHasher::hash_one(&self.hash_state, bytes)
     }
 
     #[inline]

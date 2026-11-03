@@ -348,7 +348,7 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
             for i in 0..length {
                 match get_gc_type(*data_ptr.add(i)) {
                     t if t == crate::gc::GC_TYPE_ARRAY => has_array = true,
-                    t if t == crate::gc::GC_TYPE_OBJECT => has_object = true,
+                    t if crate::gc_type_is_object!(t) => has_object = true,
                     _ => {}
                 }
             }
@@ -361,7 +361,7 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
                 for i in 0..length {
                     let elem = *data_ptr.add(i);
                     let elem_jsval = JSValue::from_bits(elem.to_bits());
-                    if get_gc_type(elem) == crate::gc::GC_TYPE_OBJECT {
+                    if crate::gc_type_is_object!(get_gc_type(elem)) {
                         let obj_ptr = elem_jsval.as_pointer::<crate::object::ObjectHeader>();
                         let keys = object_key_names(obj_ptr);
                         if only_properties.is_none() {
@@ -389,7 +389,7 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
                     let elem_jsval = JSValue::from_bits(elem.to_bits());
                     let mut row: Vec<String> = Vec::with_capacity(headers.len());
                     row.push(i.to_string());
-                    if get_gc_type(elem) == crate::gc::GC_TYPE_OBJECT {
+                    if crate::gc_type_is_object!(get_gc_type(elem)) {
                         let obj_ptr = elem_jsval.as_pointer::<crate::object::ObjectHeader>();
                         for key in &all_keys {
                             let present = row_keys
@@ -548,7 +548,7 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
                 }
                 render_table(&headers, &rows);
             }
-        } else if gc_type == crate::gc::GC_TYPE_OBJECT {
+        } else if crate::gc_type_is_object!(gc_type) {
             // Single object: rows are property name → "Values" column.
             let obj_ptr = jsval.as_pointer::<crate::object::ObjectHeader>();
             let keys = object_key_entries(obj_ptr);
@@ -561,7 +561,7 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
             let mut all_nested = true;
             for (slot, _) in &keys {
                 let v = crate::object::key_attrs::object_slot_data_f64(obj_ptr, *slot);
-                if get_gc_type(v) == crate::gc::GC_TYPE_OBJECT {
+                if crate::gc_type_is_object!(get_gc_type(v)) {
                     let vp =
                         JSValue::from_bits(v.to_bits()).as_pointer::<crate::object::ObjectHeader>();
                     for k in object_key_names(vp) {
@@ -584,7 +584,7 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
                 for (slot, key) in &keys {
                     let v = crate::object::key_attrs::object_slot_data_f64(obj_ptr, *slot);
                     let mut row = vec![key.clone()];
-                    if get_gc_type(v) == crate::gc::GC_TYPE_OBJECT {
+                    if crate::gc_type_is_object!(get_gc_type(v)) {
                         let vp = JSValue::from_bits(v.to_bits())
                             .as_pointer::<crate::object::ObjectHeader>();
                         for nested_key in &nested_keys {

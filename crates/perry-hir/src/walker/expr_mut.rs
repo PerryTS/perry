@@ -7,6 +7,15 @@ pub fn walk_expr_children_mut<F>(expr: &mut Expr, f: &mut F)
 where
     F: FnMut(&mut Expr),
 {
+    stacker::maybe_grow(WALK_STACK_RED_ZONE, WALK_STACK_SEGMENT, || {
+        walk_expr_children_mut_level(expr, f)
+    })
+}
+
+fn walk_expr_children_mut_level<F>(expr: &mut Expr, f: &mut F)
+where
+    F: FnMut(&mut Expr),
+{
     match expr {
         Expr::ScopedTemp { value, body, .. } => {
             f(value);
@@ -224,6 +233,7 @@ where
         | Expr::EncodeURIComponent(v)
         | Expr::DecodeURIComponent(v)
         | Expr::QueueMicrotask(v)
+        | Expr::AsyncStepDeclined(v)
         | Expr::IterResultSet(v, _)
         | Expr::CryptoRandomBytes(v)
         | Expr::CryptoSha256(v)
@@ -812,6 +822,7 @@ where
             object,
             index,
             value,
+            ..
         } => {
             f(object);
             f(index);
@@ -1185,6 +1196,13 @@ where
             f(replacement);
         }
         Expr::AsyncStepChain {
+            value,
+            step_closure,
+        } => {
+            f(value);
+            f(step_closure);
+        }
+        Expr::AsyncStepResumeNow {
             value,
             step_closure,
         } => {

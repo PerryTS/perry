@@ -220,7 +220,29 @@ impl ServerResponse {
         self
     }
 }
+/// node's `STATUS_CODES[statusCode] || 'unknown'`.
+pub(crate) fn status_text(code: u16) -> &'static str {
+    http::StatusCode::from_u16(code)
+        .ok()
+        .and_then(|s| s.canonical_reason())
+        .unwrap_or("unknown")
+}
+
 impl ResponseState {
+    /// The message the head carries, fixed when the head is committed (node's
+    /// `writeHead`): a string `reason` is the message, even an empty one;
+    /// otherwise `statusMessage ||= STATUS_CODES[statusCode] || 'unknown'`.
+    pub(crate) fn commit_status_message(&mut self, reason: Option<String>) {
+        let message = match reason {
+            Some(reason) => reason,
+            None => match self.status_message.take() {
+                Some(current) if !current.is_empty() => current,
+                _ => status_text(self.status_code).to_string(),
+            },
+        };
+        self.status_message = Some(message);
+    }
+
     pub fn new() -> Self {
         Self {
             header_fields: None,
@@ -796,11 +818,7 @@ pub unsafe extern "C" fn js_node_http_res_write_head(
         if status.is_finite() && status > 0.0 {
             sr.status_code = status as u16;
         }
-        if let Some(m) = status_message {
-            if !m.is_empty() {
-                sr.status_message = Some(m);
-            }
-        }
+        sr.commit_status_message(status_message);
         if let Some(headers) = direct_headers {
             sr.committed_headers = Some(headers);
         }
@@ -827,6 +845,7 @@ pub unsafe extern "C" fn js_node_http_res_write_head(
 fn heap_implicit_head(handle: i64) {
     let scope = perry_ffi::TransientRootScope::enter();
     let owner = scope.root_addr(handle);
+    implicit_header(owner.get());
     if !heap::is_response(owner.get())
         || response_state(owner.get()).is_none_or(|sr| sr.header_committed || sr.writable_ended)
     {
@@ -836,6 +855,53 @@ fn heap_implicit_head(handle: i64) {
     if let Some(sr) = response_state_mut(owner.get()) {
         sr.header_committed = true;
     }
+}
+
+extern "C" {
+    fn js_get_property(object: f64, name_ptr: i64, name_len: i64) -> f64;
+}
+
+/// node's `_implicitHeader`, which `write()`, `end()` and `flushHeaders()` run
+/// while no head exists: `this.writeHead(this.statusCode)`, a property call.
+/// A program that replaced the response's `writeHead` (on-headers, which
+/// `compression` uses to add `Vary: Accept-Encoding`) observes it; the
+/// replacement normally ends in the intrinsic, which commits the head. While
+/// `writeHead` is the intrinsic, only its message rule runs here
+/// (`statusMessage ||= STATUS_CODES[statusCode]`): the caller's native commit
+/// is that call.
+pub(crate) fn implicit_header(handle: i64) {
+    let scope = perry_ffi::TransientRootScope::enter();
+    let owner = scope.root_addr(handle);
+    let status = match response_state(owner.get()) {
+        Some(sr) if !(sr.headers_sent || sr.header_committed || sr.writable_ended) => {
+            f64::from(sr.status_code)
+        }
+        _ => return,
+    };
+    let name = b"writeHead";
+    // SAFETY: a property read on the live response value; `owner` keeps the
+    // response current across any collection the read runs.
+    let method = unsafe {
+        js_get_property(
+            handle_to_pointer_f64(owner.get()),
+            name.as_ptr() as i64,
+            name.len() as i64,
+        )
+    };
+    // SAFETY: `method` is the value just read; only a closure is inspected.
+    if unsafe { js_value_is_closure(method.to_bits() as i64) } == 0
+        || unsafe { super::response_methods::is_intrinsic_write_head(method) }
+    {
+        // The intrinsic `writeHead(this.statusCode)` the caller commits
+        // natively: it carries no reason.
+        if let Some(sr) = response_state_mut(owner.get()) {
+            sr.commit_status_message(None);
+        }
+        return;
+    }
+    let this = perry_ffi::JsThis::from_f64(handle_to_pointer_f64(owner.get()));
+    // SAFETY: `method` is a live closure read above with no allocation since.
+    unsafe { perry_ffi::call_value(method, this, &[status]) };
 }
 
 /// node's `writeHead` on a heap response: `statusMessage`, `statusCode`, then
@@ -854,7 +920,7 @@ fn finish_heap_head(handle: i64, status: f64, reason: Option<String>) {
     } else {
         response_state(owner.get()).map_or(200, |sr| sr.status_code)
     };
-    heap::write_head_fields(owner.get(), code, reason.filter(|m| !m.is_empty()));
+    heap::write_head_fields(owner.get(), code, reason);
     if response_state(owner.get()).is_some_and(|s| s.committed_headers.is_none()) {
         let headers = header_values::snapshot(owner.get());
         if let Some(sr) = response_state_mut(owner.get()) {
@@ -1064,15 +1130,40 @@ pub extern "C" fn js_node_http_res_add_trailers(handle: i64, headers_value: f64)
     }
 }
 
-/// Finalize a buffered response: append the final chunk, hand it to the
-/// connection's encoder, and return the `(finish, close)`
-/// listener lists **without** firing them — the caller controls ordering so
-/// that `res.end(cb)` can run write/end callbacks before `'finish'` (Node's
-/// contract, where `'finish'` never precedes the end callback). Returns
-/// `None` if the response was already ended or the handle is gone.
-pub(crate) fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>, Vec<i64>)> {
+/// What `finalize_buffered_end` leaves for the caller to emit.
+pub(crate) enum EndOutcome {
+    /// Nothing is still on its way to the socket: the caller runs the tail
+    /// with these `'finish'` / `'close'` listener lists.
+    Immediate { finish: Vec<i64>, close: Vec<i64> },
+    /// The socket write callback runs the whole tail once the response bytes
+    /// have reached the OS.
+    Deferred,
+}
+
+/// Finalize a buffered response: append the final chunk and hand it to the
+/// connection's encoder. On an HTTP/1.1 connection the write callback owns the
+/// tail (queued write callbacks, `'finish'`, the end callback, `'close'`) and
+/// the result is `Deferred`; otherwise the `(finish, close)` listener lists
+/// come back **without** being fired — the caller controls ordering so that
+/// `res.end(cb)` runs write/end callbacks before `'finish'` (Node's contract,
+/// where `'finish'` never precedes the end callback). Returns `None` if the
+/// response was already ended or the handle is gone.
+pub(crate) fn finalize_buffered_end(
+    handle: i64,
+    chunk: f64,
+    end_callback: i64,
+) -> Option<EndOutcome> {
     let response_scope = perry_ffi::TransientRootScope::enter();
     let response_root = response_scope.root_addr(handle);
+    // The end callback is invoked after the flush, so it has to survive the
+    // allocations in between; `implicit_header` below can also run a program's
+    // `writeHead` (compression's on-headers).
+    let end_callback = response_scope.root_addr(end_callback);
+    // That same `implicit_header` call can trigger a moving collection, which
+    // relocates a young chunk; re-read it from the root afterwards.
+    let chunk_root = response_scope.root_nanbox(chunk);
+    implicit_header(response_root.get());
+    let chunk = chunk_root.get();
     let v = JsValue::from_bits(chunk.to_bits());
     let final_chunk = if v.is_undefined() || v.is_null() {
         None
@@ -1099,14 +1190,19 @@ pub(crate) fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>
         sr.writable_ended = true;
         sr.writable_finished = true;
         sr.needs_drain = false;
-        let finish_listeners = response_event_listeners(response_root.get(), "finish");
-        let close_listeners = response_event_listeners(response_root.get(), "close");
         if let Some(c) = chunk {
             let _ = crate::server::turnloop_route::send_body(&conn, seq, &c);
         }
-        crate::server::turnloop_route::finish_body(&conn, seq, &trailers);
+        let deferred = crate::server::turnloop_route::finish_body_notified(
+            &conn,
+            seq,
+            &trailers,
+            Some(&mut || {
+                crate::server::response_end::flush_callback(response_root.get(), end_callback.get())
+            }),
+        );
         crate::server::request::mark_connection_written(req_handle_of(response_root.get()));
-        return Some((finish_listeners, close_listeners));
+        return Some(end_outcome(response_root.get(), deferred));
     }
 
     if let Some(c) = final_chunk {
@@ -1129,23 +1225,39 @@ pub(crate) fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>
         body,
         auto_content_length,
     };
-    let finish_listeners = response_event_listeners(response_root.get(), "finish");
-    let close_listeners = response_event_listeners(response_root.get(), "close");
     let turnloop = sr.turnloop;
     let req_handle = sr.req_handle;
     // P5: the handler, the codec and the socket are on the same thread, so
     // the response is encoded and submitted here. A response with no
     // connection (the connection's request was never delivered) has nowhere
     // to go, and is simply finished.
+    let mut deferred = false;
     if let Some((conn, seq)) = turnloop {
         let conn = conn.root();
-        crate::server::turnloop_route::send_response(&conn, seq, shape);
+        deferred = crate::server::turnloop_route::send_response_notified(
+            &conn,
+            seq,
+            shape,
+            Some(&mut || {
+                crate::server::response_end::flush_callback(response_root.get(), end_callback.get())
+            }),
+        );
     }
     if let Some(sr) = response_state_mut(response_root.get()) {
         sr.writable_finished = true;
     }
     crate::server::request::mark_connection_written(req_handle);
-    Some((finish_listeners, close_listeners))
+    Some(end_outcome(response_root.get(), deferred))
+}
+
+fn end_outcome(handle: i64, deferred: bool) -> EndOutcome {
+    if deferred {
+        return EndOutcome::Deferred;
+    }
+    EndOutcome::Immediate {
+        finish: response_event_listeners(handle, "finish"),
+        close: response_event_listeners(handle, "close"),
+    }
 }
 
 /// Flush the response head to the wire now and switch the response into
@@ -1557,7 +1669,11 @@ pub extern "C" fn js_node_http_res_write_with_cb(handle: i64, chunk: f64, callba
         }
         return 0;
     }
-    let bytes = jsvalue_to_body_bytes(chunk);
+    // `implicit_header` can run JS that moves a young chunk (see
+    // `finalize_buffered_end`).
+    let chunk_root = response_scope.root_nanbox(chunk);
+    implicit_header(response_root.get());
+    let bytes = jsvalue_to_body_bytes(chunk_root.get());
     // Honor streaming mode (after `res.flushHeaders()` / a prior streamed
     // `res.write`) exactly like `js_node_http_res_write`: the chunk must go down
     // the stream channel, NOT into `buffered_body`. Without this, a streamed

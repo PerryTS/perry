@@ -62,6 +62,58 @@ pub(crate) fn bodies_of(m: &Model, n: NodeId) -> Vec<BodyRef> {
     out
 }
 
+/// A stand-in describes another declaration unit's code, but still names
+/// the original emitted body. Consume that identity only in the defining
+/// source module: the native consumer cannot call a foreign module's HIR id.
+fn bodies_with_contracts(g: &Gen, n: NodeId) -> Vec<BodyRef> {
+    let m = &g.m;
+    let node = &m.nodes[n as usize];
+    if node.prim != 0 {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for t in node.pts.to_sorted() {
+        if t != TOP && (m.beside_values(t) || m.closed_marker(t)) {
+            continue;
+        }
+        let TokKind::Func(f, _) = m.toks[t as usize] else {
+            return Vec::new();
+        };
+        let fi = &m.funcs[f as usize];
+        // Contextual values share this stand-in's immutable emitted origin.
+        let Some(c) = g.stand_in_fc.get(&fi.token) else {
+            let closure = m.closures.contains(&f);
+            if fi.func_id == u32::MAX || !(closure || m.decls.contains(&f)) {
+                return Vec::new();
+            }
+            out.push(BodyRef {
+                module: fi.module,
+                func_id: fi.func_id,
+                params: fi.params.len() as u32,
+                plain: fi.rest.is_none() && !fi.has_arguments,
+                closure,
+            });
+            continue;
+        };
+        let Some((path, func_id, closure)) = &c.compiled_body else {
+            return Vec::new();
+        };
+        let Some(module) = g.modules.iter().position(|(p, _)| *p == path) else {
+            return Vec::new();
+        };
+        out.push(BodyRef {
+            module: module as u32,
+            func_id: *func_id,
+            params: c.params.len() as u32,
+            plain: !c.rest && !c.variadic,
+            closure: *closure,
+        });
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
 /// What one binding can hold.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BindingFacts {
@@ -240,7 +292,7 @@ fn facts_of(g: &Gen, n: u32) -> BindingFacts {
     out.class_ids.sort_unstable();
     out.class_ids.dedup();
     out.indexed_owner = indexed_owner(g, n);
-    out.bodies = bodies_of(m, n);
+    out.bodies = bodies_with_contracts(g, n);
     out.class_object = class_object_of(m, n);
     out
 }

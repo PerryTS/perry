@@ -383,7 +383,7 @@ fn small_and_medium_heap_strings_use_nursery_gc_pages() {
 }
 
 #[test]
-fn large_heap_strings_use_old_gc_pages_without_malloc_tracking() {
+fn large_heap_strings_use_young_nonmoving_storage_without_malloc_tracking() {
     let len = crate::gc::LARGE_OBJECT_THRESHOLD_BYTES + 1;
     let data = vec![b'L'; len];
     let before = malloc_object_count_for_test();
@@ -393,15 +393,16 @@ fn large_heap_strings_use_old_gc_pages_without_malloc_tracking() {
     assert_eq!(after, before);
     assert_eq!(unsafe { (*s).byte_len }, len as u32);
     assert_eq!(unsafe { (*s).flags }, STRING_FLAG_WTF8_VALIDATED);
-    assert!(crate::arena::pointer_in_old_gen(s as usize));
-    assert!(!crate::arena::pointer_in_nursery(s as usize));
+    assert!(!crate::arena::pointer_in_old_gen(s as usize));
+    assert!(crate::arena::is_large_storage(s as usize));
+    assert!(crate::arena::pointer_in_nursery(s as usize));
     assert_eq!(string_as_str(s), std::str::from_utf8(&data).unwrap());
 
     unsafe {
         let header = gc_header_for_string(s);
         assert_eq!((*header).obj_type, crate::gc::GC_TYPE_STRING);
         assert_ne!((*header).gc_flags & crate::gc::GC_FLAG_ARENA, 0);
-        assert_ne!((*header).gc_flags & crate::gc::GC_FLAG_TENURED, 0);
+        assert_eq!((*header).gc_flags & crate::gc::GC_FLAG_TENURED, 0);
     }
 }
 

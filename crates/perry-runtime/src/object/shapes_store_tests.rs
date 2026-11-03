@@ -329,7 +329,10 @@ fn the_record_geometry_is_bounded_and_facts_key_is_o1() {
         "record grew"
     );
     assert_eq!(std::mem::align_of::<ShapeRecord>(), 8, "record realigned");
-    assert_eq!(std::mem::offset_of!(ShapeRecord, element_kind), 72);
+    assert_eq!(
+        std::mem::offset_of!(ShapeRecord, keys_node_and_element_kind),
+        72
+    );
     assert_eq!(
         std::mem::offset_of!(ShapeRecord, family_desc_index_plus_one),
         76
@@ -400,13 +403,15 @@ fn a_record_round_trips_all_three_kinds_beside_its_flags() {
 fn special_body_identity_uses_record_owned_extension() {
     let old = ShapeRecord::new(0x40, 1, 1, 0, ShapeObjectKind::Ordinary, 0);
     assert_eq!(old.special_constfn_mask(), 0);
+    // A ConstFn slot names a live info record; the fold reads its identity.
+    let bodies = crate::builtins::fn_metadata_owner::test_registered_infos(2);
     let a = [ConstFnSlotInfo {
         slot: 0,
-        info: 0x1000,
+        info: bodies[0],
     }];
     let b = [ConstFnSlotInfo {
         slot: 0,
-        info: 0x2000,
+        info: bodies[1],
     }];
     let rep = crate::object::field_rep::with_slot_rep(0, 0, crate::object::field_rep::REP_SPECIAL);
     let special = old.with_special_facts(rep, &a, &[]);
@@ -1075,4 +1080,70 @@ fn cold_integrity_preserves_packed_facts_and_existing_weak_relationships() {
     assert_eq!(record.facts_key_with_keys(0), ordinary);
     assert_eq!(record.created_birth_shape(), LayoutWord(0x8000_3456));
     unsafe { record.release_extras() };
+}
+
+#[test]
+fn empty_body_mask_proves_absence_and_nonempty_masks_keep_exact_identity() {
+    use crate::object::field_rep::{with_slot_rep, REP_SPECIAL};
+    for brands in [&[][..], &[7][..]] {
+        let record = ShapeRecord::new(0x40, 32, 32, 0, ShapeObjectKind::Ordinary, 0)
+            .with_special_facts(0, &[], brands);
+        assert_eq!(record.special_constfn_mask(), 0);
+        assert!(record.constfn_infos().is_empty());
+        assert!(record.facts_match_proto_with_special(
+            0x40,
+            32,
+            32,
+            0,
+            ShapeObjectKind::Ordinary,
+            0,
+            0,
+            0,
+            0,
+            &[],
+            brands,
+        ));
+        unsafe { record.release_extras() };
+    }
+    let bodies = crate::builtins::fn_metadata_owner::test_registered_infos(2);
+    for slot in 0..32 {
+        let infos = [ConstFnSlotInfo {
+            slot,
+            info: bodies[0],
+        }];
+        let other = [ConstFnSlotInfo {
+            slot,
+            info: bodies[1],
+        }];
+        let rep = with_slot_rep(0, slot as u32, REP_SPECIAL);
+        let record = ShapeRecord::new(0x40, 32, 32, 0, ShapeObjectKind::Ordinary, 0)
+            .with_special_facts(rep, &infos, &[]);
+        assert_ne!(record.special_constfn_mask(), 0);
+        assert!(!record.constfn_infos().is_empty());
+        let matches = |bodies: &[ConstFnSlotInfo]| {
+            record.facts_match_proto_with_special(
+                0x40,
+                32,
+                32,
+                0,
+                ShapeObjectKind::Ordinary,
+                0,
+                0,
+                0,
+                rep,
+                bodies,
+                &[],
+            )
+        };
+        assert!(matches(&infos));
+        assert!(
+            !matches(&[]),
+            "stored nonempty mask refuses an empty request"
+        );
+        assert!(
+            !matches(&other),
+            "nonempty masks still compare exact body identity"
+        );
+        unsafe { record.release_extras() };
+    }
 }

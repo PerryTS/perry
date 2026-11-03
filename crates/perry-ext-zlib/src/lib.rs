@@ -411,6 +411,44 @@ pub unsafe extern "C" fn js_zlib_unzip(data_value: f64, options: f64, callback_v
     stream::queue_one_shot_callback(data_value, options, callback_value, stream::Codec::Unzip);
 }
 
+/// Run the node:zlib codec constructor `name` on an existing receiver: the
+/// `super(opts)` of `class C extends Gzip` reached through a runtime parent
+/// value (perry-runtime's `js_fetch_or_value_super`). The receiver keeps its
+/// own prototype, so the subclass overrides stay in its chain. Returns the
+/// receiver, or `undefined` when `name` is not a codec constructor.
+///
+/// # Safety
+/// `name` must be valid for `name_len` bytes; `owner` is the subclass
+/// instance and `opts` a raw NaN-boxed JS value.
+#[no_mangle]
+pub unsafe extern "C" fn js_ext_zlib_subclass_init(
+    name: *const u8,
+    name_len: usize,
+    owner: f64,
+    opts: f64,
+) -> f64 {
+    let undefined = f64::from_bits(perry_ffi::JsValue::UNDEFINED.bits());
+    if name.is_null() {
+        return undefined;
+    }
+    let name = std::str::from_utf8(std::slice::from_raw_parts(name, name_len)).unwrap_or("");
+    let init: unsafe extern "C" fn(f64, f64) -> f64 = match name {
+        "Gzip" => js_zlib_gzip_init,
+        "Gunzip" => js_zlib_gunzip_init,
+        "Deflate" => js_zlib_deflate_init,
+        "Inflate" => js_zlib_inflate_init,
+        "DeflateRaw" => js_zlib_deflate_raw_init,
+        "InflateRaw" => js_zlib_inflate_raw_init,
+        "Unzip" => js_zlib_unzip_init,
+        "BrotliCompress" => js_zlib_brotli_compress_init,
+        "BrotliDecompress" => js_zlib_brotli_decompress_init,
+        "ZstdCompress" => js_zlib_zstd_compress_init,
+        "ZstdDecompress" => js_zlib_zstd_decompress_init,
+        _ => return undefined,
+    };
+    init(owner, opts)
+}
+
 /// Dispatch a captured `node:zlib` export through the external zlib archive.
 ///
 /// Optimized builds strip the bundled codecs from `perry-stdlib` and link this
@@ -792,9 +830,9 @@ mod static_record_layout_tests {
         perry_ffi::initialize_runtime_fixture();
         let roots = perry_ffi::TransientRootScope::enter();
         let record = roots.root_addr(unsafe {
-            perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
-                perry_ffi::runtime_layouts::RECORD_PCHECKED031
-            ))
+            perry_ffi::runtime_layouts::alloc_runtime_record(
+                perry_ffi::runtime_layouts::RECORD_PCHECKED031::desc(),
+            )
         } as i64);
         let pointer = record.get() as *const perry_ffi::ObjectHeader;
         assert!(!pointer.is_null());
@@ -805,7 +843,7 @@ mod static_record_layout_tests {
                 0,
                 "the empty handle placeholder must carry a registered layout"
             );
-            assert!((*pointer).meta.is_null());
+            assert!(perry_ffi::ObjectHeader::meta_is_null(pointer));
         }
     }
 }

@@ -138,10 +138,9 @@ fn both(mods: &[(&str, &str)]) -> (ProgramFacts, ProgramFacts) {
         explain: true,
         ..Default::default()
     };
-    (
-        crate::compute(&list, &cfg),
-        crate::compute_units(&list, &cfg),
-    )
+    let w = crate::compute(&list, &cfg);
+    super::body_activation::assert_only_dead_bodies_dropped(&list, &cfg, &w);
+    (w, crate::compute_units(&list, &cfg))
 }
 
 /// Per unit on main's CommonJS support module: never more than the whole
@@ -150,7 +149,7 @@ fn both(mods: &[(&str, &str)]) -> (ProgramFacts, ProgramFacts) {
 /// instance's fields cross units (DECISIONS 186, field cells).
 fn assert_cjs_per_unit(w: &ProgramFacts, u: &ProgramFacts, n: usize) {
     let (pw, pu) = (proven_sites(w), proven_sites(u));
-    let stronger: Vec<&String> = pu.difference(&pw).collect();
+    let stronger = super::body_activation::stronger_sites(u, w);
     assert!(
         stronger.is_empty(),
         "per unit claims more than whole-program: {stronger:?}"
@@ -180,23 +179,6 @@ fn proven_sites(pf: &ProgramFacts) -> BTreeSet<String> {
         .collect()
 }
 
-/// Escaped templates of what the modules hand out: the records, the
-/// exports literals and the classes.
-fn escaped(pf: &ProgramFacts) -> BTreeSet<String> {
-    pf.templates
-        .iter()
-        .filter(|t| t.escape.is_some())
-        .filter(|t| {
-            ["Base", "Main", "R", "S"]
-                .iter()
-                .any(|c| t.display.ends_with(&format!(":{c}")))
-                || t.display.contains("__cjs_module")
-                || t.display.contains("exports")
-        })
-        .map(|t| format!("{} {}", t.display, t.escape.as_deref().unwrap_or("")))
-        .collect()
-}
-
 #[test]
 fn a_commonjs_unit_proves_what_the_whole_program_proves() {
     // CJL2: static edges. Against the dispatching `require` of main's wrap
@@ -205,57 +187,98 @@ fn a_commonjs_unit_proves_what_the_whole_program_proves() {
     // `this.go()` (b.js) and `b.run()` (m.js) are proven whole-program. Per
     // unit the four lost sites are the dispatch's (no user site).
     let (w, u) = both(&T1);
-    assert_eq!(proven_sites(&w).len(), 25);
-    assert_cjs_per_unit(&w, &u, 7);
+    // DECISIONS 225: the wrapper's `module.require` (`moduleRequire`) never
+    // runs in any of the three modules: its call sites are dead (25 -> 22).
+    // NativeMember: a.js's `__perry_cjs_record.children.push(record)` is
+    // `Array.prototype.push` on a.js's record's own `children` literal, which
+    // does not escape (22 -> 23; m.js's, handed to `perry:cjs`, stays No).
+    assert_eq!(proven_sites(&w).len(), 23);
+    // SEH: per unit proves all 22 others: the module records' fields joined
+    // over rounds keep each round's description (`ClassContract::join`)
+    // where the join made them ⊤ (`exports.Base` read ⊤, 7 proven). The
+    // `children.push` is not proven per unit: the record crosses units, so
+    // its `children` is no fact unit there.
+    assert_cjs_per_unit(&w, &u, 22);
 }
 
-/// DECISIONS 115: a class whose binding may hold `undefined` beside the
-/// class (its self cell) is still a contract: per unit `R` and `S` stay
-/// unbroken and every whole-program site is proven. Without the binding's
-/// primitives in the contract, `S`'s unit sinks its export, which escapes
-/// `S`'s prototype and with it `R`'s (the reader census breaks `R`).
+/// A class of a CommonJS factory that runs once is the class itself
+/// (#13755): `R`, `S` and `T` capture only the factory's `NONE`, so the
+/// factory's single evaluation keeps the template class, and `S` is named
+/// (`new S(v)`, `this.k = S`) through `ClassRef`, not through a self cell
+/// (DECISIONS 50/115 still hold for a class made per evaluation).
+///
+/// Whole program `T` is never constructed: `m.js` reads `r` unbound (a
+/// global; the source has no `require("./r")`), so `newInstance` never
+/// runs, and with the template class nothing else reaches `T`, `S` or
+/// their methods: their bodies never run and hold no site (DECISIONS 225).
+/// Before #13755 each evaluation made its own class object and the method
+/// bodies were solved as reachable (11 proven sites, 4 of them in bodies
+/// that never run).
+///
+/// Per unit `r.js` hands `newInstance` to other units, so `T` is
+/// constructed and its methods run. `R`, `S` and `T` are contracts: no unit
+/// breaks them (DECISIONS 115/120), and `T` does not escape, so `this.k`
+/// reads `T`'s own constructor store.
 #[test]
-fn a_class_bound_through_its_self_cell_is_a_contract() {
+fn a_class_of_a_run_once_factory_is_a_contract() {
     let (w, u) = both(&T2);
-    let (pw, pu) = (proven_sites(&w), proven_sites(&u));
-    let lost: Vec<_> = pw.difference(&pu).collect();
-    let classes = |pf: &ProgramFacts| -> Vec<String> {
-        escaped(pf)
-            .into_iter()
-            .filter(|t| t.starts_with("/t2/r.js:R ") || t.starts_with("/t2/r.js:S "))
+    // The class bodies, from `class R` to `exports.newInstance`.
+    let r_src = T2[1].1;
+    let body = r_src.find("class R {").unwrap() as u32
+        ..r_src.find("exports.newInstance = ").unwrap() as u32;
+    let in_classes = |pf: &ProgramFacts| -> Vec<String> {
+        pf.sites
+            .iter()
+            .filter(|s| pf.module_paths[s.module as usize] == "/t2/r.js")
+            .filter(|s| body.contains(&s.byte_offset))
+            .map(|s| format!("{}.{}", s.byte_offset, s.key))
             .collect()
     };
-    assert!(pw.len() >= 8, "whole-program proves {:?}", pw);
-    let _ = (lost, classes);
-    // Per unit 7 of 13. `T::run` calls `a.append(b, NONE)` with `a` read
-    // from `this.k`, which per unit is ⊤ (DECISIONS 186): a ⊤ callee, so
-    // the `S` instance `a` also holds escapes as its receiver, which
-    // reports `S` and its parent `R`. Broken, `super()` in the `S` and `T`
-    // constructors is ⊤, and `this.v = v`, `this.k = S` store into ⊤: under
-    // the static ⊤-store rule (#13338) that writes `v` and `k` on every
-    // intrinsic prototype, so the read `this.k` in `run` is no longer
-    // proven per unit (it was the 8th site before the rule). Whole program
-    // proves all 13.
-    assert_cjs_per_unit(&w, &u, 7);
-    // `T.k = S` holds the class and the cell's `undefined` both ways: the
-    // reader's import carries the binding's primitives.
+    assert_eq!(in_classes(&w), Vec::<String>::new(), "whole-program");
+    // Whole program proves the wrappers' seven sites: the records'
+    // `exports` reads, each factory call and the `newInstance` export read.
+    assert_eq!(
+        proven_sites(&w).into_iter().collect::<Vec<_>>(),
+        [
+            "/t2/m.js@2019.exports",
+            "/t2/m.js@5368.exports",
+            "/t2/m.js@5399.()",
+            "/t2/r.js@1950.exports",
+            "/t2/r.js@5810.exports",
+            "/t2/r.js@5841.()",
+            "/t2/r.js@5921.newInstance",
+        ]
+    );
+    // Per unit `R`, `S` and `T` stay unbroken. `super()` in the `S` and `T`
+    // constructors is ⊤ (the parent is another unit's class), so overrides
+    // of `R` are still reported.
+    for c in ["/t2/r.js:R", "/t2/r.js:S", "/t2/r.js:T"] {
+        assert!(
+            !u.broken.iter().any(|b| b == c),
+            "{c} broken: {:?}",
+            u.broken
+        );
+    }
+    // Per unit 10, none stronger than whole-program: five of the wrapper
+    // sites (a module's factory call is not a per-unit site), each module's
+    // `module.require` call of its `require` (dead whole-program, DECISIONS
+    // 225), and in the class bodies `this.v` in `S::get`, the read `this.k`
+    // in `T::run` (E0) and `b.get()` (`b` is `S.make(2)`).
+    assert_cjs_per_unit(&w, &u, 10);
     let k_kind = |pf: &ProgramFacts| {
         pf.templates
             .iter()
             .find(|t| t.display == "/t2/r.js:T")
             .and_then(|t| t.fields.iter().find(|f| f.key == "k"))
-            .map(|f| (f.kind.top, f.kind.prims))
+            .map(|f| (f.kind.top, f.kind.prims, f.kind.builtin_objs))
     };
-    // Per unit `T.k` reads ⊤ until a class instance's fields cross units
-    // (DECISIONS 186); the whole program holds the class and `undefined`.
-    assert_eq!(
-        k_kind(&w),
-        Some((false, crate::model::prim::UNDEF)),
-        "T.k whole-program"
-    );
+    // Whole program `T`'s constructor is dead: no writer, no kind.
+    assert_eq!(k_kind(&w), Some((false, 0, 0)), "T.k whole-program");
+    // Per unit `T.k` holds the class object `S` beside `undefined`, and is
+    // not ⊤: `T` does not escape.
     assert_eq!(
         k_kind(&u),
-        Some((true, crate::model::prim::ALL)),
+        Some((false, crate::model::prim::UNDEF, 1)),
         "T.k per unit"
     );
 }
@@ -376,8 +399,13 @@ fn capture_parameters_bound_directly_or_composed_hold_the_class_environment() {
     // unit hands back; reading `P` through it would make `new P(n)` a `new`
     // of an unknown constructor and sink `P`.
     let (w, u) = both(&T5);
-    assert_eq!(proven_sites(&w).len(), 31);
-    assert_cjs_per_unit(&w, &u, 13);
+    // DECISIONS 225: `moduleRequire` never runs (31 -> 28, see T1).
+    // NativeMember: r.js's `__perry_cjs_record.children.push(record)`, as
+    // a.js's in T1 (28 -> 29).
+    assert_eq!(proven_sites(&w).len(), 29);
+    // SEH: all 28 others, as T1 (13 while the joined records read ⊤); the
+    // `children.push` is whole-program only, as in T1.
+    assert_cjs_per_unit(&w, &u, 28);
 }
 
 #[test]
@@ -557,8 +585,7 @@ fn a_broken_function_is_still_the_callee_of_a_call_by_its_name() {
         "lost per unit {lost:?}\nbroken {:?}",
         u.broken
     );
-    let (pw, pu) = (proven_sites(&w), proven_sites(&u));
-    let stronger: Vec<&String> = pu.difference(&pw).collect();
+    let stronger = super::body_activation::stronger_sites(&u, &w);
     assert!(
         stronger.is_empty(),
         "per unit claims more than whole-program: {stronger:?}"

@@ -539,7 +539,7 @@ pub(super) fn pinned_young_move_report(
             },
         ));
     }
-    let valid = super::trace::build_valid_pointer_set();
+    let valid = super::mark::build_valid_pointer_set();
     match valid.enclosing_object(target_user) {
         Some(enclosing) if enclosing != target_user => {
             let eh = (enclosing - super::types::GC_HEADER_SIZE) as *const super::types::GcHeader;

@@ -266,7 +266,7 @@ fn classify_pointer(recv: f64) -> Option<PtrKind> {
         let hdr = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         (*hdr).obj_type
     };
-    if obj_type == crate::gc::GC_TYPE_OBJECT || obj_type == crate::gc::GC_TYPE_CLOSURE {
+    if crate::gc_type_is_object!(obj_type) || obj_type == crate::gc::GC_TYPE_CLOSURE {
         return Some(PtrKind::Object);
     }
     if let Some(kind) = crate::object::exotic_expando::exotic_expando_kind(raw) {
@@ -276,7 +276,7 @@ fn classify_pointer(recv: f64) -> Option<PtrKind> {
 }
 
 /// `LengthOfArrayLike(ToObject(recv))`.
-pub(super) fn al_length(recv: f64) -> i64 {
+pub(crate) fn al_length(recv: f64) -> i64 {
     let arr = as_real_array(recv);
     if !arr.is_null() {
         return unsafe { (*arr).length as i64 };
@@ -327,7 +327,7 @@ pub(super) fn al_length(recv: f64) -> i64 {
 }
 
 /// `Get(ToObject(recv), k)` (returns `undefined` for absent/out-of-range).
-pub(super) fn al_get(recv: f64, k: i64) -> f64 {
+pub(crate) fn al_get(recv: f64, k: i64) -> f64 {
     let arr = as_real_array(recv);
     if !arr.is_null() {
         if k < 0 {
@@ -1324,7 +1324,7 @@ pub(crate) fn non_array_object_receiver(arr: *const ArrayHeader) -> Option<f64> 
         let hdr = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         (*hdr).obj_type
     };
-    if obj_type == crate::gc::GC_TYPE_OBJECT || obj_type == crate::gc::GC_TYPE_CLOSURE {
+    if crate::gc_type_is_object!(obj_type) || obj_type == crate::gc::GC_TYPE_CLOSURE {
         Some(f64::from_bits(JSValue::pointer(raw as *const u8).bits()))
     } else {
         None

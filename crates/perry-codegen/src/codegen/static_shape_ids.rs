@@ -1066,24 +1066,3 @@ pub(crate) fn static_prototype_layout(cid: u32) -> Option<(u32, BirthShape)> {
     static_prototype_identity(cid)
         .map(|(id, shape)| (crate::layout_ordinals::static_word(id), shape))
 }
-
-/// Can any complete prototype contribute this named method to a static family
-/// table? A compile-time exclusion only; a possible hit still probes the live
-/// receiver and all holder words. This reads the same immutable contents that
-/// the family table emitter consumes.
-pub(crate) fn has_prototype_method(name: &str) -> bool {
-    MODULE_FINAL_IDS.with(|m| {
-        m.borrow().keys().any(|shape| {
-            matches!(shape.proto, BirthProto::Prototype(..))
-                && shape
-                    .keys
-                    .split(|b| *b == 0)
-                    .take(shape.key_count as usize)
-                    .enumerate()
-                    .any(|(slot, key)| {
-                        key == name.as_bytes()
-                            && shape.constfn.iter().any(|f| f.slot as usize == slot)
-                    })
-        })
-    })
-}

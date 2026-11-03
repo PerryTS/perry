@@ -79,7 +79,7 @@ pub(crate) unsafe fn own_data_shape(
 #[inline]
 pub(crate) unsafe fn plain_receiver_miss_is_final(object: *const ObjectHeader, key: &[u8]) -> bool {
     use crate::gc::{
-        GC_FLAG_ARENA, GC_FLAG_FORWARDED, GC_OBJECT_CALLABLE, GC_TYPE_OBJECT, OBJ_FLAG_ARGUMENTS,
+        GC_FLAG_ARENA, GC_FLAG_FORWARDED, GC_OBJECT_CALLABLE, OBJ_FLAG_ARGUMENTS,
         OBJ_FLAG_HAS_DESCRIPTORS, OBJ_FLAG_PLAIN_ORDINARY, OBJ_FLAG_TYPED_ARRAY_PROTO,
     };
     // `@@name` keys carry the well-known-symbol members class surfaces answer.
@@ -102,14 +102,17 @@ pub(crate) unsafe fn plain_receiver_miss_is_final(object: *const ObjectHeader, k
         | OBJ_FLAG_ARGUMENTS
         | GC_OBJECT_CALLABLE
         | OBJ_FLAG_HAS_DESCRIPTORS;
-    if header.obj_type != GC_TYPE_OBJECT
+    if crate::object_lacks_meta_word!(header.obj_type)
         || header.gc_flags & (GC_FLAG_ARENA | GC_FLAG_FORWARDED) != GC_FLAG_ARENA
         || header._reserved & BLOCKING != 0
         || (classless && header._reserved & OBJ_FLAG_PLAIN_ORDINARY == 0)
     {
         return false;
     }
-    let meta = (*object).meta;
+    let meta = crate::meta_read!(crate::meta_obj_from_type!(
+        object as *mut _,
+        header.obj_type
+    ));
     if !meta.is_null()
         && (*meta).flags
             & (crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER

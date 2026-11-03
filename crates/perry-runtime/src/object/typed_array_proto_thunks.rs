@@ -42,37 +42,37 @@ enum TypedArrayProtoReceiver {
 /// Mutators (`set`/`fill`/`copyWithin`/`sort`) are intentionally included: the
 /// brand check is the only behavioral change for them, and on a real TypedArray
 /// receiver they still reach the existing mutator impls via the dispatch tower.
-pub(super) const TYPED_ARRAY_PROTO_METHODS: &[(&str, u32)] = &[
-    ("at", 1),
-    ("copyWithin", 2),
-    ("entries", 0),
-    ("every", 1),
-    ("fill", 1),
-    ("filter", 1),
-    ("find", 1),
-    ("findIndex", 1),
-    ("findLast", 1),
-    ("findLastIndex", 1),
-    ("forEach", 1),
-    ("includes", 1),
-    ("indexOf", 1),
-    ("join", 1),
-    ("keys", 0),
+#[rustfmt::skip] pub(super) const TYPED_ARRAY_PROTO_METHODS: &[(&str, u32)] = &[
+    ("at", realm_typedarray_prototype_at_metadata!(length)),
+    ("copyWithin", realm_typedarray_prototype_copywithin_metadata!(length)),
+    ("entries", realm_typedarray_prototype_entries_metadata!(length)),
+    ("every", realm_typedarray_prototype_every_metadata!(length)),
+    ("fill", realm_typedarray_prototype_fill_metadata!(length)),
+    ("filter", realm_typedarray_prototype_filter_metadata!(length)),
+    ("find", realm_typedarray_prototype_find_metadata!(length)),
+    ("findIndex", realm_typedarray_prototype_findindex_metadata!(length)),
+    ("findLast", realm_typedarray_prototype_findlast_metadata!(length)),
+    ("findLastIndex", realm_typedarray_prototype_findlastindex_metadata!(length)),
+    ("forEach", realm_typedarray_prototype_foreach_metadata!(length)),
+    ("includes", realm_typedarray_prototype_includes_metadata!(length)),
+    ("indexOf", realm_typedarray_prototype_indexof_metadata!(length)),
+    ("join", realm_typedarray_prototype_join_metadata!(length)),
+    ("keys", realm_typedarray_prototype_keys_metadata!(length)),
     ("lastIndexOf", 1),
-    ("map", 1),
+    ("map", realm_typedarray_prototype_map_metadata!(length)),
     ("reduce", 1),
     ("reduceRight", 1),
-    ("reverse", 0),
-    ("set", 1),
-    ("slice", 2),
-    ("some", 1),
-    ("sort", 1),
-    ("subarray", 2),
-    ("toLocaleString", 0),
-    ("toReversed", 0),
-    ("toSorted", 1),
-    ("values", 0),
-    ("with", 2),
+    ("reverse", realm_typedarray_prototype_reverse_metadata!(length)),
+    ("set", realm_typedarray_prototype_set_metadata!(length)),
+    ("slice", realm_typedarray_prototype_slice_metadata!(length)),
+    ("some", realm_typedarray_prototype_some_metadata!(length)),
+    ("sort", realm_typedarray_prototype_sort_metadata!(length)),
+    ("subarray", realm_typedarray_prototype_subarray_metadata!(length)),
+    ("toLocaleString", realm_typedarray_prototype_tolocalestring_metadata!(length)),
+    ("toReversed", realm_typedarray_prototype_toreversed_metadata!(length)),
+    ("toSorted", realm_typedarray_prototype_tosorted_metadata!(length)),
+    ("values", realm_typedarray_prototype_values_metadata!(length)),
+    ("with", realm_typedarray_prototype_with_metadata!(length)),
 ];
 
 /// Install the brand-checking `%TypedArray%.prototype` methods onto a per-kind
@@ -101,94 +101,94 @@ pub(super) fn install_typed_array_proto_methods(proto_obj: *mut ObjectHeader) {
 fn thunk_for(name: &str) -> *const crate::closure::JsFunctionInfo {
     match name {
         "at" => {
-            crate::fn_info!(ta_at_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(#[realm("%TypedArray%.prototype.at", spec = {length = 1}, emit = metadata(realm_typedarray_prototype_at_metadata))] export crate::object::typed_array_proto_thunks::ta_at_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "copyWithin" => {
-            crate::fn_info!(ta_copy_within_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(#[realm("%TypedArray%.prototype.copyWithin", spec = {length = 2}, emit = metadata(realm_typedarray_prototype_copywithin_metadata))] export crate::object::typed_array_proto_thunks::ta_copy_within_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "entries" => {
-            crate::fn_info!(ta_entries_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(#[realm("%TypedArray%.prototype.entries", spec = {length = 0}, emit = metadata(realm_typedarray_prototype_entries_metadata))] export crate::object::typed_array_proto_thunks::ta_entries_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "every" => {
-            crate::fn_info!(ta_every_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(#[realm("%TypedArray%.prototype.every", spec = {length = 1}, emit = metadata(realm_typedarray_prototype_every_metadata))] export crate::object::typed_array_proto_thunks::ta_every_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "fill" => {
-            crate::fn_info!(ta_fill_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(#[realm("%TypedArray%.prototype.fill", spec = {length = 1}, emit = metadata(realm_typedarray_prototype_fill_metadata))] export crate::object::typed_array_proto_thunks::ta_fill_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "filter" => {
-            crate::fn_info!(ta_filter_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(#[realm("%TypedArray%.prototype.filter", spec = {length = 1}, emit = metadata(realm_typedarray_prototype_filter_metadata))] export crate::object::typed_array_proto_thunks::ta_filter_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "find" => {
-            crate::fn_info!(ta_find_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(#[realm("%TypedArray%.prototype.find", spec = {length = 1}, emit = metadata(realm_typedarray_prototype_find_metadata))] export crate::object::typed_array_proto_thunks::ta_find_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "findIndex" => {
-            crate::fn_info!(ta_find_index_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(#[realm("%TypedArray%.prototype.findIndex", spec = {length = 1}, emit = metadata(realm_typedarray_prototype_findindex_metadata))] export crate::object::typed_array_proto_thunks::ta_find_index_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "findLast" => {
-            crate::fn_info!(ta_find_last_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(#[realm("%TypedArray%.prototype.findLast", spec = {length = 1}, emit = metadata(realm_typedarray_prototype_findlast_metadata))] export crate::object::typed_array_proto_thunks::ta_find_last_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "findLastIndex" => {
-            crate::fn_info!(ta_find_last_index_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(#[realm("%TypedArray%.prototype.findLastIndex", spec = {length = 1}, emit = metadata(realm_typedarray_prototype_findlastindex_metadata))] export crate::object::typed_array_proto_thunks::ta_find_last_index_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "forEach" => {
-            crate::fn_info!(ta_for_each_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(#[realm("%TypedArray%.prototype.forEach", spec = {length = 1}, emit = metadata(realm_typedarray_prototype_foreach_metadata))] export crate::object::typed_array_proto_thunks::ta_for_each_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "includes" => {
-            crate::fn_info!(ta_includes_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(#[realm("%TypedArray%.prototype.includes", spec = {length = 1}, emit = metadata(realm_typedarray_prototype_includes_metadata))] export crate::object::typed_array_proto_thunks::ta_includes_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "indexOf" => {
-            crate::fn_info!(ta_index_of_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(#[realm("%TypedArray%.prototype.indexOf", spec = {length = 1}, emit = metadata(realm_typedarray_prototype_indexof_metadata))] export crate::object::typed_array_proto_thunks::ta_index_of_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "join" => {
-            crate::fn_info!(ta_join_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(#[realm("%TypedArray%.prototype.join", spec = {length = 1}, emit = metadata(realm_typedarray_prototype_join_metadata))] export crate::object::typed_array_proto_thunks::ta_join_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "keys" => {
-            crate::fn_info!(ta_keys_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(#[realm("%TypedArray%.prototype.keys", spec = {length = 0}, emit = metadata(realm_typedarray_prototype_keys_metadata))] export crate::object::typed_array_proto_thunks::ta_keys_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "lastIndexOf" => {
-            crate::fn_info!(ta_last_index_of_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(#[realm("%TypedArray%.prototype.lastIndexOf")] export crate::object::typed_array_proto_thunks::ta_last_index_of_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN))
         }
         "map" => {
-            crate::fn_info!(ta_map_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(#[realm("%TypedArray%.prototype.map", spec = {length = 1}, emit = metadata(realm_typedarray_prototype_map_metadata))] export crate::object::typed_array_proto_thunks::ta_map_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "reduce" => {
-            crate::fn_info!(ta_reduce_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(#[realm("%TypedArray%.prototype.reduce")] export crate::object::typed_array_proto_thunks::ta_reduce_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN))
         }
         "reduceRight" => {
-            crate::fn_info!(ta_reduce_right_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(#[realm("%TypedArray%.prototype.reduceRight")] export crate::object::typed_array_proto_thunks::ta_reduce_right_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN))
         }
         "reverse" => {
-            crate::fn_info!(ta_reverse_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(#[realm("%TypedArray%.prototype.reverse", spec = {length = 0}, emit = metadata(realm_typedarray_prototype_reverse_metadata))] export crate::object::typed_array_proto_thunks::ta_reverse_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "set" => {
-            crate::fn_info!(ta_set_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(#[realm("%TypedArray%.prototype.set", spec = {length = 1}, emit = metadata(realm_typedarray_prototype_set_metadata))] export crate::object::typed_array_proto_thunks::ta_set_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "slice" => {
-            crate::fn_info!(ta_slice_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(#[realm("%TypedArray%.prototype.slice", spec = {length = 2}, emit = metadata(realm_typedarray_prototype_slice_metadata))] export crate::object::typed_array_proto_thunks::ta_slice_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "some" => {
-            crate::fn_info!(ta_some_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(#[realm("%TypedArray%.prototype.some", spec = {length = 1}, emit = metadata(realm_typedarray_prototype_some_metadata))] export crate::object::typed_array_proto_thunks::ta_some_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "sort" => {
-            crate::fn_info!(ta_sort_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(#[realm("%TypedArray%.prototype.sort", spec = {length = 1}, emit = metadata(realm_typedarray_prototype_sort_metadata))] export crate::object::typed_array_proto_thunks::ta_sort_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "subarray" => {
-            crate::fn_info!(ta_subarray_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(#[realm("%TypedArray%.prototype.subarray", spec = {length = 2}, emit = metadata(realm_typedarray_prototype_subarray_metadata))] export crate::object::typed_array_proto_thunks::ta_subarray_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "toLocaleString" => {
-            crate::fn_info!(ta_to_locale_string_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(#[realm("%TypedArray%.prototype.toLocaleString", spec = {length = 0}, emit = metadata(realm_typedarray_prototype_tolocalestring_metadata))] export crate::object::typed_array_proto_thunks::ta_to_locale_string_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "toReversed" => {
-            crate::fn_info!(ta_to_reversed_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(#[realm("%TypedArray%.prototype.toReversed", spec = {length = 0}, emit = metadata(realm_typedarray_prototype_toreversed_metadata))] export crate::object::typed_array_proto_thunks::ta_to_reversed_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "toSorted" => {
-            crate::fn_info!(ta_to_sorted_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(#[realm("%TypedArray%.prototype.toSorted", spec = {length = 1}, emit = metadata(realm_typedarray_prototype_tosorted_metadata))] export crate::object::typed_array_proto_thunks::ta_to_sorted_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "values" => {
-            crate::fn_info!(ta_values_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(#[realm("%TypedArray%.prototype.values", spec = {length = 0}, emit = metadata(realm_typedarray_prototype_values_metadata))] export crate::object::typed_array_proto_thunks::ta_values_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "with" => {
-            crate::fn_info!(ta_with_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(#[realm("%TypedArray%.prototype.with", spec = {length = 2}, emit = metadata(realm_typedarray_prototype_with_metadata))] export crate::object::typed_array_proto_thunks::ta_with_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         _ => {
             crate::fn_info!(ta_generic_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
@@ -705,17 +705,32 @@ macro_rules! rooted_callback {
     ($name:ident, $site:ident, $($arg:ident),+) => {
         struct $name<'s> {
             handle: crate::gc::RuntimeHandle<'s>,
+            /// The callback's `this`: the method's `thisArg` argument, rooted
+            /// because the callback can collect and the value can move.
+            this_arg: crate::gc::RuntimeHandle<'s>,
             site: crate::closure::$site,
         }
 
         impl<'s> $name<'s> {
+            // Not every instantiation of this macro is built through `new`.
+            #[allow(dead_code)]
             #[inline]
             fn new(
                 scope: &'s crate::gc::RuntimeHandleScope,
                 callback: *const crate::closure::ClosureHeader,
             ) -> Self {
+                Self::with_this(scope, callback, undefined())
+            }
+
+            #[inline]
+            fn with_this(
+                scope: &'s crate::gc::RuntimeHandleScope,
+                callback: *const crate::closure::ClosureHeader,
+                this_arg: f64,
+            ) -> Self {
                 Self {
                     handle: scope.root_raw_const_ptr(callback),
+                    this_arg: scope.root_nanbox_f64(this_arg),
                     site: crate::closure::$site::resolve(callback),
                 }
             }
@@ -736,7 +751,7 @@ macro_rules! rooted_callback {
             fn call(&self, $($arg: f64),+) -> f64 {
                 self.handle
                     .with_const_ptr::<crate::closure::ClosureHeader, _>(|cb| {
-                        self.site.call(cb, crate::closure::plain_call_receiver(), $($arg),+)
+                        self.site.call(cb, crate::closure::JsThis::from_f64(self.this_arg.get_nanbox_f64()), $($arg),+)
                     })
             }
         }
@@ -818,7 +833,11 @@ pub(crate) unsafe fn dispatch_uint8_buffer_method(
             receiver
         }
         "map" => {
-            let cb = RootedCallback3::new(&scope, validate_callback(args));
+            let cb = RootedCallback3::with_this(
+                &scope,
+                validate_callback(args),
+                arg_or_undefined(args, 1),
+            );
             // `uint8_alloc_like` allocates, so the receiver read is
             // sequenced AFTER it.
             // Keep the fresh output live while the callback can run a full
@@ -835,7 +854,11 @@ pub(crate) unsafe fn dispatch_uint8_buffer_method(
             out.live().1
         }
         "filter" => {
-            let cb = RootedCallback3::new(&scope, validate_callback(args));
+            let cb = RootedCallback3::with_this(
+                &scope,
+                validate_callback(args),
+                arg_or_undefined(args, 1),
+            );
             let (addr, receiver) = recv.live();
             let mut kept = Vec::new();
             for i in 0..len {
@@ -852,7 +875,11 @@ pub(crate) unsafe fn dispatch_uint8_buffer_method(
             pointer_value(out as usize)
         }
         "every" => {
-            let cb = RootedCallback3::new(&scope, validate_callback(args));
+            let cb = RootedCallback3::with_this(
+                &scope,
+                validate_callback(args),
+                arg_or_undefined(args, 1),
+            );
             let (addr, receiver) = recv.live();
             for i in 0..len {
                 let value = uint8_get(addr, i) as f64;
@@ -864,7 +891,11 @@ pub(crate) unsafe fn dispatch_uint8_buffer_method(
             bool_value(true)
         }
         "some" => {
-            let cb = RootedCallback3::new(&scope, validate_callback(args));
+            let cb = RootedCallback3::with_this(
+                &scope,
+                validate_callback(args),
+                arg_or_undefined(args, 1),
+            );
             let (addr, receiver) = recv.live();
             for i in 0..len {
                 let value = uint8_get(addr, i) as f64;
@@ -881,7 +912,11 @@ pub(crate) unsafe fn dispatch_uint8_buffer_method(
         // node: `2`). Its sibling `findLastIndex` was already served below,
         // which is why the hole survived: the two are always cited together.
         "find" | "findLast" => {
-            let cb = RootedCallback3::new(&scope, validate_callback(args));
+            let cb = RootedCallback3::with_this(
+                &scope,
+                validate_callback(args),
+                arg_or_undefined(args, 1),
+            );
             let (addr, receiver) = recv.live();
             let indexes: Box<dyn Iterator<Item = usize>> = if method == "find" {
                 Box::new(0..len)
@@ -898,7 +933,11 @@ pub(crate) unsafe fn dispatch_uint8_buffer_method(
             undefined()
         }
         "findIndex" | "findLastIndex" => {
-            let cb = RootedCallback3::new(&scope, validate_callback(args));
+            let cb = RootedCallback3::with_this(
+                &scope,
+                validate_callback(args),
+                arg_or_undefined(args, 1),
+            );
             let (addr, receiver) = recv.live();
             let indexes: Box<dyn Iterator<Item = usize>> = if method == "findIndex" {
                 Box::new(0..len)
@@ -915,7 +954,11 @@ pub(crate) unsafe fn dispatch_uint8_buffer_method(
             -1.0
         }
         "forEach" => {
-            let cb = RootedCallback3::new(&scope, validate_callback(args));
+            let cb = RootedCallback3::with_this(
+                &scope,
+                validate_callback(args),
+                arg_or_undefined(args, 1),
+            );
             let (addr, receiver) = recv.live();
             for i in 0..len {
                 let value = uint8_get(addr, i) as f64;
@@ -1286,28 +1329,26 @@ pub(super) fn install_uint8array_base64_hex_proto_methods(proto_obj: *mut Object
     let methods: &[(&str, *const crate::closure::JsFunctionInfo, u32)] = &[
         (
             "toBase64",
-            fn_info!(u8_to_base64_thunk, 3; with_declared(3), with_flags(FN_BUILTIN)),
-            0,
+            fn_info!(#[realm(Uint8Array.prototype.toBase64, spec = {length = 0}, emit = metadata(realm_uint8array_prototype_tobase64_metadata))] export crate::object::typed_array_proto_thunks::u8_to_base64_thunk, 3; with_declared(3), with_flags(FN_BUILTIN)),
+            realm_uint8array_prototype_tobase64_metadata!(length),
         ),
         (
             "toHex",
-            fn_info!(u8_to_hex_thunk, 3; with_declared(3), with_flags(FN_BUILTIN)),
-            0,
+            fn_info!(#[realm(Uint8Array.prototype.toHex, spec = {length = 0}, emit = metadata(realm_uint8array_prototype_tohex_metadata))] export crate::object::typed_array_proto_thunks::u8_to_hex_thunk, 3; with_declared(3), with_flags(FN_BUILTIN)),
+            realm_uint8array_prototype_tohex_metadata!(length),
         ),
         (
             "setFromBase64",
-            fn_info!(u8_set_from_base64_thunk, 3; with_declared(3), with_flags(FN_BUILTIN)),
-            1,
+            fn_info!(#[realm(Uint8Array.prototype.setFromBase64, spec = {length = 1}, emit = metadata(realm_uint8array_prototype_setfrombase64_metadata))] export crate::object::typed_array_proto_thunks::u8_set_from_base64_thunk, 3; with_declared(3), with_flags(FN_BUILTIN)),
+            realm_uint8array_prototype_setfrombase64_metadata!(length),
         ),
         (
             "setFromHex",
-            fn_info!(u8_set_from_hex_thunk, 3; with_declared(3), with_flags(FN_BUILTIN)),
-            1,
+            fn_info!(#[realm(Uint8Array.prototype.setFromHex, spec = {length = 1}, emit = metadata(realm_uint8array_prototype_setfromhex_metadata))] export crate::object::typed_array_proto_thunks::u8_set_from_hex_thunk, 3; with_declared(3), with_flags(FN_BUILTIN)),
+            realm_uint8array_prototype_setfromhex_metadata!(length),
         ),
     ];
     for &(name, info, spec_length) in methods {
         ipm(proto_obj, name, info, spec_length);
     }
 }
-
-crate::realm_decl!("typed_array_proto_thunks.realm.json#*");

@@ -219,6 +219,12 @@ impl Iterator for HeapChildSlotIterator {
     type Item = HeapChildSlot;
 
     fn next(&mut self) -> Option<Self::Item> {
+        self.next_with::<{ cfg!(test) }>()
+    }
+}
+
+impl HeapChildSlotIterator {
+    pub(in crate::gc) fn next_with<const DIAGNOSTICS: bool>(&mut self) -> Option<HeapChildSlot> {
         if let Some(slot) = self.prefix_slot.take() {
             return Some(HeapChildSlot::Child(slot, HeapChildSlotReadKind::Prefix));
         }
@@ -239,14 +245,20 @@ impl Iterator for HeapChildSlotIterator {
                     None
                 } else {
                     *emitted = true;
-                    record_layout_pointer_free_range_skipped(self.payload.slot_count());
+                    if DIAGNOSTICS {
+                        record_layout_pointer_free_range_skipped(self.payload.slot_count())
+                    };
                     if *raw_numeric_array {
-                        record_layout_raw_numeric_array_range_skipped(self.payload.slot_count());
+                        if DIAGNOSTICS {
+                            record_layout_raw_numeric_array_range_skipped(self.payload.slot_count())
+                        };
                     }
                     if *raw_numeric_object_slots != 0 {
-                        record_layout_raw_numeric_object_field_range_skipped(
-                            *raw_numeric_object_slots,
-                        );
+                        if DIAGNOSTICS {
+                            record_layout_raw_numeric_object_field_range_skipped(
+                                *raw_numeric_object_slots,
+                            )
+                        };
                     }
                     Some(HeapChildSlot::PointerFreeRange(self.payload))
                 }
@@ -260,9 +272,11 @@ impl Iterator for HeapChildSlotIterator {
                 if !*raw_numeric_recorded {
                     *raw_numeric_recorded = true;
                     if *raw_numeric_object_slots != 0 {
-                        record_layout_raw_numeric_object_field_range_skipped(
-                            *raw_numeric_object_slots,
-                        );
+                        if DIAGNOSTICS {
+                            record_layout_raw_numeric_object_field_range_skipped(
+                                *raw_numeric_object_slots,
+                            )
+                        };
                     }
                 }
                 let index = mask.next_slot_at_or_after(*cursor, self.payload.slot_count())?;

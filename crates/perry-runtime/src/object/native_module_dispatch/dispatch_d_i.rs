@@ -11,6 +11,7 @@ use super::*;
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_dgram(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -55,6 +56,7 @@ pub(crate) unsafe fn nm_dispatch_dgram(ctx: &NmCtx, module_name: &str, method_na
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_dns(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -121,6 +123,7 @@ pub(crate) unsafe fn nm_dispatch_dns(ctx: &NmCtx, module_name: &str, method_name
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_domain(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -171,6 +174,7 @@ pub(crate) unsafe fn nm_dispatch_domain(ctx: &NmCtx, module_name: &str, method_n
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_events(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -245,6 +249,7 @@ pub(crate) unsafe fn nm_dispatch_events(ctx: &NmCtx, module_name: &str, method_n
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_fs(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -355,6 +360,14 @@ pub(crate) unsafe fn nm_dispatch_fs(ctx: &NmCtx, module_name: &str, method_name:
         ("fs", "read") if args_len == 4 => {
             crate::fs::js_fs_read_callback_options(arg(0), arg(1), arg(2), arg(3))
         }
+        ("fs", "read") if args_len == 3 => {
+            crate::fs::js_fs_read_callback_short(arg(0), arg(1), arg(2))
+        }
+        ("fs", "read") if args_len == 2 => crate::fs::js_fs_read_callback_short(
+            arg(0),
+            f64::from_bits(JSValue::undefined().bits()),
+            arg(1),
+        ),
         ("fs", "read") => {
             crate::fs::js_fs_read_callback(arg(0), arg(1), arg(2), arg(3), arg(4), arg(5))
         }
@@ -431,6 +444,7 @@ pub(crate) unsafe fn nm_dispatch_fs(ctx: &NmCtx, module_name: &str, method_name:
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_http(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -519,6 +533,7 @@ pub(crate) unsafe fn nm_dispatch_http(ctx: &NmCtx, module_name: &str, method_nam
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_inspector(
     ctx: &NmCtx,
     module_name: &str,

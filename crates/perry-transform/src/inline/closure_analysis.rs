@@ -24,6 +24,7 @@ pub fn body_contains_super_call(stmts: &[Stmt]) -> bool {
                 object,
                 index,
                 value,
+                ..
             } => check_expr(object) || check_expr(index) || check_expr(value),
             Expr::PropertyGet { object, .. } => check_expr(object),
             Expr::PropertySet { object, value, .. } => check_expr(object) || check_expr(value),
@@ -539,6 +540,7 @@ pub fn is_pure_function(func: &Function) -> bool {
                 object,
                 index,
                 value,
+                ..
             } => {
                 expr_is_pure(object, known)
                     && expr_is_pure(index, known)

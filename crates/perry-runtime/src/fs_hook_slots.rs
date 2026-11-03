@@ -9,6 +9,15 @@ pub(crate) fn is_fs_stream_instance_value(value: f64, name: &str) -> bool {
     IS_STREAM.get().is_some_and(|check| check(value, name))
 }
 pub(crate) fn install() {
+    install_fd();
+    install_streams();
+}
+
+pub(crate) fn install_fd() {
+    CLONE_FD.set(crate::fs::try_clone_registered_fd);
+}
+
+pub(crate) fn install_streams() {
     UTF8_STREAM_DESTROY_VALUE.set(crate::fs::utf8_stream_destroy_value);
     UTF8_STREAM_EMIT_VALUE.set(crate::fs::utf8_stream_emit_value);
     UTF8_STREAM_END_VALUE.set(crate::fs::utf8_stream_end_value);
@@ -17,7 +26,6 @@ pub(crate) fn install() {
     UTF8_STREAM_ON_VALUE.set(crate::fs::utf8_stream_on_value);
     UTF8_STREAM_REMOVE_ALL_VALUE.set(crate::fs::utf8_stream_remove_all_value);
     UTF8_STREAM_WRITE_VALUE.set(crate::fs::utf8_stream_write_value);
-    CLONE_FD.set(crate::fs::try_clone_registered_fd);
     IS_STREAM.set(crate::fs::is_fs_stream_instance_value);
 }
 

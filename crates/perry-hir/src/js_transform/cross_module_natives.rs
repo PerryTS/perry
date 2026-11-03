@@ -888,6 +888,7 @@ pub fn fix_native_instance_expr(
             object,
             index,
             value,
+            ..
         } => {
             fix_native_instance_expr(object, native_instances, local_id_instances);
             fix_native_instance_expr(index, native_instances, local_id_instances);

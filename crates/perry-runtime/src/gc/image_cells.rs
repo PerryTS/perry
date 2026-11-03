@@ -39,12 +39,12 @@ crate::perry_thread_local! {
 }
 
 /// Every image path visits a cell's slots through this one out-of-line,
-/// non-generic instance of the layout visitor. The paths are cold (bounded by
-/// the image) and sit inside hot collector functions; a generic visitor
-/// inlined at each of them grew `.text` by about 20 KB.
+/// non-generic entry into the shared rewrite-slot decoder. The paths are cold
+/// (bounded by the image) and sit inside hot collector functions; a generic
+/// visitor inlined at each of them grew `.text` by about 20 KB.
 #[inline(never)]
 unsafe fn visit_cell_slots(header: *mut GcHeader, visit: &mut dyn FnMut(GcMutableSlot)) {
-    visit_gc_rewrite_slots(header, |slot| visit(slot));
+    visit_gc_rewrite_slots_shared::<{ cfg!(test) }>(header, visit);
 }
 
 /// Is `child_addr` a cell some collector owns, so that an image slot holding
@@ -65,6 +65,7 @@ pub(super) fn image_child_is_collectable(child_addr: usize) -> bool {
 /// address) published `child_addr`. Returns whether the cell is newly
 /// remembered.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(super) fn remember_image_parent(parent_addr: usize, child_addr: usize) -> bool {
     if !image_child_is_collectable(child_addr) {
@@ -206,7 +207,7 @@ unsafe fn cell_shape_needs_visit(header: *mut GcHeader) -> bool {
     if (*header).obj_type == GC_TYPE_ARRAY && (*header).gc_flags & GC_FLAG_SHAPE_SHARED != 0 {
         return false;
     }
-    if (*header).obj_type != GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!((*header).obj_type) {
         return true;
     }
     let object = (header as *mut u8).add(GC_HEADER_SIZE) as *const crate::object::ObjectHeader;
@@ -265,7 +266,9 @@ pub(super) fn mark_image_roots(valid_ptrs: &ValidPointerSet, minor_only: bool) -
 /// stays in this set). Returns the number of slots that changed.
 #[cold]
 #[inline(never)]
-pub(super) unsafe fn visit_image_roots_copying(collector: &mut CopyingNurseryCollector) -> usize {
+pub(super) unsafe fn visit_image_roots_copying<const DIAGNOSTICS: bool>(
+    collector: &mut CopyingNurseryCollector,
+) -> usize {
     #[cfg(test)]
     if sabotage::knocked(sabotage::COPY) {
         return 0;
@@ -275,7 +278,7 @@ pub(super) unsafe fn visit_image_roots_copying(collector: &mut CopyingNurseryCol
         let mut changed = false;
         visit_cell_slots(header, &mut |slot| {
             let before = slot.read();
-            collector.visit_image_root_slot(slot, header);
+            collector.visit_image_root_slot::<DIAGNOSTICS>(slot, header);
             changed |= slot.read() != before;
             rewritten += usize::from(slot.read() != before);
         });
@@ -311,7 +314,7 @@ pub(super) fn rewrite_image_roots(valid_ptrs: &ValidPointerSet) {
         return;
     }
     for header in root_cells(false) {
-        unsafe { rewrite_heap_object_fields(header, valid_ptrs) };
+        unsafe { rewrite_heap_object_fields::<{ cfg!(test) }>(header, valid_ptrs) };
     }
 }
 
@@ -327,6 +330,7 @@ pub(super) fn for_each_image_cell(mut visit: impl FnMut(*mut GcHeader)) {
 /// image cell holding a collectable child must be remembered, whatever the
 /// child's generation. A store that bypassed the barrier leaves its cell out.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(super) fn verify_image_cells_remembered(stats: &mut OldYoungEdgeVerifyStats) {
     for_each_image_cell(|header| unsafe {
@@ -401,5 +405,11 @@ pub(crate) mod sabotage {
             let prior = self.0;
             KNOCKED.with(|k| k.set(prior));
         }
+    }
+}
+
+pub(super) unsafe fn visit_leaf_service_roots(mut visit: impl FnMut(u64)) {
+    for header in image_remembered_headers() {
+        visit_cell_slots(header, &mut |slot| visit(slot.read()));
     }
 }

@@ -71,6 +71,7 @@ use super::{
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     let _fallback = crate::fallback_diag::enter_expr(ctx, expr);
+    let _consumed = crate::facts_consumed::enter(expr);
     // Object model step 1: a literal family's added key, one slot load.
     if let Expr::PropertyGet {
         object, property, ..
@@ -795,6 +796,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // ObjectHeader, and the outer PropertyGet routes through
             // `js_object_get_field_by_name`'s NATIVE_MODULE_CLASS_ID arm.
             if let Expr::NativeModuleRef(module_name) = object.as_ref() {
+                if let Some(export) =
+                    crate::native_export_value::prepare(ctx.strings, module_name, property, true)
+                {
+                    return Ok(export.emit(ctx.block()));
+                }
                 // Devirt: register this module's runtime dispatch bucket before
                 // the namespace value is produced, so later method calls on it
                 // route to the real handlers. The CJS-`require` shim lowers
@@ -1599,9 +1605,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             );
                             let recv_box = lower_expr(ctx, object)?;
                             let field_idx_str = field_index.to_string();
-                            let header_skip =
-                                crate::target_layout::object_header_size_bytes(ctx.target_triple)
-                                    .to_string();
+                            let header_skip = crate::target_layout::object_slot_base_bytes(
+                                ctx.target_triple,
+                                crate::target_layout::class_instance_form(&class_name),
+                            )
+                            .to_string();
                             let numeric = fact.numeric_fields.contains(property);
                             let blk = ctx.block();
                             let obj_bits = blk.bitcast_double_to_i64(&recv_box);

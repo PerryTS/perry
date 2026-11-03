@@ -237,16 +237,16 @@ extern "C" fn worker_threads_lock_to_string_tag(_this: f64) -> f64 {
 }
 
 fn worker_threads_locks_proto_value() -> f64 {
-    let proto = crate::object::js_object_alloc(0, 0);
+    let proto = crate::realm_decl! { birth crate::object::js_object_alloc(0, 0); realm { "node:worker_threads.locks.<prototype>", members = { request, attrs = writable | enumerable | configurable; query, attrs = writable | enumerable | configurable; }; } };
     let request = web_locks_make_function(
         "request",
-        crate::fn_info!(worker_threads_locks_request, 3; with_declared(3)),
-        2,
+        crate::fn_info!(#[realm("node:worker_threads.locks.<prototype>.request", constructible = true, spec = {length = 2}, emit = metadata(realm_node_worker_threads_locks_prototype_request_metadata))] export crate::object::native_module::web_locks::worker_threads_locks_request, 3; with_declared(3)),
+        realm_node_worker_threads_locks_prototype_request_metadata!(length),
     );
     web_locks_set_field(proto, "request", request);
     let query = web_locks_make_function(
         "query",
-        crate::fn_info!(worker_threads_locks_query, 0; with_declared(0)),
+        crate::fn_info!(#[realm("node:worker_threads.locks.<prototype>.query", constructible = true)] export crate::object::native_module::web_locks::worker_threads_locks_query, 0; with_declared(0)),
         0,
     );
     web_locks_set_field(proto, "query", query);
@@ -286,7 +286,7 @@ pub(crate) fn worker_threads_locks_value() -> f64 {
             worker_threads_lock_to_string_tag as *const u8 as i64,
         );
     }
-    let obj = js_object_alloc(WORKER_THREADS_LOCK_MANAGER_CLASS_ID, 0);
+    let obj = crate::realm_decl! { birth js_object_alloc(WORKER_THREADS_LOCK_MANAGER_CLASS_ID, 0); realm { "node:worker_threads.locks", kind = namespace, extends = "node:worker_threads.locks.<prototype>", members = { }; } };
     let obj_value = crate::value::js_nanbox_pointer(obj as i64);
     crate::object::js_object_set_prototype_of(obj_value, worker_threads_locks_proto_value());
     WORKER_THREADS_LOCKS_VALUE.with(|slot| slot.set(obj_value.to_bits()));
@@ -395,7 +395,7 @@ fn web_locks_release_callback_value(
         crate::fn_info!(worker_threads_locks_release_fulfill, 1; with_declared(1))
     };
     let closure = crate::closure::js_closure_alloc(func_ptr, 2);
-    crate::closure::js_closure_set_capture_ptr(closure, 0, id as i64);
+    crate::closure::closure_set_capture_word(closure, 0, id as i64);
     crate::closure::js_closure_set_capture_ptr(closure, 1, output_promise as i64);
     closure
 }
@@ -677,5 +677,3 @@ extern "C" fn worker_threads_locks_query(
 pub extern "C" fn js_worker_threads_locks_query() -> f64 {
     worker_threads_locks_query(std::ptr::null(), crate::closure::JsThis::UNDEFINED)
 }
-
-crate::realm_decl!("web_locks.realm.json#*");

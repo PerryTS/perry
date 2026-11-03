@@ -368,11 +368,14 @@ pub(crate) fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescript
     let addr = extract_pointer(target.to_bits()) as usize;
     let indexed_owner = unsafe {
         match crate::value::addr_class::try_read_gc_header(addr) {
-            Some(header) if header.obj_type == crate::gc::GC_TYPE_OBJECT => {
+            Some(header) if crate::object_has_meta_word!(header.obj_type) => {
                 // The indexed answer reads the layout alone; a prototype with
                 // an overflow keeps keys and attributes in its entries (object
                 // model step 4), which the complete lookup below reads.
-                let meta = (*(addr as *const crate::ObjectHeader)).meta;
+                let meta = crate::meta_read!(crate::meta_obj_from_type!(
+                    addr as *const crate::ObjectHeader as *mut _,
+                    header.obj_type,
+                ));
                 (!meta.is_null()
                     && (*meta).flags & crate::object::OBJECT_META_FLAG_IS_PROTOTYPE != 0
                     && (*meta).overflow == 0)
@@ -412,7 +415,7 @@ pub(crate) fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescript
                         unsafe {
                             let hash = crate::object::key_bytes_hash(bytes.as_ptr(), bytes.len());
                             let verdict = crate::object::shapes::shape_slot_lookup_verdict(
-                                keys,
+                                shape.keys_view(),
                                 bytes,
                                 hash,
                                 shape.logical_key_count,
@@ -422,7 +425,7 @@ pub(crate) fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescript
                             // index. Rebuild before claiming absence.
                             if matches!(verdict, KeysIndexVerdict::Unindexed) {
                                 crate::object::shapes::shape_slot_lookup_verdict(
-                                    keys,
+                                    shape.keys_view(),
                                     bytes,
                                     hash,
                                     shape.logical_key_count,
@@ -795,18 +798,25 @@ pub(crate) unsafe fn build_create_data_descriptor(value: f64) -> f64 {
 /// receiver's `[[DefineOwnProperty]]`. This is the operation used by public
 /// class fields: it bypasses inherited setters on ordinary objects and still
 /// drives a Proxy's `defineProperty` trap.
+///
+/// The descriptor is a Property Descriptor record, not a JS object: no
+/// descriptor object is allocated, and nothing is read back through
+/// `%Object.prototype%` (an inherited `get` cannot turn it into an accessor).
 pub(crate) fn create_data_property(receiver: f64, key: f64, value: f64) -> bool {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let receiver = scope.root_nanbox_f64(receiver);
-    let key = scope.root_nanbox_f64(key);
-    let value = scope.root_nanbox_f64(value);
-    let descriptor = unsafe { build_create_data_descriptor(value.get_nanbox_f64()) };
-    let descriptor = scope.root_nanbox_f64(descriptor);
-    crate::value::js_is_truthy(js_reflect_define_property(
-        receiver.get_nanbox_f64(),
-        key.get_nanbox_f64(),
-        descriptor.get_nanbox_f64(),
-    )) != 0
+    unsafe {
+        if !crate::object::object_ops::definition_target_is_object(receiver) {
+            reflect_non_object_typeerror("defineProperty");
+        }
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let receiver = scope.root_nanbox_f64(
+            crate::object::object_ops::normalize_descriptor_operand(receiver),
+        );
+        let value = scope.root_nanbox_f64(value);
+        let key = scope.root_nanbox_f64(crate::object::js_to_property_key(key));
+        let descriptor =
+            crate::object::object_ops::DescView::create_data(&scope, value.get_nanbox_f64());
+        crate::object::object_ops::define_own_property_decoded(&scope, &receiver, &key, &descriptor)
+    }
 }
 
 /// #5129: build a `{ value }`-only property descriptor — the `valueDesc` of
@@ -962,7 +972,7 @@ pub(crate) fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, rece
                     // longer sends every later store on this receiver down the
                     // full walk. Read before the coercion below: it reads key
                     // bytes only and cannot allocate.
-                    if header.obj_type == crate::gc::GC_TYPE_OBJECT
+                    if crate::gc_type_is_object!(header.obj_type)
                         && header._reserved & SLOW_FLAGS == 0
                         && crate::object::own_descriptors_skip_key(addr, key)
                     {
@@ -1033,13 +1043,11 @@ pub(crate) fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, rece
                             // builds O(n²)). #10287: a RECORDED prototype (a
                             // function-constructed receiver, `Object.create`,
                             // `setPrototypeOf`) is walked per key rather than rejected.
-                            // A born-null receiver whose shape proves it ordinary
-                            // with no chain has nothing to intercept the key.
+                            // A receiver whose shape proves it ordinary with
+                            // no chain has nothing to intercept the key.
                             use crate::object::shapes::store_kind;
                             let obj = cur_addr() as *const crate::ObjectHeader;
-                            if header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0
-                                && store_kind::born_null_shape_proven(obj, header._reserved)
-                            {
+                            if store_kind::null_shape_proven(obj, header._reserved) {
                                 true
                             } else {
                                 match crate::object::prototype_chain::object_static_prototype(
@@ -1048,6 +1056,8 @@ pub(crate) fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, rece
                                     None => {
                                         !crate::object::object_proto_may_intercept_key(cur_key())
                                     }
+                                    // A null chain: nothing intercepts.
+                                    Some(crate::value::TAG_NULL) => true,
                                     Some(_) => {
                                         !crate::object::plain_custom_prototype_may_intercept(
                                             cur_addr(),
@@ -1128,12 +1138,6 @@ pub(crate) fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, rece
                                 // "is an ObjectHeader" test.
                                 && crate::object::object_is_regular(
                                     addr as *const crate::ObjectHeader,
-                                )
-                                // A born-null receiver's plan is keyed on a
-                                // shape that proves it ordinary with no chain.
-                                && crate::object::shapes::store_kind::born_null_admits_lane(
-                                    addr as *const crate::ObjectHeader,
-                                    header._reserved,
                                 )
                                 && interned != 0;
                             let verdict = if plan_eligible

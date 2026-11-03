@@ -276,6 +276,8 @@ fn a_sloppy_element_store_keeps_the_seal() {
             value: Box::new(Expr::Integer(2)),
             receiver: Box::new(Expr::LocalGet(receiver)),
             strict: false,
+            byte_offset: 0,
+            byte_end: 0,
         })
     };
     let m = module(
@@ -375,4 +377,88 @@ fn the_statement_probe_flags_every_exposing_use() {
     };
     assert!(stmt_may_expose(&looped, 10));
     assert!(!stmt_may_expose(&looped, 11));
+}
+
+#[test]
+fn a_direct_call_key_is_never_a_string_only_if_every_return_is() {
+    // f(i) { return i | 0; }  g(i) { return "buffer"; }  h(i) { return h(i); }
+    // a[f(1)];  b[g(1)];  c[h(1)];  d[k(1)] where k is not a module function.
+    let or0 = |id: u32| Expr::Binary {
+        op: BinaryOp::BitOr,
+        left: Box::new(Expr::LocalGet(id)),
+        right: Box::new(Expr::Integer(0)),
+    };
+    let m = module(
+        vec![
+            fresh(10),
+            fresh(11),
+            fresh(12),
+            fresh(13),
+            Stmt::Expr(get(10, call(1, vec![Expr::Integer(1)]))),
+            Stmt::Expr(get(11, call(2, vec![Expr::Integer(1)]))),
+            Stmt::Expr(get(12, call(3, vec![Expr::Integer(1)]))),
+            Stmt::Expr(get(13, call(99, vec![Expr::Integer(1)]))),
+        ],
+        vec![
+            func(1, vec![param(20)], vec![Stmt::Return(Some(or0(20)))]),
+            func(
+                2,
+                vec![param(30)],
+                vec![Stmt::Return(Some(Expr::String("buffer".to_string())))],
+            ),
+            func(
+                3,
+                vec![param(40)],
+                vec![Stmt::Return(Some(call(3, vec![Expr::LocalGet(40)])))],
+            ),
+        ],
+    );
+    let exposed = buffer_exposure(&m).exposed;
+    assert!(!exposed.contains(&10));
+    assert!(exposed.contains(&11));
+    assert!(!exposed.contains(&12));
+    assert!(exposed.contains(&13));
+}
+
+#[test]
+fn a_returned_parameter_follows_its_arguments() {
+    // id(x) { return x; }  a[id(2)];  b[id2("buffer")] with id2 the same body.
+    let m = module(
+        vec![
+            fresh(10),
+            fresh(11),
+            Stmt::Expr(get(10, call(1, vec![Expr::Integer(2)]))),
+            Stmt::Expr(get(
+                11,
+                call(2, vec![Expr::String("buffer".to_string())]),
+            )),
+        ],
+        vec![
+            func(1, vec![param(20)], vec![Stmt::Return(Some(Expr::LocalGet(20)))]),
+            func(2, vec![param(30)], vec![Stmt::Return(Some(Expr::LocalGet(30)))]),
+        ],
+    );
+    let exposed = buffer_exposure(&m).exposed;
+    assert!(!exposed.contains(&10));
+    assert!(exposed.contains(&11));
+}
+
+#[test]
+fn an_async_or_generator_callee_key_exposes_the_receiver() {
+    let mut f = func(1, vec![], vec![Stmt::Return(Some(Expr::Integer(0)))]);
+    f.is_async = true;
+    let mut g = func(2, vec![], vec![Stmt::Return(Some(Expr::Integer(0)))]);
+    g.is_generator = true;
+    let m = module(
+        vec![
+            fresh(10),
+            fresh(11),
+            Stmt::Expr(get(10, call(1, vec![]))),
+            Stmt::Expr(get(11, call(2, vec![]))),
+        ],
+        vec![f, g],
+    );
+    let exposed = buffer_exposure(&m).exposed;
+    assert!(exposed.contains(&10));
+    assert!(exposed.contains(&11));
 }

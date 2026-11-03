@@ -1,9 +1,7 @@
 use super::*;
 
 pub(super) unsafe fn object_has_null_proto_flag(object: *const ObjectHeader) -> bool {
-    let gc_header =
-        (object as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    ((*gc_header)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO) != 0
+    crate::object::shapes::object_prototype_is_null(object)
 }
 
 /// Resolve `method_name` through an ORDINARY object's prototype chain and call
@@ -34,7 +32,7 @@ pub(super) unsafe fn is_ordinary_object_receiver(object: f64) -> bool {
         return false;
     }
     let gc_header = (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    (*gc_header).obj_type == crate::gc::GC_TYPE_OBJECT
+    crate::gc_type_is_object!((*gc_header).obj_type)
 }
 
 /// The builtin `Object.prototype.hasOwnProperty` /
@@ -433,12 +431,7 @@ pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64)
     };
 
     if crate::date::is_date_value(target) {
-        let ctor = crate::object::js_get_global_this_builtin_value(b"Date".as_ptr(), 4);
-        let ctor_ptr = crate::value::js_nanbox_get_pointer(ctor) as usize;
-        if ctor_ptr == 0 {
-            return false;
-        }
-        let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
+        let proto = crate::object::builtin_prototype_value("Date");
         if let Some(proto_addr) = heap_addr(proto) {
             return proto_addr == receiver_addr;
         }

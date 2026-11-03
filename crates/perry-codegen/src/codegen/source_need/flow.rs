@@ -1131,6 +1131,7 @@ impl<'a> Build<'a> {
                 object,
                 index,
                 value,
+                ..
             } => {
                 let o = self.expr(cx, object);
                 self.sink_vals(&o, Reason::ErrorMessage, "index-write");

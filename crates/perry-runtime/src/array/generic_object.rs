@@ -81,7 +81,7 @@ fn al_set_length(recv: f64, len: i64) {
             && unsafe {
                 let keys = crate::object::object_keys(raw);
                 !keys.is_null()
-                    && crate::object::keys_find_slot_by_bytes(keys.arr(), keys.count(), b"length")
+                    && crate::object::keys_find_slot_by_bytes(keys, keys.count(), b"length")
                         .is_some()
             };
         if class_id != 0 && !own_length {

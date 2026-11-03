@@ -48,6 +48,8 @@ pub(crate) fn register_turnloop_server_session(
         listeners: HashMap::new(),
         close_callbacks: Vec::new(),
         pending_callbacks: Vec::new(),
+        ping_sent: Default::default(),
+        settings_sent: Default::default(),
         timeout_callback: 0,
         turnloop_conn: 0,
     });
@@ -309,15 +311,21 @@ pub(crate) fn queue_turnloop_goaway(
 
 /// A PING acknowledgement: fire the `session.ping(cb)` callback that is waiting.
 pub(crate) fn complete_turnloop_ping(session_handle: i64, data: [u8; 8]) {
-    let callback = get_handle_mut::<Http2SessionHandle>(session_handle)
-        .and_then(|session| {
-            if session.pending_callbacks.is_empty() {
-                None
+    let (callback, duration) = get_handle_mut::<Http2SessionHandle>(session_handle)
+        .map(|session| {
+            let duration = session
+                .ping_sent
+                .pop_front()
+                .map(|sent| sent.elapsed().as_secs_f64() * 1000.0)
+                .unwrap_or(0.0);
+            let callback = if session.pending_callbacks.is_empty() {
+                0
             } else {
-                Some(session.pending_callbacks.remove(0))
-            }
+                session.pending_callbacks.remove(0)
+            };
+            (callback, duration)
         })
-        .unwrap_or(0);
+        .unwrap_or((0, 0.0));
     if callback == 0 {
         return;
     }
@@ -325,23 +333,32 @@ pub(crate) fn complete_turnloop_ping(session_handle: i64, data: [u8; 8]) {
         session_handle,
         callback,
         payload: data.to_vec(),
+        duration,
     });
 }
 
 /// The peer acknowledged the SETTINGS the core sent at construction.
 ///
 /// This is not `complete_turnloop_settings`: there is no user callback behind
-/// the handshake's own SETTINGS and no `'localSettings'` to emit for it, but
-/// `session.pendingSettingsAck` must go false — Node's does, and a session that
-/// reported `true` for the life of the connection would be the one observable
-/// thing the handshake changes.
+/// the handshake's own SETTINGS. Node still emits `'localSettings'` for it, with
+/// what the session was created with, and `session.pendingSettingsAck` goes
+/// false.
 pub(crate) fn mark_turnloop_settings_acked(session_handle: i64) {
     if session_handle == 0 {
         return;
     }
-    if let Some(session) = get_handle_mut::<Http2SessionHandle>(session_handle) {
-        session.pending_settings_ack = false;
-    }
+    let settings = match get_handle_mut::<Http2SessionHandle>(session_handle) {
+        Some(session) => {
+            session.pending_settings_ack = false;
+            session.local_settings.clone()
+        }
+        None => return,
+    };
+    push_h2_event(Http2PendingEvent::SessionSettingsEvent {
+        session_handle,
+        event: "localSettings",
+        settings,
+    });
 }
 
 /// The SETTINGS acknowledgement arrived: Node fires `session.settings(obj, cb)`'s
@@ -350,15 +367,24 @@ pub(crate) fn complete_turnloop_settings(session_handle: i64) {
     if session_handle == 0 {
         return;
     }
-    let (callback, settings) = match get_handle_mut::<Http2SessionHandle>(session_handle) {
+    let (callback, settings, duration) = match get_handle_mut::<Http2SessionHandle>(session_handle)
+    {
         Some(session) => {
-            session.pending_settings_ack = false;
+            // The oldest frame in flight is the one acknowledged.
+            let duration = match session.settings_sent.pop_front() {
+                Some((sent, acked)) => {
+                    session.local_settings = acked;
+                    sent.elapsed().as_secs_f64() * 1000.0
+                }
+                None => 0.0,
+            };
+            session.pending_settings_ack = !session.settings_sent.is_empty();
             let callback = if session.pending_callbacks.is_empty() {
                 0
             } else {
                 session.pending_callbacks.remove(0)
             };
-            (callback, session.local_settings.clone())
+            (callback, session.local_settings.clone(), duration)
         }
         None => return,
     };
@@ -367,6 +393,7 @@ pub(crate) fn complete_turnloop_settings(session_handle: i64) {
             session_handle,
             callback,
             settings: settings.clone(),
+            duration,
         });
     }
     push_h2_event(Http2PendingEvent::SessionSettingsEvent {

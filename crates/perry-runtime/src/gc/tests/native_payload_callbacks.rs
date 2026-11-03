@@ -223,12 +223,12 @@ fn t3_owner_store_has_a_remembered_barrier() {
     let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     // Arm remembering before the store: lazy reconstruction must not hide a
     // dropped barrier by discovering the edge afterwards.
-    let _ = barrier::remembered_dirty_snapshot();
+    let _ = barrier::remembered_dirty_snapshot::<{ cfg!(test) }>();
     reset_remembered_set();
     let value = owner();
     let link = np::owner_link(value, &FAMILY).unwrap();
     let header = unsafe { header_from_user_ptr(cell(link) as *const u8) } as usize;
-    let snapshot = barrier::remembered_dirty_snapshot();
+    let snapshot = barrier::remembered_dirty_snapshot::<{ cfg!(test) }>();
     assert!(
         snapshot
             .external_dirty_entries
@@ -633,12 +633,12 @@ fn callback_cell_slot_barrier_is_exact_for_malloc_parent() {
     let cb = closure(crate::fn_info!(returns, 0));
     np::set_callback(value.get_nanbox_f64(), &FAMILY, 0, cb);
     let link = np::owner_link(value.get_nanbox_f64(), &FAMILY).unwrap();
-    let _ = barrier::remembered_dirty_snapshot();
+    let _ = barrier::remembered_dirty_snapshot::<{ cfg!(test) }>();
     reset_remembered_set();
     let replacement = crate::value::js_nanbox_pointer(crate::array::js_array_alloc(0) as i64);
     np::state_set(value.get_nanbox_f64(), &FAMILY, b"callbacks", replacement);
     let header = unsafe { header_from_user_ptr(cell(link) as *const u8) } as usize;
-    let snapshot = barrier::remembered_dirty_snapshot();
+    let snapshot = barrier::remembered_dirty_snapshot::<{ cfg!(test) }>();
     assert!(
         snapshot
             .external_dirty_entries

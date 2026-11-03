@@ -816,7 +816,7 @@ pub extern "C" fn js_array_fill_generic(
                 };
                 return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
             }
-            if obj_type == crate::gc::GC_TYPE_OBJECT || obj_type == crate::gc::GC_TYPE_CLOSURE {
+            if crate::gc_type_is_object!(obj_type) || obj_type == crate::gc::GC_TYPE_CLOSURE {
                 // `Get(O, "length")` — must fire an own `length` accessor
                 // (propagating its throw, test262
                 // fill/return-abrupt-from-this-length) and walk the prototype

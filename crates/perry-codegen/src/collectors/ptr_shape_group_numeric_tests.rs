@@ -54,6 +54,8 @@ fn this_store(property: &str, value: Expr) -> Stmt {
         object: Box::new(Expr::This),
         property: property.to_string(),
         value: Box::new(value),
+        byte_offset: 0,
+        byte_end: 0,
     })
 }
 
@@ -221,6 +223,8 @@ fn store_field(id: u32, property: &str, value: Expr) -> Stmt {
         object: Box::new(Expr::LocalGet(id)),
         property: property.to_string(),
         value: Box::new(value),
+        byte_offset: 0,
+        byte_end: 0,
     })
 }
 

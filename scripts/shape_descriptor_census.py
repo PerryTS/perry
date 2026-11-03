@@ -262,14 +262,24 @@ def assert_rule3_licenses_the_kind_fence_removal(rule3: str, gc_types: str) -> N
     # collector knows about, so re-derive that set from `gc/types.rs` instead
     # of trusting a count. A kind's discriminant is a decimal or hex literal or
     # a codegen ABI constant; `GC_TYPE_MAX` is the id bound, not a kind.
+    # The object kinds' discriminants live in the shared ABI crate
+    # (`perry_abi::GC_TYPE_OBJECT`, re-exported through `codegen_abi`), so a
+    # kind is declared either by a `pub const` whose value is a literal or an
+    # ABI path, or by a `pub use` re-export of the ABI constant.
     declared = {
         name
         for name, _ in re.findall(
             r"pub\s+const\s+(GC_TYPE_\w+)\s*:\s*u8\s*=\s*"
-            r"(0x[0-9A-Fa-f]+|\d+|crate::codegen_abi::\w+)\s*;",
+            r"(0x[0-9A-Fa-f]+|\d+|(?:crate::codegen_abi|perry_abi)::\w+)\s*;",
             gc_types,
         )
-    } - {"GC_TYPE_MAX"}
+    } | set(
+        re.findall(
+            r"pub\s+use\s+(?:crate::codegen_abi|perry_abi)::(GC_TYPE_\w+)\s*;",
+            gc_types,
+        )
+    )
+    declared -= {"GC_TYPE_MAX"}
     if not declared:
         raise CensusError("gc/types.rs declares no GC kinds: rule-3 coverage is unknowable")
     classified = {kind for kind, _ in verdicts}
@@ -332,7 +342,7 @@ DISPATCH_CHECKS = (
      r"crate::object::shapes::object_shape_record\(holder\)",
      "method holder resolves its current descriptor"),
     ("crates/perry-runtime/src/object/native_call_method/class_holder.rs", "chain_method_admitting",
-     r"key_position\(keys,\s*record\.logical_key_count\(\),\s*key\)",
+     r"key_position\((?:keys|record\.keys_view\(\)),\s*record\.logical_key_count\(\),\s*key\)",
      "method key lookup is bounded by descriptor count"),
     ("crates/perry-runtime/src/object/layout_probe.rs", "probe_get_at",
      r"let\s+word\s*=\s*\(\*obj\)\.parent_class_id;\s*let\s+r\s*=\s*record_of\(dir,\s*LayoutWord\(word\)\);",
@@ -612,7 +622,8 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     # body must emit the descriptor's keys edge without the deleted mirror.
     dispatch = function_body(layout_visit, "visit_gc_layout_slot_descriptors_inline")
     for callee in ("visit_object_layout_slots", "visit_gc_layout_slot_descriptors_generic"):
-        require_code(dispatch, rf"\b{callee}\s*\(header,\s*visit\)",
+        # A const-generic diagnostics turbofish is the same call.
+        require_code(dispatch, rf"\b{callee}\s*(?:::<[^>]*>\s*)?\(header,\s*visit\)",
                      f"layout dispatcher reaches {callee}")
     for body_name, body in (
         ("visit_gc_layout_slot_descriptors_generic",
@@ -678,7 +689,14 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     )
     # The structural publish body (charter step 5: `publish_object_shape_from`
     # delegates to it with an all-Any rep).
-    sync = function_body(shapes, "publish_object_shape_from_rep")
+    # `publish_object_shape_from_rep` now delegates to the newborn-aware
+    # `publish_object_shape_from_rep_born`, which owns the body.
+    require_code(
+        function_body(shapes, "publish_object_shape_from_rep"),
+        r"\bpublish_object_shape_from_rep_born\s*\(",
+        "publish_object_shape_from_rep delegates to its born body",
+    )
+    sync = function_body(shapes, "publish_object_shape_from_rep_born")
     # #9317 routed every post-birth ShapeId publication through
     # `stamp_object_shape_id_with_carrier_note`, which performs the header
     # write and then arms `old_carrier` for a promoted receiver. The header
@@ -725,11 +743,22 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     # keep the cache-carried versions an optimization cache can reinstall,
     # and must run AFTER the successor is stamped and armed (#9200's order).
     retirement = function_body(shapes, "retire_owned_shape_siblings")
+    # The family lookup is `ShapeTableInner::family_ids(node, keys)`: the
+    # canonical list's own family, else the owned-array index keyed by the
+    # array address. Either way it is scoped to this array.
     require_code(
         retirement,
-        r"families\s*\.\s*get\s*\(\s*&keys\s*\)",
+        r"\.\s*family_ids\s*\(\s*\w+\s*,\s*keys\s*\)",
         "keys-scoped descriptor lineage index",
     )
+    family_ids = function_body(shapes, "family_ids")
+    require_code(
+        family_ids,
+        r"families\s*\.\s*get\s*\(\s*&keys\s*\)",
+        "keys-scoped descriptor lineage index (family_ids)",
+    )
+    if re.search(r"slab\(\)\s*\.\s*for_each\s*\(", family_ids):
+        raise CensusError("descriptor family lookup scans the global descriptor table")
     if re.search(r"slab\(\)\s*\.\s*for_each\s*\(", retirement):
         raise CensusError("owned-history retirement scans the global descriptor table")
     require_code(
@@ -839,7 +868,13 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     # matcher points at a separately traced data cell, never an exotic receiver.
     for name in ("object_is_regular", "object_is_shaped"):
         body = function_body(object_mod, name)
-        require_code(body, r"obj_type\s*==\s*crate::gc::GC_TYPE_OBJECT", f"{name} GC kind")
+        # `gc_type_is_object!(t)` (perry-abi object_type.rs) expands to
+        # `t == GC_TYPE_OBJECT`, the same test.
+        require_code(
+            body,
+            r"obj_type\s*==\s*crate::gc::GC_TYPE_OBJECT|crate::gc_type_is_object!\(\s*\w+\.obj_type\s*\)",
+            f"{name} GC kind",
+        )
         if re.search(r"regex_header_has_magic|object_type", body):
             raise CensusError(f"{name} reintroduced an old payload discriminator")
     require_code(
@@ -1257,9 +1292,13 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
     for name in ("visit_object_layout_slots", "visit_gc_layout_slot_descriptors_generic"):
         missing_route = dict(sources)
         path = "crates/perry-runtime/src/gc/layout_slot_visit.rs"
-        call = f"{name}(header, visit);"
-        assert call in sources[path], f"missing mutation subject: {name}"
-        missing_route[path] = sources[path].replace(call, "return;", 1)
+        # The dispatcher calls both walks with a const-generic diagnostics
+        # turbofish; the mutation drops whichever spelling the source uses.
+        call = re.search(
+            rf"\b{name}\s*(?:::<[^>]*>\s*)?\(header,\s*visit\);", sources[path]
+        )
+        assert call is not None, f"missing mutation subject: {name}"
+        missing_route[path] = sources[path].replace(call.group(0), "return;", 1)
         expect_rejected(f"dispatcher loses {name}",
                         lambda: assert_authority_surfaces(missing_route))
 
@@ -1281,8 +1320,10 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
 
     inverted_publication = dict(sources)
     path = "crates/perry-runtime/src/object/shapes.rs"
+    # The structural publish's body lives in the newborn-aware
+    # `publish_object_shape_from_rep_born`; the plain entry only delegates.
     publication_body = function_body(
-        inverted_publication[path], "publish_object_shape_from_rep"
+        inverted_publication[path], "publish_object_shape_from_rep_born"
     )
     inverted_body = swap_once(
         publication_body,
@@ -1305,9 +1346,11 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
     retirement_body = function_body(
         unscoped_retirement[path], "retire_owned_shape_siblings"
     )
+    # The lookup is `inner.family_ids(node, keys)`; unscope it by dropping
+    # the keys argument the index is keyed by.
     unscoped_body, substitutions = re.subn(
-        r"families\s*\.\s*get\s*\(\s*&keys\s*\)",
-        "families.get(&0)",
+        r"\.\s*family_ids\s*\(\s*(\w+)\s*,\s*keys\s*\)",
+        r".family_ids(\1, 0)",
         retirement_body,
         count=1,
     )
@@ -1322,7 +1365,7 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
     )
 
     early_retirement = dict(sources)
-    publish_body = function_body(early_retirement[path], "publish_object_shape_from_rep")
+    publish_body = function_body(early_retirement[path], "publish_object_shape_from_rep_born")
     early_body = swap_once(
         publish_body,
         "stamp_object_shape_id_with_carrier_note",
@@ -1460,7 +1503,7 @@ def compare_exact_census(observed: dict[str, object], baseline: dict[str, object
             )
 
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--emit-baseline",
@@ -1468,18 +1511,27 @@ def main() -> None:
         help="print the current exact multiset for reviewed baseline refresh",
     )
     args = parser.parse_args()
-    run_literal_lexer_selftest()
-    sources = rust_sources()
-    observed = observed_census(sources)
-    if args.emit_baseline:
-        print(json.dumps(observed, indent=2, sort_keys=True))
-        return
-    baseline = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
-    compare_exact_census(observed, baseline)
-    assert_authority_surfaces(sources)
-    run_sabotage_selftests(sources, baseline)
+    try:
+        run_literal_lexer_selftest()
+        sources = rust_sources()
+        observed = observed_census(sources)
+        if args.emit_baseline:
+            print(json.dumps(observed, indent=2, sort_keys=True))
+            return 0
+        baseline = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+        compare_exact_census(observed, baseline)
+        assert_authority_surfaces(sources)
+        run_sabotage_selftests(sources, baseline)
+    except (CensusError, AssertionError) as error:
+        # A detected drift must read as a verdict, not as a traceback. This census
+        # stacks dozens of independent assertions, so every run reports exactly one
+        # of them; an escaping exception buries which subject moved under a stack
+        # trace and makes the next one harder to reach.
+        print(f"::error::shape_descriptor_census: {error}")
+        return 1
     print(json.dumps(observed["summary"], indent=2, sort_keys=True))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

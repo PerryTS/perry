@@ -19,18 +19,29 @@ pub fn arena_reset_all_blocks_to_zero() {
     ARENA.with(|arena| unsafe {
         let arena = &mut *arena.get();
         for block in arena.blocks.iter_mut() {
+            if block.extent_kind == super::region::Kind::LargeObject {
+                continue;
+            }
             block.clear_object_starts();
             block.offset = 0;
         }
-        arena.set_current(0);
+        if !arena.blocks.iter().any(ArenaBlock::bump_target) {
+            arena.install_fresh_block(BLOCK_SIZE);
+        }
+        let first = arena
+            .blocks
+            .iter()
+            .position(ArenaBlock::bump_target)
+            .unwrap_or(0);
+        arena.set_current(first);
         // Free list is now invalid (all entries point into reset blocks).
         crate::gc::ARENA_FREE_LIST.with(|fl| fl.borrow_mut().clear());
         crate::gc::ARENA_FREE_LIST_NONEMPTY.with(|c| c.set(false));
-        // Resync inline state to block 0 (offset 0, full size).
+        // Resync inline state to the bump block (offset 0, full size).
         INLINE_STATE.with(|s| {
             let inline = &mut *s.get();
             if !inline.data.is_null() {
-                let block = &arena.blocks[0];
+                let block = &arena.blocks[arena.current];
                 inline.data = block.data;
                 inline.offset = 0;
                 inline.size = super::inline::allocation_limit(0, block.size);
@@ -60,7 +71,7 @@ fn poison_fromspace_enabled() -> bool {
 /// in yet, which would be a layout change of its own.
 fn poison_region_in_place(arena: &mut Arena) {
     for block in arena.blocks.iter_mut() {
-        if block.data.is_null() || block.offset == 0 {
+        if !block.bump_target() || block.offset == 0 {
             continue;
         }
         // SAFETY: `[data, data+offset)` is this block's allocated span, owned
@@ -102,7 +113,7 @@ fn reset_region_to_zero(arena: &mut Arena, dead_cycles: DeadCycles) -> (usize, u
     let mut reset_blocks = 0usize;
     let mut reusable_bytes = 0usize;
     for block in arena.blocks.iter_mut() {
-        if block.data.is_null() {
+        if block.data.is_null() || block.extent_kind == super::region::Kind::LargeObject {
             continue;
         }
         if block.offset != 0 {
@@ -122,7 +133,14 @@ fn reset_region_to_zero(arena: &mut Arena, dead_cycles: DeadCycles) -> (usize, u
     if arena.generation == HeapGeneration::Old {
         old_gen_in_use_bytes_sub(reusable_bytes);
     }
-    arena.set_current(0);
+    // Slot 0 may hold a dedicated large extent; `point_eden_at_first_mapped_block`
+    // still covers an all-tombstone prefix.
+    let first = arena
+        .blocks
+        .iter()
+        .position(ArenaBlock::bump_target)
+        .unwrap_or(0);
+    arena.set_current(first);
     (reset_blocks, reusable_bytes)
 }
 
@@ -332,7 +350,7 @@ pub(super) fn release_idle_eden_blocks(arena: &mut Arena) -> ArenaResetStats {
     let keep_low = current.saturating_sub(4);
     let mut stats = ArenaResetStats::default();
     for (i, block) in arena.blocks.iter_mut().enumerate() {
-        if block.data.is_null() {
+        if block.data.is_null() || block.extent_kind == super::region::Kind::LargeObject {
             continue;
         }
         if (keep_low..=current).contains(&i) || block.offset != 0 {
@@ -354,7 +372,7 @@ pub(super) fn release_idle_eden_blocks(arena: &mut Arena) -> ArenaResetStats {
         block.offset = 0;
         block.dead_cycles = 0;
     }
-    if stats.removed_blocks > 0 && crate::gc::gc_diag_enabled() {
+    if stats.removed_blocks > 0 && crate::gc::diagnostic_hooks::enabled() {
         eprintln!(
             "[gc-block-release] moving_minor removed {} idle Eden blocks ({} bytes): pooled={} bytes, deallocated={} bytes",
             stats.removed_blocks, stats.removed_bytes, stats.pooled_bytes, stats.deallocated_bytes
@@ -368,11 +386,16 @@ pub(super) fn release_idle_eden_blocks(arena: &mut Arena) -> ArenaResetStats {
 /// tombstoned; allocating there would map a fresh block while empty ones sit
 /// behind it.
 pub(super) fn point_eden_at_first_mapped_block(arena: &mut Arena) {
-    if !arena.blocks[arena.current].data.is_null() {
+    if arena.blocks[arena.current].bump_target() {
         return;
     }
-    if let Some(first) = arena.blocks.iter().position(|block| !block.data.is_null()) {
-        arena.set_current(first);
+    match arena.blocks.iter().position(ArenaBlock::bump_target) {
+        Some(first) => arena.set_current(first),
+        // Only large extents remain mapped: never bump inside one.
+        None if arena.blocks.iter().any(|block| !block.data.is_null()) => {
+            arena.install_fresh_block(BLOCK_SIZE)
+        }
+        None => {}
     }
 }
 
@@ -417,7 +440,7 @@ pub fn arena_reset_empty_blocks(block_has_live: &[bool]) -> ArenaResetStats {
         for (i, block) in arena.blocks.iter_mut().enumerate() {
             // Tombstoned slot (gen-GC Phase C4b-δ): block was
             // deallocated on a prior cycle. Nothing to reset.
-            if block.data.is_null() {
+            if block.data.is_null() || block.extent_kind == super::region::Kind::LargeObject {
                 continue;
             }
             let live = block_has_live.get(i).copied().unwrap_or(false);
@@ -522,7 +545,7 @@ pub fn arena_reset_empty_blocks(block_has_live: &[bool]) -> ArenaResetStats {
         let mut removed_ranges: Vec<(usize, usize)> = Vec::new();
         let mut release_stats = ArenaResetStats::default();
         for (i, block) in arena.blocks.iter_mut().enumerate() {
-            if block.data.is_null() {
+            if block.data.is_null() || block.extent_kind == super::region::Kind::LargeObject {
                 continue;
             }
             if i == current {
@@ -584,7 +607,7 @@ pub fn arena_reset_empty_blocks(block_has_live: &[bool]) -> ArenaResetStats {
                     crate::gc::ARENA_FREE_LIST_NONEMPTY.with(|c| c.set(false));
                 }
             });
-            if crate::gc::gc_diag_enabled() {
+            if crate::gc::diagnostic_hooks::enabled() {
                 eprintln!(
                     "[gc-block-release] removed {} blocks ({} bytes): pooled={} bytes, deallocated={} bytes",
                     stats.removed_blocks,
@@ -783,7 +806,8 @@ impl ArenaResetEmptyBlocksState {
             let current = arena.current;
             let keep_low = current.saturating_sub(4);
             let block = arena.blocks.get_mut(block_idx)?;
-            if block.data.is_null()
+            if block.extent_kind == super::region::Kind::LargeObject
+                || block.data.is_null()
                 || block.data as usize != snapshot.data
                 || block.size != snapshot.size
                 || block.offset != snapshot.offset
@@ -900,7 +924,7 @@ impl ArenaResetEmptyBlocksState {
             ..self.stats
         };
 
-        if crate::gc::gc_diag_enabled() && self.diag.examined > 0 {
+        if crate::gc::diagnostic_hooks::enabled() && self.diag.examined > 0 {
             let d = self.diag;
             eprintln!(
                 "[gc-general-reclaim] examined={} released={} rejected: no_snapshot={} \
@@ -1290,7 +1314,7 @@ impl OldArenaReclaimDeadBlocksState {
                 }
                 RegionReclaimSubphase::Finish => {
                     self.finish();
-                    if crate::gc::gc_diag_enabled() && self.targeted_mode {
+                    if crate::gc::diagnostic_hooks::enabled() && self.targeted_mode {
                         let d = self.diag;
                         eprintln!(
                             "[gc-old-block-reclaim] targeted={} released={} released_bytes={} \
@@ -1375,8 +1399,7 @@ impl OldArenaReclaimDeadBlocksState {
             let used = block.offset;
             let first_page = generation_page_for_addr(base);
             let last_page = generation_page_for_addr(base + size - 1);
-            let pages: Vec<usize> = (first_page..=last_page).collect();
-            unregister_old_block_pages(&pages);
+            unregister_old_block_range(first_page, last_page);
             // #7437: this block's bytes are being recycled; any swept hole
             // recorded inside it must not be handed out again. #11505: the
             // list is threaded through those holes, so they are unlinked
@@ -1418,12 +1441,11 @@ impl OldArenaReclaimDeadBlocksState {
         }
         OLD_ARENA.with(|arena| unsafe {
             let arena = &mut *arena.get();
-            if let Some((idx, _)) = arena
-                .blocks
-                .iter()
-                .enumerate()
-                .find(|(_, block)| !block.data.is_null() && block.offset == 0)
-            {
+            if let Some((idx, _)) = arena.blocks.iter().enumerate().find(|(_, block)| {
+                !block.data.is_null()
+                    && block.offset == 0
+                    && block.extent_kind != super::region::Kind::LargeObject
+            }) {
                 arena.set_current(idx);
             } else if arena
                 .blocks
@@ -1431,12 +1453,9 @@ impl OldArenaReclaimDeadBlocksState {
                 .map(|block| block.data.is_null())
                 .unwrap_or(true)
             {
-                if let Some((idx, _)) = arena
-                    .blocks
-                    .iter()
-                    .enumerate()
-                    .find(|(_, block)| !block.data.is_null())
-                {
+                if let Some((idx, _)) = arena.blocks.iter().enumerate().find(|(_, block)| {
+                    !block.data.is_null() && block.extent_kind != super::region::Kind::LargeObject
+                }) {
                     arena.set_current(idx);
                 }
             }
@@ -1469,8 +1488,7 @@ pub(crate) fn old_arena_reclaim_dead_blocks(block_has_live: &[bool]) -> ArenaRes
             let used = block.offset;
             let first_page = generation_page_for_addr(base);
             let last_page = generation_page_for_addr(base + size - 1);
-            let pages: Vec<usize> = (first_page..=last_page).collect();
-            unregister_old_block_pages(&pages);
+            unregister_old_block_range(first_page, last_page);
             // #7437: this block's bytes are being recycled; any swept hole
             // recorded inside it must not be handed out again. #11505: the
             // list is threaded through those holes, so they are unlinked
@@ -1508,12 +1526,11 @@ pub(crate) fn old_arena_reclaim_dead_blocks(block_has_live: &[bool]) -> ArenaRes
         }
 
         if changed {
-            if let Some((idx, _)) = arena
-                .blocks
-                .iter()
-                .enumerate()
-                .find(|(_, block)| !block.data.is_null() && block.offset == 0)
-            {
+            if let Some((idx, _)) = arena.blocks.iter().enumerate().find(|(_, block)| {
+                !block.data.is_null()
+                    && block.offset == 0
+                    && block.extent_kind != super::region::Kind::LargeObject
+            }) {
                 arena.set_current(idx);
             } else if arena
                 .blocks
@@ -1521,12 +1538,9 @@ pub(crate) fn old_arena_reclaim_dead_blocks(block_has_live: &[bool]) -> ArenaRes
                 .map(|block| block.data.is_null())
                 .unwrap_or(true)
             {
-                if let Some((idx, _)) = arena
-                    .blocks
-                    .iter()
-                    .enumerate()
-                    .find(|(_, block)| !block.data.is_null())
-                {
+                if let Some((idx, _)) = arena.blocks.iter().enumerate().find(|(_, block)| {
+                    !block.data.is_null() && block.extent_kind != super::region::Kind::LargeObject
+                }) {
                     arena.set_current(idx);
                 }
             }
@@ -1576,8 +1590,7 @@ pub(crate) fn old_arena_reclaim_selected_dead_blocks(
             let used = block.offset;
             let first_page = generation_page_for_addr(base);
             let last_page = generation_page_for_addr(base + size - 1);
-            let pages: Vec<usize> = (first_page..=last_page).collect();
-            unregister_old_block_pages(&pages);
+            unregister_old_block_range(first_page, last_page);
             // #7437: this block's bytes are being recycled; any swept hole
             // recorded inside it must not be handed out again. #11505: the
             // list is threaded through those holes, so they are unlinked
@@ -1613,12 +1626,11 @@ pub(crate) fn old_arena_reclaim_selected_dead_blocks(
         }
 
         if changed {
-            if let Some((idx, _)) = arena
-                .blocks
-                .iter()
-                .enumerate()
-                .find(|(_, block)| !block.data.is_null() && block.offset == 0)
-            {
+            if let Some((idx, _)) = arena.blocks.iter().enumerate().find(|(_, block)| {
+                !block.data.is_null()
+                    && block.offset == 0
+                    && block.extent_kind != super::region::Kind::LargeObject
+            }) {
                 arena.set_current(idx);
             } else if arena
                 .blocks
@@ -1626,12 +1638,9 @@ pub(crate) fn old_arena_reclaim_selected_dead_blocks(
                 .map(|block| block.data.is_null())
                 .unwrap_or(true)
             {
-                if let Some((idx, _)) = arena
-                    .blocks
-                    .iter()
-                    .enumerate()
-                    .find(|(_, block)| !block.data.is_null())
-                {
+                if let Some((idx, _)) = arena.blocks.iter().enumerate().find(|(_, block)| {
+                    !block.data.is_null() && block.extent_kind != super::region::Kind::LargeObject
+                }) {
                     arena.set_current(idx);
                 }
             }
@@ -1663,7 +1672,10 @@ fn reclaim_dead_survivor_arena_blocks(
                     .blocks
                     .iter()
                     .enumerate()
-                    .find(|(_, block)| !block.data.is_null())
+                    .find(|(_, block)| {
+                        !block.data.is_null()
+                            && block.extent_kind != super::region::Kind::LargeObject
+                    })
                     .map(|(i, _)| i)
             });
         let mut stats = ArenaResetStats::default();
@@ -1710,12 +1722,11 @@ fn reclaim_dead_survivor_arena_blocks(
         }
 
         if changed {
-            if let Some((idx, _)) = arena
-                .blocks
-                .iter()
-                .enumerate()
-                .find(|(_, block)| !block.data.is_null() && block.offset == 0)
-            {
+            if let Some((idx, _)) = arena.blocks.iter().enumerate().find(|(_, block)| {
+                !block.data.is_null()
+                    && block.offset == 0
+                    && block.extent_kind != super::region::Kind::LargeObject
+            }) {
                 arena.set_current(idx);
             } else if arena
                 .blocks
@@ -1723,12 +1734,9 @@ fn reclaim_dead_survivor_arena_blocks(
                 .map(|block| block.data.is_null())
                 .unwrap_or(true)
             {
-                if let Some((idx, _)) = arena
-                    .blocks
-                    .iter()
-                    .enumerate()
-                    .find(|(_, block)| !block.data.is_null())
-                {
+                if let Some((idx, _)) = arena.blocks.iter().enumerate().find(|(_, block)| {
+                    !block.data.is_null() && block.extent_kind != super::region::Kind::LargeObject
+                }) {
                     arena.set_current(idx);
                 }
             }

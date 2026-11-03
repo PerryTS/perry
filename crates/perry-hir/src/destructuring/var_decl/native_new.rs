@@ -336,7 +336,7 @@ fn native_instance_for_new_ident(
             ("url", Some("URL" | "URLSearchParams"))
             | ("util", Some("TextEncoder" | "TextDecoder"))
             // node:sqlite objects are ordinary objects with prototypes (#11919).
-            | ("sqlite", Some("DatabaseSync" | "StatementSync" | "Session")) => None,
+            | ("sqlite", Some("Database" | "DatabaseSync" | "Statement" | "StatementSync" | "Session")) => None,
             _ => Some(m.to_string()),
         }
     } else if user_class_defined {

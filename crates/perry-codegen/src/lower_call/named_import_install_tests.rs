@@ -1,4 +1,4 @@
-//! Named ESM builtin cells must be initialized after their module's installer.
+//! Named builtin values retain their own callable and required metadata.
 use crate::{compile_module, CompileOptions};
 use perry_hir::{
     types::Type, Export, Expr, Function, Import, ImportSpecifier, Module, ModuleKind, Stmt,
@@ -53,7 +53,7 @@ fn compile_lookup(module_name: &str, property: &str) -> String {
 }
 
 #[test]
-fn named_builtin_cell_installs_only_its_module_before_lookup() {
+fn named_builtin_cell_references_its_export_without_a_module_installer() {
     for (module, property, installer) in [
         ("async_hooks", "AsyncResource", "js_nm_install_async_hooks"),
         (
@@ -64,15 +64,17 @@ fn named_builtin_cell_installs_only_its_module_before_lookup() {
         ("util", "inherits", "js_nm_install_util"),
     ] {
         let ir = compile_lookup(module, property);
-        let install = ir
-            .find(&format!("call void @{installer}("))
-            .expect("module installer emitted");
-        let lookup = ir
-            .find("call double @js_native_module_named_esm_export_value(")
-            .expect("export cell lookup emitted");
         assert!(
-            install < lookup,
-            "installer must precede cache population: {ir}"
+            !ir.contains(&format!("call void @{installer}(")),
+            "whole module retained: {ir}"
+        );
+        assert!(
+            ir.contains("call double @js_native_export_"),
+            "missing direct export body: {ir}"
+        );
+        assert!(
+            !ir.contains("call double @js_native_module_named_esm_export_value("),
+            "dynamic module read: {ir}"
         );
         assert!(
             !ir.contains("@js_nm_install_all("),
@@ -86,28 +88,31 @@ fn named_builtin_cell_installs_only_its_module_before_lookup() {
 }
 
 #[test]
-fn named_fs_promises_installs_dependency_before_snapshot() {
+fn named_fs_exports_initialize_only_the_selected_value() {
     for module in ["fs", "node:fs"] {
         for property in ["promises", "readFileSync"] {
             let ir = compile_lookup(module, property);
-            let parent = ir
-                .find("call void @js_nm_install_fs(")
-                .expect("fs installer");
-            let lookup = ir
-                .find("call double @js_native_module_named_esm_export_value(")
-                .expect("named export lookup");
-            assert!(parent < lookup, "parent installed before snapshot: {ir}");
+            assert!(
+                !ir.contains("call void @js_nm_install_fs("),
+                "parent module retained: {ir}"
+            );
             let dependency = ir.find("call void @js_node_submod_install_fs_promises(");
+            let lookup = ir.find("call double @js_native_module_named_esm_export_value(");
             if property == "promises" {
-                let dependency = dependency.expect("promises dependency installer");
                 assert!(
-                    dependency < lookup,
-                    "dependency installed before snapshot: {ir}"
+                    dependency.expect("child namespace installer")
+                        < lookup.expect("named child snapshot"),
+                    "child initialized before snapshot: {ir}"
                 );
             } else {
                 assert!(
                     dependency.is_none(),
-                    "sync import retains no promises dependency: {ir}"
+                    "sync export retains no promises dependency: {ir}"
+                );
+                assert!(lookup.is_none(), "sync export retains no module read: {ir}");
+                assert!(
+                    ir.contains("call double @js_native_export_"),
+                    "missing export declaration: {ir}"
                 );
             }
             assert!(!ir.contains("call void @js_nm_install_all("));
@@ -166,4 +171,23 @@ fn native_package_reexport_emits_a_value_getter() {
         getter.contains("call double @js_native_module_named_esm_export_value("),
         "getter must load the native export value: {getter}"
     );
+}
+
+#[test]
+fn child_object_export_initializes_its_declaration_before_snapshot() {
+    for module in ["readline", "node:readline", "timers", "node:timers"] {
+        let ir = compile_lookup(module, "promises");
+        let parent = module.strip_prefix("node:").unwrap_or(module);
+        let install = format!("call void @js_node_submod_install_{parent}_promises(");
+        assert!(
+            ir.find(&install).expect("child declaration install")
+                < ir.find("call double @js_native_module_named_esm_export_value(")
+                    .expect("export snapshot"),
+            "{ir}"
+        );
+        assert!(
+            !ir.contains(&format!("call void @js_nm_install_{parent}(")),
+            "{ir}"
+        );
+    }
 }

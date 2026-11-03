@@ -80,15 +80,49 @@ impl Drop for TestRecycledKeysCheckSuppression {
     }
 }
 
+/// Every descriptor id filed under the keys array at `keys_id`: its owned
+/// family, or the families of the canonical lists on that backing (CKI S2).
+#[cfg(test)]
+fn test_family_ids_at(inner: &ShapeTableInner, keys_id: usize) -> Vec<LayoutWord> {
+    let mut ids: Vec<LayoutWord> = inner
+        .owned_families
+        .get(&(keys_id as u64))
+        .map(|ids| ids.as_slice().to_vec())
+        .unwrap_or_default();
+    if keys_id == 0 {
+        ids.extend_from_slice(inner.keyless_family.as_slice());
+    }
+    let slab = crate::state::state().shapes.slab();
+    crate::object::canonical_keys::for_each_list_shapes(|_, _, list| {
+        ids.extend(list.family.as_slice().iter().copied().filter(|&id| {
+            slab.get_handle(id)
+                .is_some_and(|record| record.keys as usize == keys_id)
+        }));
+    });
+    ids
+}
+
+/// The indexed length of the slot index of the keys array at `keys_id`,
+/// owned or on its canonical backing's owner node.
+#[cfg(test)]
+fn test_index_len_at(inner: &ShapeTableInner, keys_id: usize) -> Option<u32> {
+    if let Some(index) = inner.owned_indices.get(&keys_id) {
+        return Some(index.indexed_len);
+    }
+    let mut found = None;
+    crate::object::canonical_keys::for_each_list_shapes(|_, addr, list| {
+        if addr == keys_id {
+            if let Some(index) = &list.index {
+                found = Some(index.indexed_len);
+            }
+        }
+    });
+    found
+}
+
 #[cfg(test)]
 pub(crate) fn test_shape_entry_exists(keys_id: usize) -> bool {
-    crate::state::state()
-        .shapes
-        .inner
-        .borrow()
-        .indices
-        .get(&keys_id)
-        .is_some()
+    test_index_len_at(&crate::state::state().shapes.inner.borrow(), keys_id).is_some()
 }
 
 #[cfg(test)]
@@ -103,9 +137,13 @@ pub(crate) fn test_shape_descriptor_count() -> usize {
 pub(crate) fn test_clear_shape_table() {
     let table = &crate::state::state().shapes;
     let mut inner = table.inner.borrow_mut();
-    inner.indices.clear();
+    inner.owned_indices.clear();
     inner.by_facts.clear();
-    inner.families.clear();
+    inner.owned_families.clear();
+    inner.keyless_family = IdList::default();
+    crate::object::canonical_keys::for_each_list_shapes(|_, _, list| {
+        *list = ListShapes::default();
+    });
     inner.young_keys.clear();
     SHAPE_CARRIER_YOUNG_KEYS.with(|log| log.borrow_mut().clear());
     // SAFETY: test-only reset with no slab reference held.
@@ -118,11 +156,7 @@ pub(crate) fn test_clear_shape_table() {
 #[cfg(test)]
 pub(crate) fn test_drop_shape_descriptors(keys_id: usize) {
     let mut inner = crate::state::state().shapes.inner.borrow_mut();
-    let stale: Vec<LayoutWord> = inner
-        .families
-        .get(&(keys_id as u64))
-        .map(|ids| ids.as_slice().to_vec())
-        .unwrap_or_default();
+    let stale: Vec<LayoutWord> = test_family_ids_at(&inner, keys_id);
     // Forced test retirement first releases cache owners, as production GC
     // does before deciding that a handle is uncarried.
     crate::object::with_transition_cache(|table| unsafe {
@@ -146,7 +180,7 @@ pub(crate) fn test_drop_shape_descriptors(keys_id: usize) {
 pub(crate) fn test_rekey_shape_family(old: usize, new: usize) {
     let table = &crate::state::state().shapes;
     let mut inner = table.inner.borrow_mut();
-    if let Some(ids) = inner.families.remove(&(old as u64)) {
+    if let Some(ids) = inner.owned_families.remove(&(old as u64)) {
         for &id in ids.as_slice() {
             let Some(record) = table.slab().get_handle(id) else {
                 continue;
@@ -155,7 +189,7 @@ pub(crate) fn test_rekey_shape_family(old: usize, new: usize) {
                 inner.facts_remove(record.facts_key_with_keys(old as u64), id);
                 inner.facts_push_back(record.facts_key_with_keys(new as u64), id);
             }
-            inner.family_push_back(new as u64, id);
+            inner.family_push_back(record.keys_node(), new as u64, id);
         }
     }
 }
@@ -163,21 +197,14 @@ pub(crate) fn test_rekey_shape_family(old: usize, new: usize) {
 /// The ids currently indexed under `keys_id`, in family order.
 #[cfg(test)]
 pub(crate) fn test_shape_ids_for_keys(keys_id: usize) -> Vec<LayoutWord> {
-    crate::state::state()
-        .shapes
-        .inner
-        .borrow()
-        .families
-        .get(&(keys_id as u64))
-        .map(|ids| ids.as_slice().to_vec())
-        .unwrap_or_default()
+    test_family_ids_at(&crate::state::state().shapes.inner.borrow(), keys_id)
 }
 
 #[cfg(test)]
 pub(crate) fn test_seed_shape_entry(keys_id: usize) {
     let mut inner = crate::state::state().shapes.inner.borrow_mut();
     inner.note_young_keys(keys_id as u64);
-    inner.indices.insert(
+    inner.owned_indices.insert(
         keys_id,
         ShapeIndex {
             indexed_len: 0,
@@ -198,12 +225,7 @@ pub(crate) fn test_shape_id_for_keys(keys_id: usize) -> Option<LayoutWord> {
 /// no `indices` entry. Used by the `shapes.indices` arming tests.
 #[cfg(test)]
 pub(crate) fn test_shape_index_len(keys_id: usize) -> u32 {
-    let inner = crate::state::state().shapes.inner.borrow();
-    inner
-        .indices
-        .get(&keys_id)
-        .map(|ix| ix.indexed_len)
-        .unwrap_or(0)
+    test_index_len_at(&crate::state::state().shapes.inner.borrow(), keys_id).unwrap_or(0)
 }
 
 /// A process-global shape id no descriptor in this agent has claimed, for the

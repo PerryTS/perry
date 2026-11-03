@@ -317,6 +317,7 @@ fn throw_exit_code_range_error(n: f64) -> ! {
 /// Node's behavior — atexit handlers and other shutdown logic are skipped.
 #[no_mangle]
 pub extern "C" fn js_process_abort() {
+    crate::process::worker_restrictions::ensure_worker_operation_allowed("abort");
     #[cfg(unix)]
     unsafe {
         libc::abort();
@@ -373,11 +374,13 @@ pub extern "C" fn js_process_raw_debug() -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_process_debug_process() -> f64 {
+    crate::process::worker_restrictions::ensure_worker_operation_allowed("_debugProcess");
     undefined_value()
 }
 
 #[no_mangle]
 pub extern "C" fn js_process_debug_end() -> f64 {
+    crate::process::worker_restrictions::ensure_worker_operation_allowed("_debugEnd");
     undefined_value()
 }
 
@@ -1427,7 +1430,7 @@ fn js_process_env_impl() -> f64 {
     // Pad alloc_limit so small env sets still have headroom; large
     // environments (CI runners) spill to the overflow Vec path.
     let alloc_limit = std::cmp::max(vars.len() as u32, crate::object::INLINE_SLOT_FLOOR as u32);
-    let obj = crate::object::js_object_alloc(0, alloc_limit);
+    let obj = crate::realm_decl! { birth crate::object::js_object_alloc(0, alloc_limit); realm { process.env, kind = exotic, members = { }; } };
     for (k, v) in &vars {
         #[cfg(windows)]
         ENV_KEY_CASING.with(|casing| {

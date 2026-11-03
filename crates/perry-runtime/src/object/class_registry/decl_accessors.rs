@@ -30,10 +30,24 @@ pub(crate) fn install_decl_prototype_accessor_bytes(
     class_id: u32,
     name: &[u8],
 ) {
+    install_decl_prototype_accessor_at(proto, class_id, name, None)
+}
+
+/// [`install_decl_prototype_accessor_bytes`] for an accessor whose halves sit
+/// at `at` in the declaration, when the caller holds it (else found by name).
+pub(crate) fn install_decl_prototype_accessor_at(
+    proto: *mut ObjectHeader,
+    class_id: u32,
+    name: &[u8],
+    at: Option<super::declarations::DeclAt>,
+) {
     if proto.is_null() {
         return;
     }
-    let Some((raw_get, raw_set)) = class_own_accessor_ptrs_bytes(class_id, name) else {
+    let Some((raw_get, raw_set)) = (match at {
+        Some(at) => class_own_accessor_ptrs_at(class_id, at),
+        None => class_own_accessor_ptrs_bytes(class_id, name),
+    }) else {
         return;
     };
     // A half arriving later keeps whatever attributes the accessor has now
@@ -61,7 +75,10 @@ pub(crate) fn install_decl_prototype_accessor_bytes(
             have
         } else {
             let set_length = if is_setter {
-                class_own_setter_length_bytes(class_id, name, false)
+                match at {
+                    Some(at) => class_own_setter_length_at(class_id, at),
+                    None => class_own_setter_length_bytes(class_id, name, false),
+                }
             } else {
                 None
             };
@@ -274,7 +291,7 @@ unsafe fn accessor_is_shadowed(start: f64, holder: *const ObjectHeader, name: &[
             return true;
         };
         if crate::object::keys_find_slot_by_bytes_resolved(
-            shape.keys() as usize as *const crate::array::ArrayHeader,
+            shape.keys_view(),
             shape.logical_key_count(),
             name,
         )
@@ -342,7 +359,7 @@ pub(crate) unsafe fn instance_chain_getter_value(
     Some(invoke_instance_getter(acc, this_of()))
 }
 
-unsafe fn invoke_instance_getter(acc: Accessor, this: f64) -> (crate::JSValue, usize) {
+pub(crate) unsafe fn invoke_instance_getter(acc: Accessor, this: f64) -> (crate::JSValue, usize) {
     if acc.raw_get != 0 {
         let scope = crate::gc::RuntimeHandleScope::new();
         let this = scope.root_nanbox_f64(this);

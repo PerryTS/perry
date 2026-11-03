@@ -60,6 +60,8 @@ fn alias_store() -> Stmt {
             }),
             right: Box::new(Expr::Integer(1)),
         }),
+        byte_offset: 0,
+        byte_end: 0,
     })
 }
 
@@ -79,6 +81,8 @@ fn expanded_store() -> Stmt {
             }),
             right: Box::new(Expr::Integer(1)),
         }),
+        byte_offset: 0,
+        byte_end: 0,
     })
 }
 
@@ -252,6 +256,8 @@ fn the_logical_assignment_shape_folds_but_stays_unversionable() {
                 object: Box::new(Expr::LocalGet(BASE_TEMP)),
                 index: Box::new(Expr::LocalGet(KEY_TEMP)),
                 value: Box::new(Expr::Integer(3)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
         }),
     ];

@@ -52,8 +52,9 @@ pub enum ClassFreshStaticInit {
     Block(u32),
 }
 
-/// Expression
-#[derive(Debug, Clone)]
+/// Expression. Its `Clone` (`walker/expr_clone.rs`) copies without
+/// recursion per nesting level.
+#[derive(Debug)]
 pub enum Expr {
     // Literals
     Undefined,
@@ -233,6 +234,10 @@ pub enum Expr {
         object: Box<Expr>,
         property: String,
         value: Box<Expr>,
+        /// Diagnostic source coordinates (SWC 1-based, end exclusive); set only with
+        /// `PERRY_FACTS_DUMP`, otherwise 0; ignored by stable hashing.
+        byte_offset: u32,
+        byte_end: u32,
     },
     // Property update (++/--)
     PropertyUpdate {
@@ -241,6 +246,10 @@ pub enum Expr {
         op: BinaryOp, // Add for ++, Sub for --
         prefix: bool, // true for ++x, false for x++
         strict: bool,
+        /// Diagnostic source coordinates (SWC 1-based, end exclusive); set only with
+        /// `PERRY_FACTS_DUMP`, otherwise 0; ignored by stable hashing.
+        byte_offset: u32,
+        byte_end: u32,
     },
 
     // Array/index access
@@ -255,6 +264,10 @@ pub enum Expr {
         object: Box<Expr>,
         index: Box<Expr>,
         value: Box<Expr>,
+        /// Diagnostic source coordinates (SWC 1-based, end exclusive); set only with
+        /// `PERRY_FACTS_DUMP`, otherwise 0; ignored by stable hashing.
+        byte_offset: u32,
+        byte_end: u32,
     },
     // Index update (arr[i]++ or obj[key]++)
     IndexUpdate {
@@ -263,6 +276,10 @@ pub enum Expr {
         op: BinaryOp, // Add for ++, Sub for --
         prefix: bool, // true for ++x, false for x++
         strict: bool,
+        /// Diagnostic source coordinates (SWC 1-based, end exclusive); set only with
+        /// `PERRY_FACTS_DUMP`, otherwise 0; ignored by stable hashing.
+        byte_offset: u32,
+        byte_end: u32,
     },
 
     // Object literal
@@ -927,10 +944,15 @@ pub enum Expr {
     /// of a guarded namespace call (`patched_builtin_call`):
     /// `NamespacePatched(ns) ? <the generic call> : <the intrinsic>`.
     NamespacePatched(String),
-    /// `this` in module top-level code. Node runs the assembled test files
-    /// as CJS, where top-level `this` is `module.exports` — a fresh plain
-    /// object distinct from `globalThis`. Lowered separately from
-    /// `Expr::This` so function-body `this` semantics are untouched.
+    /// `this` in CommonJS module top-level code. Node runs a CommonJS file
+    /// (the assembled test files, `node --experimental-strip-types` on a
+    /// `.ts`/`.js` in a CommonJS scope) with `this === module.exports`; Perry
+    /// materializes a stand-in plain object instead (the real `module.exports`
+    /// is a separate object, so the identity does not hold) — distinct from
+    /// `globalThis` in both. Lowered separately from
+    /// `Expr::This` so function-body `this` semantics are untouched. An ES
+    /// module's top-level `this` is `undefined` instead (#13558), so it lowers
+    /// to `Expr::Undefined` and never reaches this variant.
     ModuleTopThis,
     // Process uptime: process.uptime() -> number (seconds)
     ProcessUptime,
@@ -1311,6 +1333,24 @@ pub enum Expr {
         value: Box<Expr>,
         step_closure: Box<Expr>,
     },
+
+    /// Settled self-next continuation (SNC). Evaluates to the await result
+    /// (the primitive, or the fulfilled native promise's value) when the
+    /// runtime proved that the FIFO round trip of publishing this await and
+    /// dispatching it again is unobservable; the step then continues in place
+    /// with that value as its next resume value. A decline evaluates to the
+    /// TDZ sentinel (never a legitimate await result: observing it throws) and
+    /// changes nothing; test it with `AsyncStepDeclined` and take the ordinary
+    /// `AsyncStepChain` path.
+    /// Only emitted by `build_async_step_driver_direct`.
+    AsyncStepResumeNow {
+        value: Box<Expr>,
+        step_closure: Box<Expr>,
+    },
+
+    /// True (NaN-boxed bool) when the operand is the decline sentinel of
+    /// `AsyncStepResumeNow`. Only emitted by `build_async_step_driver_direct`.
+    AsyncStepDeclined(Box<Expr>),
 
     /// Optimized done-case for the async-step driver: equivalent to
     /// `Promise.resolve(value)` at the position where the state machine
@@ -2785,6 +2825,10 @@ pub enum Expr {
         value: Box<Expr>,
         receiver: Box<Expr>,
         strict: bool,
+        /// Diagnostic source coordinates (SWC 1-based, end exclusive); set only with
+        /// `PERRY_FACTS_DUMP`, otherwise 0; ignored by stable hashing.
+        byte_offset: u32,
+        byte_end: u32,
     },
     ReflectHas {
         target: Box<Expr>,

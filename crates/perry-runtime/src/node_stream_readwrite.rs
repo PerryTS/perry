@@ -247,6 +247,12 @@ fn define_internal_field(
             key.get_raw_const_ptr::<crate::StringHeader>(),
             entry,
         );
+        // The key carries non-default attributes from its definition: the
+        // holder publishes the descriptor fact (`OBJ_FLAG_HAS_DESCRIPTORS`)
+        // like every other attribute install.
+        crate::object::descriptor_state::note_attrs_born_with_keys(
+            obj.get_raw_mut_ptr::<ObjectHeader>() as usize,
+        );
         crate::object::object_ops::define_property_force_store_value(
             obj.get_raw_mut_ptr::<ObjectHeader>(),
             key.get_raw_const_ptr::<crate::StringHeader>(),
@@ -1825,7 +1831,7 @@ pub(super) fn append_chunk_bytes(value: f64, out: &mut Vec<u8>, depth: u8) {
             Some(crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY) => {
                 append_array_chunks(raw, out, depth);
             }
-            Some(crate::gc::GC_TYPE_OBJECT) => {
+            Some(crate::gc_object_type_pat!()) => {
                 if let Some(chunks) = readable_hidden_chunks(value) {
                     append_chunk_bytes(chunks, out, depth + 1);
                 }

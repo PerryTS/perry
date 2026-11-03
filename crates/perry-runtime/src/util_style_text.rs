@@ -380,21 +380,35 @@ fn throw_invalid_validate_stream(value: f64) -> ! {
     crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
 }
 
+#[inline(never)]
 fn heap_ptr_with_gc_type(value: f64, expected_type: u8) -> Option<*const u8> {
     let jsvalue = JSValue::from_bits(value.to_bits());
     if !jsvalue.is_pointer() {
         return None;
     }
     let ptr = jsvalue.as_pointer::<u8>();
-    if ptr.is_null()
-        || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000
-        || crate::closure::is_closure_ptr(ptr as usize)
-        || !crate::object::is_valid_obj_ptr(ptr)
-    {
+    if crate::closure::is_closure_ptr(ptr as usize) {
         return None;
     }
-    let gc_header = unsafe { &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader) };
+    let gc_header = unsafe { crate::value::addr_class::try_read_gc_header(ptr as usize) }?;
     if gc_header.obj_type == expected_type {
+        Some(ptr)
+    } else {
+        None
+    }
+}
+
+fn heap_ptr_object(value: f64) -> Option<*const u8> {
+    let jsvalue = JSValue::from_bits(value.to_bits());
+    if !jsvalue.is_pointer() {
+        return None;
+    }
+    let ptr = jsvalue.as_pointer::<u8>();
+    if crate::closure::is_closure_ptr(ptr as usize) {
+        return None;
+    }
+    let gc_header = unsafe { crate::value::addr_class::try_read_gc_header(ptr as usize) }?;
+    if crate::gc_type_is_object!(gc_header.obj_type) {
         Some(ptr)
     } else {
         None
@@ -406,7 +420,7 @@ fn array_ptr(value: f64) -> Option<*const ArrayHeader> {
 }
 
 fn object_ptr(value: f64) -> Option<*const ObjectHeader> {
-    heap_ptr_with_gc_type(value, crate::gc::GC_TYPE_OBJECT).map(|ptr| ptr as *const ObjectHeader)
+    heap_ptr_object(value).map(|ptr| ptr as *const ObjectHeader)
 }
 
 fn get_prop(obj: *const ObjectHeader, name: &[u8]) -> f64 {

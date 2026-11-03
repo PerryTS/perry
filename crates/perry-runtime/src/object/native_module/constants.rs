@@ -179,9 +179,19 @@ fn dns_error_alias(property: &str) -> Option<&'static str> {
     }
 }
 
-/// Return constant (non-method) property values for native modules.
-/// Returns None for method names, which should create bound closures instead.
+/// Dynamic namespace reads share one resolver. Only a statically selected
+/// export should specialize this body for its module and property literals.
 pub(crate) unsafe fn get_native_module_constant(
+    module_name: &str,
+    property: &str,
+    namespace: f64,
+) -> Option<f64> {
+    selected_native_module_constant(module_name, property, namespace)
+}
+
+/// Return one statically selected non-method export without its neighbours.
+#[inline(always)]
+pub(crate) unsafe fn selected_native_module_constant(
     module_name: &str,
     property: &str,
     namespace_obj: f64,
@@ -433,6 +443,7 @@ pub(crate) unsafe fn get_native_module_constant(
         // node:perf_hooks — `performance.timeOrigin` (ms since epoch at start)
         // and `performance.nodeTiming`.
         "perf_hooks" => match property {
+            "performance" => Some(crate::perf_hook_slots::performance_namespace()),
             "timeOrigin" => Some(crate::perf_clock::time_origin_ms()),
             "nodeTiming" => Some(crate::perf_hook_slots::js_perf_node_timing()),
             // `constants` used to share the `perf_hooks` tag, which made
@@ -594,6 +605,10 @@ pub(crate) unsafe fn get_native_module_constant(
             "INSPECT_MAX_BYTES" => Some(50.0),
             _ => None,
         },
+        "readline" => match property {
+            "promises" => Some(crate::node_submodules::commonjs_value("readline_promises")),
+            _ => None,
+        },
         "timers" => match property {
             "promises" => Some(crate::node_submodules::commonjs_value("timers_promises")),
             _ => None,
@@ -711,15 +726,6 @@ pub(crate) unsafe fn get_native_module_constant(
             }
             _ => None,
         },
-        "vm.constants" => match property {
-            "USE_MAIN_CONTEXT_DEFAULT_LOADER" => Some(crate::symbol::js_symbol_for(str_val(
-                "vm_dynamic_import_main_context_default",
-            ))),
-            "DONT_CONTEXTIFY" => Some(crate::symbol::js_symbol_for(str_val(
-                "vm_context_no_contextify",
-            ))),
-            _ => None,
-        },
         "stream" => match property {
             "Stream" | "default" => Some(bound_native_callable_export_value("stream", "Stream")),
             "promises" => Some(crate::node_submodules::commonjs_value("stream_promises")),
@@ -829,20 +835,8 @@ pub(crate) unsafe fn get_native_module_constant(
         // ~8 process tests in the node-core radar (#2135) were "skipping"
         // when they should have been running. (#2135)
         "worker_threads" => match property {
-            "MessageChannel" | "MessagePort" | "BroadcastChannel" => {
-                let global = crate::object::js_get_global_this();
-                let global_obj = crate::value::js_nanbox_get_pointer(global) as *const ObjectHeader;
-                if global_obj.is_null() {
-                    Some(f64::from_bits(JSValue::undefined().bits()))
-                } else {
-                    let key = crate::string::js_string_from_bytes(
-                        property.as_ptr(),
-                        property.len() as u32,
-                    );
-                    Some(f64::from_bits(
-                        js_object_get_field_by_name(global_obj, key).bits(),
-                    ))
-                }
+            _ if is_worker_messaging_constructor(property) => {
+                worker_messaging_constructor_value(module_name, property)
             }
             "isMainThread" => Some(call_worker_threads_getter(
                 &WORKER_THREADS_IS_MAIN_THREAD_GETTER,
@@ -1129,6 +1123,7 @@ fn fs_const_tail_reference(prop: &str) -> Option<f64> {
 /// `process` metadata properties — registered by `js_nm_install_process()`,
 /// which codegen emits at every site that yields `process` as a value or
 /// reads one of its members by name.
+#[inline(always)]
 pub(crate) unsafe fn nm_const_process(
     _module_name: &str,
     property: &str,
@@ -1140,6 +1135,7 @@ pub(crate) unsafe fn nm_const_process(
 
 /// `node:inspector` constants/value exports — registered by `js_nm_install_inspector()` and
 /// reached only through [`get_native_module_constant`]'s registry arm.
+#[inline(always)]
 pub(crate) unsafe fn nm_const_inspector(
     module_name: &str,
     property: &str,
@@ -1200,6 +1196,7 @@ pub(crate) unsafe fn nm_const_inspector(
 
 /// `node:tls` constants/value exports — registered by `js_nm_install_tls()` and
 /// reached only through [`get_native_module_constant`]'s registry arm.
+#[inline(always)]
 pub(crate) unsafe fn nm_const_tls(
     module_name: &str,
     property: &str,
@@ -1228,6 +1225,7 @@ pub(crate) unsafe fn nm_const_tls(
 
 /// `node:zlib` constants/value exports — registered by `js_nm_install_zlib()` and
 /// reached only through [`get_native_module_constant`]'s registry arm.
+#[inline(always)]
 pub(crate) unsafe fn nm_const_zlib(
     module_name: &str,
     property: &str,
@@ -1254,6 +1252,7 @@ pub(crate) unsafe fn nm_const_zlib(
 
 /// `node:http / node:https` constants/value exports — registered by `js_nm_install_http()` and
 /// reached only through [`get_native_module_constant`]'s registry arm.
+#[inline(always)]
 pub(crate) unsafe fn nm_const_http(
     module_name: &str,
     property: &str,
@@ -1313,6 +1312,7 @@ pub(crate) unsafe fn nm_const_http(
 
 /// `node:cluster` constants/value exports — registered by `js_nm_install_cluster()` and
 /// reached only through [`get_native_module_constant`]'s registry arm.
+#[inline(always)]
 pub(crate) unsafe fn nm_const_cluster(
     module_name: &str,
     property: &str,

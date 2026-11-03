@@ -653,6 +653,8 @@ mod shadow_scan_tests {
             value: filler(),
             receiver: filler(),
             strict: false,
+            byte_offset: 0,
+            byte_end: 0,
         }
     }
 
@@ -712,6 +714,8 @@ mod shadow_scan_tests {
             object: filler(),
             property: prop.to_string(),
             value: filler(),
+            byte_offset: 0,
+            byte_end: 0,
         })
     }
 

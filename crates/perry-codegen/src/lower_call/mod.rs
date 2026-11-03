@@ -200,7 +200,7 @@ pub(crate) use new_ctor_args::{
 pub(crate) use new_helpers::{
     ctor_body_calls_super, ctor_body_closure_calls_super, ctor_body_has_value_return,
     ctor_body_lexically_contains_arrow, ctor_body_uses_this, ctor_chain_can_replace_this,
-    default_ctor_dynamic_parent_owner,
+    ctor_chain_has_value_return, default_ctor_dynamic_parent_owner,
 };
 // #6325 / #6326: the class-chain walk to a native base whose surface perry
 // stamps onto the instance, plus its init emitter. Shared by the implicit
@@ -630,6 +630,13 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
         if name == "js_native_module_named_esm_export_value"
             && !ctx.import_function_prefixes.contains_key(name)
         {
+            if let [Expr::String(module), Expr::String(property)] = args {
+                if let Some(export) =
+                    crate::native_export_value::prepare(ctx.strings, module, property, false)
+                {
+                    return Ok(export.emit(ctx.block()));
+                }
+            }
             if let Some(Expr::String(module)) = args.first() {
                 if let Some(install) = crate::nm_install::nm_install_symbol(module) {
                     ctx.block().call_void(install, &[]);

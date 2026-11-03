@@ -292,6 +292,8 @@ fn mixed_ta_clone_guards_numeric_array_shape_at_the_direct_call() {
                 object: Box::new(Expr::LocalGet(10)),
                 index: Box::new(Expr::Integer(0)),
                 value: Box::new(Expr::LocalGet(12)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(Expr::LocalGet(12))),
         ],

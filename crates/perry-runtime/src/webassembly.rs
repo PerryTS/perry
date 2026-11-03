@@ -1205,7 +1205,7 @@ fn descriptor_object(value: f64) -> Option<*mut crate::object::ObjectHeader> {
     let object =
         value.as_pointer::<crate::object::ObjectHeader>() as *mut crate::object::ObjectHeader;
     let header = unsafe { crate::value::addr_class::try_read_gc_header(object as usize)? };
-    (header.obj_type == crate::gc::GC_TYPE_OBJECT).then_some(object)
+    (crate::gc_type_is_object!(header.obj_type)).then_some(object)
 }
 
 fn descriptor_field(object: *mut crate::object::ObjectHeader, name: &[u8]) -> f64 {

@@ -586,7 +586,7 @@ pub(super) fn note_surviving_object_census(moved_bytes: usize, moved_objects: us
     }
     OBJECT_CENSUS_SEEDED.with(|seeded| seeded.set(true));
     let previous = MEAN_SURVIVING_OBJECT_BYTES.with(|c| c.replace(mean));
-    if previous != mean && crate::gc::gc_diag_enabled() {
+    if previous != mean && crate::gc::diagnostic_hooks::enabled() {
         eprintln!(
             "[gc-tenuring] nursery cap object denomination: mean_surviving_object_bytes {} -> {} \
              (scale {} permille, band {} B)",
@@ -664,7 +664,7 @@ pub(super) fn maybe_seed_object_census_from_allocation(from_space_in_use_bytes: 
         return;
     }
     let previous = MEAN_SURVIVING_OBJECT_BYTES.with(|c| c.replace(mean));
-    if crate::gc::gc_diag_enabled() {
+    if crate::gc::diagnostic_hooks::enabled() {
         eprintln!(
             "[gc-tenuring] nursery cap object denomination: allocation census seeded \
              mean_object_bytes {} -> {} ({} objects / {} B in from-space; scale {} permille, band {} B)",
@@ -1218,7 +1218,7 @@ pub(super) fn seed_promote_lock_from_sweep(eden_live_bytes: usize, eden_dead_byt
     // mark-sweep, including refusals. A policy that silently declines is
     // indistinguishable from one that never ran (#7024/#7025), and the
     // refusal reason is the number a future tuning decision needs.
-    if crate::gc::gc_diag_enabled() {
+    if crate::gc::diagnostic_hooks::enabled() {
         let classified = eden_live_bytes.saturating_add(eden_dead_bytes);
         let pct = if classified == 0 {
             0
@@ -1257,7 +1257,7 @@ pub(super) fn report_nursery_policy(eden_live_bytes: usize) {
 }
 
 fn diag_cap_scale(from: u8, to: u8, eden_live_bytes: usize) {
-    if crate::gc::gc_diag_enabled() {
+    if crate::gc::diagnostic_hooks::enabled() {
         eprintln!(
             "[gc-tenuring] nursery cap scale {from}/{unit} -> {to}/{unit} of base \
              (band {} B, eden_live_bytes={eden_live_bytes})",
@@ -1268,7 +1268,7 @@ fn diag_cap_scale(from: u8, to: u8, eden_live_bytes: usize) {
 }
 
 fn diag_cap_cycle_hold(scale: u8, side: &str, level: Option<usize>, eden_live_bytes: usize) {
-    if crate::gc::gc_diag_enabled() {
+    if crate::gc::diagnostic_hooks::enabled() {
         let why = match level {
             None => "no whole cycle has closed".to_string(),
             Some(level) => format!("the whole cycles' level is {level} B"),
@@ -1286,7 +1286,7 @@ fn set_survivals(current: u8, next: u8, eden_live_bytes: usize, why: &str) {
         return;
     }
     TENURING_SURVIVALS.with(|s| s.set(next));
-    if crate::gc::gc_diag_enabled() {
+    if crate::gc::diagnostic_hooks::enabled() {
         eprintln!(
             "[gc-tenuring] survivals {} -> {} ({why}, eden_live_bytes={} desired={})",
             current,

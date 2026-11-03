@@ -1,6 +1,7 @@
 use super::*;
 use std::any::Any;
 
+mod diagnostic;
 mod mutable_slot;
 mod rooted_values;
 pub(super) use mutable_slot::{mark_mutable_slot, MutableRootSlot, MutableRootSlotKind};
@@ -11,15 +12,20 @@ mod shadow_layout;
 #[cfg(any(test, not(perry_native_stack_maps)))]
 mod shadow_stack;
 mod stack_maps;
+pub(super) use stack_maps::install_verify_walker;
 mod stack_roots;
 pub(crate) use stack_maps::census_rows::stack_map_index_census;
 mod temp_roots;
+mod walk_origin;
 pub(super) use stack_maps::ensure_built as ensure_stack_maps_built;
 pub(super) use stack_maps::initialize as initialize_stack_maps;
 pub(super) use stack_maps::native_maps_active as native_stack_maps_active;
 pub(super) use stack_maps::publish_rewrite_walk_stats as stack_maps_publish_rewrite_walk_stats;
 pub(super) use stack_maps::record_native_stack_walk_source;
 pub(super) use stack_maps::verify_native_slots_post_walk as stack_maps_native_slot_verify;
+#[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+pub(crate) use walk_origin::offering_entry_asm;
+pub(crate) use walk_origin::{EntryOrigin as EntryWalkOrigin, WalkOrigin};
 
 pub use rooted_values::RootedValues;
 pub(super) use runtime_handles::{
@@ -897,8 +903,9 @@ pub(super) enum RuntimeRootVisitMode<'a> {
         valid_ptrs: &'a ValidPointerSet,
     },
     Verify {
-        verifier: EvacuationVerifier<'a>,
-        surface: &'static str,
+        context: diagnostic::DiagnosticRootContext<'a>,
+        visit: diagnostic::DiagnosticRootCallback,
+        metadata_rewrite: bool,
     },
     Copy {
         mark: &'a mut dyn FnMut(f64),
@@ -960,9 +967,19 @@ impl<'a> RuntimeRootVisitor<'a> {
         }
     }
 
-    pub(super) fn for_copying_mark(collector: &'a mut CopyingNurseryCollector) -> Self {
+    pub(super) fn for_copying_mark<const DIAGNOSTICS: bool>(
+        collector: &'a mut CopyingNurseryCollector,
+    ) -> Self {
         Self {
-            mode: RuntimeRootVisitMode::CopyingMark { collector },
+            mode: if DIAGNOSTICS {
+                RuntimeRootVisitMode::Verify {
+                    context: diagnostic::DiagnosticRootContext::CopyingMark(collector),
+                    visit: diagnostic::copying_mark,
+                    metadata_rewrite: false,
+                }
+            } else {
+                RuntimeRootVisitMode::CopyingMark { collector }
+            },
             root_source_stats: None,
             young_scope: true,
         }
@@ -978,7 +995,11 @@ impl<'a> RuntimeRootVisitor<'a> {
 
     pub(super) fn for_verify(verifier: EvacuationVerifier<'a>, surface: &'static str) -> Self {
         Self {
-            mode: RuntimeRootVisitMode::Verify { verifier, surface },
+            mode: RuntimeRootVisitMode::Verify {
+                context: diagnostic::DiagnosticRootContext::Verify { verifier, surface },
+                visit: diagnostic::verify_root,
+                metadata_rewrite: true,
+            },
             root_source_stats: None,
             young_scope: false,
         }
@@ -1053,7 +1074,10 @@ impl<'a> RuntimeRootVisitor<'a> {
             &self.mode,
             RuntimeRootVisitMode::Rewrite { .. }
                 | RuntimeRootVisitMode::CopyingRewrite { .. }
-                | RuntimeRootVisitMode::Verify { .. }
+                | RuntimeRootVisitMode::Verify {
+                    metadata_rewrite: true,
+                    ..
+                }
         )
     }
 
@@ -1070,20 +1094,16 @@ impl<'a> RuntimeRootVisitor<'a> {
                 }
                 None
             }
-            RuntimeRootVisitMode::CopyingMark { collector } => {
-                decode_nanboxed_root_word(bits).and_then(|word| collector.visit_root_word(word))
-            }
+            RuntimeRootVisitMode::CopyingMark { collector } => decode_nanboxed_root_word(bits)
+                .and_then(|word| collector.visit_root_word::<{ cfg!(test) }>(word)),
             RuntimeRootVisitMode::CopyingRewrite { collector } => {
                 decode_nanboxed_root_word(bits).and_then(|_| collector.rewrite_value_bits(bits))
             }
             RuntimeRootVisitMode::Rewrite { valid_ptrs } => {
                 try_rewrite_nanboxed_value(bits, valid_ptrs)
             }
-            RuntimeRootVisitMode::Verify { verifier, surface } => {
-                if let Some(new_bits) = verifier.stale_nanboxed_value(bits) {
-                    panic_stale_forwarded_reference(*verifier, surface, 0, bits, new_bits);
-                }
-                None
+            RuntimeRootVisitMode::Verify { context, visit, .. } => {
+                visit(context, diagnostic::DiagnosticRootSlot::Nanbox(bits))
             }
             RuntimeRootVisitMode::Copy { mark } => {
                 (*mark)(f64::from_bits(bits));
@@ -1106,21 +1126,16 @@ impl<'a> RuntimeRootVisitor<'a> {
                 checker.check_addr(addr);
                 None
             }
-            RuntimeRootVisitMode::CopyingMark { collector } => collector.visit_raw_addr(addr),
+            RuntimeRootVisitMode::CopyingMark { collector } => {
+                collector.visit_raw_addr::<{ cfg!(test) }>(addr)
+            }
             RuntimeRootVisitMode::CopyingRewrite { collector } => collector.rewrite_raw_addr(addr),
             RuntimeRootVisitMode::Rewrite { valid_ptrs } => try_rewrite_raw_addr(addr, valid_ptrs),
-            RuntimeRootVisitMode::Verify { verifier, surface } => {
-                if let Some(new_addr) = verifier.stale_raw_addr(addr) {
-                    panic_stale_forwarded_reference(
-                        *verifier,
-                        surface,
-                        0,
-                        copy_tag | (addr as u64 & POINTER_MASK),
-                        copy_tag | (new_addr as u64 & POINTER_MASK),
-                    );
-                }
-                None
-            }
+            RuntimeRootVisitMode::Verify { context, visit, .. } => visit(
+                context,
+                diagnostic::DiagnosticRootSlot::Tagged(addr, copy_tag),
+            )
+            .map(|addr| addr as usize),
             RuntimeRootVisitMode::Copy { mark } => {
                 (*mark)(f64::from_bits(copy_tag | (addr as u64 & POINTER_MASK)));
                 None
@@ -1138,17 +1153,9 @@ impl<'a> RuntimeRootVisitor<'a> {
             RuntimeRootVisitMode::CopyingCheck { .. } => None,
             RuntimeRootVisitMode::CopyingMark { .. } => None,
             RuntimeRootVisitMode::CopyingRewrite { collector } => collector.rewrite_raw_addr(addr),
-            RuntimeRootVisitMode::Verify { verifier, surface } => {
-                if let Some(new_addr) = verifier.stale_raw_addr(addr) {
-                    panic_stale_forwarded_reference(
-                        *verifier,
-                        surface,
-                        0,
-                        addr as u64,
-                        new_addr as u64,
-                    );
-                }
-                None
+            RuntimeRootVisitMode::Verify { context, visit, .. } => {
+                visit(context, diagnostic::DiagnosticRootSlot::Metadata(addr))
+                    .map(|addr| addr as usize)
             }
             RuntimeRootVisitMode::Mark { .. } | RuntimeRootVisitMode::Copy { .. } => None,
         }
@@ -1494,7 +1501,7 @@ pub(super) fn visit_shadow_stack_root_slots(
                 break;
             }
             let header = *s.ptr.add(header_base);
-            let slot_count = header.meta;
+            let slot_count = header.bound;
             let slots_end = top + slot_count;
             if slots_end > s.len {
                 break;

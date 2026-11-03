@@ -74,7 +74,7 @@ fn fast_object_get(base: f64, name: &str) -> Option<f64> {
         return None;
     }
     let h = unsafe { crate::value::addr_class::try_read_gc_header(addr) }?;
-    if h.obj_type != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!(h.obj_type) {
         return None;
     }
     let key = interned_member_key(name);

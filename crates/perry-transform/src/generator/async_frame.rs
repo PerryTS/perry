@@ -372,6 +372,32 @@ mod tests {
         }
     }
     #[test]
+    fn settled_continuation_loop_is_emitted_only_for_plain_async() {
+        let mut plain = fixture();
+        super::super::transform_generators(&mut plain);
+        let text = format!("{:?}", plain.functions);
+        assert!(
+            text.contains("AsyncStepResumeNow"),
+            "plain async lacks the SNC probe"
+        );
+        assert!(
+            text.contains("AsyncStepChain"),
+            "decline path must keep the FIFO publication"
+        );
+        assert!(
+            text.contains("While"),
+            "SNC continues through a loop, never recursion"
+        );
+        let mut generator = fixture();
+        generator.functions[0].was_plain_async = false;
+        super::super::transform_generators(&mut generator);
+        let text = format!("{:?}", generator.functions);
+        assert!(
+            !text.contains("AsyncStepResumeNow"),
+            "a user generator must not get SNC"
+        );
+    }
+    #[test]
     fn async_control_descriptor_carries_exact_transform_created_ids() {
         let mut m = fixture();
         super::super::transform_generators(&mut m);

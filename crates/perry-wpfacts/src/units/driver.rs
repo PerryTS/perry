@@ -19,6 +19,10 @@ pub(super) struct Solve<'a> {
     /// the contracts must exist in; ordering by whole modules made cycles
     /// the names do not have, and a back edge's importer sees ⊤.
     after: Vec<usize>,
+    /// The `after` units only parameter types name (§11.4, the entry
+    /// guard's contracts): where a cycle must have a back edge, it is one
+    /// of these (`dependency_order`).
+    weak: Vec<usize>,
 }
 
 /// The unit of module range `t` exporting `name`; a re-export goes with
@@ -74,6 +78,7 @@ pub(super) fn solves<'a>(
             .enumerate()
         {
             let deps: Vec<usize> = deps.into_iter().map(|d| base + d).collect();
+            let weak: Vec<usize> = view.type_deps.iter().map(|&d| base + d).collect();
             out.push(Solve {
                 mi,
                 key: crate::decl_units::unit_path(path, k),
@@ -83,6 +88,7 @@ pub(super) fn solves<'a>(
                     ..view
                 },
                 after: deps.clone(),
+                weak,
                 deps,
             });
         }
@@ -93,6 +99,8 @@ pub(super) fn solves<'a>(
         let (path, module) = sorted[out[si].mi];
         let mut after: Vec<usize> = Vec::new();
         let mut deps: Vec<usize> = Vec::new();
+        let mut strong: FxHashSet<usize> = FxHashSet::default();
+        let mut weak: Vec<usize> = Vec::new();
         for imp in &module.imports {
             let Some(&t) = imp
                 .resolved_path
@@ -114,6 +122,7 @@ pub(super) fn solves<'a>(
                 });
             if reexports {
                 after.extend(range[t].clone());
+                strong.extend(range[t].clone());
             }
             for sp in &imp.specifiers {
                 let (local, name) = match sp {
@@ -139,18 +148,58 @@ pub(super) fn solves<'a>(
                 }
                 // A namespace's keys are read where they are declared: its
                 // unit is ordered after those modules too.
+                // Its order: after the units declaring the keys it reads
+                // (`ns.k`, `ns.a.b` through a nested namespace); every other
+                // unit the namespace reaches is a weak edge (a back edge of a
+                // cycle sees ⊤ there, as any back edge does).
                 if name.is_none() {
                     for &r in ns_reach.entry(d).or_insert_with(|| ex.reach(d)).iter() {
                         if r != out[si].mi {
                             deps.extend(range[r].clone());
                             after.extend(range[r].clone());
+                            weak.extend(range[r].clone());
+                        }
+                    }
+                    for (_, keys) in out[si].view.ns_paths.iter().filter(|(l, _)| l == local) {
+                        let mut m = d;
+                        for (i, k) in keys.iter().enumerate() {
+                            match ex.resolve(sorted[m].0, k.as_str()) {
+                                Some(Resolved::Binding(p, n)) => {
+                                    let p = index[p];
+                                    match owner_of(&out, &range[p], n) {
+                                        Some(w) => {
+                                            after.push(w);
+                                            strong.insert(w);
+                                        }
+                                        None => {
+                                            after.extend(range[p].clone());
+                                            strong.extend(range[p].clone());
+                                        }
+                                    }
+                                }
+                                Some(Resolved::Namespace(p)) if i + 1 < keys.len() => {
+                                    m = index[p];
+                                    continue;
+                                }
+                                Some(Resolved::Namespace(_)) => {}
+                                _ => {
+                                    after.extend(range[m].clone());
+                                    strong.extend(range[m].clone());
+                                }
+                            }
+                            break;
                         }
                     }
                 }
-                match name.and_then(|n| owner_of(&out, &range[d], n)) {
-                    Some(w) => after.push(w),
-                    None => after.extend(range[d].clone()),
+                let ws: Vec<usize> = match name.and_then(|n| owner_of(&out, &range[d], n)) {
+                    Some(w) => vec![w],
+                    None => range[d].clone().collect(),
+                };
+                match name.is_none() || out[si].view.type_names.contains(local) {
+                    true => weak.extend(&ws),
+                    false => strong.extend(&ws),
                 }
+                after.extend(ws);
             }
         }
         // A re-export whose source the module does not import (resolved
@@ -177,11 +226,20 @@ pub(super) fn solves<'a>(
                 };
                 out[si].deps.extend(range[t].clone());
                 after.extend(range[t].clone());
+                strong.extend(range[t].clone());
             }
         }
         // Each once, in first-named order (the order's DFS follows it).
         let mut once: FxHashSet<usize> = FxHashSet::default();
         after.retain(|&w| once.insert(w));
+        weak.retain(|w| !strong.contains(w));
+        weak.sort_unstable();
+        weak.dedup();
+        out[si].weak.retain(|w| !strong.contains(w));
+        let own = &mut out[si].weak;
+        own.extend(weak);
+        own.sort_unstable();
+        own.dedup();
         out[si].after.extend(after);
         deps.sort_unstable();
         deps.dedup();
@@ -192,33 +250,104 @@ pub(super) fn solves<'a>(
 
 /// Solves in dependency order (a solve after the ones it depends on), so a
 /// contract is computed before a unit consumes it. In an import cycle the
-/// back edge has no contract yet: that import is ⊤, as in P1.
+/// back edge has no contract yet: that import is ⊤, as in P1. Which edge of
+/// a cycle is the back edge decides what is ⊤: a strong edge (a name whose
+/// value the unit uses: `extends C`, `new C`, a call) makes the importer
+/// see ⊤ for that value, while a weak edge (a name only a parameter type
+/// names, `Solve::weak`) only leaves the entry guard without a contract.
+/// So the units of a cycle (a strongly connected component of `after`) are
+/// ordered by their strong edges alone: a back edge is weak wherever the
+/// strong edges have no cycle of their own. The components stay in the
+/// order a depth-first post-order of `after` gives (each after the ones it
+/// depends on); a component without weak edges keeps that order exactly.
 pub(super) fn dependency_order(solves: &[Solve]) -> Vec<usize> {
-    let mut state = vec![0u8; solves.len()];
-    let mut out = Vec::with_capacity(solves.len());
-    for root in 0..solves.len() {
-        if state[root] != 0 {
+    let n = solves.len();
+    // Depth-first post-order of `after`, with Tarjan's low links: a
+    // component is complete when its root finishes.
+    let mut index = vec![usize::MAX; n];
+    let mut low = vec![0usize; n];
+    let mut on_stack = vec![false; n];
+    let mut comp_stack: Vec<usize> = Vec::new();
+    let mut next_index = 0usize;
+    let mut out = Vec::with_capacity(n);
+    for root in 0..n {
+        if index[root] != usize::MAX {
             continue;
         }
-        // Iterative DFS, post-order.
         let mut stack: Vec<(usize, usize)> = vec![(root, 0)];
-        state[root] = 1;
+        index[root] = next_index;
+        low[root] = next_index;
+        next_index += 1;
+        comp_stack.push(root);
+        on_stack[root] = true;
         while let Some(&mut (v, ref mut next)) = stack.last_mut() {
             if *next < solves[v].after.len() {
                 let w = solves[v].after[*next];
                 *next += 1;
-                if state[w] == 0 {
-                    state[w] = 1;
+                if index[w] == usize::MAX {
+                    index[w] = next_index;
+                    low[w] = next_index;
+                    next_index += 1;
+                    comp_stack.push(w);
+                    on_stack[w] = true;
                     stack.push((w, 0));
+                } else if on_stack[w] {
+                    low[v] = low[v].min(index[w]);
                 }
-            } else {
-                state[v] = 2;
-                out.push(v);
-                stack.pop();
+                continue;
             }
+            stack.pop();
+            if let Some(&(u, _)) = stack.last() {
+                low[u] = low[u].min(low[v]);
+            }
+            if low[v] != index[v] {
+                continue;
+            }
+            // `v` is the root of a component: its members, the stack above it.
+            let at = comp_stack
+                .iter()
+                .rposition(|&x| x == v)
+                .expect("root on stack");
+            let mut members: Vec<usize> = comp_stack.split_off(at);
+            for &m in &members {
+                on_stack[m] = false;
+            }
+            if members.len() == 1 {
+                out.push(v);
+                continue;
+            }
+            // Discovery order: the root first, as the post-order found them.
+            members.sort_by_key(|&m| index[m]);
+            strong_post_order(solves, &members, &mut out);
         }
     }
     out
+}
+
+/// The post-order of `members` (one component, in discovery order) by their
+/// strong edges within it (`after` less `weak`), appended to `out`.
+fn strong_post_order(solves: &[Solve], members: &[usize], out: &mut Vec<usize>) {
+    let inside: FxHashSet<usize> = members.iter().copied().collect();
+    let mut done: FxHashSet<usize> = FxHashSet::default();
+    for &root in members {
+        if !done.insert(root) {
+            continue;
+        }
+        let mut stack: Vec<(usize, usize)> = vec![(root, 0)];
+        while let Some(&mut (v, ref mut next)) = stack.last_mut() {
+            let after = &solves[v].after;
+            if *next < after.len() {
+                let w = after[*next];
+                *next += 1;
+                if inside.contains(&w) && !solves[v].weak.contains(&w) && done.insert(w) {
+                    stack.push((w, 0));
+                }
+                continue;
+            }
+            out.push(v);
+            stack.pop();
+        }
+    }
 }
 
 /// The per-unit driver (decision 151, design §7, §11 and §12): one solve
@@ -237,8 +366,12 @@ pub(super) fn dependency_order(solves: &[Solve]) -> Vec<usize> {
 /// and stored.
 
 pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts {
+    // The rounds capture no diagnostics: they are captured once, at the
+    // fixpoint (`capture_diagnostics`), so the records of earlier solves are
+    // never held.
     let ucfg = FactsConfig {
         unit: true,
+        diagnostics: false,
         ..cfg.clone()
     };
     let flats: Vec<Option<Module>> = sorted
@@ -352,6 +485,12 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         let mut published_fns: FxHashSet<String> = FxHashSet::default();
         let mut reports: FxHashSet<String> = FxHashSet::default();
         let mut work = 0u64;
+        // The units this round solves: only their shared writes can be new.
+        let mut solved: Vec<usize> = Vec::new();
+        // A round past `LONG_ROUNDS` (64, 128, ...) names what each unit it
+        // solves changed (`no_fixpoint_report`).
+        let long = rounds >= LONG_ROUNDS && rounds.is_power_of_two();
+        let mut long_changes: Vec<(usize, Vec<String>)> = Vec::new();
         for level in &levels {
             // A unit over the bound keeps its result (`dependents`).
             for &si in level {
@@ -379,6 +518,11 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
                 // value one writer took from another's earlier write cannot
                 // pass back and forth between them after its source stopped
                 // writing it (tsc typescript.js#u4336/#u4339, period 2).
+                if long {
+                    if let Some(old) = per_unit[si].as_ref() {
+                        long_changes.push((si, output_changes(&u, old)));
+                    }
+                }
                 if let Some(old) = per_unit[si].take() {
                     let at: FxHashMap<String, usize> = u
                         .cells_out
@@ -394,6 +538,7 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
                     }
                 }
                 per_unit[si] = Some(u);
+                solved.push(si);
                 shared_seen[si] = shared_rounds.len() - 1;
             }
             if cfg.report && !todo.is_empty() {
@@ -421,25 +566,7 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
                 // of that name, another unit's (`var _C = class _C {..};
                 // export { _C }`: the module exports the binding, the class
                 // `_C` goes to the binding's unit only).
-                let module_export = |n: &String| !s.view.unit_exports.contains(n);
-                for ((p, n), c) in &u.contracts_out {
-                    input.classes.insert((s.key.clone(), n.clone()), c.clone());
-                    if module_export(n) {
-                        input.classes.insert((p.clone(), n.clone()), c.clone());
-                    }
-                }
-                for ((p, n), c) in &u.fn_contracts_out {
-                    input.fns.insert((s.key.clone(), n.clone()), c.clone());
-                    if module_export(n) {
-                        input.fns.insert((p.clone(), n.clone()), c.clone());
-                    }
-                }
-                for ((p, n), c) in &u.values_out {
-                    input.values.insert((s.key.clone(), n.clone()), c.clone());
-                    if module_export(n) {
-                        input.values.insert((p.clone(), n.clone()), c.clone());
-                    }
-                }
+                publish_contracts(&mut input, s, u);
                 // DECISIONS 134: a layout this unit owned at its last solve
                 // and no longer publishes is gone now, unless another unit
                 // births it too (DECISIONS 112).
@@ -460,9 +587,26 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
                     published_layouts.insert(c.display.clone());
                     if u.layouts_fwd.contains(&c.display) {
                         if !owned_layouts.contains(&c.display) {
-                            input
-                                .layouts
-                                .insert(c.display.clone(), Digested::new(c.clone()));
+                            // Several units forward copies of one literal
+                            // shape no unit here births: its entry is their
+                            // join, ascending from the last round's copy, as
+                            // for several owners (DECISIONS 112). Replaced,
+                            // the last forwarder of a round would win and a
+                            // reader solved before it would never read what
+                            // the round leaves.
+                            let e = match input.layouts.get(&c.display).map(|e| &e.c) {
+                                Some(p)
+                                    if c.literal_shape
+                                        && p.literal_shape
+                                        && copy_of.contains_key(&c.display) =>
+                                {
+                                    let mut j = p.clone();
+                                    j.join(c);
+                                    j
+                                }
+                                _ => c.clone(),
+                            };
+                            input.layouts.insert(c.display.clone(), Digested::new(e));
                             copy_of.insert(c.display.clone(), si);
                         }
                         continue;
@@ -673,6 +817,40 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             }
         }
         input.ctor_runs = news;
+        // DECISIONS 241: what the units store on the own properties of the
+        // functions they hold, joined the same way; every holder of a
+        // function whose join changed (its owner, the units reading its
+        // contract) solves again.
+        let mut fstores = input.fn_stores.clone();
+        for u in per_unit.iter().flatten() {
+            for (nm, fs) in &u.fn_stores_out {
+                fstores.entry(nm.clone()).or_default().join(fs);
+            }
+        }
+        let fstores_changed: FxHashSet<&str> = fstores
+            .iter()
+            .filter(|(k, v)| input.fn_stores.get(*k) != Some(*v))
+            .map(|(k, _)| k.as_str())
+            .collect();
+        if !fstores_changed.is_empty() {
+            for (si, u) in per_unit.iter().enumerate() {
+                let u = u.as_ref().expect("every unit solved");
+                if !u.stats.aborted
+                    && (u
+                        .fns_read
+                        .iter()
+                        .any(|(n, _)| fstores_changed.contains(n.as_str()))
+                        || u.fns_defined.iter().any(|d| {
+                            d.strip_prefix("fn:")
+                                .is_some_and(|n| fstores_changed.contains(n))
+                        }))
+                {
+                    seeds.push(si);
+                }
+            }
+        }
+        drop(fstores_changed);
+        input.fn_stores = fstores;
         // Decision 17: the store effects: last round's joined with what
         // every unit's latest solve stores (D16), so they only grow too.
         // The owners of a layout whose effect keys grew perform them,
@@ -758,7 +936,9 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
                     && c.fns.is_empty()
                     && c.builtins.is_empty()
                     && c.arrays.is_empty()
+                    && c.made_arrays.is_empty()
                     && c.boxes.is_empty()
+                    && c.arrayboxes.is_empty()
             };
             let top = top || others.iter().any(|w| pure(&w.c));
             let mut v: Vec<u64> = others
@@ -874,11 +1054,19 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         }
         input.writes = writes;
         // The shared objects' writes (`model::SharedWrite`): last round's
-        // joined with every unit's latest, so they only grow (D16). When
+        // joined with every unit's latest, so they only grow (D16). Last
+        // round's already holds every other unit's writes, so joining the
+        // units this round solved is that join; a unit's writes are mostly
+        // the program's few shared ones, so only new ones are cloned. When
         // they grew, the units that can see a new one are solved again.
         let mut shared = input.shared.clone();
-        for u in per_unit.iter().flatten() {
-            shared.extend(u.shared_out.iter().cloned());
+        for &si in &solved {
+            let u = per_unit[si].as_ref().expect("every unit solved");
+            for w in &u.shared_out {
+                if !shared.contains(w) {
+                    shared.insert(w.clone());
+                }
+            }
         }
         shared_closure(&mut shared);
         if shared != input.shared {
@@ -900,6 +1088,9 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             shared_rounds.push(shared.clone());
         }
         input.shared = shared;
+        if long {
+            no_fixpoint_report(rounds, &solves, &long_changes, seeds.len());
+        }
         if cfg.report {
             eprintln!(
                 "perry: wpfacts census r{rounds} end seeds {} {}",
@@ -929,7 +1120,21 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             input.broken.extend(fresh);
             continue;
         }
+        let diag_stream = if cfg.diagnostics {
+            capture_diagnostics(
+                &mut per_unit,
+                &solves,
+                sorted,
+                &ucfg,
+                &mut input,
+                &levels,
+                cfg.diag_sidecar.as_deref(),
+            )
+        } else {
+            None
+        };
         let mut pf = ProgramFacts {
+            diag_stream,
             module_paths: sorted.iter().map(|(p, _)| p.to_string()).collect(),
             dynamic_code_reach: cfg.dynamic_code_reach.clone(),
             sabotage: cfg.sabotage.clone(),
@@ -962,6 +1167,7 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
             unique_bindings(&mut b.this_of, path, "this-of FuncId");
         }
         pf.stats.modules = sorted.len();
+        join_site_records(&mut pf);
         typed_param_verdicts(&mut pf);
         pf.rounds = rounds;
         // The cost of the run is every round's.
@@ -975,6 +1181,17 @@ pub(crate) fn run(sorted: &[(&str, &Module)], cfg: &FactsConfig) -> ProgramFacts
         };
         // The program's writes of the shared objects: every unit's, joined.
         pf.shared_out = input.shared.iter().cloned().collect();
+        if cfg.diagnostics {
+            let walked: Vec<(&str, &Module)> = sorted
+                .iter()
+                .zip(&flats)
+                .map(|(&(p, m), f)| (p, f.as_ref().unwrap_or(m)))
+                .collect();
+            pf.diagnostics.push((
+                "<census>".into(),
+                crate::ledger::census(&walked, &pf.diagnostic_sites),
+            ));
+        }
         return pf;
     }
 }
@@ -1052,7 +1269,10 @@ pub(super) fn replay_is_own(w: &crate::model::SharedWrite) -> bool {
     use crate::model::{Shared, SharedWrite};
     match w {
         SharedWrite::Store(s, _) | SharedWrite::Accessor(s, _) => *s == Shared::Top,
-        SharedWrite::Unmodeled(_) | SharedWrite::Handed(_) | SharedWrite::Hard(..) => true,
+        SharedWrite::Unmodeled(_)
+        | SharedWrite::Handed(_)
+        | SharedWrite::Hard(..)
+        | SharedWrite::Removed(_) => true,
     }
 }
 
@@ -1061,13 +1281,16 @@ pub(super) fn replay_is_own(w: &crate::model::SharedWrite) -> bool {
 /// ⊤ is one on that object, as the whole-program solve sees it on the
 /// object's own token. A store under a computed key covers every key of its
 /// object: the stores under one key beside it are dropped, so a write that
-/// says nothing new solves no unit again.
+/// says nothing new solves no unit again. The builtin prototypes are not
+/// such an object: a store or accessor into ⊤ already writes its key on
+/// each of them (`builtins::native_written`), as in the whole program; it
+/// installs no accessor on `Object.prototype` (E23) and stores no value.
 pub(super) fn shared_closure(shared: &mut std::collections::BTreeSet<crate::model::SharedWrite>) {
     use crate::model::{Shared, SharedWrite};
     let handed: Vec<Shared> = shared
         .iter()
         .filter_map(|w| match w {
-            SharedWrite::Handed(s) => Some(s.clone()),
+            SharedWrite::Handed(s) if *s != Shared::ObjectProto => Some(s.clone()),
             _ => None,
         })
         .collect();
@@ -1193,6 +1416,7 @@ pub(super) fn unit_io(
     input: &Published,
 ) -> Vec<String> {
     use crate::dump::{fnv, FNV_OFFSET};
+    let synthetic = synthetic_dirs(sorted);
     let mut pos = vec![0usize; solves.len()];
     for (p, &si) in order.iter().enumerate() {
         pos[si] = p;
@@ -1203,43 +1427,46 @@ pub(super) fn unit_io(
         let u = u.as_ref().expect("every unit solved");
         let mut o: Vec<(String, u64)> = Vec::new();
         for ((_, n), c) in &u.contracts_out {
-            o.push((format!("class:{n}"), digest(c)));
+            o.push((format!("class:{n}"), sd(&synthetic, c)));
         }
         for ((_, n), c) in &u.fn_contracts_out {
-            o.push((format!("fn:{n}"), digest(c)));
+            o.push((format!("fn:{n}"), sd(&synthetic, c)));
         }
         for ((_, n), c) in &u.values_out {
-            o.push((format!("value:{n}"), digest(c)));
+            o.push((format!("value:{n}"), sd(&synthetic, c)));
         }
         for c in &u.layouts_out {
-            o.push((format!("layout:{}", c.display), digest(c)));
+            o.push((format!("layout:{}", c.display), sd(&synthetic, c)));
         }
         for (n, c) in &u.args_out {
-            o.push((format!("args:{n}"), digest(c)));
+            o.push((format!("args:{n}"), sd(&synthetic, c)));
         }
         for ((p, n), c) in &u.ctor_args_out {
-            o.push((format!("args:{p}:{n}"), digest(c)));
+            o.push((format!("args:{p}:{n}"), sd(&synthetic, c)));
         }
         for (n, c) in &u.this_args_out {
-            o.push((format!("this:{n}"), digest(c)));
+            o.push((format!("this:{n}"), sd(&synthetic, c)));
         }
         for n in &u.method_runs_out {
             o.push((format!("runs:{n}"), 0));
         }
         for (n, c) in &u.method_args_out {
-            o.push((format!("margs:{n}"), digest(c)));
+            o.push((format!("margs:{n}"), sd(&synthetic, c)));
         }
         for (n, c) in &u.ctor_runs_out {
-            o.push((format!("news:{n}"), digest(c)));
+            o.push((format!("news:{n}"), sd(&synthetic, c)));
+        }
+        for (n, c) in &u.fn_stores_out {
+            o.push((format!("fstores:{n}"), digest(c)));
         }
         for (d, k, kinds) in &u.stores_out {
-            o.push((format!("store:{d}.{k}"), digest(kinds)));
+            o.push((format!("store:{d}.{k}"), sd(&synthetic, kinds)));
         }
         for (k, c) in &u.cells_out {
-            o.push((format!("cell:{k}"), digest(c)));
+            o.push((format!("cell:{k}"), sd(&synthetic, c)));
         }
         for ((p, n), vc) in &u.writes_out {
-            o.push((format!("write:{p}.{n}"), digest(vc)));
+            o.push((format!("write:{p}.{n}"), sd(&synthetic, vc)));
         }
         for d in &u.reports {
             o.push((format!("report:{d}"), 0));
@@ -1364,6 +1591,57 @@ pub(super) fn unit_io(
     lines
 }
 
+/// The directories of the compiler-generated modules, read off the unit
+/// paths (`<cache dir>/synthetic-modules/...`).
+fn synthetic_dirs(sorted: &[(&str, &Module)]) -> Vec<Vec<u8>> {
+    const NAME: &str = "/synthetic-modules/";
+    let mut dirs: Vec<Vec<u8>> = sorted
+        .iter()
+        .filter_map(|(p, _)| {
+            p.find(NAME)
+                .map(|at| p.as_bytes()[..at + NAME.len() - 1].to_vec())
+        })
+        .collect();
+    dirs.sort();
+    dirs.dedup();
+    dirs
+}
+
+/// `digest` for the dump: a synthetic module is named by its file under the
+/// cache dir, and the value identity of a unit output must not depend on
+/// where the cache lives, so the cache dir part of the name is not hashed.
+fn sd<T: std::hash::Hash>(dirs: &[Vec<u8>], v: &T) -> u64 {
+    struct Stable<'a>(std::collections::hash_map::DefaultHasher, &'a [Vec<u8>]);
+    impl std::hash::Hasher for Stable<'_> {
+        fn write(&mut self, bytes: &[u8]) {
+            const STABLE: &[u8] = b"<cache-dir>/synthetic-modules";
+            let mut out = Vec::new();
+            let mut i = 0;
+            let mut hit = false;
+            while i < bytes.len() {
+                match self.1.iter().find(|d| bytes[i..].starts_with(d)) {
+                    Some(d) => {
+                        out.extend_from_slice(STABLE);
+                        i += d.len();
+                        hit = true;
+                    }
+                    None => {
+                        out.push(bytes[i]);
+                        i += 1;
+                    }
+                }
+            }
+            self.0.write(if hit { &out } else { bytes });
+        }
+        fn finish(&self) -> u64 {
+            self.0.finish()
+        }
+    }
+    let mut h = Stable(std::collections::hash_map::DefaultHasher::new(), dirs);
+    v.hash(&mut h);
+    std::hash::Hasher::finish(&h)
+}
+
 /// The units a newly broken contract changes (design §11.3): the unit
 /// defining it (a template it owns, or a function it publishes) and every
 /// unit depending on that one, transitively. A unit over the bound claims
@@ -1382,11 +1660,14 @@ pub(super) fn resolve_again(
         // An override report changes the overridden class's unit
         // (DECISIONS 59).
         // So does a typed-array field report (DECISIONS 126).
+        // So does a relinked parent's report (`extends <class>`).
         let d = d
             .strip_prefix("override ")
             .or_else(|| d.strip_prefix("ta "))
             .and_then(|r| r.split_once(" of "))
-            .map_or(d.as_str(), |(_, c)| c);
+            .map(|(_, c)| c)
+            .or_else(|| d.strip_prefix("extends "))
+            .unwrap_or(d.as_str());
         match owner.get(d) {
             Some(sis) => work.extend(sis.iter().copied()),
             // No unit owns it: every unit again, but a unit over the bound
@@ -1456,191 +1737,10 @@ pub(crate) fn digest<T: std::hash::Hash>(v: &T) -> u64 {
     h.finish()
 }
 
-/// The units defining each display. A display may have several owners:
-/// every unit holding a copy of one literal shape (`decl_units`).
-pub(super) fn owners(per_unit: &[Option<ProgramFacts>]) -> FxHashMap<String, Vec<usize>> {
-    let mut owner: FxHashMap<String, Vec<usize>> = FxHashMap::default();
-    for (si, u) in per_unit.iter().enumerate() {
-        let Some(u) = u else { continue };
-        for t in u.templates.iter().filter(|t| t.module == Some(0)) {
-            owner.entry(t.display.clone()).or_default().push(si);
-        }
-        for d in &u.fns_defined {
-            owner.entry(d.clone()).or_default().push(si);
-        }
-    }
-    owner
-}
+#[path = "driver/merge.rs"]
+mod merge;
+pub(in crate::units) use merge::*;
 
-/// Units `work` and every unit depending on one of them, transitively;
-/// a unit over the bound keeps its result (`resolve_again`).
-pub(super) fn dependents(
-    solves: &[Solve],
-    per_unit: &[Option<ProgramFacts>],
-    mut work: Vec<usize>,
-) -> Vec<bool> {
-    let n = solves.len();
-    let mut importers: Vec<Vec<usize>> = vec![Vec::new(); n];
-    for (si, s) in solves.iter().enumerate() {
-        for &d in &s.deps {
-            importers[d].push(si);
-        }
-    }
-    let mut dirty = vec![false; n];
-    while let Some(si) = work.pop() {
-        if per_unit[si].as_ref().is_some_and(|u| u.stats.aborted) {
-            continue;
-        }
-        if !std::mem::replace(&mut dirty[si], true) {
-            work.extend(importers[si].iter().copied());
-        }
-    }
-    dirty
-}
-
-/// A unit's bodies by program module: its solve's module 0 is the unit's
-/// own module (`mi`); a body of any other module is no claim here.
-pub(super) fn program_bodies(bodies: &mut Vec<crate::bindings::BodyRef>, mi: usize) {
-    if bodies.iter().any(|b| b.module != 0) {
-        bodies.clear();
-    }
-    for b in bodies.iter_mut() {
-        b.module = mi as u32;
-    }
-}
-
-pub(super) fn merge_unit(
-    pf: &mut ProgramFacts,
-    mi: usize,
-    path: &str,
-    view: &crate::decl_units::UnitView,
-    u: ProgramFacts,
-) {
-    for mut t in u.templates {
-        if t.module != Some(0) {
-            continue;
-        }
-        t.module = Some(mi as u32);
-        for f in t.fields.iter_mut() {
-            program_bodies(&mut f.fns, mi);
-        }
-        t.id = pf.templates.len() as crate::model::TmplId;
-        pf.templates.push(t);
-    }
-    pf.diagnostics.extend(
-        u.diagnostics
-            .into_iter()
-            .map(|(_, lines)| (path.to_owned(), lines)),
-    );
-    pf.sites.extend(u.sites.into_iter().map(|s| SiteFacts {
-        diagnostic_unit: s.diagnostic_unit.as_ref().map(|_| path.to_owned()),
-        module: mi as u32,
-        ..s
-    }));
-    if let Some(mut b) = u.bindings.into_iter().next() {
-        for (_, f) in b.locals.iter_mut().chain(b.this_of.iter_mut()) {
-            program_bodies(&mut f.bodies, mi);
-        }
-        let into = &mut pf.bindings[mi];
-        into.locals.extend(
-            b.locals
-                .into_iter()
-                .filter(|(id, _)| view.binding_locals.contains(id)),
-        );
-        into.numeric_functions.extend(
-            b.numeric_functions
-                .into_iter()
-                .filter(|(id, _, _)| view.binding_funcs.contains(id)),
-        );
-        into.this_of.extend(
-            b.this_of
-                .into_iter()
-                .filter(|(id, _)| view.binding_funcs.contains(id)),
-        );
-    }
-    pf.indexed_metadata_unwritten &= u.indexed_metadata_unwritten;
-    pf.super_unrelinked.extend(u.super_unrelinked);
-    pf.interp_guard = pf.interp_guard.take().or(u.interp_guard);
-    pf.fnproto_bind_written = pf.fnproto_bind_written.take().or(u.fnproto_bind_written);
-    let (a, s) = (&mut pf.stats, &u.stats);
-    a.templates += s.templates;
-    a.fact_units += s.fact_units;
-    a.nodes += s.nodes;
-    a.constraints += s.constraints;
-    a.tokens += s.tokens;
-    a.functions += s.functions;
-    a.gen_ms += s.gen_ms;
-    a.solve_ms += s.solve_ms;
-    a.derive_ms += s.derive_ms;
-    a.pops += s.pops;
-    a.instances += s.instances;
-    a.shared_instances += s.shared_instances;
-    a.composed += s.composed;
-    a.contexts += s.contexts;
-    a.work += s.work;
-    a.top_calls += s.top_calls;
-    a.pts_entries += s.pts_entries;
-    pf.units.push((path.to_string(), u.stats));
-}
-
-/// Post-census verdicts for sites on a parameter whose TS type is an
-/// object type (design §11.4): the type picks the candidates, every class
-/// template of the program whose definite data fields carry the type's
-/// keys; the entry guard is `class_id(param) ∈ candidates`. The site is E0
-/// when every candidate is prefix-stable and holds the key in one slot.
-pub(super) fn typed_param_verdicts(pf: &mut ProgramFacts) {
-    let mut cand_of: FxHashMap<Vec<String>, Vec<usize>> = FxHashMap::default();
-    for s in pf.sites.iter_mut() {
-        let Some(keys) = s.guard_keys.take() else {
-            continue;
-        };
-        if !matches!(s.verdict, crate::Verdict::No(_)) || s.is_call {
-            continue;
-        }
-        let tfs = &pf.templates;
-        let cands = cand_of.entry(keys.clone()).or_insert_with(|| {
-            (0..tfs.len())
-                .filter(|&i| {
-                    let t = &tfs[i];
-                    t.class_id.is_some()
-                        && keys.iter().all(|k| {
-                            t.fields
-                                .iter()
-                                .any(|f| &f.key == k && f.definite && f.data_field)
-                        })
-                })
-                .collect()
-        });
-        if cands.is_empty() {
-            continue;
-        }
-        let slot = |t: &TemplateFacts| {
-            t.fields
-                .iter()
-                .find(|f| f.key == s.key && f.definite && f.data_field)
-                .and_then(|f| f.slot)
-        };
-        let first = slot(&tfs[cands[0]]);
-        if first.is_some()
-            && cands
-                .iter()
-                .all(|&i| tfs[i].prefix_stable && slot(&tfs[i]) == first)
-        {
-            s.receivers = cands.iter().map(|&i| tfs[i].display.clone()).collect();
-            s.verdict = crate::Verdict::E0;
-        }
-    }
-}
-
-/// Facts must name one lexical binding. A second declaration with the same
-/// id is a compiler bug, not a choice of which declaration's proof to keep.
-pub(super) fn unique_bindings<T>(values: &mut [(u32, T)], module: &str, kind: &str) {
-    values.sort_by_key(|(id, _)| *id);
-    for pair in values.windows(2) {
-        assert_ne!(
-            pair[0].0, pair[1].0,
-            "per-unit facts: duplicate {kind} {} in {module}; cloned bodies must have distinct binding identities",
-            pair[0].0,
-        );
-    }
-}
+#[path = "driver/fixpoint_report.rs"]
+mod fixpoint_report;
+pub(crate) use fixpoint_report::*;

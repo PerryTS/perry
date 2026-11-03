@@ -233,6 +233,7 @@ mod class_artifacts;
 pub(crate) mod class_hierarchy;
 #[cfg(test)]
 mod clone_suffix_tests;
+pub(crate) mod closed_targets;
 mod closure;
 mod closure_capture_cells;
 mod closure_captures;
@@ -248,6 +249,8 @@ pub use ctor_arity::{
 };
 mod checked_integer;
 #[cfg(test)]
+mod buffer_alias_metadata_tests;
+#[cfg(test)]
 mod declared_string_add_tests;
 #[cfg(test)]
 mod emission_order_tests;
@@ -257,7 +260,6 @@ mod export_value_wrappers;
 pub(crate) mod fresh_class_templates;
 pub(crate) mod func_registry;
 mod function;
-mod function_metadata_descriptors;
 mod function_source_header;
 #[cfg(test)]
 mod guarded_falsy_default_method_tests;
@@ -360,9 +362,9 @@ pub(crate) use helpers::{
 pub use helpers::{resolve_target_triple, target_os_of, TARGET_NAMES};
 pub use opts::{
     namespace_member_class_key, namespace_member_func_key, namespace_member_var_key, AppMetadata,
-    ClassAccessorNames, CompileOptions, ExportedObjectLiteralCapability, FpContractMode,
-    ImportedClass, ImportedObjectLiteral, ImportedObjectLiteralMethod, NamespaceEntry,
-    NamespaceEntryKind, ObjectLiteralMethodCandidate, ShortSpreadMethodCandidate,
+    CompileOptions, ExportedObjectLiteralCapability, FpContractMode, ImportedClass,
+    ImportedObjectLiteral, ImportedObjectLiteralMethod, NamespaceEntry, NamespaceEntryKind,
+    ObjectLiteralMethodCandidate, ShortSpreadMethodCandidate,
 };
 pub(crate) use opts::{CrossModuleCtx, ImportedCtor};
 pub(crate) use param_guard::scalar_descriptor_rep;
@@ -524,6 +526,12 @@ pub fn user_function_symbol(module_name: &str, function_name: &str) -> String {
 /// hash to AFTER codegen.
 pub fn compile_module(hir: &HirModule, mut opts: CompileOptions) -> Result<Vec<u8>> {
     ensure_layout_plan(hir, &mut opts)?;
+    crate::facts_consumed::begin_module(&hir.name);
+    crate::verify_facts::begin_module(
+        &hir.name,
+        opts.module_source.as_deref(),
+        opts.debug_source_line_offset,
+    );
     let _fallback = crate::fallback_diag::begin(
         &hir.name,
         opts.module_source.as_deref(),
@@ -540,6 +548,12 @@ pub fn compile_module(hir: &HirModule, mut opts: CompileOptions) -> Result<Vec<u
 /// Lowering only borrows the input, preserving its object-cache identity.
 pub fn compile_module_owned(hir: HirModule, mut opts: CompileOptions) -> Result<Vec<u8>> {
     ensure_layout_plan(&hir, &mut opts)?;
+    crate::facts_consumed::begin_module(&hir.name);
+    crate::verify_facts::begin_module(
+        &hir.name,
+        opts.module_source.as_deref(),
+        opts.debug_source_line_offset,
+    );
     let _fallback = crate::fallback_diag::begin(
         &hir.name,
         opts.module_source.as_deref(),
@@ -651,6 +665,7 @@ fn lower_module(
     // runs it does not reach, when this module's codegen ends.
     let _region_diag = (!collect_births).then(|| crate::expr::region_guard::ModuleDiag::start(hir));
     crate::stmt::region_loop::begin_module(hir);
+    closed_targets::begin_module();
     let fp_flags = crate::block::FpFlags::new(opts.fast_math, opts.fp_contract_mode);
 
     // #5334 lever B: decide ONCE, up front, whether this module is large enough
@@ -669,6 +684,7 @@ fn lower_module(
     // FEAT_JSCVT decision is per-target (apple-arm64 only) — same
     // set-per-module discipline as the outline gate above.
     helpers::set_jscvt_for_target(&triple);
+    helpers::set_js_text_section_for_target(&triple);
     // Native roots are the default lowering wherever the runtime can walk the
     // frames, and the shadow stack elsewhere. Same per-module discipline.
     helpers::set_native_roots_for_target(&triple);
@@ -756,6 +772,7 @@ fn lower_module(
         .unwrap_or(&module_prefix);
     let mut strings = StringPool::with_prefix(module_prefix.clone());
     strings.set_thread_literal_callback_prefix(thread_literal_callback_prefix.clone());
+    strings.set_image_literals(opts.output_type != "dylib" && opts.output_type != "staticlib");
     strings.tdz_binding_names = tdz_names::collect(hir);
     // #5247: install per-module source-location context for the dynamic
     // call-dispatch throw path, but only under `--debug-symbols` (which sets
@@ -2216,6 +2233,10 @@ fn lower_module(
         })
         .collect();
     module_dispatch_facts.install_imported_return_shapes(imported_return_shapes);
+    module_dispatch_facts.install_array_record_protocol_dead(
+        crate::expr::array_iteration_facts(&opts.program_facts.elision) == 0
+            && opts.program_facts.elision.array_iterator_close_unwritten,
+    );
     // Representation-selection Phase 5a: proven-`this` method clones.
     let mut pshape_methods: std::collections::HashMap<
         (String, String),
@@ -2649,7 +2670,11 @@ fn lower_module(
             let Some(&class_id) = class_ids.get(class_name) else {
                 continue;
             };
-            let gc_packed = crate::target_layout::inline_alloc_gc_packed(&triple, field_count);
+            let gc_packed = crate::target_layout::inline_alloc_gc_packed(
+                &triple,
+                crate::target_layout::class_instance_form(class_name),
+                field_count,
+            );
             match inits.get(keys_global) {
                 // Two names (an alias) sharing one keys global must agree on
                 // the word module init writes; if they do not, neither may use
@@ -3027,6 +3052,7 @@ fn lower_module(
         program_has_thread_agents: thread_agents,
         class_hierarchy: class_hierarchy::ClassHierarchy::default(),
         namespace_imports: opts.namespace_imports.iter().cloned().collect(),
+        namespace_self_import: opts.namespace_self_import,
         namespace_source_prefixes: opts.namespace_source_prefixes,
         namespace_member_nested: opts.namespace_member_nested.iter().cloned().collect(),
         cjs_interop_namespaces: opts.cjs_interop_namespaces.iter().cloned().collect(),
@@ -3035,7 +3061,6 @@ fn lower_module(
         imported_async_funcs: opts.imported_async_funcs,
         short_spread_method_candidates: Arc::clone(&opts.short_spread_method_candidates),
         object_literal_method_candidates: Arc::clone(&opts.object_literal_method_candidates),
-        program_class_accessor_names: opts.program_class_accessor_names.clone(),
         local_async_funcs,
         local_generator_funcs,
         fixed_generator_funcs,
@@ -4315,6 +4340,7 @@ fn lower_module(
             is_entry_module: opts.is_entry_module,
             non_entry_module_prefixes: &opts.non_entry_module_prefixes,
             output_type: &opts.output_type,
+            realm_reach: opts.program_facts.realm_reach.as_deref(),
             module_prefix: &module_prefix,
             class_table: &class_table,
             class_ids: &class_ids,
@@ -4439,8 +4465,9 @@ fn lower_module(
     // total — otherwise functions whose scope ids exceed the init
     // function's count emit `!alias.scope !N` references with no matching
     // metadata definition (issue #71).
-    let total_buffer_scopes = llmod.buffer_alias_counter;
-    emit_buffer_alias_metadata(&mut llmod, total_buffer_scopes);
+    closed_targets::apply(&mut llmod);
+    emit_buffer_alias_metadata(&mut llmod);
+    llmod.number_loop_metadata();
     llmod
         .native_rep_records
         .extend(typed_clone_rejection_records);

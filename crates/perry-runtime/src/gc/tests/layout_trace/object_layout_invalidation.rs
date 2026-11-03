@@ -40,7 +40,7 @@ fn test_layout_scan_trace_counts_raw_numeric_object_fields() {
         POINTER_TAG | (obj as u64 & POINTER_MASK),
         &valid_ptrs
     ));
-    trace_marked_objects(&valid_ptrs);
+    trace_marked_objects::<{ cfg!(test) }>(&valid_ptrs);
 
     let event = trace.into_json(GcStepSnapshot::current());
     let layout_scans = &event["layout_scans"];
@@ -91,7 +91,7 @@ fn test_layout_scan_trace_counts_mixed_raw_numeric_object_fields() {
         POINTER_TAG | (obj as u64 & POINTER_MASK),
         &valid_ptrs
     ));
-    trace_marked_objects(&valid_ptrs);
+    trace_marked_objects::<{ cfg!(test) }>(&valid_ptrs);
 
     let event = trace.into_json(GcStepSnapshot::current());
     let layout_scans = &event["layout_scans"];

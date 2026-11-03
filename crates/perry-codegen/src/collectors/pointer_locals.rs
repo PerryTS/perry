@@ -1177,6 +1177,8 @@ mod tests {
                 op: BinaryOp::Add,
                 prefix: true,
                 strict: true,
+                byte_offset: 0,
+                byte_end: 0,
             },
             Expr::IndexUpdate {
                 object: Box::new(Expr::This),
@@ -1184,6 +1186,8 @@ mod tests {
                 op: BinaryOp::Add,
                 prefix: true,
                 strict: true,
+                byte_offset: 0,
+                byte_end: 0,
             },
         ] {
             let stmts = vec![Stmt::Let {
@@ -1789,6 +1793,8 @@ mod tests {
                 object: Box::new(Expr::LocalGet(1)),
                 index: Box::new(Expr::Integer(0)),
                 value: Box::new(Expr::Object(Vec::new())),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Let {
                 id: 2,
@@ -1840,6 +1846,8 @@ mod tests {
                         object: Box::new(Expr::LocalGet(1)),
                         index: Box::new(Expr::Integer(0)),
                         value: Box::new(Expr::Object(Vec::new())),
+                        byte_offset: 0,
+                        byte_end: 0,
                     },
                     owner_read(),
                 ])),

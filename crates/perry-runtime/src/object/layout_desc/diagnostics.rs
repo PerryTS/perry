@@ -61,16 +61,15 @@ pub(crate) unsafe fn note_out_of_order_pair(obj: *const ObjectHeader, pos: u32) 
         return;
     };
     let keys = std::slice::from_raw_parts(d.keys, d.key_count as usize);
-    let fields = (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
     let name = |k: &PerryLayoutKey| {
         atom_bytes(k.atom)
             .map(|b| String::from_utf8_lossy(b).into_owned())
             .unwrap_or_default()
     };
-    let Some(later) = keys[pos as usize + 1..]
-        .iter()
-        .find(|k| *fields.add(k.slot as usize) != crate::value::TAG_HOLE)
-    else {
+    let Some(later) = keys[pos as usize + 1..].iter().find(|k| {
+        *super::super::header::object_slot_at(obj as *mut _, u32::from(k.off))
+            != crate::value::TAG_HOLE
+    }) else {
         return;
     };
     let key = (d.class_id, name(&keys[pos as usize]), name(later));
@@ -120,7 +119,7 @@ pub(super) fn family_diag_report() {
     if family_diag_pairs_on() {
         if let Ok(map) = OUT_OF_ORDER_PAIRS.lock() {
             let mut pairs: Vec<_> = map.iter().flatten().collect();
-            pairs.sort_by(|a, b| b.1.cmp(a.1));
+            crate::cold_sort::sort_by(&mut pairs, |a, b| b.1.cmp(a.1));
             for ((class_id, key, later), n) in pairs.into_iter().take(40) {
                 eprintln!(
                     "PERRY_FAMILY_DIAG out_of_order class={class_id} key={key} after={later} n={n}"
@@ -242,14 +241,16 @@ pub(super) fn family_diag_other_report() {
             e.2 += 1;
         }
         let mut classes: Vec<_> = by_class.into_iter().collect();
-        classes.sort_by(|a, b| b.1 .1.cmp(&a.1 .1));
+        crate::cold_sort::sort_by(&mut classes, |a, b| b.1 .1.cmp(&a.1 .1));
         for (c, (f, t, n)) in classes.into_iter().take(20) {
             let name = super::super::class_name_for_id(c).unwrap_or_default();
             eprintln!(
                 "PERRY_FAMILY_DIAG other_class class={c} name={name} first={f} stores={t} keys={n}"
             );
         }
-        rows.sort_by(|a, b| b.1 .0.cmp(&a.1 .0).then(b.1 .1.cmp(&a.1 .1)));
+        crate::cold_sort::sort_by(&mut rows, |a, b| {
+            b.1 .0.cmp(&a.1 .0).then(b.1 .1.cmp(&a.1 .1))
+        });
         for ((c, k), (f, t)) in rows.into_iter().take(80) {
             eprintln!("PERRY_FAMILY_DIAG other class={c} key={k} first={f} stores={t}");
         }

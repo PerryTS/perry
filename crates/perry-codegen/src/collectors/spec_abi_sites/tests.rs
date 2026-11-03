@@ -464,6 +464,8 @@ fn put_value_set_receiver_demotes_source_const_len() {
             value: Box::new(Expr::Integer(3)),
             receiver: Box::new(source),
             strict: false,
+            byte_offset: 0,
+            byte_end: 0,
         }),
         let_stmt(
             2,
@@ -550,6 +552,8 @@ fn guarded_number_array_rejects_stale_or_aliasable_reads() {
             object: Box::new(Expr::LocalGet(5)),
             index: Box::new(Expr::Integer(0)),
             value: Box::new(Expr::Integer(1)),
+            byte_offset: 0,
+            byte_end: 0,
         })
     };
     let loop_stmt = || Stmt::While {
@@ -730,6 +734,8 @@ fn store_key_const_len(pre: Vec<Stmt>, key: Expr) -> Option<Option<i64>> {
         object: Box::new(Expr::LocalGet(1)),
         index: Box::new(key),
         value: Box::new(Expr::Integer(0)),
+        byte_offset: 0,
+        byte_end: 0,
     }));
     body.push(let_stmt(
         2,
@@ -782,4 +788,75 @@ fn element_store_that_may_be_length_demotes_the_constant_length() {
         ),
         Some(None)
     );
+}
+
+fn buffer_alloc(size: Expr, fill: Option<Expr>) -> Expr {
+    Expr::BufferAlloc {
+        size: Box::new(size),
+        fill: fill.map(Box::new),
+        encoding: None,
+    }
+}
+
+#[test]
+fn buffer_alloc_binding_is_a_uint8_pointer_argument() {
+    // const N = 64; const a = Buffer.alloc(16); const b = Buffer.alloc(N);
+    // const c = Buffer.alloc(u * 2); f(a); f(b); f(c);
+    let m = module_with_init(vec![
+        let_stmt(1, false, Expr::Integer(64)),
+        let_stmt(9, false, Expr::Undefined),
+        let_stmt(2, false, buffer_alloc(Expr::Integer(16), None)),
+        let_stmt(3, false, buffer_alloc(Expr::LocalGet(1), None)),
+        let_stmt(
+            4,
+            false,
+            buffer_alloc(
+                Expr::Binary {
+                    op: perry_hir::BinaryOp::Mul,
+                    left: Box::new(Expr::LocalGet(9)),
+                    right: Box::new(Expr::Integer(2)),
+                },
+                None,
+            ),
+        ),
+        Stmt::Expr(call(7, vec![Expr::LocalGet(2)])),
+        Stmt::Expr(call(7, vec![Expr::LocalGet(3)])),
+        Stmt::Expr(call(7, vec![Expr::LocalGet(4)])),
+    ]);
+    let facts = collect_spec_abi_facts(&m);
+    let uint8 = |const_len| SpecParamRep::TaPtr {
+        kind: perry_hir::TYPED_ARRAY_KIND_UINT8,
+        const_len,
+    };
+    let sites = facts.call_sites.get(&7).expect("sites judged");
+    assert_eq!(sites[0], vec![uint8(Some(16))]);
+    assert_eq!(sites[1], vec![uint8(Some(64))]);
+    assert_eq!(sites[2], vec![uint8(None)]);
+}
+
+#[test]
+fn an_exposed_or_filled_buffer_alloc_stays_boxed() {
+    // const a = Buffer.alloc(8); a.buffer; f(a);  const b = Buffer.alloc(8, 1); f(b);
+    let m = module_with_init(vec![
+        let_stmt(2, false, buffer_alloc(Expr::Integer(8), None)),
+        Stmt::Expr(Expr::PropertyGet {
+            byte_end: 0,
+            byte_offset: 0,
+            object: Box::new(Expr::LocalGet(2)),
+            property: "buffer".to_string(),
+        }),
+        let_stmt(
+            3,
+            false,
+            buffer_alloc(Expr::Integer(8), Some(Expr::Integer(1))),
+        ),
+        Stmt::Expr(call(7, vec![Expr::LocalGet(2)])),
+        Stmt::Expr(call(7, vec![Expr::LocalGet(3)])),
+    ]);
+    let facts = collect_spec_abi_facts(&m);
+    assert!(!facts.ta_bindings.contains_key(&2));
+    assert!(!facts.ta_bindings.contains_key(&3));
+    let sites = facts.call_sites.get(&7).expect("sites judged");
+    assert_eq!(sites[0], vec![SpecParamRep::Boxed]);
+    assert_eq!(sites[1], vec![SpecParamRep::Boxed]);
 }

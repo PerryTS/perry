@@ -17,18 +17,20 @@ const IMAGE_GC_FLAGS: u8 = 0x15;
 const STRING_IMAGE_MARKER: u16 = 0x494d;
 
 pub(super) fn name(entry: &StringEntry) -> String {
-    let spelling: String = if entry.bytes.len() <= SPELLED_NAME_MAX_BYTES {
-        entry.bytes.iter().map(|b| format!("{b:02x}")).collect()
+    name_of(&entry.bytes, entry.is_wtf8)
+}
+
+/// The record symbol of a string with these bytes: spelled in hex up to
+/// `SPELLED_NAME_MAX_BYTES`, else named by length and SHA-256.
+pub(super) fn name_of(bytes: &[u8], is_wtf8: bool) -> String {
+    let spelling: String = if bytes.len() <= SPELLED_NAME_MAX_BYTES {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
     } else {
-        let digest = Sha256::digest(&entry.bytes);
+        let digest = Sha256::digest(bytes);
         let hash: String = digest.iter().map(|b| format!("{b:02x}")).collect();
-        format!("s{}_{}", entry.bytes.len(), hash)
+        format!("s{}_{}", bytes.len(), hash)
     };
-    format!(
-        "perry_image_literal_{}_{}",
-        u8::from(entry.is_wtf8),
-        spelling
-    )
+    format!("perry_image_literal_{}_{}", u8::from(is_wtf8), spelling)
 }
 
 pub(super) fn pointer(entry: &StringEntry) -> String {
@@ -97,6 +99,40 @@ pub(super) fn emit(llmod: &mut LlModule, entry: &StringEntry) -> String {
 mod tests {
     use super::*;
     use crate::strings::StringPool;
+
+    /// Independent emitters of one module (its literals, the runtime
+    /// layouts, the realm image) define the same content-named record: the
+    /// module renders one definition on every target, Apple included.
+    #[test]
+    fn a_repeated_coalesced_definition_renders_once() {
+        for target in [
+            "x86_64-unknown-linux-gnu",
+            "x86_64-pc-windows-msvc",
+            "wasm32-wasip2",
+            "aarch64-apple-darwin",
+        ] {
+            let mut m = LlModule::new(target);
+            m.add_coalesced_global("image", "@image = weak_odr constant i64 1".into());
+            m.add_coalesced_global("image", "@image = weak_odr constant i64 1".into());
+            let ir = m.render_codegen_units(1).concat();
+            assert_eq!(ir.matches("@image = weak_odr").count(), 1, "{target}: {ir}");
+            if !target.contains("apple") {
+                assert_eq!(
+                    ir.matches("$image = comdat any").count(),
+                    1,
+                    "{target}: {ir}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "defined twice with different contents")]
+    fn a_different_definition_under_a_coalesced_name_is_rejected() {
+        let mut m = LlModule::new("x86_64-unknown-linux-gnu");
+        m.add_coalesced_global("image", "@image = weak_odr constant i64 1".into());
+        m.add_coalesced_global("image", "@image = weak_odr constant i64 2".into());
+    }
 
     #[test]
     fn split_units_preserve_cross_module_weak_image_identity() {

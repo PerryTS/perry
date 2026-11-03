@@ -170,6 +170,8 @@ fn reflect_script_var_initializers(
                 object: Box::new(Expr::GlobalThisExpr),
                 property: name,
                 value: Box::new(Expr::LocalGet(id)),
+                byte_offset: 0,
+                byte_end: 0,
             }));
         }
     }
@@ -251,6 +253,8 @@ fn script_var_mirror_expr(id: LocalId, script_vars: &HashMap<LocalId, String>) -
             .expect("script var mirror requires a script var")
             .clone(),
         value: Box::new(Expr::LocalGet(id)),
+        byte_offset: 0,
+        byte_end: 0,
     }
 }
 
@@ -938,6 +942,10 @@ pub fn lower_module_full_with_platform_globals(
     ctx.is_external_module = is_external_module;
     ctx.assign_class_fields = assign_class_fields;
     ctx.module_strict = module_has_strict_mode(ast_module, source_file_path);
+    // #13558: a module's top-level `this` is `undefined`, so lowering needs the
+    // module goal beside the strictness it already derives from the same two
+    // inputs (format/package context + in-source module syntax).
+    ctx.module_goal_is_module = module_has_module_goal(ast_module, source_file_path);
     ctx.current_strict = ctx.module_strict;
     if let Some(seed) = imported_class_fields {
         ctx.seed_imported_class_fields(seed);
@@ -962,7 +970,7 @@ pub fn lower_module_full_with_platform_globals(
 
     // #10421: a `Function` constructor reached as a value (an alias,
     // `ctx.Function`, `fn.constructor(...)`) needs the interpreter too.
-    pre_scan_function_ctor_reach(ast_module);
+    pre_scan_function_ctor_reach(ast_module, source_file_path);
 
     // #8882: every class DECLARATION name at any depth, for `lower_new`'s
     // unresolved-constructor guard (see `pre_scan/class_decl_names.rs`).
@@ -1268,6 +1276,15 @@ pub fn lower_module_full_with_platform_globals(
                         // the same id and is the authority for every later use.
                         if ctx.proxy_locals.contains(&name) && decl_init_is_proxy_new(decl) {
                             ctx.register_proxy_local(pre_id);
+                        }
+                        // #3144, same forward-reference reason: a function
+                        // body lowered before this module-level declarator
+                        // resolves `m` to `pre_id`, so `m.call(...)` there must
+                        // already see the alias. The declarator re-registers.
+                        if let Some(method) = decl.init.as_deref().and_then(|init| {
+                            crate::destructuring::var_decl::builtin_proto_method_alias(&ctx, init)
+                        }) {
+                            ctx.builtin_proto_method_local_ids.insert(pre_id, method);
                         }
                         ctx.pre_registered_module_vars.insert(name);
                         if var_decl.kind == ast::VarDeclKind::Var {
@@ -1959,6 +1976,8 @@ pub fn lower_module_full_with_platform_globals(
             exports_may_run_early,
         },
     );
+
+    super::module_decl::static_import_bindings::prune_unused_named_cells(&mut module);
 
     module.local_source_spans = std::mem::take(&mut ctx.local_source_spans);
     module.classic_for_lexical_bindings = std::mem::take(&mut ctx.classic_for_lexical_bindings);

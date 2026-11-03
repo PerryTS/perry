@@ -762,6 +762,14 @@ pub fn try_lower_extern_func_call(
     // tracked separately under #793.
     if let Some((submod_key, exported_name)) = ctx.import_function_node_submodule.get(name).cloned()
     {
+        if let Some(export) = crate::native_export_value::prepare_submodule(
+            ctx.strings,
+            &submod_key,
+            &exported_name,
+            false,
+        ) {
+            return Ok(Some(crate::native_export_value::call(ctx, export, args)?));
+        }
         // #11789 sweep: each argument is held across the ones after it, and
         // across `js_node_submodule_export_as_function`'s allocation below.
         let (lowered_args, args_group) = super::lower_call_args_rooted(ctx, args)?;

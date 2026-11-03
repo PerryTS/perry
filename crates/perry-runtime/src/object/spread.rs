@@ -3,6 +3,7 @@
 //! The existing weak transition table owns the learned edge. Namespace 255
 //! names a SOURCE ShapeId rather than a string; no new table or heap-pointer
 //! owner exists. Cold construction uses the canonical key-list authority.
+use super::header::meta_form_alloc_bytes;
 use super::*;
 use crate::codegen_abi::LayoutWord;
 
@@ -292,8 +293,7 @@ pub unsafe extern "C" fn js_object_spread_fresh_leading(_prefix: f64, source: f6
             // Reuse the learned bounds, just as a named transition reuses
             // its learned slot, without lifting either descriptor again.
             let count = entry.target_len;
-            let size =
-                std::mem::size_of::<ObjectHeader>() + (count as usize).max(INLINE_SLOT_FLOOR) * 8;
+            let size = meta_form_alloc_bytes((count as usize).max(INLINE_SLOT_FLOOR));
             let raw = crate::arena::arena_alloc_gc_no_collect(size, 8, crate::gc::GC_TYPE_OBJECT);
             if !raw.is_null() {
                 debug_assert_edge(src, entry.target_shape_id);
@@ -351,8 +351,8 @@ unsafe fn spread_general(prefix: f64, source: f64) -> f64 {
                 let result =
                     previous.and_then(|_| shapes::shape_record_for_word(entry.target_shape_id));
                 if previous.is_none() || result.is_some() {
-                    let size = std::mem::size_of::<ObjectHeader>()
-                        + (entry.target_len as usize).max(INLINE_SLOT_FLOOR) * 8;
+                    let size =
+                        meta_form_alloc_bytes((entry.target_len as usize).max(INLINE_SLOT_FLOOR));
                     let raw =
                         crate::arena::arena_alloc_gc_no_collect(size, 8, crate::gc::GC_TYPE_OBJECT);
                     if !raw.is_null() {
@@ -470,7 +470,7 @@ unsafe fn leading_slow(source: f64) -> f64 {
         field_rep::REP_ANY
     };
     let keys = if record.summary() == 0 {
-        ObjectKeys::new(record.keys() as usize as *mut ArrayHeader, count)
+        record.keys_view_of(count)
     } else {
         let list = key_attrs::alloc_key_list(count, true, false);
         // GC_STORE_AUDIT(INIT): unpublished default-attribute keys under suppression.
@@ -514,7 +514,7 @@ unsafe fn leading_slow(source: f64) -> f64 {
 #[optimize(size)]
 unsafe fn intern_result(keys: ObjectKeys, rep: u64) -> u32 {
     shapes::publish_shape_result(shapes::shape_descriptor_intern_with_rep(
-        keys.arr(),
+        keys,
         keys.count(),
         keys.count(),
         0,
@@ -544,7 +544,7 @@ unsafe fn finish_header(object: *mut ObjectHeader, shape: LayoutWord) -> *mut Ob
     (*object).class_id = 0;
     (*object).parent_class_id = shape.0;
     // GC_STORE_AUDIT(INIT): unpublished fresh object has no metadata.
-    (*object).meta = ptr::null_mut();
+    *crate::meta_slot_of!(crate::meta_obj_runtime_born!(object)) = ptr::null_mut();
     shapes::store_kind::premark_plain_ordinary(object);
     object
 }
@@ -593,7 +593,7 @@ unsafe fn birth_slow(
     };
     let proof = canonical_keys::SharedLayout::of_receiver(source.cast_mut()).unwrap();
     let keys = if prefix_count == 0 && record.summary() == 0 {
-        ObjectKeys::new(record.keys() as usize as *mut ArrayHeader, count)
+        record.keys_view_of(count)
     } else {
         let mut words = Vec::with_capacity((prefix_count + count) as usize);
         if let Some((_, r)) = prefix {

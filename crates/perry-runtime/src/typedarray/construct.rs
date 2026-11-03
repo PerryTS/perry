@@ -190,7 +190,7 @@ fn typed_array_new_from_heap_source(
     };
     if raw_addr >= crate::gc::GC_HEADER_SIZE + 0x1000 {
         let gc_hdr = (raw_addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if unsafe { (*gc_hdr).obj_type } == crate::gc::GC_TYPE_OBJECT {
+        if crate::gc_type_is_object!(unsafe { (*gc_hdr).obj_type }) {
             let (val, _) = {
                 let val = rooted.get_nanbox_f64();
                 let addr = (val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
@@ -259,7 +259,7 @@ unsafe fn typed_array_plain_object_values(val: f64) -> Vec<f64> {
         let bound_rooted = scope.root_nanbox_u64(bound);
         let iter = crate::closure::js_native_call_value(
             bound_rooted.get_nanbox_f64(),
-            crate::closure::plain_call_receiver(),
+            crate::closure::JsThis::from_f64(rooted.get_nanbox_f64()),
             ptr::null(),
             0,
         );
@@ -328,7 +328,7 @@ pub(crate) unsafe fn typed_array_from_source_raw_values(val: f64) -> Vec<f64> {
             let raw_addr = cur_addr();
             if raw_addr >= crate::gc::GC_HEADER_SIZE + 0x1000 {
                 let gc_hdr = (raw_addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-                if (*gc_hdr).obj_type == crate::gc::GC_TYPE_OBJECT {
+                if crate::gc_type_is_object!((*gc_hdr).obj_type) {
                     return typed_array_plain_object_values(rooted.get_nanbox_f64());
                 }
             }

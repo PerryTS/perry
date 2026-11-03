@@ -51,7 +51,7 @@ pub(crate) fn web_builtin_to_string_tag(value: f64) -> Option<&'static str> {
     // `try_read_gc_header` -- the same idiom `is_url_object_shape` /
     // `shape_is_url_search_params` already use for this exact receiver kind.
     let obj = match unsafe { crate::value::addr_class::try_read_gc_header(addr) } {
-        Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => addr as *const ObjectHeader,
+        Some(h) if crate::gc_type_is_object!(h.obj_type) => addr as *const ObjectHeader,
         _ => return None,
     };
     if crate::object::url_layout::is_url_object_shape(obj as *mut ObjectHeader) {

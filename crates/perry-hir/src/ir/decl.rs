@@ -402,7 +402,7 @@ impl Class {
                         && param.arguments_object.is_none()
                         && param.decorators.is_empty()
                         && matches!(stmt,
-                            Stmt::Expr(Expr::PropertySet { object, property, value })
+                            Stmt::Expr(Expr::PropertySet { object, property, value, .. })
                             if matches!(object.as_ref(), Expr::This)
                                 && property == &field.name
                                 && matches!(value.as_ref(), Expr::LocalGet(id) if *id == param.id)

@@ -131,5 +131,3 @@ pub(super) extern "C" fn mark_resource_timing(
         delivery_type,
     )
 }
-
-crate::realm_decl!("performance_methods.realm.json#*");

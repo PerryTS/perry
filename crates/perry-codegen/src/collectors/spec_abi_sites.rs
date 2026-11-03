@@ -599,6 +599,7 @@ fn record_expr_use(e: &Expr, depth: u32, scan: &mut ModuleScan) {
             object,
             index,
             value,
+            ..
         } => {
             record_receiver_use(object, depth, scan);
             if let Expr::LocalGet(recv) = object.as_ref() {
@@ -1273,33 +1274,51 @@ pub fn collect_spec_abi_facts(hir: &Module) -> SpecAbiModuleFacts {
     let exposed = super::sealed_buffers::buffer_exposure(hir).exposed;
     let mut collect_ta = |stmts: &[Stmt]| {
         for s in stmts {
-            if let Stmt::Let {
+            let Stmt::Let {
                 id,
-                init: Some(Expr::TypedArrayNew { kind, arg }),
+                init: Some(init),
                 ..
             } = s
-            {
-                if !spec_ta_kind_is_numeric(*kind)
-                    || exposed.contains(id)
-                    || scan.let_counts.get(id).copied() != Some(1)
-                    || scan.writes.contains(id)
-                    || scan.closure_refs.contains(id)
-                    || scan.boxed_prealloc.contains(id)
-                {
-                    continue;
-                }
-                if let Some(const_len) =
+            else {
+                continue;
+            };
+            let proven = match init {
+                Expr::TypedArrayNew { kind, arg } if spec_ta_kind_is_numeric(*kind) => {
                     judge_ctor_arg(arg.as_deref(), &array_literal_locals, &length_locals)
-                {
-                    ta_bindings.insert(
-                        *id,
-                        SpecTaBinding {
-                            kind: *kind,
-                            const_len,
-                        },
-                    );
+                        .map(|const_len| (*kind, const_len))
                 }
+                // `Buffer.alloc(size)` births a fresh owning byte cell (a
+                // `BufferHeader`: u32 length at +0, inline bytes behind the
+                // header, non-movable) for every size, or throws: it is never a
+                // view, so its byte layout is a `Uint8Array`'s. The length is
+                // constant only for a literal size (directly or through an
+                // immutable local bound once to one). A fill or encoding
+                // argument is left to the boxed path.
+                Expr::BufferAlloc {
+                    size,
+                    fill: None,
+                    encoding: None,
+                } => Some((
+                    perry_hir::TYPED_ARRAY_KIND_UINT8,
+                    typed_array_length_literal(size).or_else(|| match size.as_ref() {
+                        Expr::LocalGet(n) => length_locals.get(n).copied().flatten(),
+                        _ => None,
+                    }),
+                )),
+                _ => None,
+            };
+            let Some((kind, const_len)) = proven else {
+                continue;
+            };
+            if exposed.contains(id)
+                || scan.let_counts.get(id).copied() != Some(1)
+                || scan.writes.contains(id)
+                || scan.closure_refs.contains(id)
+                || scan.boxed_prealloc.contains(id)
+            {
+                continue;
             }
+            ta_bindings.insert(id.to_owned(), SpecTaBinding { kind, const_len });
         }
     };
     collect_ta(&hir.init);
@@ -1362,6 +1381,7 @@ pub(crate) fn guarded_number_array_param_eligible(stmts: &[Stmt], param_id: u32)
                 object,
                 index,
                 value,
+                ..
             } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == param_id) => {
                 uses.write = true;
                 scan_expr(index, param_id, uses);

@@ -374,7 +374,7 @@ fn value_tests_on(ctx: &mut FnCtx<'_>, rv: &Receiver, word: &str, handle: &str) 
             continue;
         }
         let slot = slot_of(ctx, rv, word, i);
-        let p = super::bare::slot_ptr(ctx, handle, &slot);
+        let p = super::bare::slot_ptr(ctx, rv.form(), handle, &slot);
         let v = ctx.block().load(DOUBLE, &p);
         let number = crate::stmt::loops::emit_js_value_is_number(ctx, &v);
         ok = ctx.block().and(I1, &ok, &number);

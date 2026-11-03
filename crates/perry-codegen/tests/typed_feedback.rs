@@ -1,7 +1,5 @@
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
 
-#[path = "native_proof_support/read_memo_contract.rs"]
-mod read_memo_contract;
 use perry_hir::types::{FunctionType, Type};
 use perry_hir::{
     ArgumentsObjectMeta, BinaryOp, Class, ClassField, Expr, Function, Module, ModuleInitKind,
@@ -91,6 +89,7 @@ impl Drop for EnvVarGuard {
 
 fn empty_opts() -> CompileOptions {
     CompileOptions {
+        namespace_self_import: false,
         static_shape_ids: Vec::new(),
         program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),
@@ -120,7 +119,6 @@ fn empty_opts() -> CompileOptions {
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
         short_spread_method_candidates: std::sync::Arc::default(),
-        program_class_accessor_names: Default::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -399,6 +397,8 @@ fn typed_feedback_instruments_property_and_method_boundaries() {
                 object: Box::new(Expr::LocalGet(1)),
                 property: "x".to_string(),
                 value: Box::new(Expr::Number(1.0)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Expr(Expr::Call {
                 byte_end: 0,
@@ -512,6 +512,8 @@ fn sloppy_property_set_uses_strictness_aware_put_value() {
                 object: Box::new(Expr::LocalGet(1)),
                 property: "x".to_string(),
                 value: Box::new(Expr::Number(1.0)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(Expr::PropertyGet {
                 byte_end: 0,
@@ -583,6 +585,8 @@ fn a_default_build_emits_no_typed_feedback_recording_calls() {
                 object: Box::new(Expr::LocalGet(1)),
                 property: "x".to_string(),
                 value: Box::new(Expr::Number(1.0)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Expr(Expr::Call {
                 byte_end: 0,
@@ -628,11 +632,8 @@ fn a_default_build_emits_no_typed_feedback_recording_calls() {
     // this test proves the RECORDING is gone, not the program.
     assert!(
         ir.contains("call double @perry_probe_get(")
-            && read_memo_contract::paired_memo_reads(&ir) == Some(1)
-            && ir
-                .matches(" = private global [5 x i64] zeroinitializer")
-                .count()
-                == 1,
+            && ir.contains("call double @js_object_get_field_value(")
+            && !ir.contains("_read_shape_slots"),
         "the property reads themselves must still be lowered; emitted:\n{ir}"
     );
     // And the helpers that DECIDE something, rather than merely counting, are
@@ -643,7 +644,7 @@ fn a_default_build_emits_no_typed_feedback_recording_calls() {
     // all emitted in a default build, as CALLS (every runtime entry is
     // `declare`d, so a bare symbol match would be satisfied by the declaration).
     assert!(
-        ir.contains("call double @js_object_get_field_value_site("),
+        ir.contains("call double @js_object_get_field_value("),
         "dispatching wrappers must still be emitted in a default build \
          (property get):\n{ir}"
     );
@@ -677,6 +678,8 @@ fn typed_feedback_guards_direct_class_field_specialization() {
                 object: Box::new(Expr::LocalGet(1)),
                 property: "x".to_string(),
                 value: Box::new(Expr::Number(7.0)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(Expr::Binary {
                 op: BinaryOp::Sub,
@@ -774,6 +777,8 @@ fn full_outline_ic_collapses_class_field_set_to_single_call() {
                     object: Box::new(Expr::LocalGet(1)),
                     property: "x".to_string(),
                     value: Box::new(Expr::Number(7.0)),
+                    byte_offset: 0,
+                    byte_end: 0,
                 }),
                 Stmt::Return(Some(Expr::Number(0.0))),
             ],
@@ -828,41 +833,29 @@ fn full_outline_ic_collapses_class_field_get_to_single_call() {
 
     let _lock = env_lock();
 
-    // Both modes keep one leaf and a complete collecting miss. #12986 selects
-    // a validated memo in the outlined mode; the non-outlined own field keeps
-    // the stateless entrance. No memo storage belongs to the latter site.
+    // Both modes keep one leaf and a complete collecting miss. The leaf
+    // answers from the receiver's shape (accessors included), so neither
+    // mode's site owns memo storage.
     for mode in ["1", "0"] {
         let _g = EnvVarGuard::set("PERRY_FULL_OUTLINE_IC", Some(mode));
         let ir = ir_for(build());
         // One probe per lowering of the body (the guarded clone and the
         // generic body each hold exactly one site).
-        let entrance = if mode == "1" {
-            "call double @perry_probe_get_value_memo("
-        } else {
-            "call double @perry_probe_get_value("
-        };
+        let entrance = "call double @perry_probe_get_value(";
         let probes = ir.matches(entrance).count();
         assert!(
             (1..=2).contains(&probes),
             "full-outline={mode}: one value probe per body, saw {probes}:\n{ir}"
         );
-        if mode == "1" {
-            assert_eq!(
-                read_memo_contract::paired_memo_reads(&ir),
-                Some(probes),
-                "{ir}"
-            );
-        } else {
-            assert!(
-                ir.contains("call double @js_object_get_field_value("),
-                "{ir}"
-            );
-            assert_eq!(read_memo_contract::paired_memo_reads(&ir), None, "{ir}");
-            assert!(
-                !ir.contains(" = private global [5 x i64] zeroinitializer"),
-                "{ir}"
-            );
-        }
+        assert!(
+            ir.contains("call double @js_object_get_field_value("),
+            "full-outline={mode}: the complete collecting miss:\n{ir}"
+        );
+        assert!(
+            !ir.contains("_read_shape_slots")
+                && !ir.contains(" = private global [5 x i64] zeroinitializer"),
+            "full-outline={mode}: no site memo storage:\n{ir}"
+        );
         assert!(!ir.contains("_packed_get"), "{mode}");
         assert!(
             !ir.contains("call double @js_object_get_field_ic_fast("),
@@ -1008,6 +1001,8 @@ fn class_field_set_elides_write_barrier_for_nonpointer_value() {
                     object: Box::new(Expr::LocalGet(1)),
                     property: "s".to_string(),
                     value: Box::new(val),
+                    byte_offset: 0,
+                    byte_end: 0,
                 }),
                 Stmt::Return(Some(Expr::Number(0.0))),
             ],
@@ -1308,6 +1303,8 @@ fn typed_feedback_guards_array_index_specialization() {
                 object: Box::new(Expr::LocalGet(1)),
                 index: Box::new(Expr::Number(0.0)),
                 value: Box::new(Expr::Number(7.0)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(Expr::IndexGet {
                 byte_offset: 0,
@@ -1428,6 +1425,8 @@ fn typed_feedback_inline_array_writes_note_numeric_downgrade() {
                 object: Box::new(Expr::LocalGet(2)),
                 index: Box::new(Expr::Number(0.0)),
                 value: Box::new(Expr::String("not-number".to_string())),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Expr(Expr::ArrayPush {
                 array_id: 2,

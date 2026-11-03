@@ -19,6 +19,22 @@ pub(super) unsafe fn vt_get_own_field(
     let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
     let key_len = (*key).byte_len as usize;
     let nb_ptr = crate::value::js_nanbox_pointer(obj as i64);
+    let module = js_object_get_field(obj as *mut _, 0);
+    if (*obj).class_id != NATIVE_MODULE_CLASS_ID
+        || !module.is_string()
+        || module.as_string_ptr().is_null()
+        || (*module.as_string_ptr()).byte_len == 0
+    {
+        return None;
+    }
+    // Getters can throw: enter them before owning the module-name String.
+    if let Some(value) = super::field_get_set::own_accessor_get_by_bytes(
+        obj,
+        std::slice::from_raw_parts(key_ptr, key_len),
+        nb_ptr,
+    ) {
+        return Some(value);
+    }
     let module_name = get_module_name_from_namespace(nb_ptr);
     if module_name.is_empty() {
         return None;
@@ -29,6 +45,12 @@ pub(super) unsafe fn vt_get_own_field(
     // wins all built-in resolution below — CJS exports are mutable in Node.
     if let Some(value) = native_namespace_prop_override_get(&module_name, property_name) {
         return Some(JSValue::from_bits(value.to_bits()));
+    }
+    if crate::process::worker_restrictions::worker_process_member_hidden(
+        &module_name,
+        property_name,
+    ) {
+        return Some(JSValue::undefined());
     }
     if matches!(
         module_name.as_str(),
@@ -118,7 +140,7 @@ pub(crate) unsafe fn vt_own_keys_array(
     // Read the namespace brand from the shape before interpreting field zero
     // as a module name; an ordinary object's first value is just user data.
     let header = crate::value::addr_class::try_read_gc_header(obj as usize)?;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(header.obj_type)
         || super::shapes::object_shape_descriptor(obj)?.object_kind
             != super::shapes::ShapeObjectKind::NativeNamespace
     {
@@ -132,6 +154,12 @@ pub(crate) unsafe fn vt_own_keys_array(
     ) && crate::process::process_permission_enabled();
     let out = crate::array::js_array_alloc(keys.len() as u32 + include_permission as u32);
     for key_bytes in keys {
+        if crate::process::worker_restrictions::worker_process_member_hidden(
+            &module_name,
+            std::str::from_utf8(key_bytes).unwrap_or(""),
+        ) {
+            continue;
+        }
         let key_str =
             crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
         crate::array::js_array_push(out, JSValue::string_ptr(key_str));

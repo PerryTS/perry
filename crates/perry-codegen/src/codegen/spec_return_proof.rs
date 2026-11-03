@@ -623,6 +623,7 @@ fn mutation_preserves_proof(
             object,
             property,
             value,
+            ..
         } => {
             let root = root_local(object)?;
             let expected = infer_expr(ctx, locals, object, 0)

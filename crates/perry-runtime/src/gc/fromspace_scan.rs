@@ -289,7 +289,7 @@ unsafe fn scan_object(header: *mut GcHeader, report: &mut FromSpaceScanReport) {
         };
         let target = word.addr();
         let target_space = crate::arena::classify_heap_space(target);
-        if !is_from_space(target_space) {
+        if !is_from_space(target_space) || crate::arena::is_large_storage(target) {
             continue;
         }
         // The target is in from-space. Did it move (missing rewrite) or was it

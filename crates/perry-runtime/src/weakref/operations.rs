@@ -19,6 +19,7 @@ impl Receiver {
     }
 
     #[cold]
+    #[optimize(size)]
     #[inline(never)]
     fn reject(self, receiver: f64, method: &str, args: &[f64]) -> f64 {
         match self {
@@ -49,7 +50,7 @@ impl View {
         let addr = js_nanbox_get_pointer(receiver) as usize;
         unsafe {
             let header = crate::value::addr_class::try_read_gc_header(addr)?;
-            if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+            if crate::gc_type_is_not_object!(header.obj_type) {
                 return None;
             }
             let object = addr as *mut ObjectHeader;

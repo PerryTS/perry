@@ -125,6 +125,7 @@ unsafe fn throw_load_env_file_open_error(err: &std::io::Error, target: &str) -> 
 /// based on whatever bytes the numeric value masqueraded as.
 #[no_mangle]
 pub unsafe extern "C" fn js_process_chdir_jsv(value: f64) {
+    crate::process::worker_restrictions::ensure_worker_operation_allowed("chdir");
     let jv = JSValue::from_bits(value.to_bits());
     if !jv.is_any_string() {
         let message = format!(

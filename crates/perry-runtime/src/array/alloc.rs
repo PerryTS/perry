@@ -81,9 +81,28 @@ const _: () = assert!(ARRAY_MAX_CAPACITY <= crate::object::shape_rule3::MAX_PLUS
 /// producers publish their immediate stores before any subsequent safepoint.
 #[inline(always)]
 unsafe fn initialize_fresh_array_layout(arr: *mut ArrayHeader, raw_f64: bool, all_ptr: bool) {
+    debug_assert!(!raw_f64 || !all_ptr);
+    use crate::gc::{
+        GC_ARRAY_RAW_F64_LAYOUT, GC_LAYOUT_ALL_POINTERS, GC_LAYOUT_POINTER_FREE,
+        GC_LAYOUT_SIDE_MASK,
+    };
+    let layout = if all_ptr {
+        GC_LAYOUT_SIDE_MASK | GC_LAYOUT_ALL_POINTERS
+    } else {
+        GC_LAYOUT_POINTER_FREE
+    };
+    install_birth_layout(
+        arr,
+        layout | if raw_f64 { GC_ARRAY_RAW_F64_LAYOUT } else { 0 },
+    );
+}
+
+/// Publish the birth layout word of a fresh array.
+#[inline(always)]
+unsafe fn install_birth_layout(arr: *mut ArrayHeader, layout: u16) {
     use crate::gc::{
         GC_ARRAY_ELEMENT_SHAPE, GC_ARRAY_RAW_F64_HOLES, GC_ARRAY_RAW_F64_LAYOUT,
-        GC_LAYOUT_ALL_POINTERS, GC_LAYOUT_POINTER_FREE, GC_LAYOUT_SIDE_MASK, GC_LAYOUT_STATE_MASK,
+        GC_LAYOUT_ALL_POINTERS, GC_LAYOUT_STATE_MASK,
     };
     let header = (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
     debug_assert_eq!((*header).obj_type, crate::gc::GC_TYPE_ARRAY);
@@ -96,15 +115,9 @@ unsafe fn initialize_fresh_array_layout(arr: *mut ArrayHeader, raw_f64: bool, al
                 | GC_ARRAY_RAW_F64_HOLES),
         0
     );
-    debug_assert!(!raw_f64 || !all_ptr);
-    let layout = if all_ptr {
-        GC_LAYOUT_SIDE_MASK | GC_LAYOUT_ALL_POINTERS
-    } else {
-        GC_LAYOUT_POINTER_FREE
-    };
     // GC_STORE_AUDIT(POINTER_FREE): scalar birth-layout bits in the fresh,
     // unpublished header; no existing layout record or remembered edge changes.
-    (*header)._reserved |= layout | if raw_f64 { GC_ARRAY_RAW_F64_LAYOUT } else { 0 };
+    (*header)._reserved |= layout;
 }
 
 /// Allocate a new array with the given initial capacity
@@ -162,13 +175,13 @@ pub(crate) fn js_array_alloc_named_props_reserved(
         let (named, array) = array.across_mut::<ArrayHeader, _>(|| {
             crate::object::layout_desc::perry_alloc_layout(match set {
                 crate::array::NamedPropertyKeys::ExecResult => {
-                    std::ptr::addr_of!(crate::object::runtime_layouts::REGEX_EXEC_NAMED)
+                    crate::object::runtime_layouts::REGEX_EXEC_NAMED::desc()
                 }
                 crate::array::NamedPropertyKeys::ExecResultIndices => {
-                    std::ptr::addr_of!(crate::object::runtime_layouts::REGEX_EXEC_INDICES_NAMED)
+                    crate::object::runtime_layouts::REGEX_EXEC_INDICES_NAMED::desc()
                 }
                 crate::array::NamedPropertyKeys::IndicesGroups => {
-                    std::ptr::addr_of!(crate::object::runtime_layouts::REGEX_INDICES_GROUPS_NAMED)
+                    crate::object::runtime_layouts::REGEX_INDICES_GROUPS_NAMED::desc()
                 }
             })
         });
@@ -206,6 +219,80 @@ pub(crate) fn js_array_alloc_pointer_elements(capacity: u32) -> *mut ArrayHeader
     }
 
     ptr
+}
+
+/// A realm array birth. Its layout word is the one
+/// `perry_abi::realm_header::array_reserved` derives from the declared element
+/// kind; the realm manifest producer and the image emitter derive the same
+/// word, and no birth claims the raw-f64 representation (that is the generic
+/// `[]` allocator's guess at future numeric pushes, not a declared fact).
+///
+/// The array is empty with `capacity` hole slots. For `Pointers` the caller
+/// writes each slot before it publishes the length that covers it, as for
+/// [`js_array_alloc_pointer_elements`]. Integrity is a transition after the
+/// birth (`js_object_freeze`), not a birth bit. Inlined so the declared kind
+/// and arena of each birth site fold into its word.
+#[inline]
+pub fn realm_array_alloc(
+    capacity: u32,
+    elements: perry_abi::realm_header::ArrayElements,
+    longlived: bool,
+) -> *mut ArrayHeader {
+    let actual_capacity = array_capacity_or_throw(capacity.max(MIN_ARRAY_CAPACITY));
+    let size = array_byte_size(actual_capacity as usize);
+    let ptr = if longlived {
+        crate::arena::arena_alloc_gc_longlived(size, 8, crate::gc::GC_TYPE_ARRAY)
+    } else {
+        arena_alloc_gc(size, 8, crate::gc::GC_TYPE_ARRAY)
+    } as *mut ArrayHeader;
+    unsafe {
+        (*ptr).length = 0;
+        (*ptr).capacity = actual_capacity;
+        (*ptr).named = std::ptr::null_mut();
+        (*ptr).ek_prefix = 0;
+        (*ptr).ek_kind = 0;
+        fill_fresh_capacity_with_holes(ptr);
+        install_birth_layout(
+            ptr,
+            perry_abi::realm_header::array_reserved(
+                elements,
+                perry_abi::realm_header::Integrity::Extensible,
+            ),
+        );
+    }
+    ptr
+}
+
+/// A realm array of strings: a `Pointers` birth whatever the count, filled
+/// in order, each slot written before the length that covers it.
+pub fn realm_string_array(items: &[&str], longlived: bool) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr = scope.root_raw_mut_ptr(realm_array_alloc(
+        items.len() as u32,
+        perry_abi::realm_header::ArrayElements::Pointers,
+        longlived,
+    ));
+    for item in items {
+        let bytes = item.as_bytes();
+        let string = scope.root_string_ptr(if longlived {
+            crate::string::js_string_from_bytes_longlived(bytes.as_ptr(), bytes.len() as u32)
+        } else {
+            crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+        });
+        let pushed = arr.with_mut_ptr(|arr| {
+            string.with_mut_ptr(|string| {
+                let pushed =
+                    crate::array::js_array_push(arr, crate::value::JSValue::string_ptr(string));
+                // The birth reserved a slot for every item.
+                debug_assert_eq!(pushed, arr);
+                pushed
+            })
+        });
+        arr.set_raw_mut_ptr(pushed);
+    }
+    arr.with_mut_ptr(|arr: *mut ArrayHeader| {
+        f64::from_bits(crate::value::JSValue::array_ptr(arr).bits())
+    })
 }
 
 /// Allocate storage for an independently owned canonical key list. These
@@ -597,7 +684,7 @@ pub extern "C" fn js_array_from_arraylike_holey_value(boxed: f64) -> *mut ArrayH
         if raw_addr >= crate::gc::GC_HEADER_SIZE + 0x1000 {
             let hdr = (raw_addr as *const u8).sub(crate::gc::GC_HEADER_SIZE)
                 as *const crate::gc::GcHeader;
-            if (*hdr).obj_type == crate::gc::GC_TYPE_OBJECT
+            if crate::gc_type_is_object!((*hdr).obj_type)
                 && crate::typedarray_hook_slots::lookup_typed_array_kind(raw_addr).is_none()
                 && !crate::buffer::is_registered_buffer(raw_addr)
             {

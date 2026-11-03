@@ -1,5 +1,66 @@
 use super::*;
 
+fn worker_notification_process_value() -> f64 {
+    unsafe {
+        js_nm_install_process();
+    }
+    perry_runtime::object::js_create_native_module_namespace(b"process".as_ptr(), 7)
+}
+
+fn call_process_method(method: &[u8], first: f64, second: Option<f64>) -> f64 {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let first = scope.root_nanbox_f64(first);
+    let extra = scope.root_nanbox_f64(second.unwrap_or_else(js_undefined));
+    let process = scope.root_nanbox_f64(worker_notification_process_value());
+    let key = scope.root_raw_const_ptr(
+        js_string_from_bytes(method.as_ptr(), method.len() as u32) as *const StringHeader
+    );
+    let function = scope.root_nanbox_f64(perry_runtime::object::js_object_get_field_by_name_f64(
+        JSValue::from_bits(process.get_nanbox_f64().to_bits())
+            .as_pointer::<perry_runtime::ObjectHeader>(),
+        key.get_raw_const_ptr(),
+    ));
+    let args = [first.get_nanbox_f64(), extra.get_nanbox_f64()];
+    unsafe {
+        perry_runtime::closure::js_native_call_value(
+            function.get_nanbox_f64(),
+            perry_runtime::closure::JsThis::from_f64(process.get_nanbox_f64()),
+            args.as_ptr(),
+            if second.is_some() { 2 } else { 1 },
+        )
+    }
+}
+
+extern "C" fn emit_process_worker_event(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let worker = scope.root_nanbox_f64(perry_runtime::closure::js_closure_get_capture_f64(
+        closure, 0,
+    ));
+    let event = js_string_from_bytes(b"worker".as_ptr(), 6);
+    call_process_method(
+        b"emit",
+        f64::from_bits(JSValue::string_ptr(event).bits()),
+        Some(worker.get_nanbox_f64()),
+    )
+}
+
+pub(super) fn process_worker_callback(worker: f64) -> f64 {
+    let captures = [worker.to_bits()];
+    let callback = perry_runtime::closure::js_closure_alloc_init(
+        perry_runtime::fn_info!(emit_process_worker_event, 0; with_declared(0), with_flags(perry_runtime::closure::FN_ARROW | perry_runtime::closure::FN_NON_CONSTRUCTOR)),
+        1,
+        captures.as_ptr(),
+    );
+    object_value(callback.cast())
+}
+
+pub(super) fn queue_process_worker_event(worker: f64) {
+    call_process_method(b"nextTick", process_worker_callback(worker), None);
+}
+
 pub(super) fn worker_id_from_receiver(receiver: i64) -> Option<u64> {
     if receiver == 0 {
         return None;
@@ -395,7 +456,7 @@ pub(super) fn worker_resource_limits_object(
 }
 
 pub(super) fn empty_object() -> *mut perry_runtime::object::ObjectHeader {
-    perry_runtime::object::js_object_alloc(0, 0)
+    perry_runtime::realm_decl! { birth perry_runtime::object::js_object_alloc(0, 0); realm { "node:worker_threads.resourceLimits", kind = namespace, members = { }; "node:worker_threads.default.resourceLimits", kind = namespace, members = { }; } }
 }
 
 fn worker_performance_object() -> *mut perry_runtime::object::ObjectHeader {
@@ -738,7 +799,7 @@ pub(super) fn worker_profile_handle(kind_bits: i64) -> f64 {
         perry_runtime::fn_info!(worker_profile_stop, 0; with_declared(0)),
         1,
     );
-    perry_runtime::closure::js_closure_set_capture_ptr(closure, 0, kind_bits);
+    perry_runtime::closure::closure_set_capture_word(closure, 0, kind_bits);
     let obj = perry_runtime::object::js_object_alloc(0, 0);
     set_object_field(
         obj,

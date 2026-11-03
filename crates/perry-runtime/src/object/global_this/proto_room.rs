@@ -78,9 +78,8 @@ pub(crate) unsafe fn fit_builtin_prototype(obj: *mut ObjectHeader) {
     }
     let header = (obj as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
     let total = (*header).size as usize;
-    let fitted = crate::gc::GC_HEADER_SIZE
-        + std::mem::size_of::<ObjectHeader>()
-        + used as usize * std::mem::size_of::<u64>();
+    let fitted =
+        crate::gc::GC_HEADER_SIZE + super::super::header::meta_form_alloc_bytes(used as usize);
     if fitted + crate::gc::GC_HEADER_SIZE > total {
         return;
     }
@@ -124,7 +123,7 @@ mod tests {
                 // Never-move from birth.
                 assert!(crate::gc::never_move::is_never_move(header));
                 let d = crate::object::shapes::object_shape_descriptor(bag).expect("shape");
-                let list = d.keys as usize as *const crate::array::ArrayHeader;
+                let list = d.keys_view();
                 for name in ["constructor", "slice", "toString"] {
                     let s = crate::object::keys_find_slot_by_bytes_resolved(
                         list,
@@ -157,7 +156,7 @@ mod tests {
                     d.live_inline_slot_count,
                     keys.max(crate::object::INLINE_SLOT_FLOOR as u32)
                 );
-                let list = d.keys as usize as *const crate::array::ArrayHeader;
+                let list = d.keys_view();
                 for name in ["constructor", "toString", "hasOwnProperty", "valueOf"] {
                     let s = crate::object::keys_find_slot_by_bytes_resolved(
                         list,
@@ -176,8 +175,9 @@ mod tests {
                     assert_eq!(
                         (*header).size as usize,
                         crate::gc::GC_HEADER_SIZE
-                            + std::mem::size_of::<ObjectHeader>()
-                            + d.live_inline_slot_count as usize * 8
+                            + super::super::header::meta_form_alloc_bytes(
+                                d.live_inline_slot_count as usize
+                            )
                     );
                     let tail = (header as *const u8).add((*header).size as usize)
                         as *const crate::gc::GcHeader;

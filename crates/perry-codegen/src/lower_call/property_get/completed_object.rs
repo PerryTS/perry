@@ -62,7 +62,7 @@ pub(crate) fn try_lower(
         let flags = blk.load(I16, &tp);
         let mask = (0xffu16 | (u16::from(crate::runtime_abi::GC_FLAG_FORWARDED) << 8)).to_string();
         let kind = blk.and(I16, &flags, &mask);
-        let ordinary = blk.icmp_eq(I16, &kind, &crate::runtime_abi::GC_TYPE_OBJECT.to_string());
+        let ordinary = crate::target_layout::emit_gc_type_is_object(blk, I16, &kind);
         let wp = emit_field_ptr(blk, &biased, 4);
         // Full, unmasked equality excludes getters, holes and overflow states.
         let word = blk.load(I32, &wp);
@@ -72,7 +72,9 @@ pub(crate) fn try_lower(
     }
     ctx.current_block = slot_idx;
     let value = if method.field_index < candidate.shape.live {
-        let header = crate::target_layout::object_header_size_bytes(ctx.target_triple) as i64;
+        let header =
+            crate::target_layout::object_slot_base_bytes(ctx.target_triple, candidate.form())
+                as i64;
         let ptr = emit_field_ptr(
             ctx.block(),
             &biased,
@@ -82,8 +84,10 @@ pub(crate) fn try_lower(
     } else {
         // ObjectMeta.spill is a traced owner edge, not a side table. Equality
         // proves this absolute slot has storage (including stored undefined).
-        let meta_offset =
-            crate::target_layout::object_meta_slot_offset_bytes(ctx.target_triple) as i64;
+        let meta_offset = crate::target_layout::object_meta_slot_offset_bytes(
+            ctx.target_triple,
+            crate::target_layout::HeaderForm::Meta,
+        ) as i64;
         let mp = emit_field_ptr(ctx.block(), &biased, meta_offset);
         let meta = ctx.block().load(PTR, &mp);
         let sp = ctx.block().gep(

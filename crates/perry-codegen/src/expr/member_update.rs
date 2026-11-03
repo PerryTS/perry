@@ -56,6 +56,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             op,
             prefix,
             strict,
+            ..
         } => {
             // #8654: a statically-known class field has one canonical LLVM
             // global shared by its defining module and every importer.
@@ -376,6 +377,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             op,
             prefix,
             strict,
+            ..
         } => {
             // #7628. The operand pair is consumed by FOUR calls with collection
             // points between them:
@@ -545,7 +547,13 @@ fn emit_numeric_slot_update(
     // the handle is derived only on the cold arm that needs it.
     let field_ptr = match wpf {
         Some(w) => super::wpfacts_access::emit_proof_slot_ptr(ctx, &recv_box, &w.proof),
-        None => super::wpfacts_access::emit_slot_ptr(ctx, &recv_box, field_index),
+        // No proof: a ptr-shape class receiver, whose instances have the meta word.
+        None => super::wpfacts_access::emit_slot_ptr(
+            ctx,
+            &recv_box,
+            crate::target_layout::HeaderForm::Meta,
+            field_index,
+        ),
     };
     let (old, new) = {
         let blk = ctx.block();

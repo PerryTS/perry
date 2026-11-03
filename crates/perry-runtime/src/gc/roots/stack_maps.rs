@@ -30,12 +30,17 @@ use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{OnceLock, RwLock, RwLockReadGuard};
 
-/// Magic and version of the compact map the compiler emits
+/// Version of the compact map the compiler emits
 /// (`perry-codegen/src/gc_map.rs`). LLVM's own stack-map section is rewritten
 /// at assembly time and never reaches the binary: >50% of it was the
 /// statepoint constant preamble and base/derived duplicates that this parser
 /// discarded anyway, and shipping it cost 3.9 MB on a real application.
-const GC_MAP_MAGIC: &[u8; 4] = b"PGCM";
+///
+/// v9 (DCE layer 0): one entry per FUNCTION in this section and one records
+/// blob per function, each tied by the linker to its function's section, so
+/// the map of a function the link removed is removed with it. The entry
+/// carries the version (top byte of its record count); there is no header.
+///
 /// v8: each blob is a DIRECTORY (header + one entry per function) in this
 /// section, and its records (instruction offsets + varint stream) live in a
 /// records section the directory names by a link-time self-relative offset.
@@ -62,7 +67,7 @@ const GC_MAP_MAGIC: &[u8; 4] = b"PGCM";
 /// after a move. Version mismatch still fails closed (the parser returns
 /// None and `stack_maps()` panics), so an older binary cannot run on this
 /// runtime half-understood.
-const GC_MAP_VERSION: u8 = 8;
+const GC_MAP_VERSION: u8 = 9;
 const MAX_SAFEPOINT_RETURN_DELTA: usize = 16;
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct StackMapLocation {
@@ -127,15 +132,15 @@ struct StackMapIndex {
     /// on whether it has an oracle to check itself against, and a test can
     /// build one without racing a process-wide `OnceLock`.
     mode: IndexMode,
-    /// The loaded map (directory) sections, one per image.
+    /// The loaded map (entry) sections, one per image.
     sections: Vec<&'static [u8]>,
-    /// One records blob per directory, indexed by `FunctionEntry::blob`. Held
-    /// so a function's records are reachable without a pointer per function.
-    records: Vec<&'static [u8]>,
     /// Sorted by address. Duplicates are kept, not deduplicated: two entries
     /// can share a relocated address and each brings its own records.
     functions: Vec<lazy::FunctionEntry>,
     eager: Option<EagerIndex>,
+    /// Where the x86-64 frame walk ends; resolved with the index.
+    #[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+    root_frames: frame_walk::RootFrames,
 }
 
 /// The v4 whole-section index.
@@ -259,10 +264,24 @@ static STACK_MAPS: StackMapIndexStore = StackMapIndexStore::new();
 /// corruption into a loud abort on the first test that reaches it. Landing it
 /// while the build is still eager is deliberate: it proves the check is placed
 /// on the path it claims to guard, before anything depends on it.
+///
+/// Once set it stays set: it means "an index has been published", which every
+/// later scan may rely on. A newly initialized image re-arms the build through
+/// [`STACK_MAPS_REBUILD_OWED`] instead. Clearing this flag on re-arm made it a
+/// process-wide window in which ANY thread's root scan aborted: every agent
+/// (a worker thread, a worker_threads worker) runs `js_gc_init`, and a
+/// collection another thread was already running reached the scan while the
+/// flag read false, although its own frames were covered by the published
+/// index (the re-arming image's code cannot be on another thread's stack
+/// before that image finished initializing).
 static STACK_MAPS_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
-/// Whether [`initialize`] has run. Exposed so a future lazy build can assert
-/// the same property at whatever point it chooses to construct the index.
+/// A loaded image initialized after the last build: the next [`ensure_built`]
+/// rebuilds so its section is decoded too.
+static STACK_MAPS_REBUILD_OWED: AtomicBool = AtomicBool::new(false);
+
+/// Whether an index has been published. Exposed so a future lazy build can
+/// assert the same property at whatever point it chooses to construct the index.
 pub(in crate::gc) fn stack_maps_initialized() -> bool {
     STACK_MAPS_INITIALIZED.load(Ordering::Acquire)
 }
@@ -741,6 +760,10 @@ pub(in crate::gc) struct NativeStackWalkStats {
     pub(in crate::gc) locations_visited: usize,
     pub(in crate::gc) fp_walks: usize,
     pub(in crate::gc) fallback_walks: usize,
+    /// x86-64 frame walk: frames stepped by their unwind row, and JS frames
+    /// stepped by their frame record.
+    pub(in crate::gc) cfi_steps: usize,
+    pub(in crate::gc) record_steps: usize,
 }
 
 #[inline]
@@ -778,7 +801,7 @@ pub(in crate::gc) fn record_native_stack_walk_source(
 /// Re-arms on every call: a newly loaded image calls `js_gc_init` again, and
 /// the next collection must decode its section too.
 pub(in crate::gc) fn initialize() {
-    STACK_MAPS_INITIALIZED.store(false, Ordering::Release);
+    STACK_MAPS_REBUILD_OWED.store(true, Ordering::Release);
     if !lazy_stack_maps_enabled() {
         ensure_built();
     }
@@ -802,9 +825,14 @@ fn lazy_stack_maps_enabled() -> bool {
 /// and while allocation is still legal — the parser allocates its index once,
 /// and root scans must stay allocation-free while the collector owns the heap.
 pub(in crate::gc) fn ensure_built() {
-    if STACK_MAPS_INITIALIZED.load(Ordering::Acquire) {
+    if STACK_MAPS_INITIALIZED.load(Ordering::Acquire)
+        && !STACK_MAPS_REBUILD_OWED.load(Ordering::Acquire)
+    {
         return;
     }
+    // Take the debt BEFORE the loader snapshot: an image initializing during
+    // this rebuild re-owes one, so its section is never skipped.
+    STACK_MAPS_REBUILD_OWED.store(false, Ordering::Release);
     STACK_MAPS.rebuild();
     // Publish AFTER the rebuild: a reader that observes the flag must be able
     // to observe the index it promises.
@@ -888,18 +916,13 @@ fn build_index_from_sections(
     // Sized exactly before the build: the table lives for the process, and a
     // doubling Vec would leave up to half of it (and the copies it made on the
     // way) resident for nothing.
-    let mut capacity = 0usize;
-    for section in &sections {
-        capacity = capacity.saturating_add(
-            decode::directory_function_count(section)
-                .unwrap_or_else(|| undecodable_section(section.len())),
-        );
-    }
+    let capacity = sections.iter().fold(0usize, |sum, section| {
+        sum.saturating_add(decode::entry_count(section))
+    });
     let mut functions = Vec::with_capacity(capacity);
-    let mut records = Vec::new();
     for (index, section) in sections.iter().enumerate() {
         let origin = origins[index];
-        if lazy::parse_function_table(section, origin, &mut functions, &mut records).is_none() {
+        if lazy::parse_function_table(section, origin, &mut functions).is_none() {
             undecodable_section(section.len());
         }
     }
@@ -920,9 +943,10 @@ fn build_index_from_sections(
     StackMapIndex {
         mode,
         sections,
-        records,
         functions,
         eager,
+        #[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+        root_frames: frame_walk::RootFrames::resolve(),
     }
 }
 
@@ -951,10 +975,9 @@ fn build_eager_index(sections: &[&'static [u8]], origins: &[usize]) -> EagerInde
 fn undecodable_section(len: usize) -> ! {
     panic!(
         "perry: a GC map section (__perry_gcmap / .perry_gcmap, {len} bytes) is \
-         present but could not be decoded — expected format {:?} v{}. This binary's \
+         present but could not be decoded — expected format v{}. This binary's \
          compiler and runtime disagree about the map layout; continuing would run \
          the collector with missing roots and corrupt the heap silently.",
-        std::str::from_utf8(GC_MAP_MAGIC).unwrap_or("PGCM"),
         GC_MAP_VERSION,
     );
 }
@@ -994,7 +1017,7 @@ fn index_records(
         .iter()
         .map(|record| record.function_address)
         .collect();
-    function_starts.sort_unstable();
+    crate::cold_sort::sort_by(&mut function_starts, |a, b| a.cmp(b));
     function_starts.dedup();
     EagerIndex {
         records,
@@ -1320,6 +1343,49 @@ fn sve_vector_length_bytes() -> Option<usize> {
     None
 }
 
+type VerifyWalk =
+    for<'a> fn(&StackMapIndex, &'a mut dyn FnMut(MutableRootSlot)) -> NativeStackWalkStats;
+static VERIFY_WALK: crate::feature_hooks::Hook<VerifyWalk> = crate::feature_hooks::Hook::empty();
+
+fn verify_walk(
+    index: &StackMapIndex,
+    visit: &mut dyn FnMut(MutableRootSlot),
+) -> NativeStackWalkStats {
+    verify::visit(index, &mut |slot| visit(slot))
+}
+
+/// Called by the GC diagnostics installer.
+pub(in crate::gc) fn install_verify_walker() {
+    VERIFY_WALK.set(verify_walk);
+}
+
+/// The ordinary walk: the fp-chain walk, falling back to the unwinder.
+fn visit_fast(
+    index: &StackMapIndex,
+    visit: &mut impl FnMut(MutableRootSlot),
+) -> NativeStackWalkStats {
+    // No whole-image `chain_walkable` precondition any more. v4 decided
+    // it once by scanning every root slot in the section — 4.9M of them
+    // for claude-code — which a lazy index cannot do and should not:
+    // the fast walk now checks the frame it is about to resolve and
+    // fails closed to the unwinder if THAT record uses a base it cannot
+    // reconstruct. That is strictly narrower than disabling the fast
+    // path for the whole image because one function somewhere uses an
+    // exotic register, and it reuses the mid-walk bail this walker
+    // already performs for `x19_is_body_sp` and an unvalidated
+    // `caller_fp`.
+    if let Some(stats) = fast_walk::visit(index, &mut |root: ResolvedRoot| {
+        root.visit_with_context(visit)
+    }) {
+        return stats;
+    }
+    let mut stats = unwind::visit(index, &mut |root: ResolvedRoot| {
+        root.visit_with_context(visit)
+    });
+    stats.fallback_walks = 1;
+    stats
+}
+
 // The GC-effects sidecar seeds this collector entry by name on every target.
 #[inline(never)]
 pub(super) fn visit_stack_map_root_slots(
@@ -1350,29 +1416,14 @@ pub(super) fn visit_stack_map_root_slots(
         WalkerMode::Unwind => unwind::visit(index, &mut |root: ResolvedRoot| {
             root.visit_with_context(visit)
         }),
-        WalkerMode::Fast => {
-            // No whole-image `chain_walkable` precondition any more. v4 decided
-            // it once by scanning every root slot in the section — 4.9M of them
-            // for claude-code — which a lazy index cannot do and should not:
-            // the fast walk now checks the frame it is about to resolve and
-            // fails closed to the unwinder if THAT record uses a base it cannot
-            // reconstruct. That is strictly narrower than disabling the fast
-            // path for the whole image because one function somewhere uses an
-            // exotic register, and it reuses the mid-walk bail this walker
-            // already performs for `x19_is_body_sp` and an unvalidated
-            // `caller_fp`.
-            if let Some(stats) = fp_chain::visit(index, &mut |root: ResolvedRoot| {
-                root.visit_with_context(visit)
-            }) {
-                return stats;
-            }
-            let mut stats = unwind::visit(index, &mut |root: ResolvedRoot| {
-                root.visit_with_context(visit)
-            });
-            stats.fallback_walks = 1;
-            stats
-        }
-        WalkerMode::Verify => verify::visit(index, visit),
+        WalkerMode::Fast => visit_fast(index, visit),
+        // `PERRY_STACKMAP_WALKER=verify` is a diagnostic setting: only the slot
+        // the diagnostics installer fills can honour it. Uninstalled, it is
+        // ignored like `PERRY_GC_VERIFY` and the ordinary walk runs.
+        WalkerMode::Verify => match VERIFY_WALK.get() {
+            Some(verify_walk) => verify_walk(index, visit),
+            None => visit_fast(index, visit),
+        },
     }
 }
 
@@ -1402,6 +1453,7 @@ mod unwind {
         index: &'a StackMapIndex,
         visit: &'a mut F,
         stats: NativeStackWalkStats,
+        last_ip: usize,
     }
 
     pub(super) fn visit<F: FnMut(ResolvedRoot)>(
@@ -1415,14 +1467,44 @@ mod unwind {
                 walks: 1,
                 ..NativeStackWalkStats::default()
             },
+            last_ip: 0,
         };
-        unsafe {
+        let code = unsafe {
             _Unwind_Backtrace(
                 walk_frame::<F>,
                 (&mut state as *mut WalkState<'_, _>).cast::<c_void>(),
-            );
+            )
+        };
+        #[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+        if code != URC_END_OF_STACK {
+            stopped_short(code, state.last_ip);
         }
+        #[cfg(not(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu")))]
+        let _ = code;
         state.stats
+    }
+
+    /// `_Unwind_Backtrace` reached the end of the thread's frames.
+    #[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+    const URC_END_OF_STACK: i32 = 5;
+
+    /// The unwinder stopped before the stack's end: a frame without usable
+    /// unwind tables. Every frame outward of it went unscanned, so its roots
+    /// were never visited, and under a moving collection the mutator would
+    /// resume on from-space pointers. That is corruption, not a short walk;
+    /// it ends here, naming the frame and the object it belongs to.
+    #[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+    #[cold]
+    fn stopped_short(code: i32, last_ip: usize) -> ! {
+        // `{module:?}`: `None` when no loaded object holds the pc.
+        let module = crate::eh_walker::module_name(last_ip as u64);
+        eprintln!(
+            "perry: the GC root scan cannot walk this thread's stack past the frame \
+             returning to {last_ip:#x} in {module:?} (_Unwind_Backtrace code {code}): that \
+             object has no unwind tables the walk can follow there, so every frame \
+             outward of it would go unscanned and its roots be lost."
+        );
+        std::process::abort();
     }
 
     fn walk_trace_enabled() -> bool {
@@ -1443,6 +1525,7 @@ mod unwind {
         let state = &mut *argument.cast::<WalkState<'_, F>>();
         state.stats.frames_visited = state.stats.frames_visited.saturating_add(1);
         let ip = _Unwind_GetIP(context);
+        state.last_ip = ip;
         if walk_trace_enabled() {
             let mut info: libc::Dl_info = std::mem::zeroed();
             let name =
@@ -1713,9 +1796,12 @@ mod fp_chain {
     }
 }
 
-#[cfg(not(all(
-    any(target_vendor = "apple", target_os = "linux"),
-    target_arch = "aarch64"
+#[cfg(not(any(
+    all(
+        any(target_vendor = "apple", target_os = "linux"),
+        target_arch = "aarch64"
+    ),
+    all(target_arch = "x86_64", target_os = "linux", target_env = "gnu")
 )))]
 mod fp_chain {
     use super::*;
@@ -1727,6 +1813,18 @@ mod fp_chain {
         None
     }
 }
+
+// x86-64 Linux has no frame-pointer chain through the runtime: its walk steps
+// JS frames by their frame records and everything else by its unwind row.
+#[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+#[path = "stack_maps_frame_walk.rs"]
+mod frame_walk;
+
+#[cfg(not(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu")))]
+use fp_chain as fast_walk;
+/// The walk `Fast` mode runs before (if it fails closed) the system unwinder.
+#[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+use frame_walk as fast_walk;
 
 // The compact-map decoder. Its own file because this one is close to the
 // 2000-line cap; the re-export is named rather than a glob because a glob does
@@ -1770,6 +1868,10 @@ mod unwind_contract;
 #[path = "stack_maps_decode_tests.rs"]
 mod decode_tests;
 
+#[cfg(test)]
+#[path = "stack_maps_rearm_tests.rs"]
+mod rearm_tests;
+
 // The only test anywhere that runs BOTH aarch64 walkers over a frame whose
 // layout is known, and requires each to land on the word the record names.
 // Same platform set as `fp_chain` itself.
@@ -1780,6 +1882,12 @@ mod decode_tests;
 ))]
 #[path = "stack_maps_walker_agreement.rs"]
 mod walker_agreement;
+
+// The x86-64 frame walk against the unwinder over probe frames of a chosen
+// layout, with its sabotage arms.
+#[cfg(all(test, target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+#[path = "stack_maps_frame_walk_tests.rs"]
+mod frame_walk_tests;
 
 pub(crate) mod census_rows;
 

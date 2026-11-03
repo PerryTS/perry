@@ -217,7 +217,6 @@ fn arg_is_order_free(ctx: &FnCtx<'_>, e: &perry_hir::Expr) -> bool {
 }
 
 /// `GC_TYPE_OBJECT` as the `i8` an `obj_type` header byte holds.
-const GC_TYPE_OBJECT_I8: &str = "2";
 
 /// Emit the site. `recv_box` and `lowered_args` are already evaluated and
 /// re-read from their roots; `feedback_site` is the typed-feedback site id the
@@ -365,7 +364,6 @@ pub(crate) fn emit_method_site(
     use crate::expr::receiver_range::{
         emit_field_ptr, emit_fused_receiver_test, emit_handle, RECEIVER_BIAS,
     };
-    let header = crate::target_layout::object_header_size_bytes(ctx.target_triple) as i64;
     let probe_idx = ctx.new_block("msite.probe");
     let slow_idx = ctx.new_block("msite.slow");
     let merge_idx = ctx.new_block("msite.merge");
@@ -426,7 +424,7 @@ pub(crate) fn emit_method_site(
         // GcHeader precedes the cell: obj_type @-8 (i8).
         let tp = emit_field_ptr(blk, &biased, -8);
         let ty = blk.load(crate::types::I8, &tp);
-        let ordinary = blk.icmp_eq(crate::types::I8, &ty, GC_TYPE_OBJECT_I8);
+        let ordinary = crate::target_layout::emit_gc_type_is_object(blk, crate::types::I8, &ty);
         blk.cond_br(&ordinary, &on_ordinary, &slow_l);
     }
     if let (Some(idx), Some((entry, births))) = (weak_idx, weak) {
@@ -512,6 +510,8 @@ pub(crate) fn emit_method_site(
             let mut call_args: Vec<String> =
                 lowered_args.iter().take(lane.arity).cloned().collect();
             call_args.resize(lane.arity, undefined.clone());
+            let header =
+                crate::target_layout::object_slot_base_bytes(ctx.target_triple, lane.form()) as i64;
             let blk = ctx.block();
             let vp = emit_field_ptr(blk, &biased, header + 8 * i64::from(lane.slot));
             let v = blk.load(I64, &vp);
@@ -539,9 +539,8 @@ pub(crate) fn emit_method_site(
     // The probe: the receiver's own layout, then its prototypes'.
     ctx.current_block = probe_idx;
     let (dir, key_bits, hash) = emit_site_key(ctx, property);
-    if !ctx.program_layouts.families.is_empty()
-        && crate::codegen::static_shape_ids::has_prototype_method(property)
-    {
+    let family_words = crate::layout_desc::methods::family_words(&ctx.program_layouts, property);
+    if !family_words.is_empty() {
         let family_call = ctx.new_block("msite.family_call");
         let ordinary_probe = ctx.new_block("msite.ordinary_probe");
         let family_l = ctx.block_label(family_call);
@@ -550,21 +549,15 @@ pub(crate) fn emit_method_site(
         let family_probe_l = ctx.block_label(family_probe);
         let wp = emit_field_ptr(ctx.block(), &biased, 4);
         let word = ctx.block().load(I32, &wp);
-        let index = ctx.block().sub(
-            I32,
-            &word,
-            &(crate::runtime_abi::LAYOUT_TAG | crate::layout_ordinals::current_plan().family_first)
-                .to_string(),
-        );
-        let family_word = ctx.block().icmp_ult(
-            I32,
-            &index,
-            &crate::layout_ordinals::current_plan()
-                .family_count
-                .to_string(),
-        );
-        ctx.block()
-            .cond_br(&family_word, &family_probe_l, &ordinary_l);
+        // Only rows whose emitted index contains this name can answer. The
+        // runtime still checks the live receiver, holders, and call ABI.
+        let mut dispatch = format!("switch i32 {word}, label %{ordinary_l} [");
+        for word in family_words {
+            dispatch.push_str(&format!(" i32 {word}, label %{family_probe_l}"));
+        }
+        dispatch.push_str(" ]");
+        ctx.block().emit_raw(dispatch);
+        ctx.block().mark_terminated();
         ctx.current_block = family_probe;
         let callee = ctx.block().call(
             I64,
@@ -756,7 +749,7 @@ pub(crate) fn emit_method_site_lookup(
             let blk = ctx.block();
             let tp = emit_field_ptr(blk, &biased, -8);
             let ty = blk.load(crate::types::I8, &tp);
-            let ordinary = blk.icmp_eq(crate::types::I8, &ty, GC_TYPE_OBJECT_I8);
+            let ordinary = crate::target_layout::emit_gc_type_is_object(blk, crate::types::I8, &ty);
             let plain = if crate::builtin_proto::weak_families(families) {
                 let wp = emit_field_ptr(blk, &biased, 4);
                 let word = blk.load(I32, &wp);

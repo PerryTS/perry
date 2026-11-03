@@ -968,3 +968,39 @@ fn keyed_setter_routes_a_raw_native_id_receiver_to_handle_set_dispatch() {
     assert_eq!(returned_tagged, tagged);
     assert_eq!(hits, 2);
 }
+
+#[test]
+fn raw_native_handles_decline_heap_probes_and_keep_named_dispatch() {
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    let missing = key("unclaimed_handle_probe");
+    for id in [
+        1,
+        crate::value::addr_class::FETCH_HANDLE_BAND_START,
+        crate::value::addr_class::HANDLE_BAND_MAX - 1,
+    ] {
+        // The raw ABI and honest Handle tag must reach the same fallback.
+        for bits in [id as u64, JSValue::handle(id).bits()] {
+            let receiver = bits as *const ObjectHeader;
+            assert!(
+                unsafe { try_data_get_by_name(receiver, missing) }.is_none(),
+                "native handle {bits:#x} cannot prove an ordinary data slot"
+            );
+            assert!(
+                crate::object::js_object_get_field_by_name(receiver, missing).is_undefined(),
+                "unclaimed native handle {bits:#x} must reach named dispatch"
+            );
+        }
+    }
+    assert!(unsafe { try_data_get_by_name(std::ptr::null(), missing) }.is_none());
+    let ordinary = object("unclaimed_handle_probe", 37.0);
+    assert_eq!(
+        unsafe { try_data_get_by_name(ordinary, missing) }
+            .unwrap()
+            .bits(),
+        37.0f64.to_bits()
+    );
+    assert_eq!(
+        crate::object::js_object_get_field_by_name(ordinary, missing).bits(),
+        37.0f64.to_bits()
+    );
+}
