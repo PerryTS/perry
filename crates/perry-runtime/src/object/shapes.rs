@@ -3368,7 +3368,7 @@ pub extern "C" fn js_shape_ordinary_inline_slot_for_key(shape_id: u32, key_bits:
 
 /// Step 4b loop regions: where objects of an ORDINARY, generation-0,
 /// hole-free shape (the caller checked all three) keep `key` — `(false,
-/// slot)` in the inline block, or `(true, position)` in the spill buffer: a
+/// slot)`, the key's storage slot, in the inline block, or `(true, position)` in the spill buffer: a
 /// position at or past the live inline bound IS the key's index in the
 /// buffer. Answered the inline range front to back, then the spill range
 /// back to front (#10595: a
@@ -3397,10 +3397,18 @@ fn region_key_location(keys: u64, count: u32, inline: u32, key_bits: u64) -> Opt
             stored.bits() == key_bits
                 || crate::string::js_string_key_bytes(stored, &mut stored_buf) == Some(wanted)
         };
+        // A key list with attributes keeps each key's storage slot apart from
+        // its position (a class family instance whose keys were stored out of
+        // declaration order lists them in insertion order over the family's
+        // slots): the word names the storage slot. A spill key is addressed
+        // by its position, so a list that moved one is not served.
+        let list = keys as usize as *const ArrayHeader;
         if let Some(i) = (0..lo).find(|&i| matches(i)) {
-            return Some((false, i));
+            let slot = super::key_attrs::key_storage_slot(list, i as u32) as usize;
+            return (slot < inline as usize).then_some((false, slot));
         }
-        (lo..hi).rev().find(|&i| matches(i)).map(|i| (true, i))
+        let i = (lo..hi).rev().find(|&i| matches(i))?;
+        (super::key_attrs::key_storage_slot(list, i as u32) as usize == i).then_some((true, i))
     }
 }
 
