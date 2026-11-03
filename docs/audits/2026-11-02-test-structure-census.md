@@ -1,6 +1,6 @@
 # Test structure census, 2026-11-02
 
-Point-in-time evidence behind [Test Structure](../src/testing/test-structure.md).
+Point-in-time evidence behind `docs/src/testing/test-structure.md`.
 Measured on `main` at `d76c3e1def`. Counts drift; the design page does not
 depend on any single number here.
 
@@ -8,7 +8,7 @@ depend on any single number here.
 
 | Lane | Files | Judge | Tier |
 |---|---|---|---|
-| `test-files/test_gap_*` | 2,457 | `gap_snapshot.json`, per test, both directions | pr (12 fast shards), sweep, full |
+| `test-files/test_gap_*` | 2,454 cases (`.ts`, `.cts`, `.mts`, `test_*.cjs`) of 2,457 files | `gap_snapshot.json`, per test, both directions | pr (12 fast shards), sweep, full |
 | all top-level `test-files/*.ts` | ~3,450 | `known_failures.json` + `threshold.json` category floors | full |
 | `test-parity/node-suite/<module>/` | 4,498 `.ts`, 53 modules | `node_suite_baseline.json` per-module floors | full |
 | test262 (pinned corpus) | ~53k | `test262/baseline.json` pass-count ratchet | full |
@@ -29,7 +29,8 @@ not run as `MISSING from run`, so a partial run fails by construction.
 ## What `test_gap_*` holds
 
 Classified from imports, Node-global use, name tokens and header vocabulary
-over all 2,457 files; 160 names and 22 headers checked by hand. Medium
+over all 2,457 `test_gap_*` files (three `.js` helpers included, so shares are
+approximate); 160 names and 22 headers checked by hand. Medium
 confidence: the line between language semantics and optimization witness is
 fuzzy.
 
