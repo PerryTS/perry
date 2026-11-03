@@ -32,6 +32,25 @@ pub(crate) unsafe fn dispatch(ctx: &NmCtx, module: &str, method: &str) -> f64 {
                 return set(arg(0), arg(1));
             }
         }
+        // The clone markers live in the runtime: the same answer as the direct
+        // `worker_threads.markAs*(x)` call the codegen lowers to perry-stdlib
+        // (a bundled `const { markAsUncloneable } = require("node:worker_threads")`
+        // reaches this namespace path; undici's CacheStorage calls it at init).
+        "markAsUncloneable" => {
+            crate::clone_markers::mark_uncloneable(arg(0));
+            return f64::from_bits(crate::value::TAG_UNDEFINED);
+        }
+        "markAsUntransferable" => {
+            crate::clone_markers::mark_untransferable(arg(0));
+            return f64::from_bits(crate::value::TAG_UNDEFINED);
+        }
+        "isMarkedAsUntransferable" => {
+            return f64::from_bits(if crate::clone_markers::is_untransferable(arg(0)) {
+                crate::value::TAG_TRUE
+            } else {
+                crate::value::TAG_FALSE
+            });
+        }
         _ => {}
     }
     crate::collection_iter::throw_type_error(&format!("{module}.{method} is not supported"))
@@ -46,6 +65,39 @@ mod tests {
     }
     extern "C" fn set(_key: f64, value: f64) -> f64 {
         value
+    }
+
+    /// `require("node:worker_threads").markAsUncloneable(x)` through the
+    /// namespace object (a bundle's destructured import) sets the same runtime
+    /// clone markers as the lowered direct call, instead of throwing.
+    #[test]
+    fn namespace_clone_marker_calls_set_runtime_markers() {
+        crate::clone_markers::reset_for_tests();
+        let object = crate::object::js_object_alloc(0, 0);
+        let value = crate::value::js_nanbox_pointer(object as i64);
+        let args = [value];
+        let ctx = NmCtx {
+            obj: std::ptr::null(),
+            args_ptr: args.as_ptr(),
+            args_len: args.len(),
+            assert_skip_prototype: false,
+        };
+        unsafe {
+            assert_eq!(
+                dispatch(&ctx, "worker_threads", "isMarkedAsUntransferable").to_bits(),
+                crate::value::TAG_FALSE
+            );
+            assert_eq!(
+                dispatch(&ctx, "worker_threads", "markAsUncloneable").to_bits(),
+                crate::value::TAG_UNDEFINED
+            );
+            assert!(crate::clone_markers::is_uncloneable(value));
+            dispatch(&ctx, "worker_threads", "markAsUntransferable");
+            assert_eq!(
+                dispatch(&ctx, "worker_threads", "isMarkedAsUntransferable").to_bits(),
+                crate::value::TAG_TRUE
+            );
+        }
     }
 
     #[test]

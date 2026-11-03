@@ -113,7 +113,7 @@ fn process_stmts(stmts: &mut Vec<Stmt>, next_local_id: &mut LocalId) {
         // its initializer leaves those live boxes uninitialized even though
         // every later use is an inlineable call (#9721). Earlier calls must
         // also retain their original TDZ behavior.
-        let mut earlier_uses = Uses::default();
+        let mut earlier_uses = Uses::with_arity(params.len());
         for s in &stmts[..i] {
             collect_uses_in_stmt(s, &set, &mut earlier_uses);
         }
@@ -121,7 +121,7 @@ fn process_stmts(stmts: &mut Vec<Stmt>, next_local_id: &mut LocalId) {
             i += 1;
             continue;
         }
-        let mut uses = Uses::default();
+        let mut uses = Uses::with_arity(params.len());
         for s in &stmts[i + 1..] {
             collect_uses_in_stmt(s, &set, &mut uses);
         }
@@ -281,11 +281,28 @@ fn remove_alias_lets_in_stmt(stmt: &mut Stmt, set: &[LocalId]) {
     }
 }
 
-#[derive(Default)]
 struct Uses {
+    /// The arrow's declared parameter count. A call with a different
+    /// argument count is not rewritten by `rewrite_calls`, so it must veto
+    /// the reduction here; otherwise the `let` is deleted while that call
+    /// still reads it (a helper called as `c(() => Symbol(..))` is inlined with its
+    /// missing second argument as `undefined`, leaving a call of a deleted
+    /// local that lowered to calling the constant `undefined`).
+    arity: usize,
     calls: usize,
     bad_arity: bool,
     other: bool,
+}
+
+impl Uses {
+    fn with_arity(arity: usize) -> Self {
+        Uses {
+            arity,
+            calls: 0,
+            bad_arity: false,
+            other: false,
+        }
+    }
 }
 
 fn collect_uses_in_stmt(stmt: &Stmt, set: &[LocalId], uses: &mut Uses) {
@@ -313,7 +330,7 @@ fn collect_uses(expr: &Expr, set: &[LocalId], uses: &mut Uses) {
         Expr::Call { callee, args, .. } if matches!(callee.as_ref(), Expr::LocalGet(x) if set.contains(x)) =>
         {
             uses.calls += 1;
-            if !args.iter().all(is_trivial_expr) {
+            if args.len() != uses.arity || !args.iter().all(is_trivial_expr) {
                 uses.bad_arity = true;
             }
             for a in args {
@@ -1039,6 +1056,50 @@ mod tests {
             },
             Stmt::Expr(Expr::LocalSet(F, Box::new(Expr::Undefined))),
             guard(F, Expr::Integer(7)),
+        ];
+        let before = stmts.clone();
+        let mut next = 100;
+        process_stmts(&mut stmts, &mut next);
+        assert_eq!(format!("{stmts:?}"), format!("{before:?}"));
+    }
+
+    /// A helper `c(e, t){ ... e(t) ... }` inlined as
+    /// `c(() => Symbol(..))` binds `e` to a zero-parameter arrow and
+    /// substitutes the missing `t` as `undefined`, so the only call is
+    /// `e(undefined)`: one trivial argument for a zero-parameter arrow. The
+    /// rewrite cannot reduce a call of a different arity, so the binding must
+    /// be kept; deleting it left a call of an unbound local, which codegen
+    /// lowered to calling the constant `undefined`.
+    #[test]
+    fn keeps_the_let_when_a_call_has_a_different_arity() {
+        let mut stmts = vec![
+            Stmt::Let {
+                id: F,
+                name: "e485".into(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(arrow(17, vec![], Expr::Bool(true), false)),
+            },
+            Stmt::Expr(call_local(F, vec![Expr::Undefined])),
+        ];
+        let before = stmts.clone();
+        let mut next = 100;
+        process_stmts(&mut stmts, &mut next);
+        assert_eq!(format!("{stmts:?}"), format!("{before:?}"));
+    }
+
+    /// Fewer arguments than parameters is likewise left alone.
+    #[test]
+    fn keeps_the_let_when_a_call_passes_fewer_arguments() {
+        let mut stmts = vec![
+            Stmt::Let {
+                id: F,
+                name: "f".into(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(arrow(18, vec![param(P, "x")], Expr::LocalGet(P), false)),
+            },
+            Stmt::Expr(call_local(F, vec![])),
         ];
         let before = stmts.clone();
         let mut next = 100;

@@ -359,6 +359,9 @@ pub fn static_shape_seed_ll_with_plan(
     }
     let mut rows = Vec::new();
     let mut fixups = Vec::new();
+    // The table is defined before the key lists it names: on ELF each list is
+    // tied to it (`realm_image::ArrayCell::owner`).
+    let mark = llmod.global_mark();
     for (i, (id, shape)) in seeds.iter().enumerate() {
         let word = plan
             .identity_word(*id)
@@ -454,6 +457,7 @@ pub fn static_shape_seed_ll_with_plan(
                     &mut llmod,
                     &list,
                     &key_records,
+                    "perry_static_seeds",
                 ));
                 llmod.add_raw_global(format!(
                     "@perry_static_seed_atoms_{i} = private unnamed_addr constant [{} x {}] [{}], align 8",
@@ -477,7 +481,7 @@ pub fn static_shape_seed_ll_with_plan(
             shape.constfn.len()
         ));
     }
-    llmod.add_raw_global(format!(
+    llmod.insert_raw_global(mark, format!(
         "@perry_static_seeds = constant {{ i32, i32, i32, i32, i64, ptr, [{n} x {SEED_TY}] }} {{ i32 {n}, {}, [{n} x {SEED_TY}] [{}] }}, align 8",
         plan.table_span_initializer(),
         rows.join(", "),
@@ -594,6 +598,47 @@ mod tests {
             compile_ll_to_object(&ll, Some("wasm32-wasip2"))
                 .expect("ILP32 image seed relocations compile");
         }
+    }
+
+    /// GNU ld < 2.36 (the glibc 2.31 release floor ships binutils 2.35) fails
+    /// a link whose `perry_realm` output has both SHF_LINK_ORDER and plain
+    /// inputs, so on ELF a seed's key list is tied to the table that names
+    /// it, and the table is defined before the list's section directive.
+    #[test]
+    fn elf_seed_key_lists_are_tied_to_the_seed_table() {
+        let shape = crate::BirthShape {
+            keys: b"u\0v\0".to_vec(),
+            key_count: 2,
+            live: 2,
+            proto: crate::BirthProto::Literal,
+            typed: None,
+            rep: 0,
+            constfn: Vec::new(),
+            private: Vec::new(),
+            brands: Vec::new(),
+            attrs: Vec::new(),
+        };
+        for triple in ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"] {
+            let ll = static_shape_seed_ll_impl(&[(0x1000_0042, shape.clone())], true, Some(triple));
+            let list = ll
+                .lines()
+                .find(|line| line.starts_with("@perry_static_seed_list_0 = "))
+                .unwrap_or_else(|| panic!("{triple}: no seed list\n{ll}"));
+            assert!(
+                list.ends_with(
+                    "section \"perry_realm\", align 8, !associated !{ptr @perry_static_seeds}"
+                ),
+                "{triple}: {list}"
+            );
+            let table = ll.find("@perry_static_seeds = constant").unwrap();
+            assert!(
+                table < ll.find("@perry_static_seed_list_0 = ").unwrap(),
+                "{triple}: {ll}"
+            );
+        }
+        let apple =
+            static_shape_seed_ll_impl(&[(0x1000_0042, shape)], true, Some("aarch64-apple-darwin"));
+        assert!(!apple.contains("!associated"), "{apple}");
     }
 
     #[test]

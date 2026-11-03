@@ -121,7 +121,24 @@ pub extern "C" fn js_get_global_this() -> f64 {
         let _ = crate::gc::gc_collect_minor();
     }
     // First access on this thread — allocate our own global.
-    let new_ptr = crate::realm_decl! { birth js_object_alloc(0, 0); realm { "%Global%", kind = namespace, never_move = true, members = { globalThis = ref("%Global%"); global = ref("%Global%"), attrs = writable | enumerable | configurable; Array = ref(Array); Object = ref(Object); String = ref(String); Number = ref(Number); Boolean = ref(Boolean); Function = ref(Function); RegExp = ref(RegExp); Date = ref(Date); Error = ref(Error); TypeError = ref(TypeError); RangeError = ref(RangeError); SyntaxError = ref(SyntaxError); ReferenceError = ref(ReferenceError); EvalError = ref(EvalError); URIError = ref(URIError); AggregateError = ref(AggregateError); Symbol = ref(Symbol); Promise = ref(Promise); Map = ref(Map); Set = ref(Set); WeakMap = ref(WeakMap); WeakSet = ref(WeakSet); WeakRef = ref(WeakRef); Proxy = ref(Proxy); BigInt = ref(BigInt); Uint8Array = ref(Uint8Array); Int8Array = ref(Int8Array); Uint16Array = ref(Uint16Array); Int16Array = ref(Int16Array); Uint32Array = ref(Uint32Array); Int32Array = ref(Int32Array); Float16Array = ref(Float16Array); Float32Array = ref(Float32Array); Float64Array = ref(Float64Array); Uint8ClampedArray = ref(Uint8ClampedArray); BigInt64Array = ref(BigInt64Array); BigUint64Array = ref(BigUint64Array); ArrayBuffer = ref(ArrayBuffer); SharedArrayBuffer = ref(SharedArrayBuffer); DataView = ref(DataView); TextEncoder = ref(TextEncoder); TextDecoder = ref(TextDecoder); TextEncoderStream = ref(TextEncoderStream); TextDecoderStream = ref(TextDecoderStream); CompressionStream = ref(CompressionStream); DecompressionStream = ref(DecompressionStream); ReadableStream = ref(ReadableStream); WritableStream = ref(WritableStream); TransformStream = ref(TransformStream); Navigator = ref(Navigator); URL = ref(URL); URLSearchParams = ref(URLSearchParams); URLPattern = ref(URLPattern); AbortController = ref(AbortController); AbortSignal = ref(AbortSignal); EventTarget = ref(EventTarget); Crypto = ref(Crypto); CryptoKey = ref(CryptoKey); SubtleCrypto = ref(SubtleCrypto); Event = ref(Event); CustomEvent = ref(CustomEvent); DOMException = ref(DOMException); FormData = ref(FormData); Blob = ref(Blob); File = ref(File); Headers = ref(Headers); Request = ref(Request); Response = ref(Response); MessageChannel = ref(MessageChannel); MessagePort = ref(MessagePort); BroadcastChannel = ref(BroadcastChannel); Storage = ref(Storage); localStorage = accessor(get = "localStorage.<get>", set = "localStorage.<set>"), attrs = enumerable | configurable; sessionStorage = accessor(get = "sessionStorage.<get>", set = "sessionStorage.<set>"), attrs = enumerable | configurable; WebSocket = ref(WebSocket); FinalizationRegistry = ref(FinalizationRegistry); DisposableStack = ref(DisposableStack); AsyncDisposableStack = ref(AsyncDisposableStack); SuppressedError = ref(SuppressedError); Buffer = ref(Buffer); eval = ref(eval); fetch = ref(fetch), attrs = writable | enumerable | configurable; structuredClone = ref(structuredClone), attrs = writable | enumerable | configurable; atob = ref(atob), attrs = writable | enumerable | configurable; btoa = ref(btoa), attrs = writable | enumerable | configurable; setTimeout = ref(setTimeout), attrs = writable | enumerable | configurable; clearTimeout = ref(clearTimeout), attrs = writable | enumerable | configurable; setInterval = ref(setInterval), attrs = writable | enumerable | configurable; clearInterval = ref(clearInterval), attrs = writable | enumerable | configurable; setImmediate = ref(setImmediate), attrs = writable | enumerable | configurable; clearImmediate = ref(clearImmediate), attrs = writable | enumerable | configurable; queueMicrotask = ref(queueMicrotask), attrs = writable | enumerable | configurable; gc = ref(gc); parseInt = ref(parseInt); parseFloat = ref(parseFloat); isNaN = ref(isNaN); isFinite = ref(isFinite); encodeURI = ref(encodeURI); decodeURI = ref(decodeURI); encodeURIComponent = ref(encodeURIComponent); decodeURIComponent = ref(decodeURIComponent); escape = ref(escape); unescape = ref(unescape); console = ref(console); process = ref(process); Math = ref(Math); JSON = ref(JSON); Reflect = ref(Reflect); Atomics = ref(Atomics); Intl = ref(Intl); WebAssembly = ref(WebAssembly); Temporal = ref(Temporal); performance = ref(performance), attrs = writable | enumerable | configurable; Performance = ref(Performance), attrs = writable | enumerable | configurable; PerformanceEntry = ref(PerformanceEntry), attrs = writable | enumerable | configurable; PerformanceMark = ref(PerformanceMark), attrs = writable | enumerable | configurable; PerformanceMeasure = ref(PerformanceMeasure), attrs = writable | enumerable | configurable; PerformanceObserver = ref(PerformanceObserver), attrs = writable | enumerable | configurable; PerformanceObserverEntryList = ref(PerformanceObserverEntryList), attrs = writable | enumerable | configurable; PerformanceResourceTiming = ref(PerformanceResourceTiming), attrs = writable | enumerable | configurable; crypto = accessor(get = "crypto.<get>"), attrs = enumerable | configurable; navigator = accessor(get = "navigator.<get>"), attrs = enumerable | configurable; NaN = NaN; Infinity = Infinity; undefined = undefined; }; } } as i64;
+    // The birth joins population's no-move window (`populate_global_this_builtins`):
+    // the static layout's record is one allocation that can cross an arena
+    // block, and no collection may run anywhere in the bootstrap.
+    let bootstrap_window = crate::gc::GcSuppressScope::new();
+    let new_ptr = unsafe {
+        crate::realm_decl! { birth crate::object::layout_desc::perry_alloc_layout(crate::object::runtime_layouts::GLOBAL_OBJECT::desc()); realm { "%Global%", kind = namespace, never_move = true, members = { globalThis = ref("%Global%"); global = ref("%Global%"), attrs = writable | enumerable | configurable; Array = ref(Array); Object = ref(Object); String = ref(String); Number = ref(Number); Boolean = ref(Boolean); Function = ref(Function); RegExp = ref(RegExp); Date = ref(Date); Error = ref(Error); TypeError = ref(TypeError); RangeError = ref(RangeError); SyntaxError = ref(SyntaxError); ReferenceError = ref(ReferenceError); EvalError = ref(EvalError); URIError = ref(URIError); AggregateError = ref(AggregateError); Symbol = ref(Symbol); Promise = ref(Promise); Map = ref(Map); Set = ref(Set); WeakMap = ref(WeakMap); WeakSet = ref(WeakSet); WeakRef = ref(WeakRef); Proxy = ref(Proxy); BigInt = ref(BigInt); Uint8Array = ref(Uint8Array); Int8Array = ref(Int8Array); Uint16Array = ref(Uint16Array); Int16Array = ref(Int16Array); Uint32Array = ref(Uint32Array); Int32Array = ref(Int32Array); Float16Array = ref(Float16Array); Float32Array = ref(Float32Array); Float64Array = ref(Float64Array); Uint8ClampedArray = ref(Uint8ClampedArray); BigInt64Array = ref(BigInt64Array); BigUint64Array = ref(BigUint64Array); ArrayBuffer = ref(ArrayBuffer); SharedArrayBuffer = ref(SharedArrayBuffer); DataView = ref(DataView); TextEncoder = ref(TextEncoder); TextDecoder = ref(TextDecoder); TextEncoderStream = ref(TextEncoderStream); TextDecoderStream = ref(TextDecoderStream); CompressionStream = ref(CompressionStream); DecompressionStream = ref(DecompressionStream); ReadableStream = ref(ReadableStream); WritableStream = ref(WritableStream); TransformStream = ref(TransformStream); Navigator = ref(Navigator); URL = ref(URL); URLSearchParams = ref(URLSearchParams); URLPattern = ref(URLPattern); AbortController = ref(AbortController); AbortSignal = ref(AbortSignal); EventTarget = ref(EventTarget); Crypto = ref(Crypto); CryptoKey = ref(CryptoKey); SubtleCrypto = ref(SubtleCrypto); Event = ref(Event); CustomEvent = ref(CustomEvent); DOMException = ref(DOMException); FormData = ref(FormData); Blob = ref(Blob); File = ref(File); Headers = ref(Headers); Request = ref(Request); Response = ref(Response); MessageChannel = ref(MessageChannel); MessagePort = ref(MessagePort); BroadcastChannel = ref(BroadcastChannel); Storage = ref(Storage); localStorage = accessor(get = "localStorage.<get>", set = "localStorage.<set>"), attrs = enumerable | configurable; sessionStorage = accessor(get = "sessionStorage.<get>", set = "sessionStorage.<set>"), attrs = enumerable | configurable; WebSocket = ref(WebSocket); FinalizationRegistry = ref(FinalizationRegistry); DisposableStack = ref(DisposableStack); AsyncDisposableStack = ref(AsyncDisposableStack); SuppressedError = ref(SuppressedError); Buffer = ref(Buffer); eval = ref(eval); fetch = ref(fetch), attrs = writable | enumerable | configurable; structuredClone = ref(structuredClone), attrs = writable | enumerable | configurable; atob = ref(atob), attrs = writable | enumerable | configurable; btoa = ref(btoa), attrs = writable | enumerable | configurable; setTimeout = ref(setTimeout), attrs = writable | enumerable | configurable; clearTimeout = ref(clearTimeout), attrs = writable | enumerable | configurable; setInterval = ref(setInterval), attrs = writable | enumerable | configurable; clearInterval = ref(clearInterval), attrs = writable | enumerable | configurable; setImmediate = ref(setImmediate), attrs = writable | enumerable | configurable; clearImmediate = ref(clearImmediate), attrs = writable | enumerable | configurable; queueMicrotask = ref(queueMicrotask), attrs = writable | enumerable | configurable; gc = ref(gc); parseInt = ref(parseInt); parseFloat = ref(parseFloat); isNaN = ref(isNaN); isFinite = ref(isFinite); encodeURI = ref(encodeURI); decodeURI = ref(decodeURI); encodeURIComponent = ref(encodeURIComponent); decodeURIComponent = ref(decodeURIComponent); escape = ref(escape); unescape = ref(unescape); console = ref(console); process = ref(process); Math = ref(Math); JSON = ref(JSON); Reflect = ref(Reflect); Atomics = ref(Atomics); Intl = ref(Intl); WebAssembly = ref(WebAssembly); Temporal = ref(Temporal); performance = ref(performance), attrs = writable | enumerable | configurable; Performance = ref(Performance), attrs = writable | enumerable | configurable; PerformanceEntry = ref(PerformanceEntry), attrs = writable | enumerable | configurable; PerformanceMark = ref(PerformanceMark), attrs = writable | enumerable | configurable; PerformanceMeasure = ref(PerformanceMeasure), attrs = writable | enumerable | configurable; PerformanceObserver = ref(PerformanceObserver), attrs = writable | enumerable | configurable; PerformanceObserverEntryList = ref(PerformanceObserverEntryList), attrs = writable | enumerable | configurable; PerformanceResourceTiming = ref(PerformanceResourceTiming), attrs = writable | enumerable | configurable; crypto = accessor(get = "crypto.<get>"), attrs = enumerable | configurable; navigator = accessor(get = "navigator.<get>"), attrs = enumerable | configurable; NaN = NaN; Infinity = Infinity; undefined = undefined; }; } }
+    } as i64;
+    // Born on its static layout: every builtin key is declared, and
+    // population fills the declared slots (each starts undefined).
+    // SAFETY: just born, not yet reachable; GLOBAL_OBJECT's slots are inline.
+    unsafe {
+        let fields =
+            crate::meta_slots_of!(crate::meta_obj_runtime_born!(new_ptr as *mut ObjectHeader));
+        for slot in 0..crate::object::runtime_layouts::GLOBAL_OBJECT::SLOT_COUNT {
+            // GC_STORE_AUDIT(INIT): unpublished record; undefined words have no managed edges.
+            *fields.add(slot) = crate::value::TAG_UNDEFINED;
+        }
+    }
     THREAD_GLOBAL_THIS.with(|c| c.set(crate::value::js_nanbox_pointer(new_ptr).to_bits()));
     // The thread-local cache stores the tagged JSValue, independently of
     // GLOBAL_THIS_PTR's raw pointer field. Register its writable word so marking
@@ -141,6 +158,7 @@ pub extern "C" fn js_get_global_this() -> f64 {
     // Populate constructor values for `globalThis.Array` / `context.Array` style
     // reads without changing bare `new Array`.
     populate_global_this_builtins(new_ptr as *mut ObjectHeader);
+    drop(bootstrap_window);
     GLOBAL_THIS_READY.store(true, Ordering::Release);
     // #6982: population allocates heavily, so an evacuating minor may have moved
     // the singleton since `new_ptr` was taken. The registered root slot above is
@@ -762,25 +780,6 @@ pub unsafe extern "C-unwind" fn js_fetch_or_value_super(
             }
         }
     }
-    // `class X extends AssertionError`: `super(options)` initializes the
-    // derived receiver (node: `class AssertionError extends Error`), which
-    // keeps the subclass prototype.
-    if bound_native_parent
-        .as_ref()
-        .is_some_and(|(module, method)| {
-            matches!(
-                super::super::native_module::normalize_native_module_alias(module.as_str()),
-                "assert" | "assert/strict"
-            ) && method.as_str() == "AssertionError"
-        })
-    {
-        let options = if args_len >= 1 && !args_ptr.is_null() {
-            *args_ptr
-        } else {
-            undef
-        };
-        return super::super::assert::js_assert_assertion_error_init_receiver(this_box, options);
-    }
     if bound_native_parent
         .as_ref()
         .is_some_and(|(module, method)| {
@@ -863,6 +862,61 @@ pub unsafe extern "C-unwind" fn js_fetch_or_value_super(
             let dispatch: crate::value::JsNativeAsyncLocalStorageSubclassInitFn =
                 std::mem::transmute(ptr);
             return dispatch(this_box);
+        }
+    }
+    // `class C extends Gzip` (any native module constructor whose state the
+    // instance carries): the state is attached to the receiver, the receiver
+    // is not replaced. The ordinary dispatch below constructed a FRESH native
+    // instance on the base prototype, which `super()` then bound as `this`, so
+    // the instance lost the subclass prototype and its overrides. Ask the
+    // native side for the constructor's in-place form first: the same
+    // `js_zlib_<codec>_init(owner, opts)` the static lowering emits when it can
+    // see the base, so an implicit constructor, an explicit `super(...args)`
+    // and a dynamic heritage all build the one instance. An export with no
+    // in-place form answers undefined and keeps the paths below.
+    if let Some((module, method)) = bound_native_parent.as_ref() {
+        if subclass_this_object_ptr(this_box).is_some() {
+            let module =
+                super::super::native_module::normalize_native_module_alias(module.as_str());
+            let options = if args_len >= 1 && !args_ptr.is_null() {
+                *args_ptr
+            } else {
+                undef
+            };
+            // Who owns the constructor answers the in-place init: the
+            // runtime's own natives run their init here (installed or not:
+            // the hook below is filled only by the zlib features and a
+            // runtime-only link never fills it); every other export asks the
+            // hook. A second runtime-owned native gets its own arm.
+            let initialized = match (module, method.as_str()) {
+                // `class X extends AssertionError`: node declares
+                // `class AssertionError extends Error`, so `super(options)`
+                // initializes the derived receiver.
+                ("assert" | "assert/strict", "AssertionError") => {
+                    super::super::assert::js_assert_assertion_error_init_receiver(this_box, options)
+                }
+                _ => {
+                    let ptr = crate::value::JS_NATIVE_SUBCLASS_INIT
+                        .load(std::sync::atomic::Ordering::SeqCst);
+                    if ptr.is_null() {
+                        undef
+                    } else {
+                        let init: crate::value::JsNativeSubclassInitFn = std::mem::transmute(ptr);
+                        init(
+                            module.as_ptr(),
+                            module.len(),
+                            method.as_ptr(),
+                            method.len(),
+                            this_box,
+                            args_ptr,
+                            args_len,
+                        )
+                    }
+                }
+            };
+            if !crate::value::JSValue::from_bits(initialized.to_bits()).is_undefined() {
+                return undef;
+            }
         }
     }
     // #10448: `class X extends Transform` (and Readable/Writable/Duplex)

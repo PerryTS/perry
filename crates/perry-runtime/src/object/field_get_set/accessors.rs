@@ -203,13 +203,26 @@ pub unsafe fn own_property_get_by_bytes(
     key: &[u8],
     receiver: f64,
 ) -> Option<JSValue> {
-    match own_property_slot(obj, |keys, key_count| {
-        crate::object::keys_find_property_slot_by_bytes(keys, key_count, key)
-    })? {
-        OwnSlot::Data(value) => Some(value),
-        OwnSlot::Accessor { getter: 0 } => Some(JSValue::undefined()),
-        OwnSlot::Accessor { getter } => Some(invoke_accessor_getter(getter, receiver)),
+    Some(own_property_slot_by_bytes(obj, key)?.value_for_receiver(receiver))
+}
+
+/// Probe only own accessors before native virtual-property resolution.
+/// Data properties remain subject to that receiver family's override ordering.
+pub(crate) unsafe fn own_accessor_get_by_bytes(
+    obj: *const ObjectHeader,
+    key: &[u8],
+    receiver: f64,
+) -> Option<JSValue> {
+    match own_property_slot_by_bytes(obj, key)? {
+        accessor @ OwnSlot::Accessor { .. } => Some(accessor.value_for_receiver(receiver)),
+        OwnSlot::Data(_) => None,
     }
+}
+
+unsafe fn own_property_slot_by_bytes(obj: *const ObjectHeader, key: &[u8]) -> Option<OwnSlot> {
+    own_property_slot(obj, |keys, key_count| {
+        crate::object::keys_find_property_slot_by_bytes(keys, key_count, key)
+    })
 }
 
 /// What an own-property slot holds.
@@ -223,6 +236,14 @@ enum OwnSlot {
 }
 
 impl OwnSlot {
+    unsafe fn value_for_receiver(self, receiver: f64) -> JSValue {
+        match self {
+            Self::Data(value) => value,
+            Self::Accessor { getter: 0 } => JSValue::undefined(),
+            Self::Accessor { getter } => invoke_accessor_getter(getter, receiver),
+        }
+    }
+
     fn data_or_undefined(self) -> JSValue {
         match self {
             OwnSlot::Data(value) => value,
@@ -931,19 +952,10 @@ pub(crate) unsafe fn primitive_tagged_prototype_property(
     let scope = crate::gc::RuntimeHandleScope::new();
     let key_h = scope.root_nanbox_f64(crate::value::nanbox_string_key(key));
     let receiver_h = scope.root_nanbox_f64(receiver);
-    let ctor_h = scope.root_nanbox_f64(js_get_global_this_builtin_value(
-        builtin_name.as_ptr(),
-        builtin_name.len(),
-    ));
-    let ctor_value = JSValue::from_bits(ctor_h.get_nanbox_u64());
-    if !ctor_value.is_pointer() {
-        return None;
-    }
-    let ctor_ptr = ctor_value.as_pointer::<crate::closure::ClosureHeader>() as usize;
-    let proto_h = scope.root_nanbox_f64(crate::closure::closure_get_dynamic_prop(
-        ctor_ptr,
-        "prototype",
-    ));
+    // The realm entry `%Boolean.prototype%` / `%BigInt.prototype%`, not a
+    // read through the current global binding (`globalThis.Boolean = X`).
+    let name = std::str::from_utf8(builtin_name).ok()?;
+    let proto_h = scope.root_nanbox_f64(crate::object::builtin_prototype_value(name));
     let proto_value = JSValue::from_bits(proto_h.get_nanbox_u64());
     if !proto_value.is_pointer() {
         return None;

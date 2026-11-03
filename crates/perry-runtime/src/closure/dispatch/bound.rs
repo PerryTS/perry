@@ -717,19 +717,22 @@ pub(crate) unsafe fn bound_function_name_value(ptr: usize) -> (f64, usize) {
         } else {
             f64::from_bits(crate::value::TAG_UNDEFINED)
         };
-        let target_name = if JSValue::from_bits(name_hint.to_bits()).is_any_string() {
-            let hdr = crate::builtins::js_string_coerce(name_hint);
-            crate::object::has_own_helpers::str_from_string_header(hdr)
-                .map(str::to_owned)
-                .unwrap_or_default()
+        let name_ptr = if JSValue::from_bits(name_hint.to_bits()).is_any_string() {
+            // ECMA-262 SetFunctionName(F, targetName, "bound"): the prefix is
+            // joined to the target name's code units. A name holding a lone
+            // surrogate (WTF-8) or other text that is not a Rust `&str` used
+            // to read as "" here, so `.name` became just "bound ".
+            let target = scope.root_string_ptr(crate::builtins::js_string_coerce(name_hint));
+            let prefix =
+                scope.root_string_ptr(crate::string::js_string_from_bytes(b"bound ".as_ptr(), 6));
+            prefix.with_const_ptr(|a| {
+                target.with_const_ptr(|b| crate::string::js_string_concat(a, b))
+            })
         } else {
-            bound_target_declared_name(js_closure_get_capture_f64(closure, 0))
+            let target_name = bound_target_declared_name(js_closure_get_capture_f64(closure, 0));
+            let bound_name = format!("bound {target_name}");
+            crate::string::js_string_from_bytes(bound_name.as_ptr(), bound_name.len() as u32)
         };
-        let mut bound_name = Vec::with_capacity(6 + target_name.len());
-        bound_name.extend_from_slice(b"bound ");
-        bound_name.extend_from_slice(target_name.as_bytes());
-        let name_ptr =
-            crate::string::js_string_from_bytes(bound_name.as_ptr(), bound_name.len() as u32);
         f64::from_bits(JSValue::string_ptr(name_ptr).bits())
     });
     (name_value, ptr_raw as usize)

@@ -63,6 +63,11 @@ macro_rules! builtin_constructors {
                 &GLOBAL_THIS_BUILTIN_CONSTRUCTORS[self as usize - 1]
             }
             pub(crate) fn name(self) -> &'static str { self.declaration().name }
+            /// The declaration whose intrinsic is named `name` (the spec name
+            /// of the realm intrinsic, never the current `globalThis` binding).
+            pub(crate) fn for_name(name: &str) -> Option<Self> {
+                match name { $(stringify!($name) => Some(Self::$name),)* _ => None }
+            }
         }
         const _: () = assert!((BuiltinConstructorIdentity::Buffer as u32) < 128);
         /// Builtin declarations, in the order captured by shared constructor bodies.

@@ -346,6 +346,10 @@ pub unsafe extern "C" fn js_crypto_native_dispatch(
         }
     };
     match method {
+        "__adopt_hash_prototype" | "__adopt_hmac_prototype" => {
+            super::hash_handles::adopt_digest_prototype(method == "__adopt_hmac_prototype", arg(0));
+            undefined
+        }
         "convertKey" => js_crypto_ecdh_convert_key(arg(0), arg(1), arg(2), arg(3), arg(4)),
         "createHash" => js_crypto_create_hash(str_ptr(0)),
         // #11617: one-shot `crypto.hash(alg, data, enc = "hex")` reached

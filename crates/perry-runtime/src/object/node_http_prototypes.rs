@@ -780,7 +780,7 @@ unsafe fn message_init(this: f64, req: Option<f64>) {
     // stays on those keys.
     let plain_chain = crate::node_stream::instance_birth::on_layout_with_plain_chain(
         receiver,
-        layouts::SERVER_RESPONSE::desc(),
+        layouts::SERVER_RESPONSE::WORD,
     );
     let on_layout = || {
         plain_chain
@@ -788,8 +788,9 @@ unsafe fn message_init(this: f64, req: Option<f64>) {
                 this.get_nanbox_f64(),
             )
             .is_some_and(|obj| {
-                crate::node_stream::instance_birth::instance_layout(obj)
-                    == Some(layouts::SERVER_RESPONSE::desc())
+                crate::node_stream::instance_birth::instance_layout(obj).is_some_and(
+                    |desc| unsafe { (*desc).layout_id } == layouts::SERVER_RESPONSE::WORD,
+                )
             })
     };
     let put = |slot: u32, name: &'static [u8], value: f64| {
@@ -994,8 +995,9 @@ mod tests {
     }
 
     unsafe fn on_layout(obj: usize) -> bool {
-        crate::node_stream::instance_birth::instance_layout(obj as *const ObjectHeader)
-            == Some(crate::object::runtime_layouts::SERVER_RESPONSE::desc())
+        crate::node_stream::instance_birth::instance_layout(obj as *const ObjectHeader).is_some_and(
+            |desc| (*desc).layout_id == crate::object::runtime_layouts::SERVER_RESPONSE::WORD,
+        )
     }
 
     #[test]

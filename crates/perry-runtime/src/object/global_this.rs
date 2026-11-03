@@ -104,9 +104,9 @@ pub(crate) use builtin_thunks::{
 };
 pub use ctor_thunks::js_webcrypto_illegal_constructor;
 pub(crate) use ctor_thunks::{
-    builtin_prototype_value, is_array_prototype_method_value, is_function_prototype_object_value,
-    normalize_eval_this_body, regexp_constructor_call_thunk, subtle_crypto_method_value,
-    typed_array_constructor_call_thunk, webcrypto_method_value,
+    builtin_constructor_value, builtin_prototype_value, is_array_prototype_method_value,
+    is_function_prototype_object_value, normalize_eval_this_body, regexp_constructor_call_thunk,
+    subtle_crypto_method_value, typed_array_constructor_call_thunk, webcrypto_method_value,
 };
 #[cfg(test)]
 pub(crate) use fetch_globals::collect_before_global_this_alloc_for_test;
@@ -192,3 +192,16 @@ pub(crate) use array_error::{
 };
 #[cfg(test)]
 pub(crate) use typed_array::array_buffer_is_view_thunk;
+
+/// The key of the global object named `name`: the agent atom of that text
+/// (DEC 243(5)). A builtin global name is an image atom seeded with the
+/// program atoms, so this allocates nothing for it; every key of the global
+/// object is an atom, and a miss on it proves absence.
+pub(crate) fn global_name_key(name: impl AsRef<[u8]>) -> *mut crate::StringHeader {
+    let name = name.as_ref();
+    let hash = crate::object::key_bytes_hash(name.as_ptr(), name.len());
+    if let Some(atom) = crate::object::runtime_layouts::builtin_global_atom(name, hash) {
+        return atom as *mut crate::StringHeader;
+    }
+    crate::string::js_string_pool_atom(name.as_ptr(), name.len() as u32, hash, 0)
+}

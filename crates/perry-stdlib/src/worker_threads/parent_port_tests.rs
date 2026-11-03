@@ -121,7 +121,7 @@ fn a_worker_does_not_count_its_parents_worker_record_as_its_own_work() {
             listeners: HashMap::new(),
             alive: false,
             refed: false,
-            terminate_promise: None,
+            terminate_promises: Vec::new(),
             async_resources: [perry_runtime::async_hooks::AsyncResourceIds {
                 async_id: 0,
                 trigger_async_id: 0,

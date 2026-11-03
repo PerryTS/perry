@@ -921,6 +921,7 @@ fn compute_act<'a>(
                         param_calls: Vec::new(),
                         param_handovers: Vec::new(),
                         param_cells: Vec::new(),
+                        param_defines: Vec::new(),
                     }),
                 };
                 let key = e.map(|(_, a)| {

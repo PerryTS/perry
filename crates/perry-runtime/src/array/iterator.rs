@@ -1023,7 +1023,9 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
     if let Some(entries) = entries_array_for_small_handle_id(raw_ptr() as i64) {
         return entries;
     }
-    if crate::buffer::is_registered_buffer(raw_ptr()) {
+    // Byte views iterate their bytes. An ArrayBuffer / DataView is not
+    // iterable: it takes the protocol below, which throws.
+    if crate::buffer::is_byte_indexed_buffer(raw_ptr()) {
         return crate::buffer::buffer_to_array(raw_ptr() as *const crate::buffer::BufferHeader);
     }
     // #9846: the Set / Map arms below copy the backing store instead of

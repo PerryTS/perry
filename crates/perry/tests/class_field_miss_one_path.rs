@@ -129,10 +129,11 @@ console.log(px, new P().sum(N));
 }
 
 /// `this.a` in an object literal's method, after a by-name overwrite of the
-/// receiver, is served by the read site's own word: no class guard runs, and
-/// the site's MRU word answers (nearly) every one of the 3000 reads.
+/// receiver, is a stateless layout read: no class guard runs for any of the
+/// 3000 reads. (The site's MRU word, `generic_mru_hit`, was deleted with the
+/// read caches in db6b253e9, so it is no longer counted.)
 #[test]
-fn a_this_read_in_a_literal_method_is_served_by_the_site_word() {
+fn a_this_read_in_a_literal_method_runs_no_class_guard() {
     let (stdout, count) = run_census(
         r#"// The receiver reaches `put` as a PARAMETER, so `o.d = k` is the generic
 // store, whose first execution is the runtime's by-name overwrite; `o.m()`
@@ -157,11 +158,6 @@ console.log(px, run(N, { a: 1, b: 2, c: 4, e: 8, d: 16, m() { return this.a; } }
     );
     assert_eq!(stdout, "5 5999");
     assert_eq!(count("class_read"), 0, "no class read guard may run");
-    assert!(
-        count("generic_mru_hit") >= 3000 - 16,
-        "only {} reads were served by a site's word; `this.a` must be",
-        count("generic_mru_hit")
-    );
 }
 
 /// `this.pa` (inherited) and `this.own` (own) in a literal's methods, called

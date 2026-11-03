@@ -16,6 +16,7 @@ pub(crate) mod type_infer;
 /// `lower_decl/body_stmt.rs`, which that change did not reach.
 pub(crate) use type_infer::for_init_decl_type;
 
+pub(crate) use alias_tracking::builtin_proto_method_alias;
 use alias_tracking::track_decl_aliases;
 use binding_guards::apply_binding_guards;
 use native_fetch::register_native_fetch_and_streams;

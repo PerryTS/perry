@@ -4,9 +4,11 @@
 //! classless-module path through frontend shape discovery, which used to skip
 //! such modules unless the knob was `1`.
 //!
-//! The observable is the runtime's own method-site report: a site primed from
-//! a ConstFn lane counts in `primes_constfn`. Every mode must print the same
-//! result.
+//! The observable is the emitted IR: a method site on a literal whose
+//! shape carries a ConstFn lane (`this.m()` in a module literal's method) has a static lane (`msite.static_hit`, a direct
+//! call of the named body). The runtime memo that used to count
+//! `primes_constfn` was deleted with the learned word (object-model step 5).
+//! Every mode must print the same result.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -39,11 +41,23 @@ function drive(o: any, n: number): number {
   for (let i = 0; i < n; i++) s = o.step(s);
   return s;
 }
-console.log(drive(counter, 1000), drive(make(5), 1000));
+const rec: any = {
+  a: 4,
+  m(x: number) { return this.a * x; },
+  run(n: number): number {
+    let h = 0;
+    for (let k = 0; k < n; k++) {
+      if (k === 40) this.m = (x: number) => -x;
+      h += this.m(k);
+    }
+    return h;
+  },
+};
+console.log(drive(counter, 1000), drive(make(5), 1000), rec.run(100));
 "#;
 
 /// Compile `PROGRAM` with the knob as given (`None` = unset), run it with
-/// the method-site report on, and return (stdout, primes_constfn).
+/// the IR saved, and return (stdout, number of static ConstFn lane hits).
 fn compile_and_run(setting: Option<&str>) -> (String, u64) {
     let dir = tempfile::tempdir().expect("tempdir");
     let src = dir.path().join("main.ts");
@@ -52,7 +66,9 @@ fn compile_and_run(setting: Option<&str>) -> (String, u64) {
     let mut compile = Command::new(perry_bin());
     clean(&mut compile)
         .current_dir(dir.path())
-        .env("PERRY_NO_CACHE", "1");
+        .env("PERRY_NO_CACHE", "1")
+        .env("PERRY_SAVE_LL", dir.path().join("ll"));
+    std::fs::create_dir_all(dir.path().join("ll")).unwrap();
     if let Some(value) = setting {
         compile.env("PERRY_CONSTFN_SHAPE", value);
     }
@@ -69,10 +85,14 @@ fn compile_and_run(setting: Option<&str>) -> (String, u64) {
         "compile failed (PERRY_CONSTFN_SHAPE={setting:?})\n{}",
         String::from_utf8_lossy(&compiled.stderr)
     );
+    let ll = std::fs::read_to_string(dir.path().join("ll/main_ts.ll")).expect("saved main_ts.ll");
+    let hits = ll
+        .lines()
+        .filter(|line| line.starts_with("msite.static_hit"))
+        .count() as u64;
     let mut run = Command::new(&exe);
     let ran = clean(&mut run)
         .current_dir(dir.path())
-        .env("PERRY_METHOD_SITE_STATS", "1")
         .output()
         .expect("run");
     let stderr = String::from_utf8_lossy(&ran.stderr).into_owned();
@@ -81,17 +101,7 @@ fn compile_and_run(setting: Option<&str>) -> (String, u64) {
         "run failed (PERRY_CONSTFN_SHAPE={setting:?}): {:?}\n{stderr}",
         ran.status
     );
-    let report = stderr
-        .lines()
-        .find(|line| line.starts_with("[method-site]"))
-        .unwrap_or_else(|| panic!("no method-site report ({setting:?}):\n{stderr}"));
-    let primes = report
-        .split_whitespace()
-        .find_map(|field| field.strip_prefix("primes_constfn="))
-        .unwrap_or_else(|| panic!("no primes_constfn in {report:?}"))
-        .parse()
-        .expect("primes_constfn is a count");
-    (String::from_utf8(ran.stdout).unwrap(), primes)
+    (String::from_utf8(ran.stdout).unwrap(), hits)
 }
 
 #[test]
@@ -99,7 +109,7 @@ fn constfn_lane_is_on_unless_explicitly_disabled() {
     let (unset_out, unset_primes) = compile_and_run(None);
     let (on_out, on_primes) = compile_and_run(Some("1"));
     let (off_out, off_primes) = compile_and_run(Some("0"));
-    assert_eq!(unset_out, "3000 5000\n");
+    assert_eq!(unset_out, "3000 5000 -1050\n");
     assert_eq!(on_out, unset_out);
     assert_eq!(off_out, unset_out);
     assert!(unset_primes > 0, "unset must build the ConstFn lane");

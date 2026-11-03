@@ -1249,7 +1249,7 @@ fn private_guard_checked(
     let has_brand = if is_static {
         // Static elements require the exact constructor evaluation.
         private_evaluation_brand_matches(obj, brand_owner, declaring_class_id)
-            .unwrap_or_else(|| super::super::class_ref_id(obj) == Some(declaring_class_id))
+            .unwrap_or_else(|| static_template_brand(obj, declaring_class_id))
     } else {
         // An existing receiver can acquire elements from several evaluations
         // via constructor return overrides. Its installed shape entries decide

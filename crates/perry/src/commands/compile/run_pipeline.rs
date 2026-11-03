@@ -1018,6 +1018,10 @@ pub fn run_with_parse_cache(
     for hir_module in ctx.native_modules.values_mut() {
         super::cjs_link::resolve_open_sites(hir_module, ctx.cjs_closed)?;
     }
+    // Select from the surviving HIR, never from the wrapper's discarded
+    // dynamic loader. In particular a dead createRequire import cannot
+    // select URL/dgram, or contribute opaque keys to streams selection.
+    collect_modules::feature_detect::detect_program_optional_feature_usage(&mut ctx);
 
     collect_modules::collect_declared_addons(&mut ctx, args.target.as_deref())?;
 
@@ -1036,6 +1040,21 @@ pub fn run_with_parse_cache(
                  (a partial drop-in), ignoring your installed `node_modules/{pkg}`. \
                  Add `{pkg}` to `perry.compilePackages` to AOT-compile the real JS instead."
             );
+        }
+    }
+    // A `perry.nativeAddons` grant for a package Perry implements natively has
+    // nothing to grant: every loader of that specifier gets the native module,
+    // so the package's own files and its Node-API addon are never reached.
+    if matches!(format, OutputFormat::Text) {
+        for pkg in &ctx.native_addon_packages {
+            if perry_hir::is_native_module_specifier(pkg) && !ctx.compile_packages.contains(pkg) {
+                eprintln!(
+                    "  note: `perry.nativeAddons` lists `{pkg}`, which Perry implements \
+                     natively; the entry has no effect. Add `{pkg}` to \
+                     `perry.compilePackages` to compile the package and host its Node-API \
+                     addon instead."
+                );
+            }
         }
     }
 

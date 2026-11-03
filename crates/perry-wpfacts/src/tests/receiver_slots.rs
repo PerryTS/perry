@@ -88,7 +88,6 @@ fn changing_the_receivers_descriptor_or_chain_refuses_the_certificate() {
         "Object.defineProperty(privateRecord, 'target', { get() { return 99; } });",
         "Object.setPrototypeOf(privateRecord, sibling);",
         "Object.defineProperty(Object.prototype, 'target', { get() { return 99; } });",
-        "Object.defineProperty(Object.prototype, key, { get() { return 99; } });",
     ] {
         let pf = facts(&format!(
             "declare const key: string;
@@ -295,5 +294,30 @@ fn an_unknown_subclass_runs_super_without_acquiring_private_arguments() {
                 pf.dump_text()
             );
         }
+    }
+}
+
+/// DECISIONS 242: an accessor under a computed key on `Object.prototype`
+/// never runs for an own data key (`target` is a birth key of the literal):
+/// it refuses the certificate only of a receiver with a miss site, a read
+/// of a key the receiver may not own.
+#[test]
+fn an_any_key_accessor_on_object_prototype_refuses_only_a_receiver_with_a_miss() {
+    for (miss, refused) in [
+        ("", false),
+        ("console.log((privateRecord as any)[key]);", true),
+    ] {
+        let pf = facts(&format!(
+            "declare const key: string;
+             const privateRecord = {{ source: 1, target: 2 }};
+             Object.defineProperty(Object.prototype, key, {{ get() {{ return 99; }} }});
+             {miss} console.log(privateRecord.target);"
+        ));
+        assert_eq!(
+            matches!(target(&pf).verdict, Verdict::No(_)),
+            refused,
+            "{miss}\n{}",
+            pf.dump_text()
+        );
     }
 }

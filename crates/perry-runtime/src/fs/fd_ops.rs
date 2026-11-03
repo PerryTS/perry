@@ -480,7 +480,16 @@ fn is_byte_buffer_value(value: f64) -> bool {
 /// A file position argument: a non-negative number, or `None` (`null`,
 /// `undefined`, `-1`) for "use the current file position".
 fn position_arg(value: f64) -> Option<u64> {
-    number_arg(value)
+    // Node accepts a bigint position as well as a number.
+    let jv = crate::value::JSValue::from_bits(value.to_bits());
+    let number = if jv.is_bigint() {
+        Some(crate::bigint::js_bigint_to_f64(
+            jv.as_bigint_ptr() as *const crate::bigint::BigIntHeader
+        ))
+    } else {
+        number_arg(value)
+    };
+    number
         .filter(|position| position.is_finite() && *position >= 0.0)
         .map(|position| position as u64)
 }

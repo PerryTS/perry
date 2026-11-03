@@ -462,6 +462,9 @@ fn emit_image_descriptor(
         true,
         identity,
     );
+    // The descriptor is defined before its key list: on ELF the list is
+    // tied to it (`realm_image::ArrayCell::owner`).
+    let mark = llmod.global_mark();
     let image_keys = crate::codegen::realm_image::emit_layout_key_list(
         llmod,
         &format!("{desc_name}_image_keys"),
@@ -470,8 +473,9 @@ fn emit_image_descriptor(
             .enumerate()
             .map(|(i, (a, h, attrs))| (a.clone(), *h, *attrs, i as u32))
             .collect::<Vec<_>>(),
+        &desc_name,
     );
-    llmod.add_raw_global(format!(
+    llmod.insert_raw_global(mark, format!(
         "@{desc_name} = global {DESC_TY} {{ i32 {family}, i16 {variant}, i8 0, i8 {integrity}, i32 {}, i32 {}, i64 0, ptr inttoptr (i64 {proto} to ptr), ptr @{keys_name}, i32 {count}, i32 {}, ptr @{index_name}, i32 0, i32 0, ptr null, i32 {identity}, i32 0, ptr {image_keys}, {tail} }}, section \"{sect}\", align 8",
         count.max(1),
         word as i32,
@@ -818,6 +822,9 @@ fn emit_desc(
         true,
         0,
     );
+    // The descriptor is defined before its key list: on ELF the list is
+    // tied to it (`realm_image::ArrayCell::owner`).
+    let mark = llmod.global_mark();
     let image_keys = crate::codegen::realm_image::emit_layout_key_list(
         llmod,
         &format!("{desc_name}_image_keys"),
@@ -833,8 +840,9 @@ fn emit_desc(
                 (atom.clone(), fnv1a(key.spelling().as_bytes()), attrs, *slot)
             })
             .collect::<Vec<_>>(),
+        &desc_name,
     );
-    llmod.add_raw_global(format!(
+    llmod.insert_raw_global(mark, format!(
         "@{desc_name} = global {DESC_TY} {{ i32 {family}, i16 0, i8 0, i8 0, i32 {slot_count}, i32 {}, i64 0, ptr inttoptr (i64 {} to ptr), ptr @{keys_name}, i32 {count}, i32 {}, ptr @{index_name}, i32 {}, i32 {}, ptr {methods}, i32 0, i32 {}, ptr {image_keys}, {tail} }}, section \"{sect}\", align 8",
         word as i32,
         // The `PerryLayoutDesc.proto` tag (perry-runtime `layout_desc`).
@@ -1425,6 +1433,9 @@ fn emit_descriptor(
             layout_id != 0,
             identity,
         );
+        // The descriptor is defined before its key list: on ELF the list is
+        // tied to it (`realm_image::ArrayCell::owner`).
+        let mark = llmod.global_mark();
         let image_keys = crate::codegen::realm_image::emit_layout_key_list(
             llmod,
             &format!("{desc_name}_image_keys"),
@@ -1434,8 +1445,9 @@ fn emit_descriptor(
                 .enumerate()
                 .map(|(i, (atom, key))| (atom.clone(), fnv1a(key.as_bytes()), 0, i as u32))
                 .collect::<Vec<_>>(),
+            &desc_name,
         );
-        llmod.add_raw_global(format!(
+        llmod.insert_raw_global(mark, format!(
             "@{desc_name} = global {DESC_TY} {{ i32 {family}, i16 0, i8 0, i8 0, i32 {slot_count}, i32 {}, i64 {}, ptr inttoptr (i64 {proto} to ptr), ptr @{keys_name}, i32 {count}, i32 {}, ptr @{index_name}, i32 0, i32 0, ptr null, i32 {identity}, i32 {}, ptr {image_keys}, {tail} }}, section \"{sect}\", align 8",
             word as i32,
             rep as i64,

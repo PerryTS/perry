@@ -8,6 +8,15 @@ pub fn walk_expr_children<'a, F>(expr: &'a Expr, f: &mut F)
 where
     F: FnMut(&'a Expr),
 {
+    stacker::maybe_grow(WALK_STACK_RED_ZONE, WALK_STACK_SEGMENT, || {
+        walk_expr_children_level(expr, f)
+    })
+}
+
+fn walk_expr_children_level<'a, F>(expr: &'a Expr, f: &mut F)
+where
+    F: FnMut(&'a Expr),
+{
     match expr {
         Expr::ScopedTemp { value, body, .. } => {
             f(value);

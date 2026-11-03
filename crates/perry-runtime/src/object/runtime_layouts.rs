@@ -200,8 +200,12 @@ macro_rules! runtime_layout {
             ));
             // The declaration is the producer's source and is checked here at
             // compile time; a layout only tests birth still has its facts read.
-            const _: (&[LayoutAtom], usize, u32, fn() -> *mut PerryLayoutDesc) =
-                (ATOMS, SLOT_COUNT, WORD, desc);
+            const _: (
+                &[LayoutAtom],
+                usize,
+                u32,
+                fn() -> *mut PerryLayoutDesc,
+            ) = (ATOMS, SLOT_COUNT, WORD, desc);
             const _: () = {
                 let _: (u8, u32, u16) = ($kind, $family, $variant);
                 let _ = $proto;
@@ -679,7 +683,15 @@ runtime_layout!(
     0,
     crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
     [ATOM_26, ATOM_25],
-    realm = ["ReadableStream", "node:sqlite", "node:better-sqlite3"]
+    // `fetch`: its response body stream resolves a pending `read()` from the
+    // body bridge (turnloop_bridge::response_chunk), with no ReadableStream
+    // constructor in the program.
+    realm = [
+        "ReadableStream",
+        "fetch",
+        "node:sqlite",
+        "node:better-sqlite3"
+    ]
 );
 
 runtime_layout!(
@@ -707,6 +719,8 @@ runtime_layout!(
 
 pub(crate) const URL_CLASS_ID: u32 = 0xFFFF0063;
 
+mod global_atoms;
+pub(crate) use global_atoms::{builtin_global_atom, GLOBAL_OBJECT};
 mod stream_prototypes;
 pub(crate) use stream_prototypes::*;
 mod stream_instances;
@@ -1009,6 +1023,9 @@ const fn runtime_layout_word(name: &str) -> u32 {
     }
     if same(name, "NATIVE_CTOR_WRITABLE") {
         return crate::codegen_abi::native_layout_word("NATIVE_CTOR_WRITABLE", 2);
+    }
+    if same(name, "GLOBAL_OBJECT") {
+        return crate::codegen_abi::native_layout_word("GLOBAL_OBJECT", 0);
     }
     if same(name, "OBJECT_PROTOTYPE") {
         return crate::codegen_abi::native_layout_word("OBJECT_PROTOTYPE", 2);

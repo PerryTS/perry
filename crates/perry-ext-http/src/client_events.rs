@@ -144,7 +144,7 @@ pub(crate) unsafe fn fire_request_socket_event(request_handle: Handle) {
     }
 }
 
-unsafe fn fire_incoming_event(incoming: Handle, event: &str, arg: Option<f64>) {
+pub(crate) unsafe fn fire_incoming_event(incoming: Handle, event: &str, arg: Option<f64>) {
     let listeners = get_handle_mut::<IncomingMessageHandle>(incoming)
         .and_then(|response| response.listeners.get(event).cloned())
         .unwrap_or_default();
@@ -165,6 +165,7 @@ unsafe fn fire_incoming_event(incoming: Handle, event: &str, arg: Option<f64>) {
 }
 
 unsafe fn handle_incoming_transport_abort(request_handle: Handle, incoming: Handle, error: f64) {
+    client_incoming_read::mark_destroyed(incoming);
     fire_incoming_event(incoming, "aborted", None);
     fire_incoming_event(incoming, "error", Some(error));
     fire_incoming_event(incoming, "close", None);
@@ -277,7 +278,6 @@ pub(crate) unsafe fn handle_response_event(
         trailers_map.insert(k, v);
     }
 
-    let body_clone = body.clone();
     let socket_handle = get_handle_mut::<ClientRequestHandle>(request_handle)
         .map(|request| request.socket_handle)
         .unwrap_or(0);
@@ -287,7 +287,7 @@ pub(crate) unsafe fn handle_response_event(
         status_message,
         headers,
         trailers: trailers_map,
-        body,
+        body: Vec::new(),
         listeners: HashMap::new(),
         encoding: None,
         decoder_pending: Vec::new(),
@@ -298,6 +298,7 @@ pub(crate) unsafe fn handle_response_event(
         // Whole body already fully received by construction time (this is
         // the synchronous single-event path).
         complete: true,
+        read: Default::default(),
     });
 
     // Hand the IncomingMessage handle to the user's `(res) => { ... }`
@@ -328,70 +329,14 @@ pub(crate) unsafe fn handle_response_event(
         }
     }
 
-    // `'data'` listeners — body is delivered as a single chunk. True
-    // streaming requires a cooperative spawn_async perry-ffi surface
-    // (v0.6.0 followup).
-    //
-    // Issue #1124: bytes cross the FFI boundary as a JS Buffer
-    // (`alloc_buffer`), not a lossily-decoded string — unless
-    // `res.setEncoding(enc)` asked for Readable's string-chunk behavior.
-    let (data_listeners, encoding, pipes) = get_handle_mut::<IncomingMessageHandle>(incoming)
-        .map(|r| {
-            (
-                r.listeners.get("data").cloned().unwrap_or_default(),
-                r.encoding.clone(),
-                r.pipes.clone(),
-            )
-        })
-        .unwrap_or_default();
-    let delivery_scope = perry_ffi::TransientRootScope::enter();
-    let data_listeners = delivery_scope.root_addrs(&data_listeners);
-    let pipes = pipes
-        .iter()
-        .map(|bits| delivery_scope.root_nanbox(f64::from_bits(*bits)))
-        .collect::<Vec<_>>();
-    if (!data_listeners.is_empty() || !pipes.is_empty()) && !body_clone.is_empty() {
-        let arg = body_chunk_value(&body_clone, encoding.as_deref());
-        let arg = delivery_scope.root_nanbox(arg);
-        if arg.get().to_bits() != TAG_UNDEFINED {
-            for cb in &data_listeners {
-                if cb.get() != 0 {
-                    let closure = JsClosure::from_raw(cb.get() as *const RawClosureHeader);
-                    let _ = closure.call1(perry_ffi::JsThis::UNDEFINED, arg.get());
-                }
-            }
-            for dest in &pipes {
-                forward_pipe_write_value(dest.get(), arg.get());
-            }
-        }
+    // The whole body is handed over once the callbacks have attached their
+    // listeners: `'data'` listeners and pipes get it as one chunk (a Buffer,
+    // or a string after `res.setEncoding(enc)`, #1124), a `'readable'`
+    // listener reads it with `res.read()`.
+    if let Some(im) = get_handle_mut::<IncomingMessageHandle>(incoming) {
+        im.body = body;
     }
-
-    // `'end'` listeners — fire after data.
-    let end_listeners = get_handle_mut::<IncomingMessageHandle>(incoming)
-        .and_then(|r| r.listeners.get("end").cloned())
-        .unwrap_or_default();
-    let end_scope = perry_ffi::TransientRootScope::enter();
-    let end_listeners = end_scope.root_addrs(&end_listeners);
-    for cb in end_listeners {
-        if cb.get() != 0 {
-            let closure = JsClosure::from_raw(cb.get() as *const RawClosureHeader);
-            let _ = closure.call0(perry_ffi::JsThis::UNDEFINED);
-        }
-    }
-
-    // End every pipe currently registered, including one added by an `end`
-    // listener while the callbacks above were running.
-    let pipes = get_handle_mut::<IncomingMessageHandle>(incoming)
-        .map(|response| response.pipes.clone())
-        .unwrap_or_default();
-    let pipe_scope = perry_ffi::TransientRootScope::enter();
-    let pipes = pipes
-        .iter()
-        .map(|bits| pipe_scope.root_nanbox(f64::from_bits(*bits)))
-        .collect::<Vec<_>>();
-    for dest in pipes {
-        forward_pipe_end(dest.get().to_bits());
-    }
+    client_incoming_read::on_body_complete(incoming);
 
     // Node emits `'close'` on the request once the response has fully
     // ended (#4905).
@@ -449,6 +394,7 @@ pub(crate) unsafe fn handle_upgrade_event(
         request_handle,
         http_version: (1, 1),
         complete: true,
+        read: Default::default(),
     });
 
     let upgrade_listeners = with_handle_mut::<ClientRequestHandle, _, _>(request_handle, |req| {
@@ -533,6 +479,7 @@ pub(crate) unsafe fn handle_response_head_event(
         // The body streams in later (`ResponseChunk`/`ResponseEnd`); Node
         // keeps `res.complete` false until the end edge.
         complete: false,
+        read: Default::default(),
     });
     let (response_callback, response_listeners) =
         with_handle_mut::<ClientRequestHandle, _, _>(request_handle, |request| {
@@ -561,9 +508,8 @@ pub(crate) unsafe fn handle_response_head_event(
 }
 
 /// Drain handler for `PendingHttpEvent::ResponseChunk`: deliver to the
-/// message's `'data'` listeners, or buffer until `'end'` when none are
-/// registered yet (listeners typically attach inside the response
-/// callback, which has already run by the time chunks drain).
+/// message's `'data'` listeners and pipes, or buffer when none are flowing
+/// (paused mode, or listeners that attach after the response callback).
 ///
 /// # Safety
 ///
@@ -578,53 +524,14 @@ pub(crate) unsafe fn handle_response_chunk_event(request_handle: Handle, chunk: 
     if incoming == 0 || done {
         return;
     }
-    let (data_listeners, encoding, pipes) = get_handle_mut::<IncomingMessageHandle>(incoming)
-        .map(|r| {
-            (
-                r.listeners.get("data").cloned().unwrap_or_default(),
-                r.encoding.clone(),
-                r.pipes.clone(),
-            )
-        })
-        .unwrap_or_default();
-    if data_listeners.is_empty() && pipes.is_empty() {
-        if let Some(im) = get_handle_mut::<IncomingMessageHandle>(incoming) {
-            im.body.extend_from_slice(&chunk);
-        }
-        return;
-    }
-    let scope = perry_ffi::TransientRootScope::enter();
-    let data_listeners = scope.root_addrs(&data_listeners);
-    let pipes = pipes
-        .iter()
-        .map(|bits| scope.root_nanbox(f64::from_bits(*bits)))
-        .collect::<Vec<_>>();
-    let arg = get_handle_mut::<IncomingMessageHandle>(incoming).and_then(|response| {
-        streaming_body_chunk_value(
-            chunk.as_ref(),
-            encoding.as_deref(),
-            &mut response.decoder_pending,
-            false,
-        )
-    });
-    let Some(arg) = arg else {
-        return;
-    };
-    let arg = scope.root_nanbox(arg);
-    for cb in data_listeners {
-        if cb.get() != 0 {
-            let closure = JsClosure::from_raw(cb.get() as *const RawClosureHeader);
-            let _ = closure.call1(perry_ffi::JsThis::UNDEFINED, arg.get());
-        }
-    }
-    for dest in pipes {
-        forward_pipe_write_value(dest.get(), arg.get());
+    if let Some(bytes) = client_incoming_read::accept_chunk(incoming, chunk.as_ref()) {
+        client_incoming_read::deliver_to_consumers(incoming, &bytes, false);
     }
 }
 
-/// Drain handler for `PendingHttpEvent::ResponseEnd`: flush any buffered
-/// chunks to late-registered `'data'` listeners, fire `'end'` on the
-/// message, then `'close'` on the request.
+/// Drain handler for `PendingHttpEvent::ResponseEnd`: mark the body complete
+/// (flowing consumers get the rest and `'end'`; a paused-mode reader gets the
+/// EOF `'readable'`), then `'close'` on the request.
 ///
 /// # Safety
 ///
@@ -643,83 +550,8 @@ pub(crate) unsafe fn handle_response_end_event(request_handle: Handle) {
         return;
     }
     client_abort::cleanup_request_signal(request_handle);
-    // #10467 — the body has now been fully received; flip `res.complete`
-    // before the `'end'` listeners below observe it.
-    if let Some(im) = get_handle_mut::<IncomingMessageHandle>(incoming) {
-        im.complete = true;
-    }
-
-    let (data_listeners, encoding, buffered, pipes) =
-        get_handle_mut::<IncomingMessageHandle>(incoming)
-            .map(|r| {
-                (
-                    r.listeners.get("data").cloned().unwrap_or_default(),
-                    r.encoding.clone(),
-                    std::mem::take(&mut r.body),
-                    r.pipes.clone(),
-                )
-            })
-            .unwrap_or_default();
-    if !data_listeners.is_empty() || !pipes.is_empty() {
-        let scope = perry_ffi::TransientRootScope::enter();
-        let data_listeners = scope.root_addrs(&data_listeners);
-        let pipes = pipes
-            .iter()
-            .map(|bits| scope.root_nanbox(f64::from_bits(*bits)))
-            .collect::<Vec<_>>();
-        let arg = get_handle_mut::<IncomingMessageHandle>(incoming).and_then(|response| {
-            streaming_body_chunk_value(
-                &buffered,
-                encoding.as_deref(),
-                &mut response.decoder_pending,
-                true,
-            )
-        });
-        if let Some(arg) = arg {
-            let arg = scope.root_nanbox(arg);
-            for cb in data_listeners {
-                if cb.get() != 0 {
-                    let closure = JsClosure::from_raw(cb.get() as *const RawClosureHeader);
-                    let _ = closure.call1(perry_ffi::JsThis::UNDEFINED, arg.get());
-                }
-            }
-            for dest in pipes {
-                forward_pipe_write_value(dest.get(), arg.get());
-            }
-        }
-    } else if !buffered.is_empty() {
-        // Nobody consumed the body — keep it on the handle for any
-        // late reader.
-        if let Some(im) = get_handle_mut::<IncomingMessageHandle>(incoming) {
-            im.body = buffered;
-        }
-    }
-
-    let end_listeners = get_handle_mut::<IncomingMessageHandle>(incoming)
-        .and_then(|r| r.listeners.get("end").cloned())
-        .unwrap_or_default();
-    let end_scope = perry_ffi::TransientRootScope::enter();
-    let end_listeners = end_scope.root_addrs(&end_listeners);
-    for cb in end_listeners {
-        if cb.get() != 0 {
-            let closure = JsClosure::from_raw(cb.get() as *const RawClosureHeader);
-            let _ = closure.call0(perry_ffi::JsThis::UNDEFINED);
-        }
-    }
-
-    // End any `.pipe(dest)` destinations now that the body is complete (the
-    // body chunks were forwarded as they arrived).
-    let pipes = get_handle_mut::<IncomingMessageHandle>(incoming)
-        .map(|r| r.pipes.clone())
-        .unwrap_or_default();
-    let pipe_scope = perry_ffi::TransientRootScope::enter();
-    let pipes = pipes
-        .iter()
-        .map(|bits| pipe_scope.root_nanbox(f64::from_bits(*bits)))
-        .collect::<Vec<_>>();
-    for dest in pipes {
-        forward_pipe_end(dest.get().to_bits());
-    }
+    // #10467 — `res.complete` flips before any `'end'` listener observes it.
+    client_incoming_read::on_body_complete(incoming);
 
     finish_agent_request(request_handle, true);
     fire_request_close_once(request_handle);

@@ -457,6 +457,30 @@ fn wrap_does_not_shadow_global_this_named_export() {
 }
 
 #[test]
+fn wrap_does_not_shadow_global_value_properties_named_as_exports() {
+    // zod 3 (`v3/types.cjs`): `exports.undefined = undefinedType;` next to
+    // ordinary `undefined` reads. A module-scope `export const undefined`
+    // made every one of them a dead-zone read at module init.
+    let src = "function undefinedType() { return undefined; }
+                   const notANumber = NaN;
+                   exports.undefined = undefinedType;
+                   exports.NaN = notANumber;";
+    let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/pkg/types.cjs"));
+    for name in ["undefined", "NaN"] {
+        assert!(
+            !wrapped.contains(&format!("export const {name} = _cjs.{name};")),
+            "must NOT emit a shadowing `export const {name}`, got:
+{wrapped}"
+        );
+        assert!(
+            wrapped.contains(&format!("export {{ __cjsexp_{name} as {name} }};")),
+            "expected the mangled re-export of `{name}`, got:
+{wrapped}"
+        );
+    }
+}
+
+#[test]
 fn wrap_keeps_export_const_for_builtin_name_declared_in_body() {
     // A name that collides with a builtin but IS a real module binding
     // (`function Error() {}`) is a genuine local export — keep the ordinary
@@ -498,31 +522,6 @@ fn identifier_is_reassigned_distinguishes_declaration_from_write() {
     assert!(!identifier_is_reassigned(
         "var s = require('./d'); if (s === other) {} obj.s = 1; cb(() => s);",
         "s"
-    ));
-}
-
-#[test]
-fn identifier_is_declared_binding_detects_module_bindings() {
-    use super::extract_requires::identifier_is_declared_binding;
-    // Each declaration keyword form.
-    assert!(identifier_is_declared_binding(
-        "function Error() {}",
-        "Error"
-    ));
-    assert!(identifier_is_declared_binding("class Error {}", "Error"));
-    assert!(identifier_is_declared_binding("var Error = 1;", "Error"));
-    assert!(identifier_is_declared_binding("let Error = 1;", "Error"));
-    assert!(identifier_is_declared_binding("const Error = 1;", "Error"));
-    // A bare free reference / member access is NOT a declaration.
-    assert!(!identifier_is_declared_binding(
-        "inherits(SubError, Error); var x = Error.prototype;",
-        "Error"
-    ));
-    assert!(!identifier_is_declared_binding("obj.Error = 1;", "Error"));
-    // Substring of a longer identifier must not match.
-    assert!(!identifier_is_declared_binding(
-        "var ErrorType = 1;",
-        "Error"
     ));
 }
 

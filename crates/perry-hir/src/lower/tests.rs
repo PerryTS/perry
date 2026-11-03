@@ -1298,6 +1298,7 @@ mod ambient_declare;
 mod unresolved_new_global;
 
 mod global_this_new_shadowed;
+mod nested_class_name_outside_its_scope;
 
 mod capture_stash;
 mod class_member_var_captures;
@@ -1318,6 +1319,7 @@ mod hoisted_sibling_in_later_closure;
 
 #[path = "tests/anonymous_class_outer_binding.rs"]
 mod anonymous_class_outer_binding;
+mod class_expr_self_new_instanceof;
 mod forward_class_captures;
 mod function_constructor_shadow;
 mod issue_11157_class_decl_self_statics;

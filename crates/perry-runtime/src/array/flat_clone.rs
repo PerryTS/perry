@@ -234,6 +234,7 @@ pub(crate) fn dense_spread_copy(value: f64) -> *mut ArrayHeader {
             let prefix = (*src).ek_prefix.min(len) as usize;
             for i in prefix..len as usize {
                 if ptr::read(dst_elements.add(i)) == crate::value::TAG_HOLE {
+                    // GC_STORE_AUDIT(POINTER_FREE): replaces a hole word with the immediate undefined tag in the fresh clone; no heap edge is stored or overwritten.
                     ptr::write(dst_elements.add(i), crate::value::TAG_UNDEFINED);
                 }
             }
@@ -501,7 +502,12 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
     // Detect them before any GC-header probing below; otherwise arbitrary slab
     // bytes immediately before the BufferHeader can be misread as a String or
     // Object header and `Array.from(buf)` materializes nonsense.
+    // An ArrayBuffer / DataView has no elements: neither a `length` nor an
+    // iterator, so it materializes as an empty array, never as its bytes.
     if raw_addr != 0 && crate::buffer::is_registered_buffer(raw_addr) {
+        if crate::buffer::is_non_indexed_buffer_view(raw_addr) {
+            return js_array_alloc(0);
+        }
         return crate::buffer::buffer_to_array(raw_addr as *const crate::buffer::BufferHeader);
     }
 

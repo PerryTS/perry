@@ -398,10 +398,19 @@ pub fn synthesize_class_captures(
     // for every captured id (own + inherited). The fields themselves are
     // still deduplicated below — the child only declares the OWN-not-
     // inherited subset, so a single keys-array entry exists per capture.
+    //
+    // The capture table is keyed by class name, so `extends <name>` finds
+    // whatever class of that name was declared anywhere in the module. A
+    // capture is a local in scope at this declaration: a parent capture that
+    // is not in scope here belongs to a same-named class of another function
+    // (`const C = make(1); class Child extends C {}` at module scope finds
+    // the class `C` declared inside `make`), which this class cannot forward.
     if let Some(pname) = extends_name {
         if let Some(parent_caps) = ctx.lookup_class_captures(pname) {
             for id in parent_caps {
-                union_captures.insert(*id);
+                if outer_scope_ids.contains(id) {
+                    union_captures.insert(*id);
+                }
             }
         }
     }

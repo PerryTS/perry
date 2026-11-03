@@ -389,6 +389,11 @@ impl Model {
         // is a store under a computed key.
         let elem = self.is_elem_key(key);
         let key = if elem { Key::Any } else { key };
+        // DECISIONS 242(2): a [[Set]] of a key the object does not own
+        // definitely meets the chain's setters (and may add the key).
+        if t != TOP {
+            self.note_chain_miss(t, key);
+        }
         // DECISIONS 231(c): a named store is the value of that key on the
         // receivers of the classes `t` is or stands for (`virt_store`); a
         // computed one opens them. A store into ⊤ may be a store into an

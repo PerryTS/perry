@@ -1088,6 +1088,11 @@ pub(crate) fn register_realm_prototype_scanners_for_tests() {
     reg_scanner!(crate::object::shapes::scan_shape_table_rekey_mut);
 }
 
+/// This thread ran [`gc_init`]: it owns a heap and runs its own collections.
+pub(crate) fn thread_gc_initialized() -> bool {
+    GC_INIT_DONE.try_with(std::cell::Cell::get).unwrap_or(false)
+}
+
 pub fn gc_init() {
     // Idempotent per thread: production calls this at startup, and
     // `ensure_gc_initialized` calls it lazily on threads that don't. Latch the

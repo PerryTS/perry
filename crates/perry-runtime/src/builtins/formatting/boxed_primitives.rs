@@ -138,13 +138,10 @@ fn attach_boxed_primitive_prototype(obj: *mut crate::object::ObjectHeader, class
     let Some(name) = boxed_constructor_name(class_id) else {
         return;
     };
-    let ctor = crate::object::js_get_global_this_builtin_value(name.as_ptr(), name.len());
-    let ctor_value = crate::value::JSValue::from_bits(ctor.to_bits());
-    if !ctor_value.is_pointer() {
+    let Ok(name) = std::str::from_utf8(name) else {
         return;
-    }
-    let ctor_ptr = ctor_value.as_pointer::<crate::closure::ClosureHeader>() as usize;
-    let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
+    };
+    let proto = crate::object::builtin_prototype_value(name);
     let proto_value = crate::value::JSValue::from_bits(proto.to_bits());
     if proto_value.is_pointer() {
         obj_h.with_mut_ptr(|obj: *mut crate::object::ObjectHeader| {

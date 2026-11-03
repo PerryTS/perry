@@ -990,6 +990,44 @@ pub fn schedule_native_callback(callback: i64, args: &[f64], provider_type: &'st
     )
 }
 
+/// Internal runtime scheduling never goes through a JS-visible builder. The
+/// `js_set_*_callback` entry points build the `Timeout` / `Immediate` handle a
+/// program holds; a runtime-owned job (a zlib one-shot completion, an fs turn,
+/// a deferred emit) has no JS holder, so it schedules here: the same loop
+/// phase and keep-alive as the JS builder of that phase, its own async_hooks
+/// provider type, and no handle object. The async_hooks `resource` it hands
+/// `init` is the boxed timer id. Returns the timer id (`js_timer_unref` and
+/// `clearTimeout` take it).
+pub fn schedule_native_immediate(callback: i64, args: &[f64], provider_type: &'static str) -> i64 {
+    schedule_callback_timer(
+        callback,
+        0.0,
+        args.to_vec(),
+        provider_type,
+        Class::Immediate,
+        None,
+    )
+}
+
+/// The timers-phase sibling of [`schedule_native_immediate`].
+pub fn schedule_native_timeout(callback: i64, delay_ms: f64, provider_type: &'static str) -> i64 {
+    schedule_callback_timer(
+        callback,
+        delay_ms,
+        Vec::new(),
+        provider_type,
+        Class::Timeout,
+        None,
+    )
+}
+
+/// [`schedule_native_timeout`] for extension crates (an http client request
+/// timeout: node arms the socket's internal `Timeout`). Returns the timer id.
+#[no_mangle]
+pub extern "C" fn js_perry_schedule_native_timeout(callback: i64, delay_ms: f64) -> i64 {
+    schedule_native_timeout(callback, delay_ms, "Timeout")
+}
+
 /// Schedule the final callback in a provider chain while emitting the eager
 /// native preparation stages ahead of it. Node's `fs.readFile` is implemented
 /// as four chained FSREQCALLBACK operations (open, stat, read, close); Perry

@@ -377,11 +377,14 @@ pub(crate) fn emit_object_cell_with_fields(
 /// list with no attributes: length and capacity are the key count, `named`
 /// is null, the element kind words are zero. Each slot is the NaN-boxed
 /// pointer of a key's image string record (`records`, in key order).
-/// Returns the slots startup code must tag ([`emit_tag_fixups`]).
+/// `owner` is the global that names the list, defined before it
+/// ([`ArrayCell::owner`]). Returns the slots startup code must tag
+/// ([`emit_tag_fixups`]).
 pub(crate) fn emit_key_list_cell(
     llmod: &mut LlModule,
     name: &str,
     records: &[String],
+    owner: &str,
 ) -> Vec<TagFixup> {
     emit_array_cell(
         llmod,
@@ -393,17 +396,20 @@ pub(crate) fn emit_key_list_cell(
             .collect::<Vec<_>>(),
         records.len(),
         perry_abi::GC_LAYOUT_SIDE_MASK | perry_abi::GC_LAYOUT_ALL_POINTERS,
-        None,
+        Some(owner),
     )
 }
 
 /// A descriptor's keys, attributes and storage permutation as image cells.
 /// Process-lifetime symbols are resolved before publication; per-evaluation
-/// symbol bindings deliberately keep their dynamic path.
+/// symbol bindings deliberately keep their dynamic path. `owner` is the
+/// descriptor global that names the list, defined before it
+/// ([`ArrayCell::owner`]).
 pub(crate) fn emit_layout_key_list(
     llmod: &mut LlModule,
     name: &str,
     keys: &[(String, u64, u8, u32)],
+    owner: &str,
 ) -> String {
     if keys.is_empty() {
         return "null".into();
@@ -442,7 +448,7 @@ pub(crate) fn emit_layout_key_list(
         .collect::<Vec<_>>();
     // Existing descriptor births perform their target's fixups before linking
     // the list. Realm emission consumes the returned fixups for its tag walk.
-    emit_image_key_list(llmod, name, &entries, None).0
+    emit_image_key_list(llmod, name, &entries, Some(owner)).0
 }
 
 /// One canonical key, with its actual image value. A symbol key names its
@@ -524,7 +530,15 @@ pub(crate) struct ArrayCell<'a> {
     pub(crate) slots: &'a [Slot],
     /// The descriptor global whose list this cell is: on ELF the cell lives
     /// and dies with it in the link (`!associated`, SHF_LINK_ORDER), although
-    /// the realm section itself is retained.
+    /// the realm section itself is retained. The owner is the only global
+    /// that names its list, so the tie keeps the list exactly when a
+    /// reference would. Every `perry_realm` input of an ELF link has to be
+    /// tied: GNU ld before 2.36 (binutils 2.35, the glibc 2.31 release floor)
+    /// fails an output section that has both ordered and unordered inputs
+    /// ("perry_realm has both ordered [...] and unordered [...] sections").
+    /// The owner is defined before the cell (`LlModule::insert_raw_global`):
+    /// the assembler of perry's textual `.s` resolves the linked-to symbol
+    /// where the cell's section directive stands.
     pub(crate) owner: Option<&'a str>,
 }
 
@@ -721,7 +735,7 @@ mod tests {
             (format!("perry_atom_{hex}"), 0, 0, 1),
         ];
         let mut module = LlModule::new("aarch64-apple-darwin");
-        emit_layout_key_list(&mut module, "keys", &keys);
+        emit_layout_key_list(&mut module, "keys", &keys, "desc");
         let ir = module.to_ir();
         let record = super::super::string_pool::image_record_symbol_of(long.as_bytes(), false);
         assert!(
@@ -885,6 +899,8 @@ mod tests {
             "wasm32-wasip2",
         ] {
             let mut module = LlModule::new(triple);
+            // The list's owner, defined first as a real descriptor is.
+            module.add_raw_global("@desc = global i64 0, align 8".into());
             let keys = [(
                 "perry_atom_sym_014040776b3a30".into(),
                 0xffff_ffff_ffff_ffff,
@@ -892,7 +908,7 @@ mod tests {
                 0,
             )];
             assert_ne!(
-                emit_layout_key_list(&mut module, "symbol_keys", &keys),
+                emit_layout_key_list(&mut module, "symbol_keys", &keys, "desc"),
                 "null"
             );
             let ir = module.to_ir();
@@ -921,7 +937,7 @@ mod tests {
                 .expect("symbol-list image IR parses");
             let binding = [("perry_atom_local_module_7".into(), 0, 0, 0)];
             assert_eq!(
-                emit_layout_key_list(&mut module, "bound_keys", &binding),
+                emit_layout_key_list(&mut module, "bound_keys", &binding, "desc"),
                 "null"
             );
         }

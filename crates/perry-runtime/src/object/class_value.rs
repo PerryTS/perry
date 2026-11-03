@@ -1243,10 +1243,7 @@ fn reserved_parent_constructor_value(parent_id: u32) -> Option<f64> {
         declaration.prototype_class == Some(parent_id)
             || matches!(declaration.instance_identity, Some(BuiltinInstanceIdentity::Class(id)) if id == parent_id)
     })?;
-    Some(super::js_get_global_this_builtin_value(
-        declaration.name.as_ptr(),
-        declaration.name.len(),
-    ))
+    Some(super::builtin_constructor_value(declaration.name))
 }
 
 /// Read the actual [[Prototype]] of a proven class function object. Undefined

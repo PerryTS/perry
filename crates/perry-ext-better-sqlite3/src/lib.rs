@@ -19,6 +19,7 @@ use perry_ffi::{
     alloc_bigint_from_str, alloc_string, bigint_value, build_object_shape, drop_handle, get_handle,
     js_array_alloc, js_array_push, js_object_alloc_with_shape, js_object_set_field, read_string,
     register_handle, ArrayHeader, ErrorKind, Handle, JsString, JsValue, ObjectHeader, StringHeader,
+    TransientRootScope, TransientRootedNanbox,
 };
 use rusqlite::{types::Value as SqliteValue, Connection};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -308,20 +309,19 @@ pub unsafe extern "C" fn js_sqlite_stmt_safe_integers(stmt_handle: Handle, toggl
 #[no_mangle]
 pub unsafe extern "C" fn js_sqlite_stmt_columns(stmt_handle: Handle) -> *mut ArrayHeader {
     require_statement_database_open(stmt_handle);
-    let mut result = js_array_alloc(0);
     let Some(stmt) = get_handle::<SqliteStmtHandle>(stmt_handle) else {
-        return result;
+        return js_array_alloc(0);
     };
     let Some(db) = get_handle::<SqliteDbHandle>(stmt.db_handle) else {
-        return result;
+        return js_array_alloc(0);
     };
     let Ok(conn) = db.conn.lock() else {
-        return result;
+        return js_array_alloc(0);
     };
     // The handle stores only the SQL, so the shape comes from a fresh
     // prepare — the same way `reader` and `readonly` are answered.
     let Ok(prepared) = conn.prepare(&stmt.sql) else {
-        return result;
+        return js_array_alloc(0);
     };
 
     // `columns()` carries the declared type, `columns_with_metadata()` the
@@ -344,41 +344,110 @@ pub unsafe extern "C" fn js_sqlite_stmt_columns(stmt_handle: Handle) -> *mut Arr
         })
         .collect();
 
-    let (packed_keys, shape_id) = build_object_shape(&COLUMN_KEYS);
-    for (idx, (name, database, table, column)) in origins.iter().enumerate() {
-        let obj = js_object_alloc_with_shape(
-            shape_id,
-            COLUMN_KEYS.len() as u32,
-            packed_keys.as_ptr(),
-            packed_keys.len() as u32,
-        );
-        let decl_type = decl_types.get(idx).cloned().flatten();
-        // Slot order matches COLUMN_KEYS.
-        for (field, value) in [
-            Some(name.as_str()),
-            column.as_deref(),
-            table.as_deref(),
-            database.as_deref(),
-            decl_type.as_deref(),
-        ]
-        .into_iter()
+    let shape = build_object_shape(&COLUMN_KEYS);
+    let records_scope = TransientRootScope::enter();
+    let records: Vec<TransientRootedNanbox> = origins
+        .iter()
         .enumerate()
-        .map(|(i, v)| (i as u32, v))
-        {
-            js_object_set_field(
-                obj,
-                field,
-                match value {
+        .map(|(idx, (name, database, table, column))| {
+            let decl_type = decl_types.get(idx).cloned().flatten();
+            let scope = TransientRootScope::enter();
+            // Slot order matches COLUMN_KEYS. Each string is rooted before
+            // the next allocation, and the record is born after all five.
+            let values: Vec<TransientRootedNanbox> = [
+                Some(name.as_str()),
+                column.as_deref(),
+                table.as_deref(),
+                database.as_deref(),
+                decl_type.as_deref(),
+            ]
+            .into_iter()
+            .map(|value| {
+                scope.root_nanbox(bits(match value {
                     // better-sqlite3 reports an absent origin as null, not
                     // as undefined or an empty string.
                     None => JsValue::NULL,
                     Some(text) => JsValue::from_string_ptr(alloc_string(text).as_raw()),
-                },
-            );
-        }
-        result = js_array_push(result, JsValue::from_object_ptr(obj));
+                }))
+            })
+            .collect();
+            let record = record_from_rooted(&scope, &shape, &values);
+            drop(scope);
+            // Nothing allocates between the inner scope's exit and this root.
+            records_scope.root_nanbox(bits(JsValue::from_object_ptr(record)))
+        })
+        .collect();
+    array_from_rooted(&records)
+}
+
+fn bits(value: JsValue) -> f64 {
+    f64::from_bits(value.bits())
+}
+
+/// A shaped record over `values`, which the caller rooted before this birth.
+/// The record is rooted in `scope` while its fields are written and re-read
+/// for each store.
+unsafe fn record_from_rooted(
+    scope: &TransientRootScope,
+    (packed_keys, shape_id): &(Vec<u8>, u32),
+    values: &[TransientRootedNanbox],
+) -> *mut ObjectHeader {
+    let record = scope.root_addr(js_object_alloc_with_shape(
+        *shape_id,
+        values.len() as u32,
+        packed_keys.as_ptr(),
+        packed_keys.len() as u32,
+    ) as i64);
+    for (field, value) in values.iter().enumerate() {
+        js_object_set_field(
+            record.get() as *mut ObjectHeader,
+            field as u32,
+            JsValue::from_bits(value.get().to_bits()),
+        );
     }
-    result
+    record.get() as *mut ObjectHeader
+}
+
+/// One result row as JS values, each rooted before the next conversion (a
+/// string, a BigInt or a Buffer column allocates).
+fn rooted_row_values(
+    scope: &TransientRootScope,
+    row: &rusqlite::Row<'_>,
+    columns: usize,
+    safe_ints: bool,
+) -> Vec<TransientRootedNanbox> {
+    (0..columns)
+        .map(|idx| {
+            let value: SqliteValue = row.get(idx).unwrap_or(SqliteValue::Null);
+            scope.root_nanbox(bits(sqlite_value_to_jsvalue_with(&value, safe_ints)))
+        })
+        .collect()
+}
+
+/// An array of rooted values in order. Each push returns the array to use
+/// next and nothing else is held, so no earlier pointer outlives a push.
+unsafe fn array_from_rooted(values: &[TransientRootedNanbox]) -> *mut ArrayHeader {
+    values
+        .iter()
+        .fold(js_array_alloc(values.len() as u32), |arr, v| {
+            js_array_push(arr, JsValue::from_bits(v.get().to_bits()))
+        })
+}
+
+/// One row as better-sqlite3 returns it: an array in raw mode, else a record
+/// keyed by column name.
+unsafe fn row_value(
+    row: &rusqlite::Row<'_>,
+    columns: usize,
+    raw_or_shape: Option<&(Vec<u8>, u32)>,
+    safe_ints: bool,
+) -> JsValue {
+    let scope = TransientRootScope::enter();
+    let values = rooted_row_values(&scope, row, columns, safe_ints);
+    match raw_or_shape {
+        None => JsValue::from_object_ptr(array_from_rooted(&values)),
+        Some(shape) => JsValue::from_object_ptr(record_from_rooted(&scope, shape, &values)),
+    }
 }
 
 /// The keys of a `Statement#columns()` record, in better-sqlite3's own
@@ -496,37 +565,16 @@ pub unsafe extern "C" fn js_sqlite_stmt_get(
                         .collect();
                     let column_refs: Vec<&str> = column_names.iter().map(String::as_str).collect();
 
+                    let shape = (!raw).then(|| build_object_shape(&column_refs));
                     let mut rows = prepared.query(param_refs.as_slice());
                     if let Ok(ref mut rows) = rows {
                         if let Ok(Some(row)) = rows.next() {
-                            if raw {
-                                let mut row_arr = js_array_alloc(0);
-                                for (idx, _) in column_names.iter().enumerate() {
-                                    let value: SqliteValue =
-                                        row.get(idx).unwrap_or(SqliteValue::Null);
-                                    row_arr = js_array_push(
-                                        row_arr,
-                                        sqlite_value_to_jsvalue_with(&value, safe_ints),
-                                    );
-                                }
-                                return f64::from_bits(JsValue::from_object_ptr(row_arr).bits());
-                            }
-                            let (packed_keys, shape_id) = build_object_shape(&column_refs);
-                            let obj = js_object_alloc_with_shape(
-                                shape_id,
-                                column_names.len() as u32,
-                                packed_keys.as_ptr(),
-                                packed_keys.len() as u32,
-                            );
-                            for (idx, _) in column_names.iter().enumerate() {
-                                let value: SqliteValue = row.get(idx).unwrap_or(SqliteValue::Null);
-                                js_object_set_field(
-                                    obj,
-                                    idx as u32,
-                                    sqlite_value_to_jsvalue_with(&value, safe_ints),
-                                );
-                            }
-                            return f64::from_bits(JsValue::from_object_ptr(obj).bits());
+                            return bits(row_value(
+                                row,
+                                column_names.len(),
+                                shape.as_ref(),
+                                safe_ints,
+                            ));
                         }
                     }
                 }
@@ -549,7 +597,9 @@ pub unsafe extern "C" fn js_sqlite_stmt_all(
 ) -> *mut ArrayHeader {
     let sqlite_params = params_from_array(params_arr);
     require_statement_database_open(stmt_handle);
-    let mut result_array = js_array_alloc(0);
+    // Every row is rooted as it is built; the result array is born last.
+    let rows_scope = TransientRootScope::enter();
+    let mut built: Vec<TransientRootedNanbox> = Vec::new();
 
     if let Some(stmt) = get_handle::<SqliteStmtHandle>(stmt_handle) {
         let raw = stmt.raw_mode.load(Ordering::Relaxed);
@@ -576,49 +626,24 @@ pub unsafe extern "C" fn js_sqlite_stmt_all(
                     let mut rows = prepared.query(param_refs.as_slice());
                     if let Ok(ref mut rows) = rows {
                         while let Ok(Some(row)) = rows.next() {
-                            if raw {
-                                // Raw mode: each row is an array of column
-                                // values in declared column order. drizzle's
-                                // `mapResultRow(fields, row, …)` indexes by
-                                // numeric position into this array.
-                                let mut row_arr = js_array_alloc(0);
-                                for (idx, _) in column_names.iter().enumerate() {
-                                    let value: SqliteValue =
-                                        row.get(idx).unwrap_or(SqliteValue::Null);
-                                    row_arr = js_array_push(
-                                        row_arr,
-                                        sqlite_value_to_jsvalue_with(&value, safe_ints),
-                                    );
-                                }
-                                result_array =
-                                    js_array_push(result_array, JsValue::from_object_ptr(row_arr));
-                            } else {
-                                let (packed_keys, shape_id) = object_shape.as_ref().unwrap();
-                                let obj = js_object_alloc_with_shape(
-                                    *shape_id,
-                                    column_names.len() as u32,
-                                    packed_keys.as_ptr(),
-                                    packed_keys.len() as u32,
-                                );
-                                for (idx, _) in column_names.iter().enumerate() {
-                                    let value: SqliteValue =
-                                        row.get(idx).unwrap_or(SqliteValue::Null);
-                                    js_object_set_field(
-                                        obj,
-                                        idx as u32,
-                                        sqlite_value_to_jsvalue_with(&value, safe_ints),
-                                    );
-                                }
-                                result_array =
-                                    js_array_push(result_array, JsValue::from_object_ptr(obj));
-                            }
+                            // Raw mode: each row is an array of column values
+                            // in declared column order. drizzle's
+                            // `mapResultRow(fields, row, …)` indexes by
+                            // numeric position into this array.
+                            let value = row_value(
+                                row,
+                                column_names.len(),
+                                object_shape.as_ref(),
+                                safe_ints,
+                            );
+                            built.push(rows_scope.root_nanbox(bits(value)));
                         }
                     }
                 }
             }
         }
     }
-    result_array
+    array_from_rooted(&built)
 }
 
 /// `db.pragma(name, value?)` — execute a `PRAGMA` and return the
@@ -776,6 +801,7 @@ pub extern "C" fn js_sqlite_is_stmt_handle(handle: Handle) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use perry_ffi::{js_array_get, js_array_length, js_object_get_field};
 
     fn make_in_memory_db() -> Handle {
         let path = alloc_string(":memory:");
@@ -819,6 +845,64 @@ mod tests {
         assert_eq!(js_sqlite_in_transaction(h), 1);
         assert_eq!(js_sqlite_commit(h), 1);
         assert_eq!(js_sqlite_in_transaction(h), 0);
+    }
+
+    /// `all()` (record and raw mode), `get()` and `columns()` build their
+    /// values, records and result arrays under transient roots; the results
+    /// must read back exactly as before.
+    #[test]
+    fn rows_and_columns_read_back_through_their_roots() {
+        perry_ffi::initialize_runtime_fixture();
+        let h = make_in_memory_db();
+        for sql in [
+            "CREATE TABLE people (ident INTEGER, label_text TEXT)",
+            "INSERT INTO people VALUES (1, 'alice-row'), (2, 'bobby-row'), (3, 'carol-row')",
+        ] {
+            let sql = alloc_string(sql);
+            assert_eq!(unsafe { js_sqlite_exec(h, sql.as_raw() as *const _) }, 1);
+        }
+        let sql = alloc_string("SELECT ident, label_text FROM people ORDER BY ident");
+        let stmt = unsafe { js_sqlite_prepare(h, sql.as_raw() as *const _) };
+        let text = |v: JsValue| {
+            read_string(unsafe { JsString::from_raw(v.as_string_ptr()) }).map(str::to_owned)
+        };
+        unsafe {
+            let all = js_sqlite_stmt_all(stmt, std::ptr::null());
+            assert_eq!(js_array_length(all), 3);
+            let row = js_array_get(all, 1).as_pointer::<ObjectHeader>();
+            assert_eq!(
+                text(js_object_get_field(row, 1)).as_deref(),
+                Some("bobby-row")
+            );
+
+            let one = JsValue::from_bits(js_sqlite_stmt_get(stmt, std::ptr::null()).to_bits())
+                .as_pointer::<ObjectHeader>();
+            assert_eq!(js_object_get_field(one, 0).to_number(), 1.0);
+            assert_eq!(
+                text(js_object_get_field(one, 1)).as_deref(),
+                Some("alice-row")
+            );
+
+            let columns = js_sqlite_stmt_columns(stmt);
+            assert_eq!(js_array_length(columns), 2);
+            let label = js_array_get(columns, 1).as_pointer::<ObjectHeader>();
+            // COLUMN_KEYS order: name, column, table, database, type.
+            assert_eq!(
+                text(js_object_get_field(label, 0)).as_deref(),
+                Some("label_text")
+            );
+            assert_eq!(
+                text(js_object_get_field(label, 2)).as_deref(),
+                Some("people")
+            );
+
+            js_sqlite_stmt_raw(stmt);
+            let raw = js_sqlite_stmt_all(stmt, std::ptr::null());
+            assert_eq!(js_array_length(raw), 3);
+            let last = js_array_get(raw, 2).as_pointer::<ArrayHeader>();
+            assert_eq!(js_array_length(last), 2);
+            assert_eq!(text(js_array_get(last, 1)).as_deref(), Some("carol-row"));
+        }
     }
 
     #[test]
