@@ -544,6 +544,9 @@ struct State {
     /// Global root slots on no tracked page (the thread pointer's page,
     /// or not a binding: a root slot elsewhere): not watched.
     untracked_slots: u64,
+    /// The executable's static TLS block is whole pages (`TLS_PAGE`): every
+    /// module slot in it can be protected.
+    tls_whole: bool,
     /// `PERRY_SNAP_MODE=top`: every member of D may read and write every
     /// location that exists when it starts (a ⊤ summary). Members run
     /// untracked; any other init that touches such a location joins D.
@@ -689,12 +692,16 @@ unsafe fn start(out: String) {
     // The page holding the thread pointer is never protected: the kernel
     // writes the thread's rseq area (in the TCB, right above it) on every
     // return to user space, and a protected page there kills the thread.
+    // `TLS_PAGE` makes the block whole pages (fs page-aligned, size a page
+    // multiple), so no module slot shares a page with libc's TLS or the TCB.
+    std::hint::black_box(std::ptr::addr_of!(TLS_PAGE));
     let (tls_lo, tls_hi) = if fs != 0 && tls_size != 0 {
         // Whole pages only: the page below the block holds libc static TLS.
         ((fs - tls_size + PAGE - 1) & !(PAGE - 1), fs & !(PAGE - 1))
     } else {
         (fs, fs)
     };
+    let tls_whole = tls_size == 0 || (tls_lo == fs - tls_size && tls_hi == fs);
     let mut st = Box::new(State {
         out,
         inits: Vec::with_capacity(4096),
@@ -746,6 +753,7 @@ unsafe fn start(out: String) {
         marks: 0,
         entry_module_next: false,
         untracked_slots: 0,
+        tls_whole,
         top_mode: std::env::var("PERRY_SNAP_MODE").is_ok_and(|v| v == "top"),
         pre_bits: map_zeroed::<u64>(((res_hi - res_lo) / 8).div_ceil(64).max(1)),
         pre_upto: 0,
@@ -989,6 +997,17 @@ fn writable_image_range(inside: usize) -> (usize, usize) {
 }
 
 /// `PT_TLS` memsz of the executable, rounded up to its alignment.
+/// One page-aligned TLS byte (census builds only): it raises the executable's
+/// `PT_TLS` alignment to a page, so the static TLS block `[fs - size, fs)`
+/// is whole pages. Without it the block's first page is shared with libc's
+/// static TLS and its last with the TCB (rseq), both never protected, and the
+/// module slots on them were untracked: fastify 276 of 3,520, Supabase 260 of
+/// 44,914, the poison fixture's one binding (TLS offset 0).
+#[repr(C, align(4096))]
+struct TlsPage(u8);
+#[thread_local]
+static TLS_PAGE: TlsPage = TlsPage(0);
+
 fn executable_tls_size() -> usize {
     unsafe extern "C" fn each(
         info: *mut libc::dl_phdr_info,
@@ -2781,6 +2800,7 @@ fn write_report(st: &mut State) {
     let _ = writeln!(f, "#transparent\t{}\t{}\t{}", st.transparent.len(), st.transp.len, st.transparent_hits);
     let _ = writeln!(f, "#foreign_thread_faults\t{}", st.foreign_faults);
     let _ = writeln!(f, "#untracked_slots\t{}\tof\t{}", st.untracked_slots, st.globals.len);
+    let _ = writeln!(f, "#tls\twhole={}", st.tls_whole as u8);
     for (what, pcs) in &st.realm_hosts {
         let pcs: Vec<String> = pcs.iter().map(|p| format!("{p:x}")).collect();
         let _ = writeln!(f, "#realm_host\t{what}\t{}", pcs.join(","));
