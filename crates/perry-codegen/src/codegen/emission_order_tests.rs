@@ -144,6 +144,7 @@ fn empty_module(name: &str) -> Module {
         name: name.to_string(),
         imports: Vec::new(),
         requested_modules: Vec::new(),
+        locally_redeclared_imports: Vec::new(),
         exports: Vec::new(),
         classes: Vec::new(),
         interfaces: Vec::new(),
