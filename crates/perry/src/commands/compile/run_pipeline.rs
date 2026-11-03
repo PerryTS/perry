@@ -3635,11 +3635,6 @@ pub fn run_with_parse_cache(
         candidates.dedup_by(|a, b| a.class_id == b.class_id && a.target == b.target);
     }
     let short_spread_method_candidates = std::sync::Arc::new(short_spread_method_candidates);
-    // #10498: the accessor names every compiled class declares decide which
-    // sites carry a class-accessor arm.
-    let program_class_accessor_names = std::sync::Arc::new(
-        perry_codegen::ClassAccessorNames::collect(ctx.native_modules.values()),
-    );
     // #8775: a generic library module can receive an exported adapter object
     // through a parameter without importing its defining module. Publish the
     // producer's exact immutable object/method facts to every codegen job so a
@@ -6242,9 +6237,6 @@ pub fn run_with_parse_cache(
             program_layouts: Default::default(),
             gc_effects: std::sync::Arc::clone(&gc_effects),
             short_spread_method_candidates: std::sync::Arc::clone(&short_spread_method_candidates),
-            program_class_accessor_names: Some(std::sync::Arc::clone(
-                &program_class_accessor_names,
-            )),
             object_literal_method_candidates: std::sync::Arc::clone(
                 &object_literal_method_candidates,
             ),
@@ -6740,7 +6732,6 @@ pub fn run_with_parse_cache(
         constructor_contracts,
         static_shape_ids,
         short_spread_method_candidates,
-        program_class_accessor_names,
         object_literal_method_candidates,
     ));
     let mut owned_modules = std::mem::take(&mut ctx.native_modules);
