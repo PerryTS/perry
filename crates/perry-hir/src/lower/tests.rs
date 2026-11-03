@@ -1503,3 +1503,5 @@ fn named_wasi_constructor_uses_registered_native_export() {
             ))), "WASI must construct the registered export, not an empty class placeholder: {:?}", hir.init);
     }
 }
+
+mod worker_constructor_imports;
