@@ -824,6 +824,13 @@ fn collect_module_one(
         solid_module.as_ref().unwrap_or(ast_module),
         &mut ctx.proto_census,
     );
+    // A builder fold reads the census's create-add answers; one that changed
+    // after a module was lowered re-walks every module against the union.
+    if perry_hir::install_lowering_proto_census(&ctx.proto_census)
+        && ctx.patched_builtins_lowered_modules > 0
+    {
+        ctx.patched_builtins_grew_after_lower = true;
+    }
     perry_hir::set_patched_builtins(std::sync::Arc::new(ctx.patched_builtins.clone()));
     let lower_result = perry_hir::lower_module_full_with_platform_globals(
         solid_module.as_ref().unwrap_or(ast_module),
