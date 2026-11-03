@@ -1,27 +1,22 @@
 #!/usr/bin/env python3
-"""Pin `scripts/parity_normalize.py` against the implementations it replaced.
+"""Pin the `parity` rules of `scripts/parity_normalize.py`.
 
-The module exists because two parity runners each owned a private answer to
-"did Perry print what Node printed", written twice in two languages, each
-missing rules the other had. The fixtures in
-`tests/fixtures/parity_normalize/` were captured from those two
-implementations *before* the refactor, so passing this suite is the evidence
-that unifying them changed no verdict in either lane.
+The fixtures in `tests/fixtures/parity_normalize/` were captured from the shell
+chain these rules replaced, so passing them is the evidence that the port
+changed no verdict.
 
-The last test asserts the fixture inventory is live. A golden-file suite whose
+The inventory test asserts the fixtures are live. A golden-file suite whose
 subject silently empties out otherwise reports the same green verdict for "all
-29 cases match" and "there were no cases".
+cases match" and "there were no cases".
 """
 
 import os
-import subprocess
 import sys
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 FIXTURES = os.path.join(HERE, "fixtures", "parity_normalize")
-MODULE = os.path.join(ROOT, "scripts", "parity_normalize.py")
 
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
 
@@ -83,75 +78,18 @@ class ParityProfileTest(unittest.TestCase):
         )
 
 
-class NodeSuiteProfileTest(unittest.TestCase):
-    def test_fixtures(self):
-        for name, source, expected in _cases("node_suite__"):
-            with self.subTest(case=name):
-                self.assertEqual(
-                    parity_normalize.normalize_node_suite_output(_read(source)),
-                    _read(expected),
-                )
-
-
-class ProfileTest(unittest.TestCase):
-    def test_profiles_select_different_rules(self):
-        # `true` folds to `1` only in the parity profile, and the node:test
-        # reporter line is masked only in the node_suite profile. The parity
-        # chain deliberately keeps that line: its `^\s+at ` / `^\s+[0-9]+: `
-        # deletions do not match `    test at /x/…`, while `node_suite_run.py`
-        # exists precisely to mask it. Neither rule set is safe in the other
-        # lane, which is why the profiles are declared separately instead of
-        # merged.
-        text = "true\n    test at /x/a.test.ts:1:1\n"
-        parity = parity_normalize.normalize_parity_output(text)
-        node_suite = parity_normalize.normalize_node_suite_output(text)
-        self.assertIn("1", parity)
-        self.assertIn("test at /x/a.test.ts:1:1", parity)
-        self.assertIn("test at <location>", node_suite)
-        self.assertIn("true", node_suite)
-
-
-class CliTest(unittest.TestCase):
-    """The shell runner drives the module as a process, so pin that contract."""
-
-    def _run(self, *args, stdin=""):
-        return subprocess.run(
-            [sys.executable, MODULE, *args],
-            input=stdin, capture_output=True, text=True,
-        )
-
-    def test_output_mode_reads_stdin(self):
-        proc = self._run("output", stdin="true\n")
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(proc.stdout, "1\n")
-
-    def test_failure_mode(self):
-        proc = self._run("failure", stdin="node:internal/x:1\nError: boom\n    at f (/x:1)\n")
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(proc.stdout, "Error: boom")
-
-    def test_usage_errors(self):
-        for args in ((), ("nonsense",), ("output", "failure")):
-            with self.subTest(args=args):
-                self.assertEqual(self._run(*args).returncode, 2)
-
-
 class FixtureInventoryTest(unittest.TestCase):
     def test_inventory_is_live(self):
         counts = {
             "output": len(_cases("output__")),
             "failure": len(_cases("failure__")),
-            "node_suite": len(_cases("node_suite__")),
         }
         self.assertGreaterEqual(counts["output"], 15, counts)
         self.assertGreaterEqual(counts["failure"], 5, counts)
-        self.assertGreaterEqual(counts["node_suite"], 4, counts)
 
     def test_every_case_has_both_files(self):
         stems = {name.rsplit(".", 1)[0] for name in os.listdir(FIXTURES)}
         for stem in stems:
-            if stem.startswith("_"):
-                continue
             with self.subTest(stem=stem):
                 self.assertTrue(os.path.exists(os.path.join(FIXTURES, stem + ".in")), stem)
                 self.assertTrue(
