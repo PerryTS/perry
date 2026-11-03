@@ -333,6 +333,12 @@ console.log(run(10));
 
 /// A worker builds its own literals: the static lane's compare and body are
 /// valid in every agent, and a reassignment inside the worker is seen there.
+///
+/// The value stored into `o.m` is one the facts cannot name a body for. Were
+/// it a closure literal, the facts would prove that `m` holds exactly the two
+/// bodies, and the site would be the proven field call
+/// (`proven_call::try_lower_proven_field_call`, tested in `proven_calls.rs`),
+/// which runs before the method site and needs no lane.
 #[test]
 fn static_lanes_are_valid_in_a_worker_and_see_its_reassignment() {
     let dir = tempfile::tempdir().unwrap();
@@ -341,7 +347,7 @@ function drive(n: number): number {
   const o: any = { a: 2, m(x: number) { return this.a * x; } };
   let h = 0;
   for (let k = 0; k < n; k++) {
-    if (k === 500) o.m = (x: number) => x + 1;
+    if (k === 500) o.m = (globalThis as any).noSuch ?? ((x: number) => x + 1);
     h += o.m(k);
   }
   return h;
