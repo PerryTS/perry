@@ -33,6 +33,8 @@ fn worker_scanner_keeps_owner_roots_and_excludes_another_agents_heap() {
         let object_bits = object.get_nanbox_f64().to_bits();
         let callback_bits = callback.get_nanbox_f64().to_bits();
         let worker = thread_exit_probe::insert_worker_for_test(object_bits, callback_bits);
+        let first = scope.root_nanbox_f64(worker_terminate_by_id(worker));
+        let second = scope.root_nanbox_f64(worker_terminate_by_id(worker));
         let owned = emitted_roots();
         let (foreign, other_agent) = std::thread::spawn(|| {
             let agent = enter_worker_agent();
@@ -47,6 +49,15 @@ fn worker_scanner_keeps_owner_roots_and_excludes_another_agents_heap() {
         }
         assert!(owned.contains(&object_bits));
         assert!(owned.contains(&callback_bits));
+        for promise in [&first, &second] {
+            let bits = promise.get_nanbox_f64().to_bits();
+            assert!(owned.contains(&bits));
+            assert!(!other_agent.contains(&bits));
+            let ptr = JSValue::from_bits(bits)
+                .as_pointer::<perry_runtime::Promise>()
+                .cast_mut();
+            perry_runtime::js_promise_resolve(ptr, 0.0);
+        }
         assert!(
             !other_agent.contains(&object_bits),
             "foreign Worker handle was emitted"
@@ -110,6 +121,74 @@ fn process_notification_callback_retains_its_worker_on_the_creating_threads_tick
         .unwrap();
         assert!(!foreign.contains(&callback_bits));
         assert!(!foreign.contains(&worker_bits));
+    })
+    .join()
+    .unwrap();
+}
+
+#[test]
+fn termination_requests_all_resolve_with_the_observed_exit_code() {
+    std::thread::spawn(|| {
+        enter_worker_agent();
+        perry_runtime::gc::gc_init();
+        let scope = RuntimeHandleScope::new();
+        let object = scope.root_raw_mut_ptr(perry_runtime::object::js_object_alloc(0, 0));
+        let worker = thread_exit_probe::insert_worker_for_test(
+            object_value(object.get_raw_mut_ptr()).to_bits(),
+            JSValue::undefined().bits(),
+        );
+        let first = scope.root_nanbox_f64(worker_terminate_by_id(worker));
+        let second = scope.root_nanbox_f64(worker_terminate_by_id(worker));
+        assert_ne!(
+            first.get_nanbox_f64().to_bits(),
+            second.get_nanbox_f64().to_bits()
+        );
+        push_parent_event(
+            perry_runtime::agent::current_agent(),
+            WorkerEvent::Exit(worker, 0),
+        );
+        js_worker_threads_process_pending();
+        async_shim::js_stdlib_process_pending();
+        for promise in [&first, &second] {
+            let ptr = JSValue::from_bits(promise.get_nanbox_f64().to_bits())
+                .as_pointer::<perry_runtime::Promise>()
+                .cast_mut();
+            assert_eq!(perry_runtime::js_promise_state(ptr), 1);
+            assert_eq!(perry_runtime::js_promise_value(ptr), 0.0);
+        }
+        WORKERS.lock().unwrap().remove(&worker);
+    })
+    .join()
+    .unwrap();
+}
+
+#[test]
+fn terminating_an_exited_worker_resolves_undefined() {
+    std::thread::spawn(|| {
+        enter_worker_agent();
+        perry_runtime::gc::gc_init();
+        let scope = RuntimeHandleScope::new();
+        let object = scope.root_raw_mut_ptr(perry_runtime::object::js_object_alloc(0, 0));
+        let worker = thread_exit_probe::insert_worker_for_test(
+            object_value(object.get_raw_mut_ptr()).to_bits(),
+            JSValue::undefined().bits(),
+        );
+        WORKERS
+            .lock()
+            .unwrap()
+            .get_mut(&worker)
+            .unwrap()
+            .set_liveness(false, false);
+        let value = worker_terminate_by_id(worker);
+        let promise = JSValue::from_bits(value.to_bits())
+            .as_pointer::<perry_runtime::Promise>()
+            .cast_mut();
+        assert_eq!(perry_runtime::js_promise_state(promise), 1);
+        assert_eq!(
+            perry_runtime::js_promise_value(promise).to_bits(),
+            JSValue::undefined().bits()
+        );
+        WORKERS.lock().unwrap().remove(&worker);
     })
     .join()
     .unwrap();

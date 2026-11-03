@@ -266,7 +266,7 @@ struct WorkerRecord {
     listeners: HashMap<String, Vec<WorkerListener>>,
     alive: bool,
     refed: bool,
-    terminate_promise: Option<usize>,
+    terminate_promises: Vec<usize>,
     async_resources: [perry_runtime::async_hook_slots::AsyncResourceIds; 3],
     async_resource_bits: [u64; 3],
 }
@@ -464,8 +464,9 @@ fn release_worker_records_in_freed_ranges(freed: &perry_runtime::arena::thread_e
                 .flatten()
                 .any(|listener| freed.holds_bits(listener.callback_bits))
             || worker
-                .terminate_promise
-                .is_some_and(|promise| freed.contains(promise))
+                .terminate_promises
+                .iter()
+                .any(|promise| freed.contains(*promise))
             || worker
                 .async_resource_bits
                 .iter()
@@ -506,7 +507,7 @@ pub(crate) mod thread_exit_probe {
             listeners,
             alive: false,
             refed: false,
-            terminate_promise: None,
+            terminate_promises: Vec::new(),
             async_resources: [perry_runtime::async_hook_slots::AsyncResourceIds {
                 async_id: 0,
                 trigger_async_id: 0,
@@ -544,7 +545,7 @@ fn scan_worker_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>
                     visitor.visit_nanbox_u64_slot(&mut listener.callback_bits);
                 }
             }
-            if let Some(promise) = worker.terminate_promise.as_mut() {
+            for promise in &mut worker.terminate_promises {
                 visitor.visit_usize_slot(promise);
             }
             for resource in &mut worker.async_resource_bits {
@@ -1198,16 +1199,9 @@ fn worker_terminate_by_id(worker_id: u64) -> f64 {
     let resolved_now = {
         let mut workers = WORKERS.lock().unwrap();
         match workers.get_mut(&worker_id) {
-            // The worker already exited (its entry returned and it pushed an
-            // Exit event) — there is no live thread to receive `Terminate`, so
-            // no further Exit event will arrive to settle the promise. Resolve
-            // it immediately. `terminate()` on an already-finished worker is a
-            // no-op in Node and resolves at once. Without this, a worker pool
-            // whose workers run-and-exit (no `parentPort` message loop) would
-            // hang forever on `Promise.all(workers.map(w => w.terminate()))`.
             Some(worker) if !worker.alive => true,
             Some(worker) => {
-                worker.terminate_promise = Some(promise_ptr);
+                worker.terminate_promises.push(promise_ptr);
                 // Running JS stops at its next loop back-edge; an idle worker
                 // reads the command.
                 worker.sender.termination.request();
@@ -1218,7 +1212,7 @@ fn worker_terminate_by_id(worker_id: u64) -> f64 {
         }
     };
     if resolved_now {
-        perry_runtime::js_promise_resolve(promise, 1.0);
+        perry_runtime::js_promise_resolve(promise, js_undefined());
     }
     perry_runtime::value::js_nanbox_pointer(promise as i64)
 }
@@ -1469,7 +1463,7 @@ fn worker_new_started(
         listeners: HashMap::new(),
         alive: false,
         refed: false,
-        terminate_promise: None,
+        terminate_promises: Vec::new(),
         async_resources,
         async_resource_bits,
     };
