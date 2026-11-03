@@ -1074,6 +1074,25 @@ pub(crate) fn lower(
                     MaterializationReason::FunctionAbi,
                 ));
             }
+            // A `TaPtr` parameter's entry-bound view: the same checked store
+            // `IndexSet` takes (expr/proven_view_access.rs) — a bounds compare
+            // against the hoisted length and one byte store, with no per-store
+            // receiver guard. That tier keeps ToUint8 with the guarded path
+            // below unless the value is a proven exact-i32 (its truncated low
+            // byte IS ToUint8 there), and an out-of-range index stays the
+            // silent no-op the spec requires.
+            if let Some(stored) =
+                super::try_lower_proven_view_checked_store(ctx, array, index, value)?
+            {
+                if value_discarded {
+                    return Ok(double_literal(0.0));
+                }
+                return Ok(materialize_js_value(
+                    ctx,
+                    stored,
+                    MaterializationReason::FunctionAbi,
+                ));
+            }
             if !numeric_index_has_integer_array_index_proof(ctx, index) {
                 // A non-numeric key uses ordinary [[Set]] semantics (including
                 // typed-array named expandos and Symbol keys). The numeric-only

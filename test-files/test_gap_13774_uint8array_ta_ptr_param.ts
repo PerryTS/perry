@@ -65,6 +65,39 @@ const probe = new Uint8Array(n >> 8);
 probe[1] = 7;
 console.log("read", readAt(probe, 1), readAt(probe, probe.length), readAt(probe, -1));
 
+// The store half: a proven-integer value takes the inline byte store, and
+// every store keeps ToUint8's wrap plus the silent no-op outside the range.
+function paint(a: Uint8Array, n: number): void {
+  for (let i = 0; i < n; i += 1) a[i] = i & 255;
+}
+
+function shiftDown(a: Uint8Array, n: number): void {
+  for (let i = 0; i < n; i += 1) a[i - 1] = i;
+}
+
+const stamps = new Uint8Array(300);
+paint(stamps, stamps.length);
+console.log(
+  "paint",
+  stamps[0],
+  stamps[1],
+  stamps[254],
+  stamps[255],
+  stamps[256],
+  stamps[299],
+);
+paint(stamps, 3);
+console.log("paint prefix", stamps[0], stamps[2], stamps[3]);
+paint(stamps, stamps.length + 2);
+console.log("paint past end", stamps.length, stamps[299]);
+
+const edged = new Uint8Array(8);
+edged[0] = 111;
+shiftDown(edged, 9);
+console.log("shift down", edged[0], edged[1], edged[7]);
+shiftDown(edged, 0);
+console.log("shift down empty", edged[0]);
+
 let total = 0;
 for (let r = 0; r < 50; r++) total += sumStep(bytes, bytes.length) + sumRows(bytes, 8, 32);
 console.log("repeated", total);
