@@ -1099,7 +1099,7 @@ runtime_layout!(GLOBAL_OBJECT, 0x5254_0012, 0, crate::object::layout_desc::LAYOU
 /// The global object's own key named `name` (FNV-1a `hash`), found through
 /// the index of its layout descriptor (the program's definition; `desc()`):
 /// the builtin name's image atom.
-#[inline]
+#[inline(never)]
 pub(crate) fn builtin_global_atom(name: &[u8], hash: u64) -> Option<*const StringHeader> {
     // SAFETY: the descriptor is the program's immutable definition of the
     // layout; its keys and index are image data of that descriptor.
