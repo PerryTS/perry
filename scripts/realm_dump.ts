@@ -170,7 +170,8 @@ if (inR("%BufferSpeciesConstructor%")) {
     const bufferSpecies = Object.getOwnPropertyDescriptor(Buffer, Symbol.species);
     if (bufferSpecies && bufferSpecies.get) intrinsic("%BufferSpeciesConstructor%", () => bufferSpecies.get.call(Buffer));
 }
-// Static native imports are realm roots too. Keep literal specifiers so each
+// Static native imports are realm roots too, keyed by the name R records for
+// the import (import_name in realm_diff_gate.py). Keep literal specifiers so each
 // module's existing installer is linked by the qualified reference compiler.
 const nativeRoots: any[] = [
     ["node:assert", realm_native_0],
