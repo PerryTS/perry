@@ -82,10 +82,7 @@ fn export_begin(
         return ExportStep::Existing(value.get_nanbox_f64());
     }
     install_native_module_vtable();
-    let ns = scope.root_nanbox_f64(js_create_native_module_namespace(
-        module.as_ptr(),
-        module.len(),
-    ));
+    let ns = scope.root_nanbox_f64(native_namespace_by_name(module));
     let closure = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(info, 3));
     closure.with_mut_ptr(|c| {
         crate::closure::js_closure_set_capture_f64(c, 0, ns.get_nanbox_f64());
@@ -324,8 +321,15 @@ mod messaging_constructor_ownership_tests {
                     .unwrap_or(f64::from_bits(JSValue::undefined().bits())),
             );
             let generic = scope.root_nanbox_f64(
-                unsafe { get_native_module_constant("worker_threads", name, 0.0) }
-                    .unwrap_or(f64::from_bits(JSValue::undefined().bits())),
+                unsafe {
+                    get_native_module_constant(
+                        "worker_threads",
+                        name,
+                        0.0,
+                        Some(&super::namespaces::worker_threads::NM_WORKER_THREADS),
+                    )
+                }
+                .unwrap_or(f64::from_bits(JSValue::undefined().bits())),
             );
             key.with_const_ptr::<crate::StringHeader, _>(|key| {
                 crate::object::js_object_set_field_by_name(

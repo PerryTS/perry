@@ -17,8 +17,42 @@ fn key_value(name: &str) -> f64 {
     crate::value::js_nanbox_string(key_str(name) as i64)
 }
 
+/// The namespace of `module`, born with the vtable its declaration names.
 fn namespace(module: &str) -> f64 {
-    js_create_native_module_namespace(module.as_ptr(), module.len())
+    let vt: &'static crate::object::native_module::NativeModuleVtable = match module {
+        "process" => &crate::object::native_module::namespaces::process::NM_PROCESS,
+        "path" => &crate::object::native_module::namespaces::path::NM_PATH,
+        "os" => &crate::object::native_module::namespaces::os::NM_OS,
+        "zlib" => &crate::object::native_module::namespaces::zlib::NM_ZLIB,
+        "fs" => &crate::fs::NM_FS,
+        "path.default" => &crate::object::native_module::namespaces::path::NM_PATH_DEFAULT,
+        "events" => &crate::object::native_module::namespaces::events::NM_EVENTS,
+        "crypto" => &crate::object::native_module::namespaces::crypto::NM_CRYPTO,
+        "crypto.constants" => {
+            &crate::object::native_module::namespaces::crypto::NM_CRYPTO_CONSTANTS
+        }
+        "crypto.subtle" => &crate::object::native_module::namespaces::crypto::NM_CRYPTO_SUBTLE,
+        "crypto.webcrypto" => {
+            &crate::object::native_module::namespaces::crypto::NM_CRYPTO_WEBCRYPTO
+        }
+        "fs.constants" => &crate::fs::NM_FS_CONSTANTS,
+        "os.constants" => &crate::object::native_module::namespaces::os::NM_OS_CONSTANTS,
+        "readline" => &crate::object::native_module::namespaces::readline::NM_READLINE,
+        "stream/promises" => &crate::object::native_module::namespaces::stream::NM_STREAM_PROMISES,
+        "string_decoder" => {
+            &crate::object::native_module::namespaces::string_decoder::NM_STRING_DECODER
+        }
+        "v8.promiseHooks" => &crate::object::native_module::namespaces::v8::NM_V8_PROMISEHOOKS,
+        "v8.startupSnapshot" => {
+            &crate::object::native_module::namespaces::v8::NM_V8_STARTUPSNAPSHOT
+        }
+        "streams" => &crate::object::native_module::namespaces::streams::NM_STREAMS,
+        "cluster" => &crate::object::native_module::namespaces::cluster::NM_CLUSTER,
+        "url" => &crate::object::native_module::namespaces::url::NM_URL,
+        "stream" => &crate::object::native_module::namespaces::stream::NM_STREAM,
+        _ => unreachable!("test module {module}"),
+    };
+    crate::object::native_module::create_native_module_namespace(vt, module)
 }
 
 fn get(receiver: f64, name: &str) -> f64 {
@@ -193,9 +227,15 @@ fn every_declared_namespace_key_is_served() {
         "v8.startupSnapshot",
         "streams",
     ] {
-        let vt = native_module::native_module_vtable_for(module);
-        let keys = (vt.keys)(vt).unwrap_or_else(|| panic!("{module}: no declaration"));
         let ns = namespace(module);
+        let vt = unsafe {
+            native_module::object_native_vtable(
+                crate::value::JSValue::from_bits(ns.to_bits())
+                    .as_pointer::<crate::object::ObjectHeader>(),
+            )
+        }
+        .unwrap_or_else(|| panic!("{module}: no vtable"));
+        let keys = (vt.keys)(vt).unwrap_or_else(|| panic!("{module}: no declaration"));
         for key in keys.iter() {
             let key = std::str::from_utf8(key).unwrap();
             assert_ne!(

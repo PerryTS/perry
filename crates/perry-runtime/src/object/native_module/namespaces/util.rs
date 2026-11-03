@@ -91,6 +91,7 @@ crate::realm_decl! {
 
 crate::realm_decl! {
     namespace NM_UTIL = "util" {
+        default = NM_UTIL_DEFAULT;
         births = [Object];
         members = {
             _errnoException = (ref("node:sys._errnoException"));

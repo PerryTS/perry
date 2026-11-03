@@ -5,6 +5,7 @@
 crate::realm_decl! {
     namespace NM_PUNYCODE = "punycode" {
         cell = "node:punycode";
+        default = NM_PUNYCODE_DEFAULT;
         births = [Array, Error, Function, Object];
         members = {
             decode = (ref("node:punycode.decode"));

@@ -114,10 +114,7 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
 
     let method_bytes: &'static [u8] = property_name.as_bytes().to_vec().leak();
     let scope = crate::gc::RuntimeHandleScope::new();
-    let ns = scope.root_nanbox_f64(js_create_native_module_namespace(
-        callable_module_name.as_ptr(),
-        callable_module_name.len(),
-    ));
+    let ns = scope.root_nanbox_f64(native_namespace_by_name(callable_module_name));
     // Export resolution already publishes the native class identity used by
     // instanceof and super. Carry that fact on the canonical constructor;
     // invocation must not resolve names again or consult a side table.
@@ -328,7 +325,14 @@ extern "C" fn fs_namespace_descriptor_getter_thunk(
         let property_len = crate::closure::js_closure_get_capture_ptr(closure, 1) as usize;
         // A restored descriptor must resolve the builtin value, not consult its
         // own accessor override and recursively invoke this getter again.
-        native_module_property_by_name_impl(b"fs".as_ptr(), 2, property_ptr, property_len, false)
+        native_module_property_by_name_impl(
+            b"fs".as_ptr(),
+            2,
+            property_ptr,
+            property_len,
+            false,
+            Some(&crate::fs::NM_FS),
+        )
     }
 }
 

@@ -18,6 +18,7 @@ crate::realm_decl! {
 
 crate::realm_decl! {
     namespace NM_REPL = "repl" {
+        default = NM_REPL_DEFAULT;
         births = [Object];
         members = {
             REPLServer = (ref("node:repl.REPLServer"));

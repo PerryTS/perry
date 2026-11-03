@@ -242,10 +242,12 @@ thread_local! {
 /// it for `cluster.on(...) === cluster` chaining.
 pub(crate) fn cluster_default_value() -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let cluster = scope.root_nanbox_f64(crate::object::js_create_native_module_namespace(
-        b"cluster.default".as_ptr(),
-        "cluster.default".len(),
-    ));
+    let cluster = scope.root_nanbox_f64(
+        crate::object::native_module::create_native_module_namespace(
+            &crate::object::native_module::namespaces::cluster::NM_CLUSTER_DEFAULT,
+            "cluster.default",
+        ),
+    );
     let event_emitter = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
         "events",
         "EventEmitter",
@@ -936,7 +938,10 @@ fn self_worker_value() -> f64 {
         set_field(
             worker,
             b"process",
-            crate::object::js_create_native_module_namespace(b"process".as_ptr(), 7),
+            crate::object::native_module::create_native_module_namespace(
+                &crate::object::native_module::namespaces::process::NM_PROCESS,
+                "process",
+            ),
         );
         set_field(worker, b"state", box_string("online"));
         set_field(worker, b"exitedAfterDisconnect", TAG_FALSE_F64);

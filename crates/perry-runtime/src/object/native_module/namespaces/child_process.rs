@@ -21,6 +21,7 @@ crate::realm_decl! {
 
 crate::realm_decl! {
     namespace NM_CHILD_PROCESS = "child_process" {
+        default = NM_CHILD_PROCESS_DEFAULT;
         births = [Object];
         members = {
             ChildProcess = (ref("node:child_process.ChildProcess"));

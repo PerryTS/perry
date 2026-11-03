@@ -20,6 +20,30 @@ pub fn generate(runtime_src: &Path, out: &Path) -> Result<RealmManifest, String>
         writeln!(rust,"perry_hir::realm_manifest::RealmEntry {{ name: {:?}, kind: perry_hir::realm_manifest::RealmKind::{:?}, births: &{:?}, module: {}, facts: {:?} }},",d.name,d.kind,d.births,module,serde_json::to_string(d).unwrap()).unwrap();
     }
     rust.push_str("];\n");
+    // The vtable each native module's namespace is born with, by the module
+    // its declaration owns: codegen names the symbol at the module's births.
+    // One module, one vtable; two declarations naming two vtables is an error.
+    let mut vtables = std::collections::BTreeMap::new();
+    for d in &manifest.declarations {
+        let (Some(module), Some(vtable)) = (&d.native_namespace, &d.exotic_vtable) else {
+            continue;
+        };
+        let ident = vtable.rsplit("::").next().unwrap_or(vtable);
+        if let Some(other) = vtables.insert(module.as_str(), ident) {
+            if other != ident {
+                return Err(format!(
+                    "native module {module} is declared with two vtables, {other} and {ident} ({})",
+                    d.name
+                ));
+            }
+        }
+    }
+    rust.push_str("/// `(module, vtable symbol)`, sorted by module.\n");
+    rust.push_str("pub static NATIVE_NAMESPACE_VTABLES: &[(&str, &str)] = &[\n");
+    for (module, ident) in &vtables {
+        writeln!(rust, "({module:?}, \"perry_nm_vt_{ident}\"),").unwrap();
+    }
+    rust.push_str("];\n");
     std::fs::write(out.join("realm_table.rs"), rust).map_err(|e| e.to_string())?;
     std::fs::write(
         out.join("realm-consume-time-ns"),

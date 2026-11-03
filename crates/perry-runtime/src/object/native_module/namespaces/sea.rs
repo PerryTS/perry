@@ -17,6 +17,7 @@ crate::realm_decl! {
 
 crate::realm_decl! {
     namespace NM_SEA = "sea" {
+        default = NM_SEA_DEFAULT;
         births = [Object];
         members = {
             default = (ref("node:sea.default"));

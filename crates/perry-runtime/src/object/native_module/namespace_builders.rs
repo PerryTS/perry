@@ -3,7 +3,7 @@ use std::sync::atomic::Ordering;
 /// Create a NativeModuleRef sub-namespace (e.g. "fs.constants", "path.posix").
 /// The compiled code treats the result as another NativeModuleRef, so chained
 /// property accesses like `fs.constants.O_RDONLY` work through the dispatch table.
-pub(crate) fn create_sub_namespace(name: &str) -> f64 {
+pub(crate) fn create_sub_namespace(vt: &'static NativeModuleVtable, name: &str) -> f64 {
     if name == "vm.constants" {
         // One object per realm, kept where the namespace was kept before.
         if let Some(bits) = NATIVE_MODULE_NAMESPACES.with(|cache| cache.borrow().get(name).copied())
@@ -16,7 +16,7 @@ pub(crate) fn create_sub_namespace(name: &str) -> f64 {
         });
         return value;
     }
-    js_create_native_module_namespace(name.as_ptr(), name.len())
+    create_native_module_namespace(vt, name)
 }
 
 /// `vm.constants`: as in Node, an ordinary frozen object with a null
@@ -49,7 +49,11 @@ fn vm_constants_value() -> f64 {
     value
 }
 
-pub(crate) fn native_namespace_or_create(module_name: &str, namespace_obj: f64) -> f64 {
+pub(crate) fn native_namespace_or_create(
+    vt: &'static NativeModuleVtable,
+    module_name: &str,
+    namespace_obj: f64,
+) -> f64 {
     let value = JSValue::from_bits(namespace_obj.to_bits());
     if value.is_pointer() {
         let obj = value.as_pointer::<ObjectHeader>();
@@ -63,16 +67,20 @@ pub(crate) fn native_namespace_or_create(module_name: &str, namespace_obj: f64) 
             }
         }
     }
-    js_create_native_module_namespace(module_name.as_ptr(), module_name.len())
+    create_native_module_namespace(vt, module_name)
 }
 
-pub(crate) fn create_cached_sub_namespace(name: &str, cache: &super::super::RealmAtomicU64) -> f64 {
+pub(crate) fn create_cached_sub_namespace(
+    vt: &'static NativeModuleVtable,
+    name: &str,
+    cache: &super::super::RealmAtomicU64,
+) -> f64 {
     let cached = cache.load(Ordering::Relaxed);
     if cached != 0 {
         return f64::from_bits(cached);
     }
 
-    let result = create_sub_namespace(name);
+    let result = create_sub_namespace(vt, name);
     // GC_STORE_AUDIT(ROOT): os constants caches are mutable roots visited by scan_object_cache_roots_mut.
     cache.with_slot(|slot| {
         crate::gc::runtime_store_root_atomic_nanbox_u64(slot, result.to_bits(), Ordering::Relaxed);

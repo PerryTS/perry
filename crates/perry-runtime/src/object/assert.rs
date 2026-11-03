@@ -1395,7 +1395,10 @@ pub extern "C" fn js_assert_assert_ctor(options: f64) -> f64 {
         (true, false) => "assert/strict.instance",
         (true, true) => "assert/strict.instance.skip",
     };
-    let instance = js_create_native_module_namespace(module_name.as_ptr(), module_name.len());
+    let instance = crate::object::native_module::create_native_module_namespace(
+        &crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL,
+        module_name,
+    );
     let jv = crate::value::JSValue::from_bits(instance.to_bits());
     if jv.is_pointer() {
         let obj = jv.as_pointer::<ObjectHeader>() as *mut ObjectHeader;

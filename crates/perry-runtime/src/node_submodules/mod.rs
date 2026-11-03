@@ -537,12 +537,16 @@ pub(crate) fn emit_sys_deprecation_warning_once() {
 }
 
 fn sys_util_namespace_value() -> f64 {
-    crate::object::js_create_native_module_namespace(b"util".as_ptr(), "util".len())
+    crate::object::native_module::create_native_module_namespace(
+        &crate::object::native_module::namespaces::util::NM_UTIL,
+        "util",
+    )
 }
 
 fn sys_util_default_value() -> f64 {
     unsafe {
-        crate::object::js_native_module_property_by_name(
+        crate::object::js_native_module_property_by_name_vt(
+            &crate::object::native_module::namespaces::util::NM_UTIL,
             b"util".as_ptr(),
             "util".len(),
             b"default".as_ptr(),
@@ -556,7 +560,8 @@ fn sys_util_export_value(name: &str) -> Option<f64> {
         return Some(sys_util_default_value());
     }
     let value = unsafe {
-        crate::object::js_native_module_property_by_name(
+        crate::object::js_native_module_property_by_name_vt(
+            &crate::object::native_module::namespaces::util::NM_UTIL,
             b"util".as_ptr(),
             "util".len(),
             name.as_ptr(),
@@ -572,7 +577,8 @@ fn sys_util_export_value(name: &str) -> Option<f64> {
 
 fn fs_constants_namespace_value() -> f64 {
     unsafe {
-        crate::object::js_native_module_property_by_name(
+        crate::object::js_native_module_property_by_name_vt(
+            &crate::fs::NM_FS,
             b"fs".as_ptr(),
             "fs".len(),
             b"constants".as_ptr(),
@@ -852,7 +858,8 @@ fn submodule_has_default_object(submod_key: &str) -> bool {
 
 fn fs_promises_constants_value() -> f64 {
     unsafe {
-        crate::object::js_native_module_property_by_name(
+        crate::object::js_native_module_property_by_name_vt(
+            &crate::fs::NM_FS,
             b"fs".as_ptr(),
             "fs".len(),
             b"constants".as_ptr(),
@@ -1280,7 +1287,8 @@ pub unsafe extern "C" fn js_node_submodule_namespace_member(
             return sys_util_default_value();
         }
         return unsafe {
-            crate::object::js_native_module_property_by_name(
+            crate::object::js_native_module_property_by_name_vt(
+                &crate::object::native_module::namespaces::util::NM_UTIL,
                 b"util".as_ptr(),
                 "util".len(),
                 name.as_ptr(),

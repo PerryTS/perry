@@ -80,6 +80,7 @@ impl ItemNamespaces {
         let mut cell = None;
         let mut extends = None;
         let mut births = None;
+        let mut default_namespace = false;
         let mut members = None;
         for clause in info::split(&ts[5..ts.len() - 1], ";") {
             match clause {
@@ -89,6 +90,12 @@ impl ItemNamespaces {
                 }
                 [name, eq, ..] if name.text == "births" && eq.text == "=" && births.is_none() => {
                     births = Some(span(&clause[2..]).to_owned());
+                }
+                // `default = NM_X_DEFAULT;` names the vtable of the module's
+                // CommonJS default namespace: a fact of the runtime vtable, no
+                // realm data.
+                [name, eq, _] if name.text == "default" && eq.text == "=" && !default_namespace => {
+                    default_namespace = true;
                 }
                 [name, eq, text] if name.text == "cell" && eq.text == "=" && cell.is_none() => {
                     cell = Some(text.string.clone().ok_or_else(shape)?);

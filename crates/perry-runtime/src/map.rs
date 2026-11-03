@@ -139,14 +139,12 @@ unsafe fn note_map_compaction(map: *mut MapHeader, removed: RemovedSlots) {
     (*map).compaction_epoch = epoch;
     let budget = std::cmp::max(MAP_COMPACTION_LOG_MIN_BUDGET, (*map).capacity as usize);
     {
-        let entry = (*(*map).store)
-            .compaction
-            .get_or_insert_with(|| {
-                Box::new(MapCompactionLog {
-                    records: std::collections::VecDeque::new(),
-                    retained: 0,
-                })
-            });
+        let entry = (*(*map).store).compaction.get_or_insert_with(|| {
+            Box::new(MapCompactionLog {
+                records: std::collections::VecDeque::new(),
+                retained: 0,
+            })
+        });
         if matches!(removed, RemovedSlots::Prefix(_)) {
             // The extent was discarded: every cursor rebases to 0 through
             // this record whatever came before, so older history is dead.
@@ -1679,11 +1677,7 @@ unsafe fn small_map_array_key_miss(map: *const MapHeader, key_bits: u64) -> i32 
 
 /// [`small_map_array_key_miss`] for a large map whose store the caller holds.
 #[inline(always)]
-unsafe fn large_map_array_key_miss(
-    store: &MapStore,
-    map: *const MapHeader,
-    key_bits: u64,
-) -> i32 {
+unsafe fn large_map_array_key_miss(store: &MapStore, map: *const MapHeader, key_bits: u64) -> i32 {
     match probe_array_state(key_bits) {
         ProbeArray::NotArray => -1,
         ProbeArray::Forwarded => find_array_alias(map, key_bits, true),
@@ -1818,7 +1812,9 @@ unsafe fn index_large_map_array_key(map: *mut MapHeader, key_bits: u64, index: u
     }
     if let Some(token) = crate::array::array_identity_token(key_bits, true) {
         let store = &mut *(*map).store;
-        let arrays = store.arrays.get_or_insert_with(|| Box::new(crate::fast_hash::new_ptr_hash_map()));
+        let arrays = store
+            .arrays
+            .get_or_insert_with(|| Box::new(crate::fast_hash::new_ptr_hash_map()));
         let before = hash_index_bytes(arrays);
         arrays.insert(token, index);
         note_index_bytes_changed(before, hash_index_bytes(arrays));

@@ -81,6 +81,7 @@ crate::realm_decl! {
 
 crate::realm_decl! {
     namespace NM_PATH = "path" {
+        default = NM_PATH_DEFAULT;
         births = [Object];
         members = {
             _makeLong = (ref("node:path._makeLong"));
@@ -107,6 +108,7 @@ crate::realm_decl! {
 
 crate::realm_decl! {
     namespace NM_PATH_POSIX = "path.posix" {
+        default = NM_PATH_POSIX_DEFAULT;
         births = [Object];
         members = {
             _makeLong = (ref("node:path/posix._makeLong"));
@@ -133,6 +135,7 @@ crate::realm_decl! {
 
 crate::realm_decl! {
     namespace NM_PATH_WIN32 = "path.win32" {
+        default = NM_PATH_WIN32_DEFAULT;
         births = [Object];
         members = {
             _makeLong = (ref("node:path/win32._makeLong"));

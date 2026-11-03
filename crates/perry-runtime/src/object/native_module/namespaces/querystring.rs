@@ -19,6 +19,7 @@ crate::realm_decl! {
 
 crate::realm_decl! {
     namespace NM_QUERYSTRING = "querystring" {
+        default = NM_QUERYSTRING_DEFAULT;
         births = [Object];
         members = {
             decode = (ref("node:querystring.decode"));

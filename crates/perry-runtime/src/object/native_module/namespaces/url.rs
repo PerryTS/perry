@@ -26,6 +26,7 @@ crate::realm_decl! {
 
 crate::realm_decl! {
     namespace NM_URL = "url" {
+        default = NM_URL_DEFAULT;
         births = [Object];
         members = {
             URL = (ref(URL));

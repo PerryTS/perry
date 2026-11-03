@@ -14,6 +14,7 @@ crate::realm_decl! {
 
 crate::realm_decl! {
     namespace NM_DGRAM = "dgram" {
+        default = NM_DGRAM_DEFAULT;
         births = [Object];
         members = {
             Socket = (ref("node:dgram.Socket"));

@@ -177,7 +177,8 @@ pub unsafe extern "C" fn js_global_or_console_property_by_name(
         let property_name =
             std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len)).unwrap_or("");
         if is_native_module_callable_export("console", property_name) {
-            return js_native_module_property_by_name(
+            return js_native_module_property_by_name_vt(
+                &crate::object::native_module::namespaces::console::NM_CONSOLE,
                 b"console".as_ptr(),
                 "console".len(),
                 key_ptr,

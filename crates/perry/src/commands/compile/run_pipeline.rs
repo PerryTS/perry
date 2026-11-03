@@ -6280,6 +6280,7 @@ pub fn run_with_parse_cache(
                 } else {
                     Vec::new()
                 },
+                native_module_table: is_entry && ctx.uses_dynamic_module_lookup,
                 ..ctx.app_metadata.clone()
             },
             // Issue #100: namespace_entries empty unless this

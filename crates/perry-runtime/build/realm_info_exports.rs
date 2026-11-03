@@ -252,11 +252,19 @@ fn write_namespace_storage(declarations: &[Value], out: &Path) -> Result<(), Str
         let header = declaration
             .get("header")
             .ok_or("native receiver lacks its header facts")?;
+        let vtable = declaration
+            .get("exotic_vtable")
+            .and_then(Value::string)
+            .ok_or("native receiver lacks its vtable")?;
         let reserved = header
             .get("reserved")
             .ok_or("native receiver lacks reserved facts")?
             .encode();
-        writeln!(expected, "({name:?}, {module:?}, {reserved}u16),").unwrap();
+        writeln!(
+            expected,
+            "({name:?}, {module:?}, {reserved}u16, &{vtable}),"
+        )
+        .unwrap();
     }
     let source = format!(
         r#"
@@ -264,8 +272,9 @@ fn write_namespace_storage(declarations: &[Value], out: &Path) -> Result<(), Str
 fn realm_native_receiver_facts_match_namespace_births() {{
     crate::gc::initialize_runtime_fixture();
     let _no_move = crate::gc::GcSuppressScope::new();
-    for (name, module, reserved) in [ {expected} ] {{
-        let value = super::js_create_native_module_namespace(module.as_ptr(), module.len());
+    let rows: &[(&str, &str, u16, &'static super::NativeModuleVtable)] = &[ {expected} ];
+    for &(name, module, reserved, vt) in rows {{
+        let value = super::create_native_module_namespace(vt, module);
         let obj = crate::value::js_nanbox_get_pointer(value) as *const crate::object::ObjectHeader;
         unsafe {{
             let header = crate::gc::header_from_trusted_user_ptr(obj.cast());
@@ -286,6 +295,33 @@ fn realm_native_receiver_facts_match_namespace_births() {{
 /// namespace birth, reached through its real access path, yields a value
 /// whose slot-0 module is the owner the declaration names.
 fn write_native_owner_truth(declarations: &[Value], out: &Path) -> Result<(), String> {
+    // The vtable each module's namespace is born with: its declaration's, by
+    // the module and by every specifier the declaration is reached under.
+    let mut vtables = BTreeMap::new();
+    for declaration in declarations {
+        let (Some(owner), Some(vtable)) = (
+            declaration.get("native_namespace").and_then(Value::string),
+            declaration.get("exotic_vtable").and_then(Value::string),
+        ) else {
+            continue;
+        };
+        vtables.entry(owner).or_insert(vtable);
+        let names = declaration
+            .get("names")
+            .and_then(Value::array)
+            .into_iter()
+            .flatten();
+        for name in declaration
+            .get("name")
+            .into_iter()
+            .chain(names)
+            .filter_map(Value::string)
+        {
+            if let Some(module) = name.strip_prefix("node:") {
+                vtables.entry(module).or_insert(vtable);
+            }
+        }
+    }
     let mut expected = String::new();
     for declaration in declarations {
         let Some(name) = declaration.get("name").and_then(Value::string) else {
@@ -312,9 +348,28 @@ fn write_native_owner_truth(declarations: &[Value], out: &Path) -> Result<(), St
             .into_iter()
             .flatten();
         for name in std::iter::once(name).chain(names.filter_map(Value::string)) {
-            if !name.starts_with('%') {
-                writeln!(expected, "({name:?}, {owner:?}, {provider}),").unwrap();
+            if name.starts_with('%') {
+                continue;
             }
+            // The root the access path starts at, as the test splits it; an
+            // alias root (`sys`) is born as the owner's module.
+            let root = match name.strip_prefix("node:") {
+                Some(path) if provider => Some(path),
+                Some(path) => Some(path.split_once('.').map_or(path, |(root, _)| root)),
+                None => None,
+            };
+            let root_vt = match root {
+                Some(root) => {
+                    let owner_root = owner.split_once('.').map_or(owner, |(root, _)| root);
+                    let vtable = vtables
+                        .get(root)
+                        .or_else(|| vtables.get(owner_root))
+                        .ok_or_else(|| format!("{name}: no vtable for its root {root}"))?;
+                    format!("Some(&{vtable})")
+                }
+                None => "None".into(),
+            };
+            writeln!(expected, "({name:?}, {owner:?}, {provider}, {root_vt}),").unwrap();
         }
     }
     let source = format!(
@@ -324,7 +379,8 @@ fn realm_native_owners_are_the_modules_their_access_paths_yield() {{
     crate::gc::initialize_runtime_fixture();
     let scope = crate::gc::RuntimeHandleScope::new();
     let mut wrong = Vec::new();
-    for (name, owner, provider) in [ {expected} ] {{
+    let rows: &[(&str, &str, bool, Option<&'static super::NativeModuleVtable>)] = &[ {expected} ];
+    for &(name, owner, provider, root_vt) in rows {{
         let (path, global) = match name.strip_prefix("node:") {{
             Some(path) => (path, false),
             None => (name, true),
@@ -339,7 +395,7 @@ fn realm_native_owners_are_the_modules_their_access_paths_yield() {{
             let global = crate::object::js_get_global_this();
             unsafe {{ crate::value::js_dynamic_object_get_property(global, root.as_ptr().cast(), root.len()) }}
         }} else {{
-            super::js_create_native_module_namespace(root.as_ptr(), root.len())
+            super::create_native_module_namespace(root_vt.expect("a module root names its vtable"), root)
         }});
         for (depth, segment) in segments.enumerate() {{
             // The HIR rule: a first-level `.default` of a module without a
@@ -359,7 +415,7 @@ fn realm_native_owners_are_the_modules_their_access_paths_yield() {{
             let next = if module.is_empty() {{
                 unsafe {{ crate::value::js_dynamic_object_get_property(current, segment.as_ptr().cast(), segment.len()) }}
             }} else {{
-                unsafe {{ super::js_native_module_property_by_name(module.as_ptr(), module.len(), segment.as_ptr(), segment.len()) }}
+                unsafe {{ super::native_module_property_by_name_impl(module.as_ptr(), module.len(), segment.as_ptr(), segment.len(), true, super::namespace_vtable(current)) }}
             }};
             value = scope.root_nanbox_f64(next);
         }}
@@ -392,7 +448,14 @@ fn native_module_keys_test(declarations: &[Value]) -> String {
         ) else {
             continue;
         };
-        if vtable == "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL" {
+        // An item declaration only: a native provider's vtable keys are its
+        // hand table's, not a declared key order.
+        if vtable == "crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL"
+            || declaration
+                .get("body")
+                .and_then(Value::string)
+                .is_some_and(|body| body.ends_with("::js_create_native_module_namespace"))
+        {
             continue;
         }
         let keys = declaration
@@ -405,7 +468,11 @@ fn native_module_keys_test(declarations: &[Value]) -> String {
             .map(|key| format!("b{key:?}"))
             .collect::<Vec<_>>()
             .join(", ");
-        writeln!(expected, "({owner:?}, &[{keys}], {vtable}.module_keys),").unwrap();
+        writeln!(
+            expected,
+            "({owner:?}, &[{keys}], {vtable}.module_keys, &{vtable}),"
+        )
+        .unwrap();
     }
     format!(
         r#"
@@ -413,14 +480,14 @@ fn native_module_keys_test(declarations: &[Value]) -> String {
 fn realm_native_module_keys_are_their_item_declarations_keys() {{
     crate::gc::initialize_runtime_fixture();
     let scope = crate::gc::RuntimeHandleScope::new();
-    let items: &[(&str, &[&[u8]], &[&[u8]])] = &[ {expected} ];
+    let items: &[(&str, &[&[u8]], &[&[u8]], &'static super::NativeModuleVtable)] = &[ {expected} ];
     assert!(!items.is_empty(), "no namespace is declared as an item");
     let mut wrong = Vec::new();
-    for &(owner, declared, module_keys) in items {{
+    for &(owner, declared, module_keys, vt) in items {{
         if module_keys != declared {{
             wrong.push(format!("{{owner}}: the vtable keys are not the declaration's own key order"));
         }}
-        let value = scope.root_nanbox_f64(super::js_create_native_module_namespace(owner.as_ptr(), owner.len()));
+        let value = scope.root_nanbox_f64(super::create_native_module_namespace(vt, owner));
         let obj = crate::value::js_nanbox_get_pointer(value.get_nanbox_f64()) as *const crate::object::ObjectHeader;
         let keys = crate::object::js_object_keys(obj);
         let keys = (0..crate::array::js_array_length(keys))

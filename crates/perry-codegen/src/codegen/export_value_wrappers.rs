@@ -100,10 +100,15 @@ pub(super) fn emit_export_value_wrappers(c: ExportValueWrapperCtx<'_>) {
         }
         let source_value = blk.load(DOUBLE, &source_handle);
         let imported_value = blk.load(DOUBLE, &imported_handle);
+        let vtable = crate::nm_install::nm_vtable_ref(source);
         let value = blk.call(
             DOUBLE,
-            "js_native_module_named_esm_export_value",
-            &[(DOUBLE, &source_value), (DOUBLE, &imported_value)],
+            "js_native_module_named_esm_export_value_vt",
+            &[
+                (crate::types::PTR, &vtable),
+                (DOUBLE, &source_value),
+                (DOUBLE, &imported_value),
+            ],
         );
         blk.ret(DOUBLE, &value);
     }

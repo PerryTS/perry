@@ -27,6 +27,7 @@ crate::realm_decl! {
     namespace NM_PERF_HOOKS = "perf_hooks" {
         cell = "performance";
         extends = (Performance.prototype);
+        default = NM_PERF_HOOKS_DEFAULT;
         members = {
             Performance = (ref(Performance));
             PerformanceEntry = (ref(PerformanceEntry));

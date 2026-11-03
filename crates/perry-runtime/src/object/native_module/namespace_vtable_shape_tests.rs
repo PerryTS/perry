@@ -6,8 +6,9 @@
 use super::*;
 use crate::object::shapes::{object_shape_descriptor, object_shape_stamp};
 
-fn born(module: &str) -> *mut ObjectHeader {
-    let value = js_create_native_module_namespace(module.as_ptr(), module.len());
+/// The namespace of `module`, born with the vtable its declaration names.
+fn born(vt: &'static NativeModuleVtable, module: &str) -> *mut ObjectHeader {
+    let value = crate::object::native_module::create_native_module_namespace(vt, module);
     crate::value::js_nanbox_get_pointer(value) as *mut ObjectHeader
 }
 
@@ -25,9 +26,9 @@ fn stamp(obj: *mut ObjectHeader) -> u64 {
 
 #[test]
 fn each_module_namespace_has_its_own_shape() {
-    let fs = born("fs");
-    let path = born("path");
-    let opaque = born("perry/gc");
+    let fs = born(&crate::fs::NM_FS, "fs");
+    let path = born(&super::namespaces::path::NM_PATH, "path");
+    let opaque = born(&NATIVE_MODULE_VTABLE_IMPL, "perry/gc");
     assert_eq!(vt_of(fs), &crate::fs::NM_FS as *const _);
     assert_eq!(vt_of(path), &super::namespaces::path::NM_PATH as *const _);
     assert_eq!(vt_of(opaque), &NATIVE_MODULE_VTABLE_IMPL as *const _);
@@ -40,11 +41,7 @@ fn each_module_namespace_has_its_own_shape() {
     assert_ne!(stamp(fs), stamp(path));
     assert_ne!(stamp(fs), stamp(opaque));
     // A second birth of a module reuses its shape.
-    let fs_twin = {
-        let module = "fs";
-        let bits = js_create_native_module_namespace(module.as_ptr(), module.len());
-        crate::value::js_nanbox_get_pointer(bits) as *mut ObjectHeader
-    };
+    let fs_twin = born(&crate::fs::NM_FS, "fs");
     assert_eq!(stamp(fs_twin), stamp(fs));
 }
 
@@ -52,17 +49,17 @@ fn each_module_namespace_has_its_own_shape() {
 fn an_unmatched_name_is_unkeyed_not_empty() {
     // A module with no key table enumerates its key list; it must not read
     // as a declared module with zero exports.
-    let opaque = born("perry/gc");
+    let opaque = born(&NATIVE_MODULE_VTABLE_IMPL, "perry/gc");
     let vt = unsafe { object_native_vtable(opaque) }.unwrap();
     assert!((vt.keys)(vt).is_none());
-    let fs = born("fs");
+    let fs = born(&crate::fs::NM_FS, "fs");
     let vt = unsafe { object_native_vtable(fs) }.unwrap();
     assert!((vt.keys)(vt).is_some_and(|keys| keys.len() > 50));
 }
 
 #[test]
 fn adding_and_deleting_a_property_keep_the_vtable() {
-    let path = born("path");
+    let path = born(&super::namespaces::path::NM_PATH, "path");
     let before = stamp(path);
     let name = "extra_q8";
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
@@ -75,7 +72,7 @@ fn adding_and_deleting_a_property_keep_the_vtable() {
             super::super::PropertyAttrs::new(true, true, true),
         );
     }
-    let path = born("path");
+    let path = born(&super::namespaces::path::NM_PATH, "path");
     let added = stamp(path);
     assert_ne!(added, before, "defineProperty transitions the shape");
     assert_eq!(vt_of(path), &super::namespaces::path::NM_PATH as *const _);
@@ -83,27 +80,36 @@ fn adding_and_deleting_a_property_keep_the_vtable() {
     let deleted =
         js_object_delete_dynamic_value(value_of(path), crate::value::js_nanbox_string(key as i64));
     assert_ne!(deleted, 0);
-    let path = born("path");
+    let path = born(&super::namespaces::path::NM_PATH, "path");
     assert_ne!(stamp(path), added, "delete transitions the shape");
     assert_eq!(vt_of(path), &super::namespaces::path::NM_PATH as *const _);
 }
 
 #[test]
 fn integrity_transitions_keep_the_vtable() {
-    for (module, op) in [
+    for (module_vt, module, op) in [
         (
+            &super::namespaces::os::NM_OS as &'static NativeModuleVtable,
             "os",
             crate::object::js_object_prevent_extensions as extern "C" fn(f64) -> f64,
         ),
-        ("url", crate::object::js_object_seal),
-        ("querystring", crate::object::js_object_freeze),
+        (
+            &super::namespaces::url::NM_URL,
+            "url",
+            crate::object::js_object_seal,
+        ),
+        (
+            &super::namespaces::querystring::NM_QUERYSTRING,
+            "querystring",
+            crate::object::js_object_freeze,
+        ),
     ] {
-        let ns = born(module);
+        let ns = born(module_vt, module);
         let vt = vt_of(ns);
         assert!(!vt.is_null(), "{module}: born branded");
         let before = stamp(ns);
         op(value_of(ns));
-        let ns = born(module);
+        let ns = born(module_vt, module);
         assert_ne!(
             stamp(ns),
             before,
@@ -112,7 +118,7 @@ fn integrity_transitions_keep_the_vtable() {
         assert_eq!(vt_of(ns), vt, "{module}: the vtable is carried");
     }
     // `module` is sealed at birth: the seal carried the brand too.
-    let module = born("module");
+    let module = born(&super::namespaces::module::NM_MODULE, "module");
     assert_eq!(
         vt_of(module),
         &super::namespaces::module::NM_MODULE as *const _
@@ -121,7 +127,7 @@ fn integrity_transitions_keep_the_vtable() {
 
 #[test]
 fn the_brand_is_not_a_key() {
-    let fs = born("fs");
+    let fs = born(&crate::fs::NM_FS, "fs");
     let keys = unsafe { vt_own_keys_array(fs) }.unwrap();
     let count = crate::array::js_array_length(keys) as usize;
     assert_eq!(count, crate::fs::NM_FS.module_keys.len());

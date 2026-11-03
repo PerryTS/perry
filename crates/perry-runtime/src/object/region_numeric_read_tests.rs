@@ -270,6 +270,11 @@ fn native_namespace_virtual_value_cannot_publish_a_numeric_own_slot_word() {
         assert_eq!(slot_rep(rep, 1), REP_F64);
         (*obj).class_id = crate::object::NATIVE_MODULE_CLASS_ID;
         restamp_object_proto_id(obj);
+        // The namespace brand (its vtable) is a fact of the shape.
+        let obj = crate::object::native_module::brand_native_namespace(
+            obj,
+            &crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL,
+        );
         // The prototype transition conservatively loses rep facts. Mint an
         // artificial but compatible native F64 descriptor, so rejection
         // cannot be explained by a missing numeric lane.

@@ -1346,7 +1346,10 @@ pub(crate) unsafe fn nm_static_buffer_proto_chain(
             let parent_value = crate::value::js_nanbox_pointer(parent_addr as i64);
             if is_buffer_constructor_value(parent_value) {
                 let module = b"buffer.Buffer";
-                let ns = js_create_native_module_namespace(module.as_ptr(), module.len());
+                let ns = crate::object::native_module::create_native_module_namespace(
+                    &crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL,
+                    "buffer.Buffer",
+                );
                 let ns_obj = JSValue::from_bits(ns.to_bits()).as_pointer::<ObjectHeader>();
                 let result = crate::object::native_module::call_native_module_dispatch_hook(
                     ns_obj, name, args_ptr, args_len,

@@ -40,7 +40,7 @@ pub(crate) mod constants;
 mod constants_tables;
 mod constructor_exports;
 pub(crate) mod constructor_shapes;
-mod module_keys;
+pub(crate) mod module_keys;
 mod name_tables;
 mod namespace_builders;
 mod namespace_prototype;
@@ -77,8 +77,7 @@ pub(crate) use constructor_exports::{
     bound_native_callable_is_constructor_value, is_native_module_constructor_export,
 };
 pub(crate) use module_keys::{
-    native_module_has_enumerable_key, native_module_vtable_for,
-    zlib_readonly_property_enumerability,
+    native_module_has_enumerable_key, vm_modules_vtable, zlib_readonly_property_enumerability,
 };
 use name_tables::should_cache_native_module_namespace;
 pub(crate) use name_tables::{assert_instance_base_module, canonical_native_callable_property};
@@ -614,6 +613,10 @@ pub(crate) struct NativeModuleVtable {
     /// `realm_decl! { namespace ... }` declaration lists them; empty for a
     /// module still declared in the native birth block.
     pub module_keys: &'static [&'static [u8]],
+    /// The vtable of the module's CommonJS default namespace (`<mod>.default`),
+    /// `None` when the module has none: the default export is born from the
+    /// module's own vtable, never from its name.
+    pub default_namespace: Option<&'static NativeModuleVtable>,
 }
 
 /// A module's enumerable export keys: its declared keys, then the keys a
@@ -660,11 +663,13 @@ pub(crate) const NATIVE_MODULE_VTABLE_BASE: NativeModuleVtable = NativeModuleVta
     has_enumerable_key: native_module_has_enumerable_key,
     keys: declared_module_keys,
     module_keys: &[],
+    default_namespace: None,
 };
 
 /// The vtable of a namespace whose module declares no key table (the
 /// modules of the native birth block, and the runtime's instance objects
 /// that share the namespace class).
+#[export_name = "perry_nm_vt_NATIVE_MODULE_VTABLE_IMPL"]
 pub(crate) static NATIVE_MODULE_VTABLE_IMPL: NativeModuleVtable = NativeModuleVtable {
     keys: no_module_keys,
     ..NATIVE_MODULE_VTABLE_BASE
@@ -684,6 +689,21 @@ pub(crate) unsafe fn object_native_vtable(
     // SAFETY: only `brand_native_namespace` and the image-row registration
     // produce this band, each from a `&'static NativeModuleVtable`.
     Some(&*(address as *const NativeModuleVtable))
+}
+
+/// The vtable the namespace value `ns`'s shape records, or `None` when `ns`
+/// is no namespace object (0.0 included).
+pub(crate) fn namespace_vtable(ns: f64) -> Option<&'static NativeModuleVtable> {
+    let value = JSValue::from_bits(ns.to_bits());
+    if !value.is_pointer() {
+        return None;
+    }
+    let obj = (ns.to_bits() & crate::value::POINTER_MASK) as *const ObjectHeader;
+    if obj.is_null() {
+        return None;
+    }
+    // SAFETY: a pointer-tagged value is a live heap object.
+    unsafe { object_native_vtable(obj) }
 }
 
 /// Record `vt` on `obj`'s shape: one brand transition, carried by every
@@ -852,6 +872,100 @@ pub extern "C" fn js_create_native_module_namespace(
         );
         std::str::from_utf8_unchecked(bytes)
     };
+    native_namespace_by_name(module_name)
+}
+
+/// One row of the program's `(name, vtable)` array: the namespaces a program
+/// with a dynamic `require(expr)` / `getBuiltinModule(id)` can reach by a
+/// runtime string. Codegen emits the array (`@perry_native_modules`) only in
+/// such programs; every other birth names its vtable.
+#[repr(C)]
+pub struct NativeModuleRow {
+    name_ptr: *const u8,
+    /// `u64` on every target: the row is `{ ptr, i64, ptr }` in the image.
+    name_len: u64,
+    vt: &'static NativeModuleVtable,
+}
+
+static NATIVE_MODULE_ROWS: std::sync::atomic::AtomicPtr<NativeModuleRow> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+static NATIVE_MODULE_ROW_COUNT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Program entry: the codegen-emitted `(name, vtable)` array of a program with
+/// a dynamic require. The array is a constant of the program image.
+#[no_mangle]
+pub extern "C" fn js_nm_set_module_table(rows: *const NativeModuleRow, count: usize) {
+    NATIVE_MODULE_ROW_COUNT.store(count, std::sync::atomic::Ordering::Relaxed);
+    NATIVE_MODULE_ROWS.store(rows as *mut _, std::sync::atomic::Ordering::Release);
+}
+
+/// The vtable of the namespace a runtime string `module_name` reaches: its row
+/// in the program's array, else `None` (the program never names the module).
+pub(crate) fn native_module_vtable_by_name(
+    module_name: &str,
+) -> Option<&'static NativeModuleVtable> {
+    let module_name = normalize_native_module_alias(module_name);
+    let rows = NATIVE_MODULE_ROWS.load(std::sync::atomic::Ordering::Acquire);
+    if !rows.is_null() {
+        let count = NATIVE_MODULE_ROW_COUNT.load(std::sync::atomic::Ordering::Relaxed);
+        // SAFETY: the array and its name bytes are constants of the image.
+        let rows = unsafe { std::slice::from_raw_parts(rows, count) };
+        for row in rows {
+            let name = unsafe { std::slice::from_raw_parts(row.name_ptr, row.name_len as usize) };
+            if name == module_name.as_bytes() {
+                return Some(row.vt);
+            }
+        }
+    }
+    None
+}
+
+/// The namespace of a module named by a runtime string: the module's
+/// namespace when one is born, else one born with the program's row vtable;
+/// with no row, an unkeyed namespace that is never cached (it serves as a
+/// bound callable's receiver and is never handed out as the module's
+/// namespace, so a later import still births the keyed one).
+pub(crate) fn native_namespace_by_name(module_name: &str) -> f64 {
+    create_native_module_namespace_in(native_module_vtable_by_name(module_name), module_name)
+}
+
+/// The namespace of `module_name` born with the vtable its birth site names.
+/// A site that names its module statically passes the module's vtable; the
+/// shape carries it from here on. The name bytes are as for
+/// [`js_create_native_module_namespace`].
+#[no_mangle]
+pub extern "C" fn js_create_native_module_namespace_vt(
+    vt: &'static NativeModuleVtable,
+    module_name_ptr: *const u8,
+    module_name_len: usize,
+) -> f64 {
+    let module_name = unsafe {
+        let bytes = std::slice::from_raw_parts(module_name_ptr, module_name_len);
+        debug_assert!(
+            std::str::from_utf8(bytes).is_ok(),
+            "native module name is not UTF-8"
+        );
+        std::str::from_utf8_unchecked(bytes)
+    };
+    create_native_module_namespace(vt, module_name)
+}
+
+/// The namespace of `module_name`, whose vtable the caller names.
+pub(crate) fn create_native_module_namespace(
+    vt: &'static NativeModuleVtable,
+    module_name: &str,
+) -> f64 {
+    create_native_module_namespace_in(Some(vt), module_name)
+}
+
+/// The namespace of `module_name` born with `vt`; `None` (the vtable is not
+/// known at this birth) births an unkeyed namespace and leaves the
+/// per-module cache to the keyed birth.
+pub(crate) fn create_native_module_namespace_in(
+    vt: Option<&'static NativeModuleVtable>,
+    module_name: &str,
+) -> f64 {
     let module_name = normalize_native_module_alias(module_name);
     if module_name == "wasi" {
         crate::wasi_hook_slots::emit_wasi_static_warning();
@@ -863,7 +977,7 @@ pub extern "C" fn js_create_native_module_namespace(
             return f64::from_bits(bits);
         }
     }
-    crate::realm_decl! { "%NativeNamespace:assert%", provider = native, births = [Object]; "%NativeNamespace:buffer.Buffer%", provider = native, births = [Object]; "%NativeNamespace:crypto.KeyObject%", provider = native, births = [Object]; "%NativeNamespace:crypto.Certificate%", provider = native, births = [Object]; "%NativeNamespace:inspector.DOMStorage%", provider = native, births = [Object]; "%NativeNamespace:inspector.NetworkResources%", provider = native, births = [Object]; "%NativeNamespace:perf_hooks%", provider = native, births = [Object]; "node:@lydell/node-pty", provider = native, native_namespace = "node-pty", births = [Array, Error, Function, Object]; "node:@parcel/watcher", provider = native, births = [Array, Error, Function, Object]; "node:@parcel/watcher-darwin-arm64", provider = native, births = [Array, Error, Function, Object]; "node:@parcel/watcher-darwin-x64", provider = native, births = [Array, Error, Function, Object]; "node:@parcel/watcher-linux-arm64-glibc", provider = native, births = [Array, Error, Function, Object]; "node:@parcel/watcher-linux-arm64-musl", provider = native, births = [Array, Error, Function, Object]; "node:@parcel/watcher-linux-x64-glibc", provider = native, births = [Array, Error, Function, Object]; "node:@parcel/watcher-linux-x64-musl", provider = native, births = [Array, Error, Function, Object]; "node:@parcel/watcher-win32-arm64", provider = native, births = [Array, Error, Function, Object]; "node:@parcel/watcher-win32-x64", provider = native, births = [Array, Error, Function, Object]; "node:@perryts/pdf", provider = native, births = [Array, Error, Function, Object]; "node:__disposable__", provider = native, births = [Array, Error, Function, Object]; "node:argon2", provider = native, births = [Array, Error, Function, Object]; "node:bcrypt", provider = native, births = [Array, Error, Function, Object]; "node:better-sqlite3", provider = native, births = [Array, Error, Function, Object]; "node:buffer.Buffer", provider = native, births = [Array, Error, Function, Object]; "node:bun", provider = native, births = [Array, Buffer, Error, Function, Object, Promise]; "node:bun-pty", provider = native, native_namespace = "node-pty", births = [Array, Error, Function, Object]; "node:bun:ffi", provider = native, births = [Array, Error, Function, Object]; "node:bun:jsc", provider = native, births = [Array, Error, Function, Object]; "node:bun:sqlite", provider = native, births = [Array, Error, Function, Object]; "node:cheerio", provider = native, births = [Array, Error, Function, Object]; "node:ethers", provider = native, births = [Array, Error, Function, Object]; "node:ffi", provider = native, births = [Array, Error, Function, Object]; "node:lodash", provider = native, births = [Array, Error, Function, Object]; "node:node-fetch", provider = native, births = [Array, Error, Function, Headers, Object, Promise, Request, Response, fetch]; "node:node-pty", provider = native, births = [Array, Error, Function, Object]; "node:nodemailer", provider = native, births = [Array, Error, Function, Object]; "node:perry", provider = native, births = [Array, Error, Function, Object]; "node:perry/ads", provider = native, births = [Array, Error, Function, Object]; "node:perry/audio", provider = native, births = [Array, Error, Function, Object]; "node:perry/background", provider = native, births = [Array, Error, Function, Object]; "node:perry/component", provider = native, births = [Array, Error, Function, Object]; "node:perry/compose", provider = native, births = [Array, Error, Function, Object]; "node:perry/container", provider = native, births = [Array, Error, Function, Object]; "node:perry/container-compose", provider = native, births = [Array, Error, Function, Object]; "node:perry/gc", provider = native, births = [Array, Error, Function, Object]; "node:perry/i18n", provider = native, births = [Array, Error, Function, Object]; "node:perry/ios", provider = native, births = [Array, Error, Function, Object]; "node:perry/media", provider = native, births = [Array, Error, Function, Object]; "node:perry/native", provider = native, births = [Array, Error, Function, Object]; "node:perry/plugin", provider = native, births = [Array, Error, Function, Object]; "node:perry/system", provider = native, births = [Array, Error, Function, Object]; "node:perry/thread", provider = native, births = [Array, Error, Function, Object]; "node:perry/tui", provider = native, births = [Array, Error, Function, Object]; "node:perry/ui", provider = native, births = [Array, Error, Function, Object]; "node:perry/updater", provider = native, births = [Array, Error, Function, Object]; "node:perry/widget", provider = native, births = [Array, Error, Function, Object]; "node:perry/workloads", provider = native, births = [Array, Error, Function, Object]; "node:perry/yoga", provider = native, births = [Array, Error, Function, Object]; "node:sharp", provider = native, births = [Array, Error, Function, Object]; "node:sqlite", provider = native, births = [Array, Error, Function, Object]; "node:typescript", provider = native, births = [Array, Error, Function, Object]; "node:undici", provider = native, births = [Array, ArrayBuffer, Error, Function, Headers, Object, Promise, Request, Response, fetch]; "node:util.types", provider = native, births = [Array, Error, Function, Object]; "node:ws", provider = native, births = [Array, Error, Function, Object]; }
+    crate::realm_decl! { "%NativeNamespace:assert%", provider = native, births = [Object]; "%NativeNamespace:buffer.Buffer%", provider = native, births = [Object]; "%NativeNamespace:constants%", provider = native, vtable = crate::object::native_module::module_keys::NM_CONSTANTS, births = [Object]; "%NativeNamespace:crypto.KeyObject%", provider = native, births = [Object]; "%NativeNamespace:crypto.Certificate%", provider = native, births = [Object]; "%NativeNamespace:inspector.DOMStorage%", provider = native, vtable = crate::object::native_module::namespaces::inspector::NM_INSPECTOR_DOMSTORAGE, births = [Object]; "%NativeNamespace:inspector.NetworkResources%", provider = native, vtable = crate::object::native_module::namespaces::inspector::NM_INSPECTOR_NETWORKRESOURCES, births = [Object]; "%NativeNamespace:perf_hooks%", provider = native, vtable = crate::object::native_module::namespaces::perf_hooks::NM_PERF_HOOKS, births = [Object]; "node:@lydell/node-pty", provider = native, native_namespace = "node-pty", vtable = crate::object::native_module::module_keys::NM_NODE_PTY, births = [Array, Error, Function, Object]; "node:@parcel/watcher", provider = native, births = [Array, Error, Function, Object]; "node:@parcel/watcher-darwin-arm64", provider = native, births = [Array, Error, Function, Object]; "node:@parcel/watcher-darwin-x64", provider = native, births = [Array, Error, Function, Object]; "node:@parcel/watcher-linux-arm64-glibc", provider = native, births = [Array, Error, Function, Object]; "node:@parcel/watcher-linux-arm64-musl", provider = native, births = [Array, Error, Function, Object]; "node:@parcel/watcher-linux-x64-glibc", provider = native, births = [Array, Error, Function, Object]; "node:@parcel/watcher-linux-x64-musl", provider = native, births = [Array, Error, Function, Object]; "node:@parcel/watcher-win32-arm64", provider = native, births = [Array, Error, Function, Object]; "node:@parcel/watcher-win32-x64", provider = native, births = [Array, Error, Function, Object]; "node:@perryts/pdf", provider = native, births = [Array, Error, Function, Object]; "node:__disposable__", provider = native, births = [Array, Error, Function, Object]; "node:argon2", provider = native, births = [Array, Error, Function, Object]; "node:bcrypt", provider = native, births = [Array, Error, Function, Object]; "node:better-sqlite3", provider = native, births = [Array, Error, Function, Object]; "node:buffer.Buffer", provider = native, births = [Array, Error, Function, Object]; "node:bun", provider = native, vtable = crate::object::native_module::module_keys::NM_BUN, births = [Array, Buffer, Error, Function, Object, Promise]; "node:bun-pty", provider = native, native_namespace = "node-pty", vtable = crate::object::native_module::module_keys::NM_NODE_PTY, births = [Array, Error, Function, Object]; "node:bun:ffi", provider = native, vtable = crate::object::native_module::module_keys::NM_BUN_FFI, births = [Array, Error, Function, Object]; "node:bun:jsc", provider = native, vtable = crate::object::native_module::module_keys::NM_BUN_JSC, births = [Array, Error, Function, Object]; "node:bun:sqlite", provider = native, births = [Array, Error, Function, Object]; "node:cheerio", provider = native, births = [Array, Error, Function, Object]; "node:ethers", provider = native, births = [Array, Error, Function, Object]; "node:ffi", provider = native, vtable = crate::object::native_module::module_keys::NM_FFI, births = [Array, Error, Function, Object]; "node:lodash", provider = native, births = [Array, Error, Function, Object]; "node:node-fetch", provider = native, births = [Array, Error, Function, Headers, Object, Promise, Request, Response, fetch]; "node:node-pty", provider = native, vtable = crate::object::native_module::module_keys::NM_NODE_PTY, births = [Array, Error, Function, Object]; "node:nodemailer", provider = native, births = [Array, Error, Function, Object]; "node:perry", provider = native, births = [Array, Error, Function, Object]; "node:perry/ads", provider = native, births = [Array, Error, Function, Object]; "node:perry/audio", provider = native, births = [Array, Error, Function, Object]; "node:perry/background", provider = native, births = [Array, Error, Function, Object]; "node:perry/component", provider = native, births = [Array, Error, Function, Object]; "node:perry/compose", provider = native, births = [Array, Error, Function, Object]; "node:perry/container", provider = native, births = [Array, Error, Function, Object]; "node:perry/container-compose", provider = native, births = [Array, Error, Function, Object]; "node:perry/gc", provider = native, births = [Array, Error, Function, Object]; "node:perry/i18n", provider = native, births = [Array, Error, Function, Object]; "node:perry/ios", provider = native, births = [Array, Error, Function, Object]; "node:perry/media", provider = native, births = [Array, Error, Function, Object]; "node:perry/native", provider = native, births = [Array, Error, Function, Object]; "node:perry/plugin", provider = native, births = [Array, Error, Function, Object]; "node:perry/system", provider = native, births = [Array, Error, Function, Object]; "node:perry/thread", provider = native, births = [Array, Error, Function, Object]; "node:perry/tui", provider = native, births = [Array, Error, Function, Object]; "node:perry/ui", provider = native, births = [Array, Error, Function, Object]; "node:perry/updater", provider = native, births = [Array, Error, Function, Object]; "node:perry/widget", provider = native, births = [Array, Error, Function, Object]; "node:perry/workloads", provider = native, births = [Array, Error, Function, Object]; "node:perry/yoga", provider = native, births = [Array, Error, Function, Object]; "node:sharp", provider = native, births = [Array, Error, Function, Object]; "node:sqlite", provider = native, vtable = crate::object::native_module::module_keys::NM_SQLITE, births = [Array, Error, Function, Object]; "node:typescript", provider = native, births = [Array, Error, Function, Object]; "node:undici", provider = native, births = [Array, ArrayBuffer, Error, Function, Headers, Object, Promise, Request, Response, fetch]; "node:util.types", provider = native, vtable = crate::object::native_module::namespaces::util::NM_UTIL_TYPES, births = [Array, Error, Function, Object]; "node:ws", provider = native, births = [Array, Error, Function, Object]; }
     // Create an object with one field to store the module name
     let obj = crate::realm_decl! { birth js_object_alloc(NATIVE_MODULE_CLASS_ID, 1); realm { namespaces = native_namespaces; } };
 
@@ -881,14 +995,20 @@ pub extern "C" fn js_create_native_module_namespace(
     crate::array::js_array_push(keys_array, JSValue::string_ptr(key_str));
     js_object_set_keys(obj, keys_array);
     // The module's vtable is a fact of the namespace's shape.
-    let obj = unsafe { brand_native_namespace(obj, native_module_vtable_for(module_name)) };
+    let known = vt.is_some();
+    let vt = if module_name == "vm" && crate::node_vm::vm_modules_enabled() {
+        native_module::vm_modules_vtable()
+    } else {
+        vt.unwrap_or(&NATIVE_MODULE_VTABLE_IMPL)
+    };
+    let obj = unsafe { brand_native_namespace(obj, vt) };
 
     // Return as NaN-boxed pointer
     let value = crate::value::js_nanbox_pointer(obj as i64);
     if module_name == "module" {
         crate::object::js_object_seal(value);
     }
-    if should_cache_native_module_namespace(module_name) {
+    if known && should_cache_native_module_namespace(module_name) {
         NATIVE_MODULE_NAMESPACES.with(|cache| {
             cache
                 .borrow_mut()
@@ -918,7 +1038,10 @@ pub(crate) fn normalize_native_module_alias(module_name: &str) -> &str {
 }
 
 pub(crate) fn webcrypto_namespace() -> f64 {
-    js_create_native_module_namespace(b"crypto.webcrypto".as_ptr(), "crypto.webcrypto".len())
+    crate::object::native_module::create_native_module_namespace(
+        &crate::object::native_module::namespaces::crypto::NM_CRYPTO_WEBCRYPTO,
+        "crypto.webcrypto",
+    )
 }
 
 pub(crate) fn install_webcrypto_constructor_proto(proto_obj: *mut ObjectHeader, ctor_value: f64) {
@@ -933,8 +1056,19 @@ pub(crate) fn install_webcrypto_constructor_proto(proto_obj: *mut ObjectHeader, 
     );
 }
 
+/// The `string_decoder` namespace (perry-stdlib reads its `StringDecoder`).
+pub fn string_decoder_namespace() -> f64 {
+    create_native_module_namespace(
+        &crate::object::native_module::namespaces::string_decoder::NM_STRING_DECODER,
+        "string_decoder",
+    )
+}
+
 pub(crate) fn subtle_crypto_namespace() -> f64 {
-    js_create_native_module_namespace(b"crypto.subtle".as_ptr(), "crypto.subtle".len())
+    crate::object::native_module::create_native_module_namespace(
+        &crate::object::native_module::namespaces::crypto::NM_CRYPTO_SUBTLE,
+        "crypto.subtle",
+    )
 }
 
 /// #1479: read the module-name string stored in field 0 of a
@@ -979,6 +1113,27 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
         property_name_ptr,
         property_name_len,
         true,
+        None,
+    )
+}
+
+/// [`js_native_module_property_by_name`] from a codegen site: `vt` is the
+/// vtable of the module's own namespace (the read holds no receiver).
+#[no_mangle]
+pub unsafe extern "C" fn js_native_module_property_by_name_vt(
+    vt: &'static NativeModuleVtable,
+    module_name_ptr: *const u8,
+    module_name_len: usize,
+    property_name_ptr: *const u8,
+    property_name_len: usize,
+) -> f64 {
+    native_module_property_by_name_impl(
+        module_name_ptr,
+        module_name_len,
+        property_name_ptr,
+        property_name_len,
+        true,
+        Some(vt),
     )
 }
 
@@ -988,6 +1143,7 @@ unsafe fn native_module_property_by_name_impl(
     property_name_ptr: *const u8,
     property_name_len: usize,
     consult_overrides: bool,
+    base: Option<&'static NativeModuleVtable>,
 ) -> f64 {
     // Codegen NativeModuleRef fast path — can mint native-module-backed
     // values without a namespace object; the vtable must be live for the
@@ -1015,8 +1171,16 @@ unsafe fn native_module_property_by_name_impl(
         }
     }
     if module_name == "process.namespace" && property_name == "default" {
-        return cjs_default_export_value("process")
-            .unwrap_or_else(|| js_create_native_module_namespace(b"process".as_ptr(), 7));
+        return cjs_default_export_value(
+            "process",
+            Some(&crate::object::native_module::namespaces::process::NM_PROCESS),
+        )
+        .unwrap_or_else(|| {
+            crate::object::native_module::create_native_module_namespace(
+                &crate::object::native_module::namespaces::process::NM_PROCESS,
+                "process",
+            )
+        });
     }
     let module_name = if module_name == "process.namespace" {
         "process"
@@ -1038,7 +1202,10 @@ unsafe fn native_module_property_by_name_impl(
         // `Object.keys(constants)` enumerated the export list instead of the
         // `NODE_PERFORMANCE_GC_*` table.
         let submodule = "perf_hooks.constants";
-        return js_create_native_module_namespace(submodule.as_ptr(), submodule.len());
+        return crate::object::native_module::create_native_module_namespace(
+            &crate::object::native_module::namespaces::perf_hooks::NM_PERF_HOOKS_CONSTANTS,
+            "perf_hooks.constants",
+        );
     }
     // #1533: node:stream exposes a `promises` namespace (`await pipeline(...)`
     // / `finished(...)`). Resolve `stream.promises` to a `stream/promises`-
@@ -1060,9 +1227,15 @@ unsafe fn native_module_property_by_name_impl(
     }
     if module_name == "dns" && property_name == "promises" {
         crate::dns::dns_promises_init_servers_from_callback_if_unset();
-        return cjs_default_export_value("dns/promises").unwrap_or_else(|| {
-            let submodule = "dns/promises";
-            js_create_native_module_namespace(submodule.as_ptr(), submodule.len())
+        return cjs_default_export_value(
+            "dns/promises",
+            Some(&crate::object::native_module::namespaces::dns::NM_DNS_PROMISES),
+        )
+        .unwrap_or_else(|| {
+            crate::object::native_module::create_native_module_namespace(
+                &crate::object::native_module::namespaces::dns::NM_DNS_PROMISES,
+                "dns/promises",
+            )
         });
     }
 
@@ -1095,8 +1268,10 @@ unsafe fn native_module_property_by_name_impl(
     if module_name == "bun" {
         match property_name {
             "ant" => {
-                let submodule = "bun.ant";
-                return js_create_native_module_namespace(submodule.as_ptr(), submodule.len());
+                return crate::object::native_module::create_native_module_namespace(
+                    &crate::object::native_module::module_keys::NM_BUN_ANT,
+                    "bun.ant",
+                );
             }
             "stdin" => return crate::bun_hook_slots::js_bun_stdin(),
             "stdout" => return crate::bun_hook_slots::js_bun_stdout(),
@@ -1137,7 +1312,7 @@ unsafe fn native_module_property_by_name_impl(
         return bound_native_callable_export_value("cluster.default", property_name);
     }
 
-    if let Some(val) = get_native_module_constant(module_name, property_name, 0.0) {
+    if let Some(val) = get_native_module_constant(module_name, property_name, 0.0, base) {
         return val;
     }
     // Modules the submodule registry implements (`timers/promises`, `stream/web`,
@@ -1171,7 +1346,12 @@ fn native_module_string_arg(value: f64) -> Option<String> {
     Some(String::from_utf8_lossy(bytes).into_owned())
 }
 
-fn native_module_export_value(module: f64, property: f64, observe_namespace_writes: bool) -> f64 {
+fn native_module_export_value(
+    module: f64,
+    property: f64,
+    observe_namespace_writes: bool,
+    base: Option<&'static NativeModuleVtable>,
+) -> f64 {
     let Some(module) = native_module_string_arg(module) else {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
@@ -1209,6 +1389,7 @@ fn native_module_export_value(module: f64, property: f64, observe_namespace_writ
             property.as_ptr(),
             property.len(),
             false,
+            base,
         )
     };
     if live || value.to_bits() == crate::value::TAG_UNDEFINED {
@@ -1225,14 +1406,39 @@ fn native_module_export_value(module: f64, property: f64, observe_namespace_writ
 /// User writes to the CommonJS namespace are observable immediately here.
 #[no_mangle]
 pub extern "C" fn js_native_module_esm_export_value(module: f64, property: f64) -> f64 {
-    native_module_export_value(module, property, true)
+    let base =
+        native_module_string_arg(module).and_then(|module| native_module_vtable_by_name(&module));
+    native_module_export_value(module, property, true, base)
+}
+
+/// [`js_native_module_esm_export_value`] from a codegen site: `vt` is the
+/// vtable of the module's own namespace.
+#[no_mangle]
+pub extern "C" fn js_native_module_esm_export_value_vt(
+    vt: &'static NativeModuleVtable,
+    module: f64,
+    property: f64,
+) -> f64 {
+    native_module_export_value(module, property, true, Some(vt))
 }
 
 /// Snapshot-backed value used for named ESM imports from builtins. CommonJS
 /// namespace writes stay isolated until `syncBuiltinESMExports()` copies them.
 #[no_mangle]
 pub extern "C" fn js_native_module_named_esm_export_value(module: f64, property: f64) -> f64 {
-    native_module_export_value(module, property, false)
+    let base =
+        native_module_string_arg(module).and_then(|module| native_module_vtable_by_name(&module));
+    native_module_export_value(module, property, false, base)
+}
+
+/// [`js_native_module_named_esm_export_value`] from a codegen site.
+#[no_mangle]
+pub extern "C" fn js_native_module_named_esm_export_value_vt(
+    vt: &'static NativeModuleVtable,
+    module: f64,
+    property: f64,
+) -> f64 {
+    native_module_export_value(module, property, false, Some(vt))
 }
 
 /// Armed `.constructor` resolver for `MODULE_CJS` instances (binary size).
@@ -1290,6 +1496,7 @@ pub extern "C" fn js_module_sync_builtin_esm_exports() -> f64 {
                 property.as_ptr(),
                 property.len(),
                 true,
+                None,
             )
         };
         NATIVE_ESM_EXPORT_VALUES.with(|values| {
@@ -1349,7 +1556,12 @@ pub extern "C" fn js_native_module_bind_method(
 
     // Check for known constant properties first
     if let Some(val) = unsafe {
-        get_native_module_constant(&module_name, property_name, namespace.get_nanbox_f64())
+        get_native_module_constant(
+            &module_name,
+            property_name,
+            namespace.get_nanbox_f64(),
+            None,
+        )
     } {
         return val;
     }

@@ -318,19 +318,19 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // and the runtime returns the constant value (or a sub-namespace
     // ObjectHeader for `.constants`-style chains).
     module.declare_function(
-        "js_native_module_property_by_name",
+        "js_native_module_property_by_name_vt",
         DOUBLE,
-        &[PTR, I64, PTR, I64],
+        &[PTR, PTR, I64, PTR, I64],
     );
     module.declare_function(
-        "js_native_module_esm_export_value",
+        "js_native_module_esm_export_value_vt",
         DOUBLE,
-        &[DOUBLE, DOUBLE],
+        &[PTR, DOUBLE, DOUBLE],
     );
     module.declare_function(
-        "js_native_module_named_esm_export_value",
+        "js_native_module_named_esm_export_value_vt",
         DOUBLE,
-        &[DOUBLE, DOUBLE],
+        &[PTR, DOUBLE, DOUBLE],
     );
     for &(source, properties) in perry_dispatch::native_callable_exports::CALLABLE_EXPORT_TABLE {
         for &property in properties {
@@ -370,7 +370,15 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // produced by `compilePackages` CJS wrapping). Pre-fix the value
     // lowered to `0.0` and any subsequent member access returned
     // undefined, tripping the spec property-access throw.
-    module.declare_function("js_create_native_module_namespace", DOUBLE, &[PTR, I64]);
+    // A namespace birth names its module's vtable (`nm_install::nm_vtable_ref`).
+    module.declare_function(
+        "js_create_native_module_namespace_vt",
+        DOUBLE,
+        &[PTR, PTR, I64],
+    );
+    for &(_, symbol) in crate::realm_manifest::NATIVE_NAMESPACE_VTABLES {
+        module.add_external_declaration(format!("@{symbol} = external global i8"));
+    }
     // Per-module native-module dispatch-install symbols (devirt). Codegen emits
     // the matching one at each js_create_native_module_namespace site.
     module.declare_function("js_nm_install_assert", VOID, &[]);
@@ -424,6 +432,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_nm_install_worker_threads", VOID, &[]);
     module.declare_function("js_nm_install_all", VOID, &[]);
     module.declare_function("js_nm_enable_install_all", VOID, &[]);
+    module.declare_function("js_nm_set_module_table", VOID, &[PTR, I64]);
     module.declare_function("js_dns_install_exports", VOID, &[]);
     // The named read's entries behind the probe (`object/field_get_set/
     // get_slow.rs`): the complete read of a heap receiver the probe declined

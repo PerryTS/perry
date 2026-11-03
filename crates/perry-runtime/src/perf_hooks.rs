@@ -337,7 +337,10 @@ pub fn performance_namespace() -> f64 {
         return f64::from_bits(cached);
     }
     let module = b"perf_hooks";
-    let ns = crate::object::js_create_native_module_namespace(module.as_ptr(), module.len());
+    let ns = crate::object::native_module::create_native_module_namespace(
+        &crate::object::native_module::namespaces::perf_hooks::NM_PERF_HOOKS,
+        "perf_hooks",
+    );
     let ns = link_perf_prototype(ns, "Performance");
     PERFORMANCE_NS.with(|c| c.set(ns.to_bits()));
     ns
@@ -1651,8 +1654,10 @@ pub extern "C" fn js_perf_observer_flush_all(
             // would resolve to `undefined` and silently do nothing. Arm it here.
             crate::object::js_nm_install_perf();
             let module = b"perf_observer_list";
-            let list =
-                crate::object::js_create_native_module_namespace(module.as_ptr(), module.len());
+            let list = crate::object::native_module::create_native_module_namespace(
+                &crate::object::native_module::namespaces::perf_hooks::NM_PERF_HOOKS,
+                "perf_hooks",
+            );
             let list = link_perf_prototype(list, "PerformanceObserverEntryList");
             let cb_jv = JSValue::from_bits(cb_bits);
             if cb_jv.is_pointer() {

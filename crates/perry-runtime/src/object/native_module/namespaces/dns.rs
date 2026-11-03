@@ -116,6 +116,7 @@ crate::realm_decl! {
 
 crate::realm_decl! {
     namespace NM_DNS = "dns" {
+        default = NM_DNS_DEFAULT;
         births = [Object];
         members = {
             ADDRCONFIG = (32.0);
@@ -175,6 +176,7 @@ crate::realm_decl! {
 
 crate::realm_decl! {
     namespace NM_DNS_PROMISES = "dns/promises" {
+        default = NM_DNS_PROMISES_DEFAULT;
         births = [Object];
         members = {
             ADDRGETNETWORKPARAMS = ("EADDRGETNETWORKPARAMS");

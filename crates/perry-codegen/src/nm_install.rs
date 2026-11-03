@@ -14,6 +14,54 @@ pub(crate) fn nm_install_symbol(name: &str) -> Option<&'static str> {
     crate::native_routing::with_program_routing(|routing| routing.install_symbol(name))
 }
 
+/// The vtable symbol a namespace of the native module `name` is born with:
+/// the one its realm declaration names (`perry_nm_vt_<IDENT>`, exported by the
+/// runtime beside the static). The specifier folds as the runtime folds it
+/// (`normalize_native_module_alias`); a module whose declaration names no
+/// vtable of its own is born with the base vtable.
+pub(crate) fn nm_vtable_symbol(name: &str) -> &'static str {
+    let name = name.strip_prefix("node:").unwrap_or(name);
+    let module = match name {
+        "sys" => "util",
+        "path/posix" => "path.posix.default",
+        "path/win32" => "path.win32.default",
+        "util/types" => "util.types",
+        "@lydell/node-pty" | "bun-pty" => "node-pty",
+        other => other,
+    };
+    let table = crate::realm_manifest::NATIVE_NAMESPACE_VTABLES;
+    match table.binary_search_by(|(owner, _)| (*owner).cmp(module)) {
+        Ok(index) => table[index].1,
+        Err(_) => "perry_nm_vt_NATIVE_MODULE_VTABLE_IMPL",
+    }
+}
+
+/// `@<vtable symbol>` of `name` (every module declares the symbols, see
+/// `runtime_decls`).
+pub(crate) fn nm_vtable_ref(name: &str) -> String {
+    format!("@{}", nm_vtable_symbol(name))
+}
+
+/// `@perry_native_modules`: one `{ name, len, vtable }` row per native module
+/// the realm declares, for the runtime-string paths of a program that has
+/// them. Returns the array and its row count.
+pub(crate) fn emit_native_module_table(llmod: &mut crate::module::LlModule) -> (String, String) {
+    let table = crate::realm_manifest::NATIVE_NAMESPACE_VTABLES;
+    let mut rows = Vec::with_capacity(table.len());
+    for &(module, symbol) in table {
+        let (name, len) = llmod.add_string_constant(module);
+        rows.push(format!(
+            "{{ ptr, i64, ptr }} {{ ptr @{name}, i64 {len}, ptr @{symbol} }}"
+        ));
+    }
+    llmod.add_raw_global(format!(
+        "@perry_native_modules = private unnamed_addr constant [{} x {{ ptr, i64, ptr }}] [{}]",
+        rows.len(),
+        rows.join(", ")
+    ));
+    ("@perry_native_modules".into(), table.len().to_string())
+}
+
 /// The runtime dispatch bucket's install symbol for `name`.
 pub(crate) fn runtime_bucket_install_symbol(name: &str) -> Option<&'static str> {
     let name = name.strip_prefix("node:").unwrap_or(name);

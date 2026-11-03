@@ -1044,6 +1044,10 @@ pub struct CompilationContext {
     /// module is only known at runtime, so auto-optimized runtimes must retain
     /// optional builtin namespace data such as the HTTP/2 key tables.
     pub uses_get_builtin_module: bool,
+    /// A module reaches builtins by a runtime string (`getBuiltinModule`,
+    /// `require(expr)` / `import(expr)`, `createRequire`): the entry carries
+    /// the native module rows.
+    pub uses_dynamic_module_lookup: bool,
     /// Whether any module imports, requires, or names (`getBuiltinModule`)
     /// `dns` / `dns/promises`. Arms the dns export router so a namespace
     /// created at runtime (a CommonJS `require('node:dns')`) reaches
@@ -1487,6 +1491,7 @@ impl CompilationContext {
             uses_dgram: false,
             uses_node_test: false,
             uses_get_builtin_module: false,
+            uses_dynamic_module_lookup: false,
             uses_dns: false,
             needs_thread: false,
             cross_module_class_field_types: HashMap::new(),

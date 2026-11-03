@@ -12,7 +12,13 @@ fn linking_a_native_subclass_keeps_the_builtin_parent_prototype_descriptor() {
             || crate::object::get_property_attrs(ptr, "prototype").is_some_and(|a| a.writable());
         assert!(!writable());
         let recoverable = unsafe {
-            js_native_module_property_by_name(b"repl".as_ptr(), 4, b"Recoverable".as_ptr(), 11)
+            js_native_module_property_by_name_vt(
+                &crate::object::native_module::namespaces::repl::NM_REPL,
+                b"repl".as_ptr(),
+                4,
+                b"Recoverable".as_ptr(),
+                11,
+            )
         };
         assert_eq!(
             crate::object::js_object_get_prototype_of(recoverable).to_bits(),

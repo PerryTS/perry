@@ -608,7 +608,10 @@ mod registry_backed_dispatch_tests {
     #[test]
     fn method_calls_run_the_registry_export() {
         let module = "diagnostics_channel";
-        let ns = js_create_native_module_namespace(module.as_ptr(), module.len());
+        let ns = crate::object::native_module::create_native_module_namespace(
+            &crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL,
+            "diagnostics_channel",
+        );
         let obj = (ns.to_bits() & crate::value::POINTER_MASK) as *const ObjectHeader;
         let channel_name = crate::string::js_string_from_bytes(b"registry-dispatch".as_ptr(), 17);
         let arg = crate::value::js_nanbox_string(channel_name as i64);

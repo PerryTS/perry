@@ -204,6 +204,7 @@ crate::realm_decl! {
 
 crate::realm_decl! {
     namespace NM_OS = "os" {
+        default = NM_OS_DEFAULT;
         births = [Object];
         members = {
             EOL = ("\n");

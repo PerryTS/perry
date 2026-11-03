@@ -976,7 +976,8 @@ mod length_handle_band_tests {
     #[test]
     fn named_native_callable_length_paths_use_declared_arity() {
         let console_ctor = unsafe {
-            crate::object::js_native_module_property_by_name(
+            crate::object::js_native_module_property_by_name_vt(
+                &crate::object::native_module::namespaces::console::NM_CONSOLE,
                 b"console".as_ptr(),
                 "console".len(),
                 b"Console".as_ptr(),

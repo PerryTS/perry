@@ -644,7 +644,17 @@ pub extern "C" fn js_v8_is_building_snapshot() -> f64 {
 /// promiseHooks). Method calls on it dispatch through the native-module table.
 #[no_mangle]
 pub extern "C" fn js_v8_namespace(name_ptr: *const u8, name_len: usize) -> f64 {
-    crate::object::js_create_native_module_namespace(name_ptr, name_len)
+    let name = unsafe { std::slice::from_raw_parts(name_ptr, name_len) };
+    // Site-local vtable choice: the names are this site's own closed set inside one
+    // module family, so reaching this site already reaches the family it names.
+    let vt: &'static crate::object::native_module::NativeModuleVtable = match name {
+        b"v8.startupSnapshot" => {
+            &crate::object::native_module::namespaces::v8::NM_V8_STARTUPSNAPSHOT
+        }
+        b"v8.promiseHooks" => &crate::object::native_module::namespaces::v8::NM_V8_PROMISEHOOKS,
+        _ => &crate::object::native_module::NATIVE_MODULE_VTABLE_IMPL,
+    };
+    crate::object::js_create_native_module_namespace_vt(vt, name_ptr, name_len)
 }
 
 /// `v8.startupSnapshot.addSerializeCallback()` &c. outside a snapshot-building

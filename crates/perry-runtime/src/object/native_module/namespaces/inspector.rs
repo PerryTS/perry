@@ -78,6 +78,7 @@ crate::realm_decl! {
 
 crate::realm_decl! {
     namespace NM_INSPECTOR = "inspector" {
+        default = NM_INSPECTOR_DEFAULT;
         births = [Object];
         members = {
             open = (ref("node:inspector.open"));
@@ -95,6 +96,7 @@ crate::realm_decl! {
 
 crate::realm_decl! {
     namespace NM_INSPECTOR_PROMISES = "inspector/promises" {
+        default = NM_INSPECTOR_PROMISES_DEFAULT;
         births = [Object];
         members = {
             open = (ref("node:inspector.open"));

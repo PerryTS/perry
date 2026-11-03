@@ -1452,10 +1452,11 @@ pub(super) fn emit_namespace_populator(
                     if let Some(install) = crate::nm_install::nm_install_symbol(name) {
                         blk.call_void(install, &[]);
                     }
+                    let vtable = crate::nm_install::nm_vtable_ref(name);
                     blk.call(
                         DOUBLE,
-                        "js_create_native_module_namespace",
-                        &[(PTR, &name_global), (I64, &name_len)],
+                        "js_create_native_module_namespace_vt",
+                        &[(PTR, &vtable), (PTR, &name_global), (I64, &name_len)],
                     )
                 }
             };

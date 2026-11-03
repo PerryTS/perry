@@ -14,6 +14,7 @@ pub(crate) enum PreparedExport {
         install: &'static str,
         source: String,
         member: String,
+        vtable: String,
         helper: &'static str,
     },
     Submodule {
@@ -31,12 +32,17 @@ impl PreparedExport {
                 install,
                 source,
                 member,
+                vtable,
                 helper,
             } => {
                 block.call_void(install, &[]);
                 let source = block.load(DOUBLE, &source);
                 let member = block.load(DOUBLE, &member);
-                block.call(DOUBLE, helper, &[(DOUBLE, &source), (DOUBLE, &member)])
+                block.call(
+                    DOUBLE,
+                    helper,
+                    &[(PTR, &vtable), (DOUBLE, &source), (DOUBLE, &member)],
+                )
             }
             Self::Submodule {
                 install,
@@ -117,10 +123,11 @@ pub(crate) fn prepare(
             install,
             source: format!("@{}", strings.entry(m).handle_global),
             member: format!("@{}", strings.entry(p).handle_global),
+            vtable: crate::nm_install::nm_vtable_ref(source),
             helper: if observe_writes {
-                "js_native_module_esm_export_value"
+                "js_native_module_esm_export_value_vt"
             } else {
-                "js_native_module_named_esm_export_value"
+                "js_native_module_named_esm_export_value_vt"
             },
         });
     }

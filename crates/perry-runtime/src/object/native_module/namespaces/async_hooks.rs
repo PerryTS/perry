@@ -19,6 +19,7 @@ crate::realm_decl! {
 
 crate::realm_decl! {
     namespace NM_ASYNC_HOOKS = "async_hooks" {
+        default = NM_ASYNC_HOOKS_DEFAULT;
         births = [Object];
         members = {
             AsyncLocalStorage = (ref("node:async_hooks.AsyncLocalStorage"));

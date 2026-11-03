@@ -85,7 +85,10 @@ pub(crate) fn attach_stream_legacy_prototype(constructor_value: f64) {
             // `require('stream/promises')` and `import * as` hand out.
             "promises" => {
                 let module = "stream/promises";
-                super::js_create_native_module_namespace(module.as_ptr(), module.len())
+                crate::object::native_module::create_native_module_namespace(
+                    &crate::object::native_module::namespaces::stream::NM_STREAM_PROMISES,
+                    "stream/promises",
+                )
             }
             _ => super::native_module::stream_export_value(name),
         };
@@ -340,7 +343,7 @@ mod tests {
         assert_ne!(ctor_ptr, 0);
 
         assert_eq!(
-            cjs_default_export_value("stream").map(f64::to_bits),
+            cjs_default_export_value("stream", None).map(f64::to_bits),
             Some(stream_ctor.to_bits()),
             "the CommonJS module value must be the Stream constructor itself"
         );
