@@ -262,7 +262,7 @@ fn readable_state_view_reads_live_stream_state() {
     ));
     assert_eq!(
         json,
-        r#"{"highWaterMark":65536,"buffer":[{"type":"Buffer","data":[97,98,99]}],"bufferIndex":0,"length":3,"pipes":[],"awaitDrainWriters":null}"#
+        r#"{"highWaterMark":65536,"buffer":[{"type":"Buffer","data":[97,98,99]}],"bufferIndex":0,"length":3,"fastChunk":null,"pipeOnData":null,"pipePause":null,"pipes":[],"awaitDrainWriters":null}"#
     );
 }
 

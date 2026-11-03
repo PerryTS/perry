@@ -610,6 +610,9 @@ use literal_atoms::ATOM_28;
 use literal_atoms::ATOM_29;
 use literal_atoms::ATOM_3;
 use literal_atoms::ATOM_30;
+use literal_atoms::ATOM_31;
+use literal_atoms::ATOM_32;
+use literal_atoms::ATOM_33;
 use literal_atoms::ATOM_4;
 use literal_atoms::ATOM_5;
 use literal_atoms::ATOM_6;
@@ -634,7 +637,9 @@ runtime_layout!(
     0x52540001,
     0,
     &raw const READABLE_STATE_PROTO_FAMILY,
-    [ATOM_0, ATOM_1, ATOM_2, ATOM_3, ATOM_4, ATOM_5],
+    // node 26.12 ReadableState (26102c22f2, 247c0274c1): `fastChunk`,
+    // `pipeOnData` and `pipePause` sit between `length` and `pipes`.
+    [ATOM_0, ATOM_1, ATOM_2, ATOM_3, ATOM_31, ATOM_32, ATOM_33, ATOM_4, ATOM_5],
     realm = [
         "node:stream.Readable",
         "node:stream.Duplex",
