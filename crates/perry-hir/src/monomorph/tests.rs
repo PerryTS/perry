@@ -1232,7 +1232,7 @@ fn fill_defaults_pads_before_appended_class_captures() {
         .expect("Doc has a constructor")
         .params
         .iter()
-        .filter(|p| p.name.starts_with(crate::cap_fields::CAP_FIELD_PREFIX))
+        .filter(|p| crate::cap_fields::is_cap_field_name(&p.name))
         .count();
     assert!(ctor_caps > 0, "Doc must be a capturing class for this test");
     let child = doc

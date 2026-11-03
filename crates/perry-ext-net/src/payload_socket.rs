@@ -191,7 +191,78 @@ pub(crate) fn initialize_socket(
     initialize_open_state(owner.get(), state.get());
     let resource = scope.root_nanbox(prepare_tcp(owner.get(), trigger));
     provider::notify(resource.get());
+    apply_duplex_options(owner.get(), options.get());
+    adopt_fd_option(owner.get(), options.get());
     owner.get()
+}
+
+/// Node's Duplex constructor: `readable: false` starts the socket with its
+/// readable side ended (no reading, no `end` event), `writable: false` with
+/// its writable side finished. Once the other side is done too, the socket
+/// destroys itself as an ended Duplex does.
+fn apply_duplex_options(owner: f64, options: f64) {
+    let scope = TransientRootScope::enter();
+    let owner = scope.root_nanbox(owner);
+    let options = scope.root_nanbox(options);
+    let is_false = |key: &str| p::own_get(options.get(), key).to_bits() == JsValue::FALSE.bits();
+    let readable = !is_false("readable");
+    let writable = !is_false("writable");
+    if readable && writable {
+        return;
+    }
+    // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle, and
+    // field access ends before allocation or JS.
+    unsafe {
+        if let Ok(payload) = p::socket_ptr(link(owner.get())) {
+            let fields = &mut (*payload).ext;
+            if !readable {
+                fields.read_ended = true;
+                fields.read_end_emitted = true;
+            }
+            if !writable {
+                fields.write_ended = true;
+                fields.shutdown_done = true;
+            }
+        }
+    }
+}
+
+/// `new net.Socket({ fd })`: the socket owns the program's descriptor (a pipe,
+/// FIFO, tty or socket) as its open stream, as under Node. A readable socket
+/// starts reading at once, as Node's constructor calls `read(0)`: data that
+/// arrives before a consumer is buffered (`readableLength`) in paused mode. A
+/// descriptor that cannot be adopted destroys the socket with the error.
+fn adopt_fd_option(owner: f64, options: f64) {
+    let fd = p::own_get(options, "fd");
+    if !JsValue::from_bits(fd.to_bits()).is_number() {
+        return;
+    }
+    let scope = TransientRootScope::enter();
+    let owner = scope.root_nanbox(owner);
+    if !fd.is_finite() || fd < 0.0 || fd.fract() != 0.0 || fd > f64::from(i32::MAX) {
+        let failure = error("ERR_OUT_OF_RANGE", "The value of \"fd\" is out of range.");
+        destroy(owner.get(), failure);
+        return;
+    }
+    let socket = link(owner.get());
+    // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle, and
+    // core access ends before allocation or JS.
+    let result = unsafe {
+        p::socket_core(socket)
+            .ok()
+            .map(|core| tl::link_adopt_descriptor(&mut *core, socket, fd as i32))
+    };
+    match result {
+        Some(Ok(())) => {
+            super::native_transport::adopted(owner.get());
+            flow(owner.get());
+        }
+        Some(Err(failure)) => {
+            let failure = error(&failure.code, &failure.message());
+            destroy(owner.get(), failure);
+        }
+        None => {}
+    }
 }
 
 fn prepare_tcp(owner: f64, trigger: u64) -> f64 {
@@ -223,6 +294,7 @@ fn initialize_open_state(owner: f64, state: f64) {
         "hadError",
         "readableEnded",
         "writableEnded",
+        "writableFinished",
         "unconnectedWriteFailed",
     ] {
         p::record_set(state.get(), key, f64::from_bits(JsValue::FALSE.bits()));
@@ -477,13 +549,14 @@ pub(crate) fn cache_before_release(owner: f64, socket: OwnerLink) {
                 fields.bytes_written,
                 fields.read_end_emitted,
                 fields.write_ended,
+                fields.shutdown_done,
                 fields.local,
                 fields.peer,
             )
         })
     };
     let state = scope.root_nanbox(state(owner.get()));
-    if let Some((read, written, read_ended, write_ended, local, peer)) = cached {
+    if let Some((read, written, read_ended, write_ended, finished, local, peer)) = cached {
         p::record_set(state.get(), "bytesRead", read as f64);
         p::record_set(state.get(), "bytesWritten", written as f64);
         p::record_set(
@@ -495,6 +568,11 @@ pub(crate) fn cache_before_release(owner: f64, socket: OwnerLink) {
             state.get(),
             "writableEnded",
             f64::from_bits(JsValue::from_bool(write_ended).bits()),
+        );
+        p::record_set(
+            state.get(),
+            "writableFinished",
+            f64::from_bits(JsValue::from_bool(finished).bits()),
         );
         for (key, address) in [("local", local), ("peer", peer)] {
             if let Some(address) = address {
@@ -521,6 +599,7 @@ pub(crate) fn cache_before_release(owner: f64, socket: OwnerLink) {
             "bytesWritten",
             "readableEnded",
             "writableEnded",
+            "writableFinished",
             "localAddress",
             "localPort",
             "localFamily",
@@ -1345,11 +1424,99 @@ pub(crate) fn end(owner: f64, chunk: f64, encoding: f64, callback: f64) -> f64 {
         return owner.get();
     }
     let result = super::payload_tls::shutdown(owner.get(), user);
-    if let Err(failure) = result {
-        let error = error(&failure.code, &failure.message());
-        destroy(owner.get(), error);
+    match result {
+        // A pipe, FIFO or tty has no separate write direction to shut down.
+        // libuv queues the shutdown behind the writes and reports ENOTSOCK, and
+        // Node's afterShutdown ignores the status: end() completes once the
+        // writes ahead of it are done, with no error.
+        Err(failure) if failure.code == "ENOTSUP" && failure.syscall == "shutdown" => {
+            drain_end(owner.get(), user);
+        }
+        Err(failure) => {
+            let error = error(&failure.code, &failure.message());
+            destroy(owner.get(), error);
+        }
+        Ok(()) => {}
     }
     owner.get()
+}
+
+/// Complete `end()` on a transport without a write-side shutdown once every
+/// queued write is acknowledged: now (on the next tick) when none is
+/// outstanding, else from the acknowledgement of the last one
+/// ([`super::payload_io::wrote`]).
+fn drain_end(owner: f64, user: u64) {
+    let scope = TransientRootScope::enter();
+    let owner = scope.root_nanbox(owner);
+    let socket = link(owner.get());
+    // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle, and
+    // field access ends before allocation or JS.
+    let drained = unsafe {
+        let Ok(payload) = p::socket_ptr(socket) else {
+            return;
+        };
+        let fields = &mut (*payload).ext;
+        fields.drain_end = Some(user);
+        fields.queued == 0
+    };
+    if !drained {
+        return;
+    }
+    // SAFETY: Projection and handle extraction do not allocate or call JS.
+    let Some(parts) = (unsafe {
+        p::socket_core(socket)
+            .ok()
+            .and_then(|core| tl::link_handle_parts(&mut *core, socket))
+    }) else {
+        return;
+    };
+    let job = scope.root_addr(perry_ffi::alloc_closure(
+        perry_ffi::js_function_info!(drain_end_tick, 0; with_flags(perry_ffi::FN_BUILTIN)),
+        5,
+    ) as i64);
+    // SAFETY: The rooted closure was allocated with these capture slots; every JS capture is rooted
+    // until the scheduled job owns its traced edge.
+    unsafe {
+        let closure = job.get() as *mut RawClosureHeader;
+        perry_ffi::set_closure_capture_f64(closure, 0, owner.get());
+        for (index, part) in parts.into_iter().enumerate() {
+            perry_ffi::set_closure_capture_f64(closure, index as u32 + 1, part as f64);
+        }
+        js_queue_next_tick(job.get());
+    }
+}
+
+unsafe extern "C" fn drain_end_tick(closure: *const RawClosureHeader, _: JsThis) -> f64 {
+    let scope = TransientRootScope::enter();
+    let owner = scope.root_nanbox(perry_ffi::closure_capture_f64(closure, 0));
+    let socket = link(owner.get());
+    let _account = p::AccountSocket(socket);
+    let parts = std::array::from_fn(|index| {
+        perry_ffi::closure_capture_f64(closure, index as u32 + 1) as u32
+    });
+    let current = p::socket_core(socket)
+        .ok()
+        .and_then(|core| tl::link_handle_parts(&mut *core, socket));
+    if current == Some(parts) {
+        if let Some(user) = take_drained_end(socket) {
+            super::payload_io::shutdown(owner.get(), user);
+        }
+    }
+    p::undefined()
+}
+
+/// The pending drained `end()` user once no write is outstanding.
+pub(crate) fn take_drained_end(socket: OwnerLink) -> Option<u64> {
+    // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle, and
+    // field access ends before allocation or JS.
+    unsafe {
+        let fields = &mut (*p::socket_ptr(socket).ok()?).ext;
+        if fields.queued == 0 {
+            fields.drain_end.take()
+        } else {
+            None
+        }
+    }
 }
 
 pub(crate) fn read(owner: f64, size: f64) -> f64 {
@@ -1509,6 +1676,8 @@ pub(crate) fn get(owner: f64, key: &str) -> f64 {
                     "writableEnded" => bool_value(fields.write_ended),
                     "readableEnded" => bool_value(fields.read_end_emitted),
                     "writableFinished" => bool_value(fields.shutdown_done),
+                    "closed" | "writableObjectMode" | "readableObjectMode" => bool_value(false),
+                    "readableLength" => Scalar::Value(fields.read_buffer.len() as f64),
                     "isPaused" => bool_value(fields.paused),
                     "readableFlowing" => match fields.flowing {
                         Some(value) => bool_value(value),
@@ -1583,8 +1752,11 @@ pub(crate) fn get(owner: f64, key: &str) -> f64 {
                 "connecting" | "writable" | "readable" | "writableNeedDrain" => {
                     Scalar::Value(f64::from_bits(JsValue::FALSE.bits()))
                 }
-                "pending" => Scalar::Value(f64::from_bits(JsValue::TRUE.bits())),
-                "writableLength" | "writableCorked" => Scalar::Value(0.0),
+                "pending" | "closed" => Scalar::Value(f64::from_bits(JsValue::TRUE.bits())),
+                "writableObjectMode" | "readableObjectMode" => {
+                    Scalar::Value(f64::from_bits(JsValue::FALSE.bits()))
+                }
+                "writableLength" | "writableCorked" | "readableLength" => Scalar::Value(0.0),
                 "readyState" => Scalar::Text("closed".into()),
                 "bufferSize" => Scalar::Value(p::undefined()),
                 _ => Scalar::Cached,
@@ -1761,7 +1933,7 @@ pub(crate) fn flow(owner: f64) {
             if listeners != 0 && !fields.raw_consumer {
                 fields.flowing = Some(true);
             }
-            let start = fields.opened && !fields.read_started;
+            let start = fields.opened && !fields.read_started && !fields.read_ended;
             if start {
                 fields.read_started = true;
             }

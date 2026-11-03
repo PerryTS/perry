@@ -124,7 +124,9 @@ fn static_layout_state_views_have_no_fixed_field_spill() {
             (*object).parent_class_id,
             layout_id(runtime_layouts::READABLE_STATE::desc())
         );
-        assert_eq!(object_live_slot_count(object), 6);
+        // node 26.12.1 lib/internal/streams/readable.js adds fastChunk, pipeOnData and
+        // pipePause to the ReadableState (nodejs/node 26102c22f2, 247c0274c1): 6 + 3.
+        assert_eq!(object_live_slot_count(object), 9);
         assert_eq!(
             (*(*object).meta).spill,
             0,

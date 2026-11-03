@@ -710,10 +710,10 @@ fn typed_feedback_boxed_fallback_preserves_fractional_keys_for_array_like_receiv
     crate::set::js_set_add(set, 10.0);
     crate::set::js_set_add(set, 20.0);
     let set_box = crate::value::js_nanbox_pointer(set as i64);
-    assert_eq!(
-        js_typed_feedback_array_index_get_fallback_boxed(73, set_box, 1.0),
-        20.0
-    );
+    // Map/Set: a keyed read is the ordinary [[Get]], never the storage.
+    assert_undefined(js_typed_feedback_array_index_get_fallback_boxed(
+        73, set_box, 1.0,
+    ));
     assert_undefined(js_typed_feedback_array_index_get_fallback_boxed(
         73, set_box, 1.5,
     ));
@@ -722,10 +722,9 @@ fn typed_feedback_boxed_fallback_preserves_fractional_keys_for_array_like_receiv
     crate::map::js_map_set(map, 10.0, 100.0);
     crate::map::js_map_set(map, 20.0, 200.0);
     let map_box = crate::value::js_nanbox_pointer(map as i64);
-    assert_eq!(
-        js_typed_feedback_array_index_get_fallback_boxed(73, map_box, 1.0),
-        20.0
-    );
+    assert_undefined(js_typed_feedback_array_index_get_fallback_boxed(
+        73, map_box, 1.0,
+    ));
     assert_undefined(js_typed_feedback_array_index_get_fallback_boxed(
         73, map_box, 1.5,
     ));
@@ -812,9 +811,12 @@ fn runtime_dynamic_index_fallbacks_preserve_fractional_keys_for_array_like_recei
     crate::set::js_set_add(set, 10.0);
     crate::set::js_set_add(set, 20.0);
     let set_box = crate::value::js_nanbox_pointer(set as i64);
-    assert_eq!(crate::value::js_dyn_index_get(set_box, 1.0), 20.0);
+    // A Set has no indexed own properties: `s[1]` is an ordinary [[Get]],
+    // never its storage; `s[1.5] = v` creates the own property "1.5".
+    assert_undefined(crate::value::js_dyn_index_get(set_box, 1.0));
     assert_undefined(crate::value::js_dyn_index_get(set_box, 1.5));
     crate::value::js_dyn_index_set(set_box, 1.5, 99.0);
+    assert_eq!(crate::value::js_dyn_index_get(set_box, 1.5), 99.0);
     assert_eq!(crate::set::js_set_size(set), 2);
     assert_eq!(crate::set::js_set_value_at(set, 1), 20.0);
 
@@ -822,9 +824,10 @@ fn runtime_dynamic_index_fallbacks_preserve_fractional_keys_for_array_like_recei
     crate::map::js_map_set(map, 10.0, 100.0);
     crate::map::js_map_set(map, 20.0, 200.0);
     let map_box = crate::value::js_nanbox_pointer(map as i64);
-    assert_eq!(crate::value::js_dyn_index_get(map_box, 1.0), 20.0);
+    assert_undefined(crate::value::js_dyn_index_get(map_box, 1.0));
     assert_undefined(crate::value::js_dyn_index_get(map_box, 1.5));
     crate::value::js_dyn_index_set(map_box, 1.5, 88.0);
+    assert_eq!(crate::value::js_dyn_index_get(map_box, 1.5), 88.0);
     assert_eq!(crate::map::js_map_size(map), 2);
     assert_eq!(crate::map::js_map_entry_key_at(map, 1), 20.0);
 }
@@ -861,14 +864,18 @@ fn polymorphic_index_fallbacks_preserve_fractional_keys_for_array_like_receivers
     crate::set::js_set_add(set, 10.0);
     crate::set::js_set_add(set, 20.0);
     let set_handle = crate::value::js_nanbox_pointer(set as i64).to_bits() as i64;
-    assert_eq!(
-        crate::object::js_object_get_index_polymorphic(set_handle, 1.0),
-        20.0
-    );
+    // Map/Set: the same ordinary keyed [[Get]]/[[Set]] as `js_dyn_index_*`.
+    assert_undefined(crate::object::js_object_get_index_polymorphic(
+        set_handle, 1.0,
+    ));
     assert_undefined(crate::object::js_object_get_index_polymorphic(
         set_handle, 1.5,
     ));
     crate::object::js_object_set_index_polymorphic(set_handle, 1.5, 77.0);
+    assert_eq!(
+        crate::object::js_object_get_index_polymorphic(set_handle, 1.5),
+        77.0
+    );
     assert_eq!(crate::set::js_set_size(set), 2);
     assert_eq!(crate::set::js_set_value_at(set, 1), 20.0);
 
@@ -876,14 +883,17 @@ fn polymorphic_index_fallbacks_preserve_fractional_keys_for_array_like_receivers
     crate::map::js_map_set(map, 10.0, 100.0);
     crate::map::js_map_set(map, 20.0, 200.0);
     let map_handle = crate::value::js_nanbox_pointer(map as i64).to_bits() as i64;
-    assert_eq!(
-        crate::object::js_object_get_index_polymorphic(map_handle, 1.0),
-        20.0
-    );
+    assert_undefined(crate::object::js_object_get_index_polymorphic(
+        map_handle, 1.0,
+    ));
     assert_undefined(crate::object::js_object_get_index_polymorphic(
         map_handle, 1.5,
     ));
     crate::object::js_object_set_index_polymorphic(map_handle, 1.5, 66.0);
+    assert_eq!(
+        crate::object::js_object_get_index_polymorphic(map_handle, 1.5),
+        66.0
+    );
     assert_eq!(crate::map::js_map_size(map), 2);
     assert_eq!(crate::map::js_map_entry_key_at(map, 1), 20.0);
 }

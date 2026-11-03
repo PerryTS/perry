@@ -604,8 +604,10 @@ fn a_number_read_guard_value_tests_a_word_that_asks() {
     assert!(
         bl.iter()
             .filter(|(l, _)| l.starts_with("rloop.guard.value.need"))
-            .all(|(_, (insts, _))| insts.iter().any(|i| i.contains("icmp slt i64"))),
-        "the value test must be selected by the word's sign bit"
+            .all(|(_, (insts, _))| insts
+                .iter()
+                .any(|i| i.contains("icmp uge i64") && i.contains("4611686018427387904"))),
+        "the object tests must be selected by the word's test bits (63: value, 62: presence)"
     );
 }
 
@@ -874,16 +876,13 @@ fn invariant_boxed_bound_has_strict_entry_and_generic_fallback() {
         ir.contains("@js_rel_lt("),
         "Any bound must retain its collecting comparison:\n{ir}"
     );
-    // Object model step 7 deleted the numeric-expression region facts with
-    // the array regions: the Any bound is rechecked each iteration and the
-    // split loop keeps its poll.
+    // The bound is loop-invariant and compared relationally in the condition,
+    // so it joins the region's Number entry tests (R2): inside the region it
+    // is a Number, the condition no longer stales the facts, and the loop
+    // does not re-check every iteration.
     assert!(
-        ir.contains("br i1 true, label %rloop.recheck"),
-        "the Any bound is rechecked without the numeric-expression facts:\n{ir}"
-    );
-    assert!(
-        split_loop_has_poll(&ir),
-        "the split loop keeps its poll without the numeric-expression facts:\n{ir}"
+        !ir.contains("br i1 true, label %rloop.recheck"),
+        "the entry-tested Any bound must not re-check every iteration:\n{ir}"
     );
     assert!(
         ir.contains("@js_gc_loop_safepoint"),

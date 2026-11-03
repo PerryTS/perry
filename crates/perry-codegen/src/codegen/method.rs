@@ -1064,7 +1064,7 @@ pub(super) fn compile_method(
             let forwarded: Vec<perry_hir::Expr> = method
                 .params
                 .iter()
-                .filter(|p| !p.name.starts_with("__perry_cap_"))
+                .filter(|p| !perry_hir::cap_fields::is_cap_field_name(&p.name))
                 .map(|p| perry_hir::Expr::LocalGet(p.id))
                 .collect();
             crate::expr::checked_super::default_call(&mut ctx, class, &forwarded)?;

@@ -42,7 +42,7 @@ fn a_computed_instance_field_key_is_not_a_constructor_capture() {
         class
             .fields
             .iter()
-            .filter(|field| field.name.starts_with("__perry_cap_"))
+            .filter(|field| field.origin.is_capture())
             .count(),
         1,
         "the method value is captured, but the definition-time key is not"
@@ -1503,3 +1503,5 @@ fn named_wasi_constructor_uses_registered_native_export() {
             ))), "WASI must construct the registered export, not an empty class placeholder: {:?}", hir.init);
     }
 }
+
+mod worker_constructor_imports;

@@ -342,6 +342,7 @@ pub(super) fn prepare_from_raw(
         &source,
         inputs.compile_packages,
         canonical.parent().unwrap_or_else(|| Path::new(".")),
+        &canonical,
         inputs.bunfs_root,
         !was_cjs_wrapped,
     );

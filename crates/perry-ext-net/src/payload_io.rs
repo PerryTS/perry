@@ -96,6 +96,7 @@ extern "C" fn sink(completion: *const tl::NetCompletion) {
                     && !payload.ext.tls_parent
                     && payload.ext.coalesced_users.is_empty()
                     && !payload.ext.need_drain
+                    && payload.ext.drain_end.is_none()
                 {
                     if tl::link_snapshot_handle(&mut payload.core, window.link).is_some() {
                         payload.ext.bytes_written =
@@ -457,6 +458,7 @@ pub(crate) fn wrote(owner: f64, user: u64, len: usize, queued: usize) {
                 && !payload.ext.tls_parent
                 && payload.ext.coalesced_users.is_empty()
                 && !payload.ext.need_drain
+                && payload.ext.drain_end.is_none()
             {
                 if tl::link_snapshot_handle(&mut payload.core, window.link).is_none() {
                     return;
@@ -524,9 +526,17 @@ pub(crate) fn wrote(owner: f64, user: u64, len: usize, queued: usize) {
     // Node emits drain before the completed write callbacks. They are already
     // successful completions, including if the drain listener closed its old
     // transport; none of these calls projects the possibly replaced payload.
+    let null = f64::from_bits(JsValue::NULL.bits());
     for callback in callbacks {
         if socket::is_callback(callback.get()) {
-            events::call_in(resource.get(), callback.get(), JsThis::UNDEFINED, &[]);
+            events::call_in(resource.get(), callback.get(), JsThis::UNDEFINED, &[null]);
+        }
+    }
+    // The last acknowledged write completes an end() the transport could not
+    // shut down (a pipe drains instead).
+    if snapshot(link).is_some() {
+        if let Some(user) = socket::take_drained_end(link) {
+            shutdown(owner.get(), user);
         }
     }
 }
@@ -551,13 +561,17 @@ pub(crate) fn shutdown(owner: f64, user: u64) {
             users
         })
     };
+    // Node's Writable: `prefinish` once the final write-side step is done,
+    // then the end() callbacks, then `finish`.
+    events::emit_in(resource.get(), owner.get(), "prefinish", &[]);
+    let null = f64::from_bits(JsValue::NULL.bits());
     for user in users.unwrap_or_default() {
         if !matches(link, &snapshot) {
             return;
         }
         let callback = scope.root_nanbox(socket::take_callback(owner.get(), user));
         if socket::is_callback(callback.get()) {
-            events::call_in(resource.get(), callback.get(), JsThis::UNDEFINED, &[]);
+            events::call_in(resource.get(), callback.get(), JsThis::UNDEFINED, &[null]);
         }
     }
     if !matches(link, &snapshot) {

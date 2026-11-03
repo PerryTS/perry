@@ -114,7 +114,7 @@ fn resolve_compiled_require_target(
 /// it to a file it compiles and wraps as CommonJS (the same `is_commonjs`
 /// test the walk applies). Builtins, addons, ES modules, JSON and missing
 /// files keep their `require` function arms.
-fn static_edge_target(
+pub(crate) fn static_edge_target(
     specifier: &str,
     source_path: &Path,
     compile_packages: Option<&HashSet<String>>,
