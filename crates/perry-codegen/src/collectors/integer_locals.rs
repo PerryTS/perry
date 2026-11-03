@@ -687,9 +687,15 @@ impl ProvenanceJudge<'_> {
     /// (`exact_i32_range::for_step_fits`). Returns `false` — and judges
     /// nothing — when the update is not such a step or the step is not
     /// proven, leaving the ordinary write judgment to the caller.
-    fn judge_for_step(&mut self, condition: Option<&Expr>, update: &Expr, body: &[Stmt]) -> bool {
+    fn judge_for_step(
+        &mut self,
+        init: Option<&Stmt>,
+        condition: Option<&Expr>,
+        update: &Expr,
+        body: &[Stmt],
+    ) -> bool {
         let mut deps = HashSet::new();
-        let proven = super::exact_i32_range::for_step_fits(condition, update, body, &mut |e| {
+        let proven = super::exact_i32_range::for_step_fits(init, condition, update, body, &mut |e| {
             self.judged_range(e, &mut deps)
         });
         let Some(counter) = proven.filter(|c| self.candidates.contains(c)) else {
@@ -715,7 +721,7 @@ impl ProvenanceJudge<'_> {
     ) -> Option<u32> {
         let mut scratch = HashSet::new();
         let step_static =
-            super::exact_i32_range::for_step_fits(condition, update, body, &mut |e| {
+            super::exact_i32_range::for_step_fits(init, condition, update, body, &mut |e| {
                 self.judged_range(e, &mut scratch)
             })
             .is_some();
@@ -819,7 +825,7 @@ impl ProvenanceJudge<'_> {
                             perry_hir::walker::walk_expr_children(upd, &mut |child| {
                                 self.walk_expr(child)
                             });
-                        } else if !self.judge_for_step(condition.as_ref(), upd, body) {
+                        } else if !self.judge_for_step(init.as_deref(), condition.as_ref(), upd, body) {
                             self.walk_expr(upd);
                         }
                     }

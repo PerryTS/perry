@@ -7708,6 +7708,7 @@ fn emit_overflow_exit_step(
     ctx: &mut FnCtx<'_>,
     state: &OverflowExitLoop,
     update: &perry_hir::Expr,
+    guard: Option<(&str, perry_hir::CompareOp)>,
 ) -> Result<()> {
     use perry_hir::Expr;
     let counter_id = state.counter_id;
@@ -7743,7 +7744,23 @@ fn emit_overflow_exit_step(
     let le_max = blk.icmp_sle(I64, &sum, &i64::from(i32::MAX).to_string());
     let ge_min = blk.icmp_sge(I64, &sum, &i64::from(i32::MIN).to_string());
     let fits = blk.and(I1, &le_max, &ge_min);
-    let overflow = blk.xor(I1, &fits, "true");
+    let mut overflow = blk.xor(I1, &fits, "true");
+    // A step that cannot decrease, with the loop's own `counter < len` /
+    // `counter <= len` guard: the exit flag is "the exact next value fails
+    // the guard", one i64 compare. The counter starts at or above i32::MIN
+    // and the step is >= 0, so the sum is >= i32::MIN; a sum that passes the
+    // guard is below an i32 length, so it fits i32 and `trunc` is exact. A sum
+    // that overflowed is above i32::MAX >= len, so it fails the guard too:
+    // the flag decides the same exit the overflow test and the guard would.
+    if let Some((len_slot, op)) = guard {
+        let len = blk.load(I32, len_slot);
+        let len_wide = blk.sext(I32, &len, I64);
+        let passes = match op {
+            perry_hir::CompareOp::Le => blk.icmp_sle(I64, &sum, &len_wide),
+            _ => blk.icmp_slt(I64, &sum, &len_wide),
+        };
+        overflow = blk.xor(I1, &passes, "true");
+    }
     let next = blk.trunc(I64, &sum, I32);
     blk.store(I1, &overflow, &state.flag_slot);
     store_overflow_exit_counter(ctx, counter_id, &next);
@@ -8315,7 +8332,20 @@ fn lower_for_after_init_impl(
     ctx.current_block = update_idx;
     if let Some(update_expr) = update {
         match overflow_exit {
-            Some(state) => emit_overflow_exit_step(ctx, state, update_expr)?,
+            Some(state) => {
+                // The fused exit flag needs a step that never decreases.
+                let step_nonneg = match overflow_exit_step_operand(update_expr, state.counter_id) {
+                    None => true,
+                    Some(perry_hir::Expr::Integer(n)) => (0..=i64::from(i32::MAX)).contains(n),
+                    Some(_) => false,
+                };
+                let guard = hoist_classification
+                    .filter(|h| h.counter_id == state.counter_id && h.lhs_addend == 0)
+                    .zip(i32_length_slot.as_deref())
+                    .filter(|_| state.checked && step_nonneg)
+                    .map(|(h, slot)| (slot, h.op));
+                emit_overflow_exit_step(ctx, state, update_expr, guard)?
+            }
             None => {
                 let _ = lower_expr(ctx, update_expr)?;
             }
