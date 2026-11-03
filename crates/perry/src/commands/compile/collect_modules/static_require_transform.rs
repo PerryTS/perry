@@ -15,13 +15,23 @@ fn transform_static_literal_requires(
     compile_packages: &HashSet<String>,
     module_dir: &Path,
 ) -> String {
-    transform_static_literal_requires_with_bunfs(source, compile_packages, module_dir, None, false)
+    transform_static_literal_requires_with_bunfs(
+        source,
+        compile_packages,
+        module_dir,
+        &module_dir.join("index.js"),
+        None,
+        false,
+    )
 }
 
+/// `replace_json_requires`: the module is one the CommonJS wrapper does not
+/// rewrite (its `require` is the ambient one, with no per-module shim).
 pub(super) fn transform_static_literal_requires_with_bunfs(
     source: &str,
     compile_packages: &HashSet<String>,
     module_dir: &Path,
+    source_path: &Path,
     bunfs_root: Option<&Path>,
     replace_json_requires: bool,
 ) -> String {
@@ -83,6 +93,9 @@ pub(super) fn transform_static_literal_requires_with_bunfs(
     let mut commonjs_targets = HashMap::new();
     let mut replacements = Vec::new();
     let mut next_id = 0usize;
+    // One static edge function per target (`__perry_require_static_N`).
+    let mut edges: HashMap<std::path::PathBuf, String> = HashMap::new();
+    let mut edge_fns = String::new();
     for alias in require_aliases {
         for cap in literal_require_resolve_call_re(&alias).captures_iter(source) {
             let Some(full) = cap.name("call") else {
@@ -225,6 +238,39 @@ pub(super) fn transform_static_literal_requires_with_bunfs(
                             target.to_string_lossy()
                         ));
                     }
+                    // In a module the wrapper does not rewrite, the ambient
+                    // `require` of a compiled CommonJS module is the same
+                    // static edge the wrapper writes (design CJS_LINK §2.2):
+                    // the census counts a literal require as exact, so in a
+                    // closed program nothing publishes into the loader's path
+                    // registry and the call must read the target's record.
+                    // A program that is not closed keeps the loader call.
+                    if replace_json_requires && alias == "require" && !require_is_create_require_bound {
+                        if let Some(edge_target) = crate::commands::compile::cjs_wrap::static_edge_target(
+                            specifier,
+                            source_path,
+                            Some(compile_packages),
+                            None,
+                        ) {
+                            let edge = edges
+                                .entry(edge_target.clone())
+                                .or_insert_with(|| {
+                                    let (record, edge) = unique_static_edge_names(source, &mut next_id);
+                                    imports.push(format!(
+                                        "import {{ {} as {record} }} from {:?};",
+                                        perry_hir::CJS_RECORD_EXPORT,
+                                        edge_target.to_string_lossy()
+                                    ));
+                                    edge_fns.push_str(&format!(
+                                        "\nfunction {edge}() {{ if (__perry_cjs_open()) {{ return require({}); }} else {{ return __perry_cjs_init({record}).exports; }} }}",
+                                        serde_json::to_string(specifier).expect("specifier is JSON encodable")
+                                    ));
+                                    edge
+                                })
+                                .clone();
+                            replacements.push((full.start(), full.end(), format!("{edge}()")));
+                        }
+                    }
                     continue;
                 }
             }
@@ -248,6 +294,8 @@ pub(super) fn transform_static_literal_requires_with_bunfs(
     for (start, end, replacement) in replacements.into_iter().rev() {
         transformed.replace_range(start..end, &replacement);
     }
+    // Function declarations hoist: appended, they shift no source line.
+    transformed.push_str(&edge_fns);
     prepend_imports_preserving_shebang(&transformed, &imports)
 }
 
@@ -640,6 +688,21 @@ fn unique_temp_name(source: &str, next_id: &mut usize) -> String {
     }
 }
 
+/// The record binding (`__perry_cjs_rec_N`, the name the collector and the
+/// init order read as an edge) and the edge function of one static edge.
+fn unique_static_edge_names(source: &str, next_id: &mut usize) -> (String, String) {
+    loop {
+        let (record, edge) = (
+            format!("__perry_cjs_rec_{}", *next_id),
+            format!("__perry_require_static_{}", *next_id),
+        );
+        *next_id += 1;
+        if !source.contains(&record) && !source.contains(&edge) {
+            return (record, edge);
+        }
+    }
+}
+
 fn unique_lazy_require_name(source: &str, next_id: &mut usize) -> String {
     loop {
         let name = format!("_lazyreq_static_{}", *next_id);
@@ -884,6 +947,7 @@ export const version = require("../../../package.json").version + marker;
             source,
             &HashSet::new(),
             &module_dir,
+            &module_dir.join("index.js"),
             None,
             true,
         );
@@ -926,6 +990,7 @@ console.log(cached.exports.version, req("../../../package.json").version);
             source,
             &HashSet::new(),
             &module_dir,
+            &module_dir.join("index.js"),
             None,
             true,
         );
@@ -1007,6 +1072,7 @@ const { answer } = NodeModule.createRequire(import.meta.url)("demo-js");
             source,
             &compile_packages,
             dir.path(),
+            &dir.path().join("main.mjs"),
             None,
             false,
         );
@@ -1152,5 +1218,87 @@ const text = 'require("./local")';
             Path::new("/nonexistent-test-dir"),
         );
         assert_eq!(got, source);
+    }
+    /// In a module the CommonJS wrapper does not rewrite, a literal `require`
+    /// of a compiled CommonJS module is the wrapper's static edge: the record
+    /// import and an edge function whose closed arm runs the target's init
+    /// and returns its exports. (worker_deferred_require: the call stayed a
+    /// loader call, the census counted it exact, the program was closed, the
+    /// target never published, and the require threw MODULE_NOT_FOUND.)
+    #[test]
+    fn a_literal_require_of_a_compiled_commonjs_module_is_a_static_edge() {
+        let dir = tempfile::tempdir().unwrap();
+        let dom = dir.path().join("node_modules").join("fakedom");
+        std::fs::create_dir_all(dom.join("lib")).unwrap();
+        std::fs::write(dom.join("package.json"), r#"{ "name": "fakedom", "main": "./lib" }"#)
+            .unwrap();
+        std::fs::write(dom.join("lib").join("index.js"), "exports.parse = (s) => s;").unwrap();
+        let source = r#"
+function createParser() { var Dom = require("fakedom"); return Dom.parse; }
+function again() { return require("fakedom"); }
+export default createParser();
+"#;
+        let mut packages = HashSet::new();
+        packages.insert("fakedom".to_string());
+        let parser = dir.path().join("parser.es.js");
+        let got = transform_static_literal_requires_with_bunfs(
+            source,
+            &packages,
+            dir.path(),
+            &parser,
+            None,
+            true,
+        );
+        let target = dom.join("lib").join("index.js");
+        assert!(
+            got.contains(&format!(
+                "import {{ __perry_cjs_record as __perry_cjs_rec_1 }} from {:?};",
+                target.to_string_lossy()
+            )),
+            "{got}"
+        );
+        assert!(got.contains("var Dom = __perry_require_static_1();"), "{got}");
+        assert!(got.contains("return __perry_require_static_1(); }"), "{got}");
+        assert_eq!(got.matches("function __perry_require_static_1()").count(), 1, "{got}");
+        assert!(
+            got.contains(r#"if (__perry_cjs_open()) { return require("fakedom"); } else { return __perry_cjs_init(__perry_cjs_rec_1).exports; }"#),
+            "{got}"
+        );
+        // A wrapped module keeps its call: the wrapper wrote its edge.
+        let wrapped = transform_static_literal_requires_with_bunfs(
+            source,
+            &packages,
+            dir.path(),
+            &parser,
+            None,
+            false,
+        );
+        assert!(!wrapped.contains("__perry_require_static_"), "{wrapped}");
+    }
+
+    /// Only a computed specifier is a loader use in a module the wrapper does
+    /// not rewrite: the transform leaves the call and the census counts it,
+    /// so the program is not closed (as with `createRequire`).
+    #[test]
+    fn a_require_left_to_the_runtime_loader_is_counted() {
+        let source = r#"
+function load(name) { return require(name); }
+export default load("fakedom");
+"#;
+        let got = transform_static_literal_requires_with_bunfs(
+            source,
+            &HashSet::new(),
+            Path::new("/nonexistent-test-dir"),
+            Path::new("/nonexistent-test-dir/parser.es.js"),
+            None,
+            true,
+        );
+        assert_eq!(got, source);
+        let census = crate::commands::compile::cjs_wrap::family_syntax::analyze(source);
+        assert_eq!(census.module_capability_uses, 1);
+        let literal = crate::commands::compile::cjs_wrap::family_syntax::analyze(
+            "function load() { return require(\"fakedom\"); }\nexport default load();\n",
+        );
+        assert_eq!(literal.module_capability_uses, 0);
     }
 }
