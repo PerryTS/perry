@@ -1537,78 +1537,85 @@ fn worker_new_started(
             // An exception the worker leaves unhandled ends the worker, not
             // the process: it lands in `run_worker_body`.
             let result = catch_unwind(AssertUnwindSafe(|| {
-                perry_runtime::exception::run_worker_body(|| 'reload: loop {
-                    entry();
-                    // Let module-level continuations run, and report a
-                    // module-level rejection nothing handled.
-                    pump_worker_microtasks();
-                    if CURRENT_WORKER_CLOSE_REQUESTED.with(Cell::get) {
-                        return;
-                    }
-                    loop {
-                        // Re-evaluate after every callback/checkpoint. A consumed
-                        // once listener no longer references its MessagePort;
-                        // timers and native completions still keep this agent alive.
-                        if CURRENT_WORKER_CLOSE_REQUESTED.with(Cell::get)
-                            || perry_runtime::event_pump::perry_has_work() == 0
-                        {
-                            return;
+                perry_runtime::exception::run_worker_body(|| {
+                    'reload: loop {
+                        entry();
+                        // Let module-level continuations run, and report a
+                        // module-level rejection nothing handled.
+                        pump_worker_microtasks();
+                        if CURRENT_WORKER_CLOSE_REQUESTED.with(Cell::get) {
+                            break 'reload;
                         }
-                        let received = match inbox::try_recv() {
-                            Ok(command) => Ok(command),
-                            Err(mpsc::TryRecvError::Empty) => {
-                                // The agent's normal park observes its timers,
-                                // native work and notifications from the parent.
-                                perry_runtime::event_pump::js_wait_for_event();
-                                pump_worker_microtasks();
-                                continue;
-                            }
-                            Err(mpsc::TryRecvError::Disconnected) => {
-                                Err(std::sync::mpsc::RecvError)
-                            }
-                        };
-                        match received {
-                            Ok(WorkerCommand::Message(message)) => {
-                                deliver_parent_port_message(message);
-                                // #10854: let the handler's continuations run before
-                                // parking again, so an `async` handler can reply.
-                                pump_worker_microtasks();
-                                if CURRENT_WORKER_CLOSE_REQUESTED.with(Cell::get) {
-                                    return;
-                                }
-                            }
-                            Ok(WorkerCommand::Reload) => {
-                                MESSAGE_PORTS.with(|ports| {
-                                    ports.borrow_mut().remove(&(PARENT_PORT_HANDLE as u64));
-                                });
-                                CURRENT_WORKER_CLOSE_REQUESTED.with(|closed| closed.set(false));
-                                worker_surface::install_web_worker_globals();
-                                continue 'reload;
-                            }
-                            Ok(WorkerCommand::DirectMessage {
-                                message,
-                                source_thread_id,
-                                ack,
-                            }) => {
-                                let result = direct_message::deliver_worker_message(
-                                    &message,
-                                    source_thread_id,
-                                );
-                                pump_worker_microtasks();
-                                let _ = ack.send(result);
-                            }
-                            Ok(WorkerCommand::Terminate) => {
-                                exit_code = 1;
+                        loop {
+                            // Re-evaluate after every callback/checkpoint. A consumed
+                            // once listener no longer references its MessagePort;
+                            // timers and native completions still keep this agent alive.
+                            if CURRENT_WORKER_CLOSE_REQUESTED.with(Cell::get)
+                                || perry_runtime::event_pump::perry_has_work() == 0
+                            {
                                 break 'reload;
                             }
-                            Err(_) => break 'reload,
+                            let received = match inbox::try_recv() {
+                                Ok(command) => Ok(command),
+                                Err(mpsc::TryRecvError::Empty) => {
+                                    // The agent's normal park observes its timers,
+                                    // native work and notifications from the parent.
+                                    perry_runtime::event_pump::js_wait_for_event();
+                                    pump_worker_microtasks();
+                                    continue;
+                                }
+                                Err(mpsc::TryRecvError::Disconnected) => {
+                                    Err(std::sync::mpsc::RecvError)
+                                }
+                            };
+                            match received {
+                                Ok(WorkerCommand::Message(message)) => {
+                                    deliver_parent_port_message(message);
+                                    // #10854: let the handler's continuations run before
+                                    // parking again, so an `async` handler can reply.
+                                    pump_worker_microtasks();
+                                    if CURRENT_WORKER_CLOSE_REQUESTED.with(Cell::get) {
+                                        break 'reload;
+                                    }
+                                }
+                                Ok(WorkerCommand::Reload) => {
+                                    MESSAGE_PORTS.with(|ports| {
+                                        ports.borrow_mut().remove(&(PARENT_PORT_HANDLE as u64));
+                                    });
+                                    CURRENT_WORKER_CLOSE_REQUESTED.with(|closed| closed.set(false));
+                                    worker_surface::install_web_worker_globals();
+                                    continue 'reload;
+                                }
+                                Ok(WorkerCommand::DirectMessage {
+                                    message,
+                                    source_thread_id,
+                                    ack,
+                                }) => {
+                                    let result = direct_message::deliver_worker_message(
+                                        &message,
+                                        source_thread_id,
+                                    );
+                                    pump_worker_microtasks();
+                                    let _ = ack.send(result);
+                                }
+                                Ok(WorkerCommand::Terminate) => {
+                                    exit_code = 1;
+                                    break 'reload;
+                                }
+                                Err(_) => break 'reload,
+                            }
                         }
+                    }
+                    if exit_code == 0 {
+                        perry_runtime::process::js_process_run_exit_sequence();
+                        exit_code = perry_runtime::process::js_process_pending_exit_code();
                     }
                 })
             }));
             // Retire the termination request before anything else: from here
             // on no JS of this worker runs, so no poll may answer it.
             let terminated = perry_runtime::loop_interrupt::take_terminated();
+            let controlled_exit_code = perry_runtime::process::js_process_pending_exit_code();
             perry_runtime::loop_interrupt::clear_current();
             restore_worker_env(previous_env);
             // This arena is about to go away; purge any queue entry still tagged
@@ -1618,9 +1625,7 @@ fn worker_new_started(
 
             let exit_code = match result {
                 Ok(Ok(())) => exit_code,
-                // Stopped by `terminate()` mid-JS: Node reports exit code 1
-                // and no error.
-                Ok(Err(_)) if terminated => 1,
+                Ok(Err(_)) if terminated => controlled_exit_code,
                 Ok(Err(thrown)) => {
                     let error = worker_error_message(thrown);
                     push_parent_event(parent_agent, WorkerEvent::Error(worker_id, error));
