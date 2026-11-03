@@ -88,7 +88,7 @@ pub extern "C" fn js_perry_stream_queue_immediate(closure: f64) -> i32 {
     if !crate::closure::is_closure_ptr(addr) {
         return -1;
     }
-    crate::timer::js_set_immediate_callback(addr as i64);
+    crate::timer::schedule_native_immediate(addr as i64, &[], "ZLIB");
     0
 }
 
