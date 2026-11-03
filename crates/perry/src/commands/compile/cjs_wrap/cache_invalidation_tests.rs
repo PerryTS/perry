@@ -81,3 +81,23 @@ fn computed_requires_refresh_evicted_path_modules() {
         "computed requests need factory re-evaluation too: {support}"
     );
 }
+
+/// A hoisted class reads only module-scope bindings, so the wrapper evaluates
+/// before it only a target whose alias it surfaces at module scope. A
+/// conditional alias stays in the body: its target loads when the edge runs
+/// (conditional_require_init: `class Unrelated {}` made `dep.cjs` run before
+/// the entry's first line).
+#[test]
+fn a_hoisted_class_does_not_evaluate_a_conditional_require_first() {
+    let pre_init = "\n__perry_cjs_init(__perry_cjs_rec_0);\n";
+    let conditional = wrapped(
+        "class Unrelated {}\nif (process.argv.includes('--load')) {\n    const Value = require('./dep.cjs');\n    console.log(Value.value);\n}\n",
+    );
+    assert!(conditional.contains("class Unrelated {}"), "{conditional}");
+    assert!(!conditional.contains(pre_init), "{conditional}");
+    // A module-scope alias, which a class could read, is still evaluated first.
+    let module_scope = wrapped(
+        "class Unrelated {}\nconst Dep = require('./dep.cjs');\nconsole.log(Dep.value);\n",
+    );
+    assert!(module_scope.contains(pre_init), "{module_scope}");
+}
