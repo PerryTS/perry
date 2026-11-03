@@ -43,6 +43,7 @@ mod for_in_keys;
 mod function_values;
 mod getter_contract;
 mod global_gc;
+mod global_namespace_store;
 mod hub_tokens;
 mod indexed_owner;
 mod inherited_layout;
