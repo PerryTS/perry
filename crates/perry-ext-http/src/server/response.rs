@@ -13,6 +13,9 @@ use perry_ffi::{
 };
 
 use crate::server::request::handle_to_pointer_f64;
+use crate::server::response_cork::{
+    queue_connection_cork_tick, throw_unknown_chunked_encoding, writable_length,
+};
 use crate::server::response_end::call_closure0;
 use crate::server::types::{
     js_json_stringify, js_node_setheaders_entries, js_value_is_closure, jsvalue_to_body_bytes,
@@ -24,6 +27,8 @@ use crate::server::types::{
 /// signalling backpressure so producer loops (`while (res.write(buf))`)
 /// terminate instead of spinning forever (#4909).
 const DEFAULT_HIGH_WATER_MARK: usize = 16 * 1024;
+/// node's `OutgoingMessage` `writableHighWaterMark` (`getDefaultHighWaterMark()`).
+pub(crate) const WRITABLE_HIGH_WATER_MARK: usize = 65_536;
 
 // ------------------------------------------------------------------
 // #4907 — Node-compatible header / argument validation.
@@ -180,6 +185,13 @@ pub struct ResponseState {
     /// P5: the head has gone out and further writes stream straight to the
     /// socket.
     pub turnloop_streaming: bool,
+    /// node's `OutgoingMessage[kCorked]`: `cork()` adds one, `uncork()`
+    /// subtracts one, and a streaming HTTP/1 `write()` on an uncorked message
+    /// corks it until the next tick (node f9175a212c).
+    pub corked: i32,
+    /// node's `kChunkedBuffer`: the body bytes of chunked writes made while the
+    /// message is corked. `uncork()` sends them as ONE chunk (node f9175a212c).
+    pub chunked_buffer: Vec<u8>,
 }
 
 /// Owned shape produced by `.end()` (or by `begin_streaming` for the head
@@ -271,6 +283,8 @@ impl ResponseState {
             destroyed: false,
             turnloop: None,
             turnloop_streaming: false,
+            corked: 0,
+            chunked_buffer: Vec::new(),
         }
     }
 
@@ -949,11 +963,37 @@ fn stream_write_with_cb(handle: i64, bytes: &[u8], callback: i64) -> Option<bool
     let callback_root = callback_scope.root_addr(callback);
     let response_scope = perry_ffi::TransientRootScope::enter();
     let response_root = response_scope.root_addr(handle);
-    if !begin_streaming(response_root.get()) {
+    if !begin_streaming_head(response_root.get(), true) {
         return None;
     }
     let (conn, seq) = response_state(response_root.get()).and_then(|sr| sr.turnloop)?;
     let conn = conn.root();
+    // node f9175a212c (`write_`): a write on an uncorked HTTP/1 message corks
+    // it and uncorks on the next tick; while it is corked, chunked writes
+    // collect in `chunked_buffer` and go out as one chunk.
+    if let Some(chunked) = crate::server::turnloop_route::http1_chunked(&conn, seq) {
+        let sr = response_state_mut(response_root.get())?;
+        if sr.corked <= 0 {
+            sr.corked += 1;
+            queue_connection_cork_tick(response_root.get());
+        }
+        let sr = response_state_mut(response_root.get())?;
+        // node: a non-empty chunk joins the buffer; an empty one joins it only
+        // behind buffered chunks, else it is sent (and carries the head).
+        if chunked && sr.corked != 0 && !(bytes.is_empty() && sr.chunked_buffer.is_empty()) {
+            sr.chunked_buffer.extend_from_slice(bytes);
+            // node: `msg.writableLength < msg.writableHighWaterMark`.
+            let below_hwm = writable_length(response_root.get()) < WRITABLE_HIGH_WATER_MARK
+                && crate::server::turnloop_route::writable_below_watermark(&conn, seq);
+            if !below_hwm {
+                response_state_mut(response_root.get())?.needs_drain = true;
+            }
+            if callback != 0 {
+                push_write_callback(response_root.get(), callback_root.get());
+            }
+            return Some(below_hwm);
+        }
+    }
     // A backpressured HTTP/2 write has already accepted these bytes. Preserve
     // its answer instead of falling back to buffering a duplicate chunk.
     let below_hwm = crate::server::turnloop_route::send_body(&conn, seq, bytes)?;
@@ -1055,6 +1095,7 @@ pub extern "C" fn js_node_http_res_write_full(
     if ended {
         return f64::from_bits(TAG_TRUE);
     }
+    throw_unknown_chunked_encoding(response_root.get(), chunk, arg2);
     if let Some(b) = &bytes {
         if let Some(below_hwm) = stream_write(response_root.get(), b) {
             // Streaming: the chunk is on its way to the wire, so the write
@@ -1190,6 +1231,20 @@ pub(crate) fn finalize_buffered_end(
         sr.writable_ended = true;
         sr.writable_finished = true;
         sr.needs_drain = false;
+        // node f9175a212c (`end`): a final chunk written while the message is
+        // corked joins the buffered chunked writes, and the buffer goes out as
+        // one chunk before the terminator. `end()` leaves the message uncorked.
+        let mut chunk = chunk;
+        if sr.corked != 0 && !sr.chunked_buffer.is_empty() {
+            if let Some(c) = chunk.take() {
+                sr.chunked_buffer.extend_from_slice(&c);
+            }
+        }
+        let buffered = std::mem::take(&mut sr.chunked_buffer);
+        sr.corked = 0;
+        if !buffered.is_empty() {
+            let _ = crate::server::turnloop_route::send_body(&conn, seq, &buffered);
+        }
         if let Some(c) = chunk {
             let _ = crate::server::turnloop_route::send_body(&conn, seq, &c);
         }
@@ -1273,6 +1328,12 @@ fn end_outcome(handle: i64, deferred: bool) -> EndOutcome {
 /// Standalone (`assignSocket`) and bare `OutgoingMessage` handles keep the
 /// buffered path, as does a response whose connection already died.
 pub(crate) fn begin_streaming(handle: i64) -> bool {
+    begin_streaming_head(handle, false)
+}
+
+/// [`begin_streaming`]; `defer_head` holds an HTTP/1 head back until the first
+/// body bytes or the terminator, as node's corked first `write()` does.
+pub(crate) fn begin_streaming_head(handle: i64, defer_head: bool) -> bool {
     let response_scope = perry_ffi::TransientRootScope::enter();
     let response_root = response_scope.root_addr(handle);
     let headers = header_values::snapshot(response_root.get());
@@ -1303,7 +1364,7 @@ pub(crate) fn begin_streaming(handle: i64) -> bool {
     let first = std::mem::take(&mut sr.buffered_body);
     sr.headers_sent = true;
     sr.turnloop_streaming = true;
-    if !crate::server::turnloop_route::begin_stream(&conn, seq, shape) {
+    if !crate::server::turnloop_route::begin_stream(&conn, seq, shape, defer_head) {
         if let Some(sr) = response_state_mut(response_root.get()) {
             sr.turnloop_streaming = false;
         }
@@ -1356,14 +1417,6 @@ pub extern "C" fn js_node_http_res_flush_headers(handle: i64) {
         }
     }
 }
-
-/// `res.cork()` — buffered responses are already corked until `.end()`.
-#[no_mangle]
-pub extern "C" fn js_node_http_res_cork(_handle: i64) {}
-
-/// `res.uncork()` — no-op counterpart to `cork()`.
-#[no_mangle]
-pub extern "C" fn js_node_http_res_uncork(_handle: i64) {}
 
 /// `res.setTimeout(msecs[, callback])` — expose Node's chainable control
 /// surface; actual transport timeout scheduling is handled at the server.

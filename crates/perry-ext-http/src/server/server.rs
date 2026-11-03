@@ -1399,6 +1399,11 @@ pub(crate) fn synthesize_default_response_if_needed(response_handle: i64) {
                 let conn = conn.root();
                 let trailers = sr.snapshot_trailers();
                 sr.needs_drain = false;
+                let buffered = std::mem::take(&mut sr.chunked_buffer);
+                sr.corked = 0;
+                if !buffered.is_empty() {
+                    let _ = crate::server::turnloop_route::send_body(&conn, seq, &buffered);
+                }
                 crate::server::turnloop_route::finish_body(&conn, seq, &trailers);
                 return;
             }
