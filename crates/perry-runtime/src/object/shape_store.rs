@@ -707,6 +707,24 @@ unsafe fn try_array_store(
             );
         }
     }
+    if !existing {
+        // A key the bag's layout lists ahead of its first store (an array
+        // layout's declared late key) is absent while its slot holds the
+        // hole (`key_view`): the store is the layout's add, which proves the
+        // chain through the edge linked above and fills the slot in order
+        // (`layout_desc::family_store`). Any other key is not its add.
+        let bag = bag_root.get_raw_mut_ptr::<ObjectHeader>();
+        let key = key_root.get_raw_const_ptr::<crate::StringHeader>();
+        let bytes = crate::string::header_str_checked(key)?.as_bytes();
+        if super::layout_desc::family_store(
+            bag,
+            crate::value::js_nanbox_string(key as i64).to_bits(),
+            bytes,
+            value_root.get_nanbox_f64().to_bits(),
+        ) {
+            return Some(value_root.get_nanbox_f64());
+        }
+    }
     let bag = bag_root.get_raw_mut_ptr::<ObjectHeader>();
     let key = key_root.get_raw_const_ptr::<crate::StringHeader>();
     let key_value = crate::value::js_nanbox_string(key as i64);
