@@ -7,9 +7,10 @@
   needs nightly unwind-table flags. Running Cargo from the checkout installs
   or selects the pinned toolchain automatically, with its `rust-src` component:
   every build of the workspace compiles the Rust standard library from source
-  without its `backtrace` feature (`.cargo/config.toml` `[unstable]`), which
-  keeps std's DWARF symbolizer (~170 KB of code) out of every program Perry
-  links. It adds about 20 s per target to a cold build. A Rust panic inside
+  without its optional backtrace support (`.cargo/config.toml` `[unstable]`:
+  `build-std-features = []`, where rustup's prebuilt std has `backtrace`,
+  `panic-unwind` and `compiler-builtins-c`), which keeps std's DWARF
+  symbolizer (~170 KB of code) out of every program Perry links. It adds about 20 s per target to a cold build. A Rust panic inside
   the runtime still prints its message and location; `RUST_BACKTRACE` has no
   effect. Tests build with `panic=abort` like everything else, so libtest runs
   each test in its own process and `catch_unwind` catches nothing.
