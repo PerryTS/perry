@@ -1,4 +1,5 @@
 import importlib.util
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -6,6 +7,9 @@ from pathlib import Path
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "test262_subset.py"
 SPEC = importlib.util.spec_from_file_location("test262_subset", SCRIPT_PATH)
 SUBSET = importlib.util.module_from_spec(SPEC)
+# dataclasses resolves string annotations through sys.modules[cls.__module__]
+# (Python 3.12), so the module must be registered before it executes.
+sys.modules[SPEC.name] = SUBSET
 SPEC.loader.exec_module(SUBSET)
 
 HEADER = "/*---\ndescription: x\n{extra}---*/\n"
