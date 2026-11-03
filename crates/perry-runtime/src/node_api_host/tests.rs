@@ -125,7 +125,7 @@ fn primitive_values_round_trip_and_report_types() {
 }
 
 #[test]
-fn handle_scopes_are_lifo_and_invalidate_local_handles() {
+fn handle_scopes_are_lifo_and_release_local_handles() {
     let env = test_env();
     let mut outer = std::ptr::null_mut();
     let mut inner = std::ptr::null_mut();
@@ -148,11 +148,9 @@ fn handle_scopes_are_lifo_and_invalidate_local_handles() {
         unsafe { napi_close_handle_scope(env, inner) },
         NapiStatus::Ok
     );
-    let mut ignored = 0;
-    assert_eq!(
-        unsafe { napi_get_value_int32(env, inner_value, &mut ignored) },
-        NapiStatus::InvalidArg
-    );
+    // A closed scope releases its slots; a released handle keeps reading
+    // until a new handle reuses its slot (V8 moves only the block top).
+    assert_eq!(read_int32(env, inner_value), 2);
     assert_eq!(read_int32(env, outer_value), 1);
     assert_eq!(
         unsafe { napi_close_handle_scope(env, outer) },
@@ -165,13 +163,17 @@ fn handle_scopes_are_lifo_and_invalidate_local_handles() {
         unsafe { napi_open_handle_scope(env, &mut recycled_scope) },
         NapiStatus::Ok
     );
-    let recycled_value = int32(env, 3);
+    let recycled_values = [int32(env, 3), int32(env, 4)];
     assert_eq!(with_env(env, |env| env.slots.len()).unwrap(), slot_count);
-    assert_eq!(
-        unsafe { napi_get_value_int32(env, inner_value, &mut ignored) },
-        NapiStatus::InvalidArg
-    );
-    assert_eq!(read_int32(env, recycled_value), 3);
+    let mut ignored = 0;
+    for released in [inner_value, outer_value] {
+        assert_eq!(
+            unsafe { napi_get_value_int32(env, released, &mut ignored) },
+            NapiStatus::InvalidArg
+        );
+    }
+    assert_eq!(read_int32(env, recycled_values[0]), 3);
+    assert_eq!(read_int32(env, recycled_values[1]), 4);
     assert_eq!(
         unsafe { napi_close_handle_scope(env, recycled_scope) },
         NapiStatus::Ok
@@ -640,6 +642,144 @@ fn native_callback_exceptions_are_caught_before_returning_to_addon_code() {
         NapiStatus::Ok
     );
     assert!(is_error);
+}
+
+/// node-addon-api's `Napi::HandleScope scope(env)` shape: the callback
+/// builds its result inside its own scope, the scope closes, then the
+/// callback returns the result.
+unsafe extern "C" fn own_scope_object_callback(env: NapiEnv, _info: NapiCallbackInfo) -> NapiValue {
+    let mut scope = std::ptr::null_mut();
+    assert_eq!(napi_open_handle_scope(env, &mut scope), NapiStatus::Ok);
+    let mut object = std::ptr::null_mut();
+    assert_eq!(napi_create_object(env, &mut object), NapiStatus::Ok);
+    assert_eq!(
+        napi_set_named_property(env, object, c"master".as_ptr(), int32(env, 31)),
+        NapiStatus::Ok
+    );
+    assert_eq!(napi_close_handle_scope(env, scope), NapiStatus::Ok);
+    object
+}
+
+/// Returns a handle whose slot a later handle took.
+unsafe extern "C" fn reused_handle_callback(env: NapiEnv, _info: NapiCallbackInfo) -> NapiValue {
+    let mut scope = std::ptr::null_mut();
+    assert_eq!(napi_open_handle_scope(env, &mut scope), NapiStatus::Ok);
+    let stale = int32(env, 5);
+    assert_eq!(napi_close_handle_scope(env, scope), NapiStatus::Ok);
+    let _reuses_the_slot = int32(env, 6);
+    stale
+}
+
+fn call_native(
+    env: NapiEnv,
+    name: &std::ffi::CStr,
+    callback: NapiCallback,
+) -> (NapiStatus, NapiValue) {
+    let mut function = std::ptr::null_mut();
+    assert_eq!(
+        unsafe {
+            napi_create_function(
+                env,
+                name.as_ptr(),
+                NAPI_AUTO_LENGTH,
+                callback,
+                std::ptr::null_mut(),
+                &mut function,
+            )
+        },
+        NapiStatus::Ok
+    );
+    let mut receiver = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { napi_get_undefined(env, &mut receiver) },
+        NapiStatus::Ok
+    );
+    let mut result = std::ptr::null_mut();
+    let status =
+        unsafe { napi_call_function(env, receiver, function, 0, std::ptr::null(), &mut result) };
+    (status, result)
+}
+
+#[test]
+fn a_callback_returns_the_object_it_built_in_its_own_closed_scope() {
+    let env = test_env();
+    let (status, object) = call_native(env, c"openScoped", Some(own_scope_object_callback));
+    assert_eq!(status, NapiStatus::Ok);
+    let mut value_type = NapiValueType::Undefined;
+    assert_eq!(
+        unsafe { napi_typeof(env, object, &mut value_type) },
+        NapiStatus::Ok
+    );
+    assert_eq!(value_type, NapiValueType::Object);
+    let mut master = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { napi_get_named_property(env, object, c"master".as_ptr(), &mut master) },
+        NapiStatus::Ok
+    );
+    assert_eq!(read_int32(env, master), 31);
+}
+
+#[test]
+fn a_returned_handle_whose_slot_was_reused_throws() {
+    let env = test_env();
+    let (status, _) = call_native(env, c"reused", Some(reused_handle_callback));
+    assert_eq!(status, NapiStatus::PendingException);
+    let mut exception = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { napi_get_and_clear_last_exception(env, &mut exception) },
+        NapiStatus::Ok
+    );
+    let mut code = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { napi_get_named_property(env, exception, c"code".as_ptr(), &mut code) },
+        NapiStatus::Ok
+    );
+    let mut buffer = [0u8; 64];
+    let mut length = 0;
+    assert_eq!(
+        unsafe {
+            napi_get_value_string_utf8(
+                env,
+                code,
+                buffer.as_mut_ptr().cast(),
+                buffer.len(),
+                &mut length,
+            )
+        },
+        NapiStatus::Ok
+    );
+    assert_eq!(&buffer[..length], b"ERR_INVALID_RETURN_VALUE");
+}
+
+#[test]
+fn a_collection_ends_a_released_handle() {
+    let env = test_env();
+    let mut scope = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { napi_open_handle_scope(env, &mut scope) },
+        NapiStatus::Ok
+    );
+    let mut object = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { napi_create_object(env, &mut object) },
+        NapiStatus::Ok
+    );
+    assert_eq!(
+        unsafe { napi_close_handle_scope(env, scope) },
+        NapiStatus::Ok
+    );
+    let mut value_type = NapiValueType::Undefined;
+    assert_eq!(
+        unsafe { napi_typeof(env, object, &mut value_type) },
+        NapiStatus::Ok
+    );
+    // A released slot is no root; after a collection its handle must not
+    // read a value the collector may have moved or freed.
+    crate::gc::js_gc_collect();
+    assert_eq!(
+        unsafe { napi_typeof(env, object, &mut value_type) },
+        NapiStatus::InvalidArg
+    );
 }
 
 #[test]
