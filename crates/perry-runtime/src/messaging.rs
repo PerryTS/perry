@@ -14,7 +14,9 @@ use std::sync::Mutex;
 mod port_operations;
 pub use port_operations::install_core_methods as install_message_port_core_methods;
 pub use port_operations::js_register_worker_threads_message_port_dispatch;
-pub use port_operations::{message_port_id, message_port_object_with_id, MessagePortOperation};
+pub use port_operations::{
+    message_port_id, message_port_object_with_id, post_message_arguments, MessagePortOperation,
+};
 
 type MessageChannelFactory = extern "C" fn() -> f64;
 type BroadcastChannelFactory = extern "C" fn(f64) -> f64;

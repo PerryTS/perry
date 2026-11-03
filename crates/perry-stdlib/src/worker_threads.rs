@@ -1029,13 +1029,17 @@ extern "C" fn worker_off(
     js_undefined()
 }
 
-extern "C" fn worker_post_message(
+unsafe extern "C" fn worker_post_message(
     closure: *const ClosureHeader,
     _this: perry_runtime::closure::JsThis,
-    value: f64,
-    transfer: f64,
+    args: *const f64,
+    len: usize,
 ) -> f64 {
-    let worker_id = captured_worker_id(closure);
+    let (value, transfer) = unsafe { perry_runtime::messaging::post_message_arguments(args, len) };
+    worker_post_message_by_id(captured_worker_id(closure), value, transfer)
+}
+
+fn worker_post_message_by_id(worker_id: u64, value: f64, transfer: f64) -> f64 {
     let message = clone_message(value, transfer);
     let sender = WORKERS
         .lock()
