@@ -224,9 +224,20 @@ pub extern "C" fn js_process_run_finalization_before_exit() {
     run_process_finalization_callbacks(ProcessFinalizationKind::BeforeExit);
 }
 
+/// The `process.finalization` exit callbacks: the JS-visible part of every
+/// exit, `process.exit()` included.
+pub(crate) fn run_process_finalization_exit_callbacks() {
+    run_process_finalization_callbacks(ProcessFinalizationKind::Exit);
+}
+
+/// The natural end of the main agent (Node's `FreeEnvironment`), called from
+/// the generated exit epilogue: the `process.finalization` exit callbacks,
+/// then the Node-API environment teardown (cleanup hooks, thread-safe function
+/// and object finalizers). `process.exit()` runs only the callbacks; Node's
+/// `reallyExit` ends the process without freeing the environment.
 #[no_mangle]
 pub extern "C" fn js_process_run_finalization_exit() {
-    run_process_finalization_callbacks(ProcessFinalizationKind::Exit);
+    run_process_finalization_exit_callbacks();
     crate::node_api_host::hooks::shutdown_current_env();
 }
 
