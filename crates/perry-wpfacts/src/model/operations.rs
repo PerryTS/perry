@@ -967,6 +967,7 @@ impl Model {
     /// strongly connected components are taken in topological order and
     /// each key set moves along each edge between them once.
     pub(crate) fn settle_keyed_uses(&mut self) {
+        self.settle_marker_ops();
         self.keyed_uses.clear();
         // The argument markers a keyed use walks through (`keyed_use`).
         let inner = |s: &Self, x: Tok| s.is_arg_marker(x) && !s.reach_marker.contains(&x);
@@ -1213,6 +1214,51 @@ impl Model {
     /// set), each component's set the union of its members' leaves and its
     /// successors' sets, shared by its members: the readers after a solve
     /// ask for the same markers at every site, result and contract.
+    /// DECISIONS 242 (contract half): the miss sites met on marker tokens,
+    /// per parameter marker each stands for (`marker_members`, read once
+    /// the model is final). A reach marker's (`p.x[k]`) are not the
+    /// parameter's own.
+    pub(crate) fn settle_marker_ops(&mut self) {
+        self.param_reads.clear();
+        let reads: Vec<(Tok, Vec<Key>)> = self
+            .marker_reads
+            .iter()
+            .map(|(&t, ks)| (t, ks.clone()))
+            .collect();
+        for (t, ks) in reads {
+            for m in self.marker_members(t) {
+                if !self.param_marker.contains_key(&m) || self.reach_marker.contains(&m) {
+                    continue;
+                }
+                let v = self.param_reads.entry(m).or_default();
+                for &k in &ks {
+                    if !v.contains(&k) {
+                        v.push(k);
+                    }
+                }
+            }
+        }
+        self.param_defines.clear();
+        let defs: Vec<(Tok, Vec<(Option<Atom>, bool)>)> = self
+            .marker_defines
+            .iter()
+            .map(|(&t, ds)| (t, ds.clone()))
+            .collect();
+        for (t, ds) in defs {
+            for m in self.marker_members(t) {
+                if !self.param_marker.contains_key(&m) || self.reach_marker.contains(&m) {
+                    continue;
+                }
+                let v = self.param_defines.entry(m).or_default();
+                for &d in &ds {
+                    if !v.contains(&d) {
+                        v.push(d);
+                    }
+                }
+            }
+        }
+    }
+
     pub(crate) fn marker_members(&self, t: Tok) -> Vec<Tok> {
         if !self.is_arg_marker(t) {
             return vec![t];
@@ -1644,6 +1690,7 @@ impl Model {
             parent_value: None,
             parent_links: Vec::new(),
             null_proto: false,
+            chain_miss: false,
             species: None,
         });
         tm
@@ -1681,6 +1728,7 @@ impl Model {
             parent_value: None,
             parent_links: Vec::new(),
             null_proto: false,
+            chain_miss: false,
             species: None,
         });
         let t = self.tok(TokKind::Obj(tm, NO_CTX));

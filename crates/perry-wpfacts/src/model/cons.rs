@@ -129,6 +129,10 @@ pub enum Cons {
     NotNullish { dst: NodeId },
     /// Every object token reaches a HARD operation.
     Hard { kind: Hard, reason: u32 },
+    /// DECISIONS 242 (contract half): another unit's function reads `key`
+    /// on the argument this node holds (`FnContract::reach_keys`): a miss
+    /// site without a value (`Model::note_chain_miss` on every token).
+    Miss { key: Key },
     /// `delete o.key`: E7 HARD on every object token; on ⊤ (which may be a
     /// builtin prototype) a write of `key` only.
     DeleteKey { key: Atom, reason: u32 },
@@ -406,6 +410,7 @@ impl Cons {
             Cons::Defined { .. } => "defined",
             Cons::NotNullish { .. } => "notnullish",
             Cons::Hard { .. } => "hard",
+            Cons::Miss { .. } => "miss",
             Cons::DeleteKey { .. } => "deletekey",
             Cons::AddsKeys => "addskeys",
             Cons::DefineKey { .. } => "definekey",
