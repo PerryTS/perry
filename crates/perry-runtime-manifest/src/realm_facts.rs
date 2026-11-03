@@ -465,11 +465,11 @@ pub(super) fn constant(ts: &[Token<'_>]) -> Result<Value, String> {
     }
 }
 
-/// The modules js_create_native_module_namespace seals after the birth:
+/// The modules the native namespace birth (create_native_module_namespace_in) seals:
 /// `if module_name == "m" { crate::object::js_object_seal(value); }`.
 pub(super) fn sealed_native_namespaces(source: &str) -> Result<Vec<&str>, String> {
     let body = source
-        .split_once("pub extern \"C\" fn js_create_native_module_namespace(")
+        .split_once("pub(crate) fn create_native_module_namespace_in(")
         .ok_or("missing native namespace birth")?
         .1;
     let body = body.split_once("\n}\n").map_or(body, |(b, _)| b);

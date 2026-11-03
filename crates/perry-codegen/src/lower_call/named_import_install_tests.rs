@@ -73,7 +73,7 @@ fn named_builtin_cell_references_its_export_without_a_module_installer() {
             "missing direct export body: {ir}"
         );
         assert!(
-            !ir.contains("call double @js_native_module_named_esm_export_value("),
+            !ir.contains("call double @js_native_module_named_esm_export_value_vt("),
             "dynamic module read: {ir}"
         );
         assert!(
@@ -97,7 +97,7 @@ fn named_fs_exports_initialize_only_the_selected_value() {
                 "parent module retained: {ir}"
             );
             let dependency = ir.find("call void @js_node_submod_install_fs_promises(");
-            let lookup = ir.find("call double @js_native_module_named_esm_export_value(");
+            let lookup = ir.find("call double @js_native_module_named_esm_export_value_vt(");
             if property == "promises" {
                 assert!(
                     dependency.expect("child namespace installer")
@@ -124,7 +124,7 @@ fn named_fs_exports_initialize_only_the_selected_value() {
 #[test]
 fn unknown_named_module_does_not_install_unrelated_buckets() {
     let ir = compile_lookup("unknown-module", "value");
-    assert!(ir.contains("call double @js_native_module_named_esm_export_value("));
+    assert!(ir.contains("call double @js_native_module_named_esm_export_value_vt("));
     assert!(!ir.contains("call void @js_nm_install_"));
 }
 
@@ -168,7 +168,7 @@ fn native_package_reexport_emits_a_value_getter() {
     let end = tail.find("\n}\n").expect("getter terminated");
     let getter = &tail[..end + 3];
     assert!(
-        getter.contains("call double @js_native_module_named_esm_export_value("),
+        getter.contains("call double @js_native_module_named_esm_export_value_vt("),
         "getter must load the native export value: {getter}"
     );
 }
@@ -181,7 +181,7 @@ fn child_object_export_initializes_its_declaration_before_snapshot() {
         let install = format!("call void @js_node_submod_install_{parent}_promises(");
         assert!(
             ir.find(&install).expect("child declaration install")
-                < ir.find("call double @js_native_module_named_esm_export_value(")
+                < ir.find("call double @js_native_module_named_esm_export_value_vt(")
                     .expect("export snapshot"),
             "{ir}"
         );
