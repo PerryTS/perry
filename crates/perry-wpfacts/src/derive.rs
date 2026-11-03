@@ -547,6 +547,48 @@ fn cjs_cache_stable(m: &Model) -> bool {
         })
 }
 
+/// The native root of `tm` (DEC 251 flip regression A): the first class
+/// along its linked chain (`tm`, then `tmpls[].parent`) whose instance a
+/// native constructor births: a native parent without a summary, or an
+/// ancestor whose evaluated `extends` is not one class (E11, e.g. `class Own
+/// extends RegExp`). Every instance of the chain is then that native exotic
+/// object, never a class layout, so no template below the root is
+/// fixed-layout or prefix-stable.
+fn native_root(m: &Model, tm: TmplId) -> Option<String> {
+    let name = |c: TmplId| {
+        m.tok_index
+            .get(&TokKind::Obj(c, NO_CTX))
+            .map_or_else(|| format!("#{c}"), |&t| m.tok_name(t))
+    };
+    let mut cur = Some(tm);
+    for _ in 0..=m.tmpls.len() {
+        let c = cur?;
+        let tpl = &m.tmpls[c as usize];
+        if let Some((_, n)) = &tpl.native_parent {
+            if !crate::builtins::native_parent_summarized(n) {
+                return Some(if c == tm {
+                    "E21 native parent without a summary".into()
+                } else {
+                    format!("E21 native parent without a summary on ancestor {}", name(c))
+                });
+            }
+        }
+        if c != tm
+            && m.tmpl_toks(c)
+                .iter()
+                .filter_map(|t| m.hard.get(t))
+                .any(|(k, _)| matches!(k, Hard::E11ReflectConstruct))
+        {
+            return Some(format!(
+                "E21 native parent: ancestor {} is born by a native constructor (E11)",
+                name(c)
+            ));
+        }
+        cur = tpl.parent;
+    }
+    Some("E21 native parent: cyclic parent chain".into())
+}
+
 fn template_facts(
     m: &mut Model,
     tm: TmplId,
@@ -648,12 +690,8 @@ fn template_facts(
     {
         chain_problem.get_or_insert_with(|| "computed accessor/layout on the chain".into());
     }
-    let unsummarized_native = tpl
-        .native_parent
-        .as_ref()
-        .is_some_and(|(_, n)| !crate::builtins::native_parent_summarized(n));
-    if unsummarized_native {
-        chain_problem.get_or_insert_with(|| "E21 native parent without a summary".into());
+    if let Some(r) = native_root(m, tm) {
+        chain_problem.get_or_insert(r);
     }
     let escape = global.clone().or(escape);
     let prefix_stable = escape.is_none() && hard.is_none() && chain_problem.is_none();
@@ -984,11 +1022,7 @@ fn private_own_slot(m: &Model, tf: &TemplateFacts, t: Tok, key: &str, a: Atom) -
         return None;
     }
     let tpl = &m.tmpls[tf.id as usize];
-    if tpl
-        .native_parent
-        .as_ref()
-        .is_some_and(|(_, n)| !crate::builtins::native_parent_summarized(n))
-    {
+    if native_root(m, tf.id).is_some() {
         return None;
     }
     let star = m.atom_index.get(crate::STAR_KEY).copied();

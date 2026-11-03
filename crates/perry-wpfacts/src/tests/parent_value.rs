@@ -202,3 +202,24 @@ fn per_evaluation_class_birth_keys_are_reserved_not_owned() {
     assert!(!b.definite, "{}", pf.dump_text());
     assert!(b.reserved, "{}", pf.dump_text());
 }
+
+/// DEC 251 flip regression A: an instance of a class whose ANCESTOR is born
+/// by a native constructor (`Own extends RegExp`, E11) is that native exotic
+/// object: no class below the native root is fixed-layout or prefix-stable.
+#[test]
+fn native_ancestor_ends_layout_facts_down_the_chain() {
+    let pf = facts(
+        r#"
+        class Own extends RegExp {}
+        class Deep extends Own {}
+        class Deeper extends Deep {}
+        function show(r: any) { console.log(r.flags, r.source); }
+        show(new Own("b")); show(new Deep("b")); show(new Deeper("b", "g"));
+    "#,
+    );
+    for name in ["Own", "Deep", "Deeper"] {
+        let t = tmpl(&pf, name);
+        assert!(!t.fixed_layout, "{name}\n{}", pf.dump_text());
+        assert!(!t.prefix_stable, "{name}\n{}", pf.dump_text());
+    }
+}
