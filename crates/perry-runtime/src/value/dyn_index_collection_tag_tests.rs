@@ -46,11 +46,18 @@ fn collection_receivers_still_use_their_authoritative_registries() {
     let set_receiver = crate::value::js_nanbox_pointer(set as i64);
 
     let before = probes();
-    assert_eq!(js_dyn_index_get(map_receiver, 0.0), 1.0);
+    // A Map has no indexed own property: `m[0]` is undefined, not its first key.
+    assert_eq!(
+        js_dyn_index_get(map_receiver, 0.0).to_bits(),
+        crate::value::TAG_UNDEFINED
+    );
     assert_eq!(probes(), (before.0 + 1, before.1));
 
     let before = probes();
-    assert_eq!(js_dyn_index_get(set_receiver, 0.0), 20.0);
+    assert_eq!(
+        js_dyn_index_get(set_receiver, 0.0).to_bits(),
+        crate::value::TAG_UNDEFINED
+    );
     assert_eq!(probes(), (before.0, before.1 + 1));
 
     let before = probes();
