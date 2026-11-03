@@ -128,6 +128,37 @@ console.log(px, new P().sum(N));
     );
 }
 
+/// R1: the word names each key's STORAGE slot. `q` skips `d` in its
+/// constructor and stores `e`, so its key list (insertion order `a, e`, then
+/// `d`) places `d` and `e` away from their positions over the family's slots.
+/// `q`'s first loop finds `d` a hole (the presence test sends it to the
+/// generic copy, whose store adds `d`); its second runs F.
+///
+/// Sabotage: return the key's position instead of its storage slot from
+/// `region_key_location` -> F stores `d` into `e`'s slot: `q` prints `a,e`
+/// after the first loop and `q.d` is `undefined`.
+#[test]
+fn a_family_instance_with_keys_stored_out_of_order_runs_f_on_their_storage_slots() {
+    const JS: &str = r#"const N = process.argv.length > 99 ? 1 : 3000;
+const probes = [{ x: 5 }, { y: 0, x: 5 }];
+const px = probes[process.argv.length & 1].x;
+class Q {
+    constructor(f) { this.a = 1; if (f) this.d = 4; this.e = 5; }
+    sum(n) { let s = 0; for (let i = 0; i < n; i++) { this.d = i; s += this.a; } return s; }
+}
+const q = new Q(px > 99);
+const r = new Q(true);
+console.log(px, Object.keys(q).join(), r.sum(N), r.sum(N), q.sum(N), Object.keys(q).join(), q.sum(N), q.d, q.e);
+"#;
+    let (stdout, count) = run_census(JS, "js");
+    assert_eq!(stdout, "5 a,e 3000 3000 3000 a,e,d 3000 2999 5");
+    assert!(
+        count("rloop_f") >= 2 * (3000 - 8),
+        "once `d` is present, `q`'s loop and `r`'s run F (rloop_f={})",
+        count("rloop_f")
+    );
+}
+
 /// `this.a` in an object literal's method, after a by-name overwrite of the
 /// receiver, is a stateless layout read: no class guard runs for any of the
 /// 3000 reads. (The site's MRU word, `generic_mru_hit`, was deleted with the
